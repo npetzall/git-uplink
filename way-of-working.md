@@ -237,6 +237,13 @@ git fetch origin
 git checkout uplink/conflict/upl_asha
 # fix files so the change is correct on the new upstream
 git add -A
+git commit -m "Resolve upl_asha onto the new upstream"
+git push origin uplink/conflict/upl_asha
+```
+
+On GHEC, pushing that branch runs **Uplink resolve** (`uplink-resolve.yml`), which skips the Actions bot that published the conflict. Locally (or if the workflow is not installed), stay on the conflict branch:
+
+```bash
 git uplink resolve upl_asha
 ```
 

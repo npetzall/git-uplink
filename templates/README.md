@@ -12,6 +12,7 @@ That repository also needs the `git-uplink` binary on `PATH`. Install this crate
 - **Preflight** (`uplink-preflight.yml`) — required check on every PR to `main`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines from the body, then runs `UPLINK_PREFLIGHT`. Failure comments on the PR; do not import until it is green.
 - **Import** (`uplink-import.yml`) — internal product approval. Label `uplink:import` after engineering review (or merge the PR). The change lands on company `main` as status `queued` only if export preflight still passes.
 - **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream, drops merged patches, rebuilds `main`. If a patch does not apply, it records `conflict` on the queue (committed on `main` without moving product files), pushes `uplink/conflict/<id>`, and opens an internal PR. Do not merge that PR; resolve the patch instead.
+- **Resolve** (`uplink-resolve.yml`) — on human pushes to `uplink/conflict/<id>` (skips `github-actions[bot]`). Runs `git uplink resolve`, rebuilds `main`, and deletes the conflict branch. Does not export to the contribution fork.
 - **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`oss` GitHub Environment**. Dispatch with a patch id. The packet job commits the report; environment reviewers approve; the same run then `git uplink approve` + `git uplink submit`. Preflight runs again; a failing build/test means no fork push and no public PR.
 
 Repo variables:
@@ -23,7 +24,7 @@ Repo variables:
 | `UPLINK_INTERNAL_DOMAINS` | Comma-separated email domains flagged in the export diff (example: `acme.com`) |
 | `UPLINK_EXPORT_AUTHOR` | Default public identity `Name <email>` for contribution commits (machine user). Override per change with `Uplink-Export-Author` below the cutoff. |
 
-Import and sync share the Actions concurrency group `uplink-mutate` at workflow level. Submit uses that group **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI also retries `git push --force-with-lease` if another import landed first.
+Import and sync share the Actions concurrency group `uplink-mutate` at workflow level. Resolve uses that group too. Submit uses it **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI also retries `git push --force-with-lease` if another import landed first.
 
 ---
 

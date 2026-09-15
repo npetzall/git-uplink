@@ -297,10 +297,12 @@ export function PlaybookPage() {
         <Section title="Sync conflicts">
           <p>
             Hourly (and on demand) the bot fetches public upstream, drops merged patches, and
-            replays the rest. If apply fails, it stops on that patch, points{" "}
-            <code>HEAD</code> at <code>uplink/conflict/&lt;id&gt;</code>, and opens an internal PR.
-            The developer resolves the files, <code>git add</code>, and runs{" "}
-            <code>git uplink resolve &lt;id&gt;</code>. That refreshes the single patch. Remaining
+            replays the rest. If apply fails, it records <code>conflict</code> on company{" "}
+            <code>main</code> without moving product files, commits{" "}
+            <code>uplink/conflict/&lt;id&gt;</code>, and opens an internal PR. Do not merge that PR.
+            Fix the files on the conflict branch and push.{" "}
+            <code>uplink-resolve.yml</code> skips the Actions bot, runs{" "}
+            <code>git uplink resolve &lt;id&gt;</code>, and rebuilds <code>main</code>. Remaining
             patches then replay. If the patch was already submitted, the next submit/sync
             force-pushes the contribution branch so the upstream PR is amended.
           </p>

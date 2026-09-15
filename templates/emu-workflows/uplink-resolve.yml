@@ -1,0 +1,49 @@
+# Copy into the company product repository on GitHub Enterprise Cloud.
+# Requires `git-uplink` on PATH.
+#
+# Human pushes to uplink/conflict/<id> after fixing markers. This job
+# runs git uplink resolve, rebuilds company main, and deletes the
+# conflict branch. It must not run when the sync bot publishes the
+# conflict branch (that push is github-actions[bot]).
+name: Uplink resolve
+
+on:
+  push:
+    branches:
+      - "uplink/conflict/**"
+
+concurrency:
+  group: uplink-mutate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve patch and rebuild main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin main
+          git branch -f main origin/main
+          id="${GITHUB_REF_NAME#uplink/conflict/}"
+          if [ -z "$id" ] || [ "$id" = "$GITHUB_REF_NAME" ]; then
+            echo "Could not parse patch id from $GITHUB_REF_NAME"
+            exit 1
+          fi
+          git uplink resolve "$id"
+          git push origin HEAD:main --force-with-lease
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh pr close "$number" --comment "Resolved ${id}; company main rebuilt. Do not merge a conflict PR."
+          fi
+          git push origin --delete "$GITHUB_REF_NAME"
