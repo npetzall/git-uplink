@@ -1,0 +1,29 @@
+[package]
+name = "git-uplink"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Git subcommand that carries internal patches on public upstream and contributes through an upstream-owned private fork."
+license = "MIT"
+keywords = ["git", "subcommand", "emu", "oss", "contribution"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "git-uplink"
+path = "src/main.rs"
+
+[lib]
+name = "git_uplink"
+path = "src/lib.rs"
+
+[dependencies]
+chrono = { version = "=0.4.39", default-features = false, features = ["clock", "std"] }
+clap = { version = "=4.5.23", features = ["derive", "env"] }
+regex = "=1.11.1"
+serde = { version = "=1.0.217", features = ["derive"] }
+serde_json = "=1.0.135"
+thiserror = "=2.0.11"
+uuid = { version = "=1.11.0", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "=3.14.0"

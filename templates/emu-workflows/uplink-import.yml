@@ -1,0 +1,49 @@
+# Copy into the company product repository on GitHub Enterprise Cloud.
+# Requires `git-uplink` on PATH (cargo install this crate on the runner).
+name: Uplink import
+
+on:
+  pull_request:
+    types: [labeled, closed]
+
+concurrency:
+  group: uplink-mutate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  import:
+    if: |
+      (github.event.action == 'labeled' && github.event.label.name == 'uplink:import') ||
+      (github.event.action == 'closed' && github.event.pull_request.merged)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Fetch the reviewed change
+        run: |
+          git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
+          git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
+
+      - name: Import as a queued patch
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          INTERNAL_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'uplink:internal-only') }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+          UPLINK_DEPENDS_ON: ${{ github.event.pull_request.body }}
+        run: |
+          extra=""
+          if [ "$INTERNAL_ONLY" = "true" ]; then extra="--internal-only"; fi
+          git uplink add --title "$TITLE" --from "$FROM_SHA" --head "$HEAD_SHA" \
+            --pr "$PR_NUMBER" --pr-url "$PR_URL" --push $extra

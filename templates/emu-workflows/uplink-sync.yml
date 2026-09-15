@@ -1,0 +1,25 @@
+name: Uplink sync
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: uplink-mutate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git uplink sync
+      - run: |
+          git push origin HEAD:main --force-with-lease
+          git push origin 'refs/heads/uplink/*' --force --prune || true
