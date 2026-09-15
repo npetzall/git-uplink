@@ -116,6 +116,9 @@ pub struct PatchConflict {
     pub branch: String,
     pub files: Vec<String>,
     pub message: String,
+    /// Prefix commit the conflict branch was cut from (upstream + earlier patches).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onto: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

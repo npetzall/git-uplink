@@ -348,7 +348,25 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
         .find(|p| p.id == ttl_patch.id)
         .unwrap();
     assert_eq!(conflicted.status, "conflict");
+    let conflict_branch = conflicted
+        .conflict
+        .as_ref()
+        .map(|c| c.branch.as_str())
+        .unwrap();
+    assert_eq!(conflict_branch, format!("uplink/conflict/{}", ttl_patch.id));
 
+    let on_main = git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
+    assert_eq!(on_main, "main");
+    let main_tokens = fs::read_to_string(company.join("src/tokens.js")).unwrap();
+    assert!(main_tokens.contains("return 7200;"), "{main_tokens}");
+    assert!(!main_tokens.contains("<<<<<<"), "{main_tokens}");
+
+    git(
+        company,
+        &["checkout", "--quiet", conflict_branch],
+        GitOpts::default(),
+    )
+    .unwrap();
     let tokens = fs::read_to_string(company.join("src/tokens.js")).unwrap();
     assert!(
         tokens.contains("<<<<<<") || tokens.contains("1800") || tokens.contains("7200"),

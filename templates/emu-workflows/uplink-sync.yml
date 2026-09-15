@@ -1,3 +1,10 @@
+# Copy into the company product repository on GitHub Enterprise Cloud.
+# Requires `git-uplink` on PATH.
+#
+# Fetches public upstream, drops merged patches, rebuilds company main.
+# On apply failure it records the patch as conflict, commits
+# uplink/conflict/<id> (with markers), fast-forwards that status onto
+# main, and opens an internal PR. Do not merge that PR into main.
 name: Uplink sync
 
 on:
@@ -11,6 +18,7 @@ concurrency:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   sync:
@@ -19,7 +27,45 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: git uplink sync
-      - run: |
+
+      - name: Sync with upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          git uplink sync
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+            exit "$code"
+          fi
+
           git push origin HEAD:main --force-with-lease
-          git push origin 'refs/heads/uplink/*' --force --prune || true
+          git push origin uplink/upstream --force || true
+
+          if [ "$code" -ne 2 ]; then
+            git push origin 'refs/heads/uplink/*' --force --prune || true
+            exit 0
+          fi
+
+          conflict_id=$(jq -r '.patches[] | select(.status=="conflict") | .id' .uplink/queue.json | head -n 1)
+          conflict_branch=$(jq -r '.patches[] | select(.status=="conflict") | .conflict.branch' .uplink/queue.json | head -n 1)
+          if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+            echo "sync exited 2 but no conflict patch was recorded"
+            exit 2
+          fi
+          if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+            git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+          fi
+
+          if [ -z "$(gh pr list --head "$conflict_branch" --state open --json number --jq '.[0].number')" ]; then
+            gh pr create --base main --head "$conflict_branch" --title "Uplink conflict: ${conflict_id}" --body "$(cat <<EOF
+          Do not merge this PR into \`main\`. Company main is bot-owned.
+
+          Sync stopped on \`${conflict_id}\`. Checkout \`${conflict_branch}\`, remove the conflict markers, and push. Then run \`git uplink resolve ${conflict_id}\` (or let **Uplink resolve** run on that push).
+
+          Remaining patches wait until this id is resolved.
+          EOF
+          )"
+          fi
+          exit 2

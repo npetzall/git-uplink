@@ -224,7 +224,7 @@ Upstream changes a file Asha also changed. Sync:
 
 What you have then:
 
-- `upl_asha` status `conflict`. `HEAD` is `uplink/conflict/upl_asha` with the conflicted files.
+- `upl_asha` status `conflict`. Sync records that on company `main` (product files stay at the last successful rebuild) and commits `uplink/conflict/upl_asha` with the conflicted files. The Actions sync job opens an internal PR from that branch. **Do not merge it into `main`.**
 - **Ben is not applied**, even though he does not depend on Asha. A blocked patch blocks the rest of the rebuild. Company `main` is not updated to “upstream + Ben, skip Asha.” There is no skip.
 - Ben’s public PR, if he already submitted, is untouched until his patch is replayed.
 

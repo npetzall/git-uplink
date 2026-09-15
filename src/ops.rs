@@ -470,6 +470,94 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
     Ok(merged_ids)
 }
 
+fn restore_company_branch(repo: &Path, company_branch: &str) -> Result<()> {
+    git(
+        repo,
+        &["checkout", "-f", "--quiet", company_branch],
+        GitOpts::default(),
+    )?;
+    Ok(())
+}
+
+fn persist_apply_conflict(
+    repo: &Path,
+    queue: &mut QueueState,
+    snapshot: &Path,
+    company_branch: &str,
+    upstream_ref: &str,
+    patch_id: &str,
+    title: &str,
+    files: Vec<String>,
+) -> Result<ConflictError> {
+    let onto = rev_parse(repo, "HEAD")?;
+    let branch = format!("uplink/conflict/{patch_id}");
+    git(repo, &["branch", "-f", &branch, "HEAD"], GitOpts::default())?;
+    git(
+        repo,
+        &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+        GitOpts::default(),
+    )?;
+    git(
+        repo,
+        &["add", "-A", "--", ".", ":!.uplink", ":!.git"],
+        GitOpts::default(),
+    )?;
+    let staged = git(
+        repo,
+        &["diff", "--cached", "--quiet"],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    if staged.code != 0 {
+        git(
+            repo,
+            &[
+                "commit",
+                "-m",
+                &format!("uplink: conflict applying {patch_id}"),
+            ],
+            GitOpts::default(),
+        )?;
+    }
+
+    let message =
+        format!("Patch {patch_id} (\"{title}\") does not apply onto the current upstream prefix.");
+    {
+        let current = get_patch_mut(queue, patch_id)?;
+        current.status = "conflict".into();
+        current.conflict = Some(PatchConflict {
+            branch: branch.clone(),
+            files: files.clone(),
+            message: message.clone(),
+            onto: Some(onto),
+        });
+        add_event(
+            current,
+            "conflict",
+            if files.is_empty() {
+                "untracked conflict".into()
+            } else {
+                files.join(", ")
+            },
+        );
+    }
+    queue.last_sync = Some(LastSync {
+        at: stamp(),
+        upstream_sha: rev_parse(repo, upstream_ref)?,
+        result: "conflict".into(),
+        message: Some(message.clone()),
+    });
+
+    restore_company_branch(repo, company_branch)?;
+    fs::create_dir_all(repo.join(".uplink/patches"))?;
+    copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
+    write_queue_file(repo, queue)?;
+    commit_queue(repo, &format!("uplink: conflict on {patch_id}"))?;
+    Ok(ConflictError::new(message, patch_id, files))
+}
+
 pub fn rebuild(repo: &Path) -> Result<QueueState> {
     with_queue_lock(repo, || rebuild_once(repo))
 }
@@ -491,6 +579,7 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
         )?;
         for patch in topological_active(&queue)? {
             if patch.status == "conflict" {
+                restore_company_branch(repo, &company_branch)?;
                 return Err(Error::Conflict(ConflictError::new(
                     format!("Queue is blocked on conflict in {}", patch.id),
                     patch.id,
@@ -501,8 +590,8 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
                 .join(".uplink/patches")
                 .join(format!("{}.patch", patch.id));
             let result = apply_patch_file(repo, &patch, &patch_file, false)?;
-            let current = get_patch_mut(&mut queue, &patch.id)?;
             if result == "empty" {
+                let current = get_patch_mut(&mut queue, &patch.id)?;
                 if current.intent == "upstream" {
                     current.status = "merged".into();
                     current.merged = Some(PatchMerged {
@@ -520,46 +609,20 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
             }
             if result == "conflict" {
                 let files = conflicted_files(repo)?;
-                let branch = format!("uplink/conflict/{}", patch.id);
-                git(repo, &["branch", "-f", &branch, "HEAD"], GitOpts::default())?;
-                git(
+                return Err(Error::Conflict(persist_apply_conflict(
                     repo,
-                    &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
-                    GitOpts::default(),
-                )?;
-                fs::create_dir_all(repo.join(".uplink"))?;
-                current.status = "conflict".into();
-                current.conflict = Some(PatchConflict {
-                    branch,
-                    files: files.clone(),
-                    message: format!(
-                        "Patch {} (\"{}\") does not apply onto the current upstream prefix.",
-                        patch.id, patch.title
-                    ),
-                });
-                add_event(
-                    current,
-                    "conflict",
-                    if files.is_empty() {
-                        "untracked conflict".into()
-                    } else {
-                        files.join(", ")
-                    },
-                );
-                let message = current.conflict.as_ref().unwrap().message.clone();
-                queue.last_sync = Some(LastSync {
-                    at: stamp(),
-                    upstream_sha: rev_parse(repo, upstream_ref)?,
-                    result: "conflict".into(),
-                    message: Some(message.clone()),
-                });
-                write_queue_file(repo, &queue)?;
-                return Err(Error::Conflict(ConflictError::new(
-                    message, patch.id, files,
-                )));
+                    &mut queue,
+                    &snapshot,
+                    &company_branch,
+                    upstream_ref,
+                    &patch.id,
+                    &patch.title,
+                    files,
+                )?));
             }
 
             let contents = fs::read_to_string(&patch_file)?;
+            let current = get_patch_mut(&mut queue, &patch.id)?;
             current.patch_id_stable = Some(stable_patch_id_from_contents(repo, &contents)?);
             if current.status == "conflict" {
                 current.status = if current
@@ -657,6 +720,25 @@ pub fn sync(repo: &Path) -> Result<QueueState> {
 
 pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
     with_queue_lock(repo, || {
+        let expected_branch = format!("uplink/conflict/{id}");
+        let head = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        if head != expected_branch {
+            return Err(Error::msg(format!(
+                "Check out {expected_branch} before resolving {id} (currently on {head})."
+            )));
+        }
+        let company_branch = if repo.join(QUEUE_PATH).exists() {
+            read_queue_file(repo)?.config.company_branch
+        } else {
+            "main".into()
+        };
+        if has_ref(repo, &company_branch)? {
+            git(
+                repo,
+                &["checkout", &company_branch, "--", ".uplink"],
+                GitOpts::default(),
+            )?;
+        }
         let mut queue = read_queue_file(repo)?;
         let patch = get_patch(&queue, id)?.clone();
         if patch.status != "conflict" {
@@ -667,6 +749,20 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
             return Err(Error::msg(format!(
                 "Conflict still has unmerged files: {}. Fix and git add them first.",
                 unmerged.join(", ")
+            )));
+        }
+        let markers = git(
+            repo,
+            &["grep", "-I", "-l", "^<<<<<<<", "--", ".", ":!.uplink"],
+            GitOpts {
+                allow_fail: true,
+                ..GitOpts::default()
+            },
+        )?;
+        if markers.code == 0 && !markers.stdout.trim().is_empty() {
+            return Err(Error::msg(format!(
+                "Conflict markers still present in {}. Remove them before resolve.",
+                markers.stdout.trim().replace('\n', ", ")
             )));
         }
         git(
@@ -685,6 +781,21 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         if staged.code != 0 {
             let message = commit_message(&patch);
             git(repo, &["commit", "-m", &message], GitOpts::default())?;
+        }
+        if let Some(onto) = patch.conflict.as_ref().and_then(|c| c.onto.as_deref()) {
+            git(repo, &["reset", "--soft", onto], GitOpts::default())?;
+            let staged = git(
+                repo,
+                &["diff", "--cached", "--quiet"],
+                GitOpts {
+                    allow_fail: true,
+                    ..GitOpts::default()
+                },
+            )?;
+            if staged.code != 0 {
+                let message = commit_message(&patch);
+                git(repo, &["commit", "-m", &message], GitOpts::default())?;
+            }
         }
         let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;
         fs::create_dir_all(repo.join(".uplink/patches"))?;
