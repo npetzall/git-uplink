@@ -57,6 +57,4 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 
 ## Relation to the TypeScript dashboard
 
-The original playbook and operator UI live in this repository's root. This crate is the engine and CLI, rewritten in Rust so the tool is a normal Git subcommand.
-
-Intended Origin repository name: `git-uplink`. The agent token in this session cannot create that repo (create is outside the token's scope). Until then, develop and install from this directory.
+The playbook and operator UI stay on `main`. This branch is only the Rust engine and CLI, so the tool can be installed as a Git subcommand.
