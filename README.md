@@ -83,7 +83,7 @@ cargo deny check
 
 The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, OSS packets, plus a check that the UI was embedded.
 
-`build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, and every lab step completing. You can run them alone with `npm test --prefix web`. Typecheck is `npm run typecheck --prefix web`.
+`build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, queued work staying off the fork until oss approval, and every lab step completing. You can run them alone with `npm test --prefix web`. Typecheck is `npm run typecheck --prefix web`.
 
 CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a dedicated `web/` job (`npm ci`, typecheck, vitest), and `cargo deny` (RustSec advisories plus licenses, bans, and sources).
 

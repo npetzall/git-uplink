@@ -20,6 +20,14 @@ export type SimPatch = {
   mergedVia?: string;
 };
 
+export type SimConflict = {
+  patchId: string;
+  branch: string;
+  blockedIds: string[];
+  files: SimFileMap;
+  phase: "stopped" | "fixed";
+};
+
 export type SimState = {
   stepId: string;
   upstream: SimFileMap;
@@ -27,20 +35,103 @@ export type SimState = {
   contrib: { branch: string; files: SimFileMap; prNumber?: number }[];
   patches: SimPatch[];
   log: string[];
-  conflict?: { patchId: string; ours: string; theirs: string };
+  conflict?: SimConflict;
 };
 
-const BASE: SimFileMap = {
-  "src/tokens.js": `export function hash(value) {
+const README = "tokenkit\n";
+
+function tree(tokens: string): SimFileMap {
+  return { "src/tokens.js": tokens, "README.md": README };
+}
+
+function withVendor(tokens: string): SimFileMap {
+  return tree(
+    `${tokens.trimEnd()}\n\nexport function vendorTelemetry() {\n  return "emu-only";\n}\n`,
+  );
+}
+
+const TOKENS_SHA1 = `export function hash(value) {
   return sha1(value);
 }
 
 export function ttl() {
   return 3600;
 }
-`,
-  "README.md": "tokenkit\n",
-};
+`;
+
+const TOKENS_SHA256 = `export function hash(value) {
+  return sha256(value);
+}
+
+export function ttl() {
+  return 3600;
+}
+`;
+
+const TOKENS_SHA256_LOGS = `export function hash(value) {
+  console.log("hash", value);
+  return sha256(value);
+}
+
+export function ttl() {
+  return 3600;
+}
+`;
+
+const TOKENS_SALTED = `export function hash(value) {
+  return saltedSha256(value);
+}
+
+export function ttl() {
+  return 3600;
+}
+`;
+
+const TOKENS_SALTED_LOGS = `export function hash(value) {
+  console.log("hash", value);
+  return saltedSha256(value);
+}
+
+export function ttl() {
+  return 3600;
+}
+`;
+
+const TOKENS_DIGEST = `export function hash(value) {
+  const digest = saltedSha256(value);
+  return digest;
+}
+
+export function ttl() {
+  return 3600;
+}
+`;
+
+const TOKENS_CONFLICT = `export function hash(value) {
+<<<<<<< HEAD (upstream/main)
+  const digest = saltedSha256(value);
+  return digest;
+=======
+  console.log("hash", value);
+  return saltedSha256(value);
+>>>>>>> upl_logs
+}
+
+export function ttl() {
+  return 3600;
+}
+`;
+
+const TOKENS_RESOLVED = `export function hash(value) {
+  const digest = saltedSha256(value);
+  console.log("hash", value);
+  return digest;
+}
+
+export function ttl() {
+  return 3600;
+}
+`;
 
 function clone(files: SimFileMap): SimFileMap {
   return { ...files };
@@ -49,8 +140,8 @@ function clone(files: SimFileMap): SimFileMap {
 export function initialState(): SimState {
   return {
     stepId: "start",
-    upstream: clone(BASE),
-    company: clone(BASE),
+    upstream: tree(TOKENS_SHA1),
+    company: tree(TOKENS_SHA1),
     contrib: [],
     patches: [],
     log: ["Company mirror created from public upstream."],
@@ -85,20 +176,13 @@ export const LAB_STEPS: {
       "Asha branches from company main, switches SHA-1 to SHA-256, and opens one internal PR. Engineering review plus the uplink:import label is internal product approval: Uplink imports that PR as a queued patch. She never opens a second branch for upstream. IP has not run yet.",
     why: "Developers keep a normal GitHub Enterprise workflow. The upstream fork branch is derived later from this patch object.",
     apply: (state) => {
-      const files = {
-        "src/tokens.js": state.upstream["src/tokens.js"].replace(
-          "return sha1(value);",
-          "return sha256(value);",
-        ),
-        "README.md": state.upstream["README.md"],
-      };
       const patch: SimPatch = {
         id: "upl_hash",
         title: "Use SHA-256 for tokens",
         intent: "upstream",
         status: "queued",
         dependsOn: [],
-        files,
+        files: tree(TOKENS_SHA256),
       };
       return rebuild({
         ...state,
@@ -118,20 +202,13 @@ export const LAB_STEPS: {
       "Ben branches from company main, which already includes SHA-256, and adds structured logging. Uplink stores that as a second patch stacked on the first.",
     why: "The company can ship and test on top of work that is not public yet, without merging a long-lived product fork by hand.",
     apply: (state) => {
-      const files = {
-        "src/tokens.js": state.company["src/tokens.js"].replace(
-          "return sha256(value);",
-          'console.log("hash", value);\n  return sha256(value);',
-        ),
-        "README.md": state.company["README.md"],
-      };
       const patch: SimPatch = {
         id: "upl_logs",
         title: "Log token hashes",
         intent: "upstream",
         status: "queued",
         dependsOn: ["upl_hash"],
-        files,
+        files: tree(TOKENS_SHA256_LOGS),
       };
       return rebuild({
         ...state,
@@ -148,17 +225,13 @@ export const LAB_STEPS: {
       "Compliance needs a vendor telemetry hook that must not leave the enterprise. It is labeled internal-only. It still rebases onto upstream, but Uplink will refuse to export it.",
     why: "Odd case, but supported. The default remains: every other internal change is intended for upstream.",
     apply: (state) => {
-      const files = {
-        "src/tokens.js": `${state.company["src/tokens.js"].trimEnd()}\n\nexport function vendorTelemetry() {\n  return "emu-only";\n}\n`,
-        "README.md": state.company["README.md"],
-      };
       const patch: SimPatch = {
         id: "upl_vendor",
         title: "Vendor telemetry hook",
         intent: "internal-only",
         status: "queued",
         dependsOn: [],
-        files,
+        files: withVendor(TOKENS_SHA256_LOGS),
       };
       return rebuild({
         ...state,
@@ -206,79 +279,41 @@ export const LAB_STEPS: {
     id: "upstream-merges",
     title: "Maintainer merges, later hardens the change",
     summary:
-      "Upstream squash-merges PR #412. They then land a follow-up that salts the hash. Because Uplink recorded the PR (and the Uplink-Patch-Id trailer), the original patch is dropped and the salt fix is kept.",
+      "Upstream squash-merges PR #412. They then land a follow-up that salts the hash. Because Uplink recorded the PR (and the Uplink-Patch-Id trailer), the original patch is dropped and the salt fix is kept. The logging delta still applies.",
     why: "If the company kept applying its old SHA-256 patch, the later salt fix would be reverted on the next sync. Drop-on-merge is the whole point of the link between the internal patch and the upstream PR.",
     apply: (state) => {
-      const upstream = {
-        ...state.upstream,
-        "src/tokens.js": state.upstream["src/tokens.js"].replace(
-          "return sha1(value);",
-          "return saltedSha256(value);",
-        ),
-      };
-      const logsFiles: SimFileMap = {
-        "src/tokens.js": `export function hash(value) {
-  console.log("hash", value);
-  return saltedSha256(value);
-}
-
-export function ttl() {
-  return 3600;
-}
-`,
-        "README.md": "tokenkit\n",
-      };
-      const vendorFiles: SimFileMap = {
-        "src/tokens.js": `${logsFiles["src/tokens.js"].trimEnd()}
-
-export function vendorTelemetry() {
-  return "emu-only";
-}
-`,
-        "README.md": "tokenkit\n",
-      };
       const patches = state.patches.map((patch) => {
         if (patch.id === "upl_hash") {
           return { ...patch, status: "merged" as const, mergedVia: "pr #412" };
         }
         if (patch.id === "upl_logs") {
-          return { ...patch, files: logsFiles };
+          return { ...patch, files: tree(TOKENS_SALTED_LOGS) };
         }
         if (patch.id === "upl_vendor") {
-          return { ...patch, files: vendorFiles };
+          return { ...patch, files: withVendor(TOKENS_SALTED_LOGS) };
         }
         return patch;
       });
       return rebuild({
         ...state,
         stepId: "upstream-merges",
-        upstream,
+        upstream: tree(TOKENS_SALTED),
         patches,
+        contrib: [],
         log: [
           ...state.log,
-          "PR #412 merged. Dropped upl_hash. Rebased remaining patches onto saltedSha256.",
+          "PR #412 merged. Dropped upl_hash. Rebased remaining patches onto saltedSha256. Fork branch uplink/upl_hash is done.",
         ],
       });
     },
   },
   {
     id: "conflict",
-    title: "Unrelated upstream edit conflicts with a pending patch",
+    title: "Sync stops: upstream overlaps a pending patch",
     summary:
-      "Someone else changes ttl() from 3600 to 1800. The logging patch still applies. A later company TTL patch would conflict — here we collide with the remaining hash-adjacent logging context after another overlapping edit, then stop the queue on upl_logs after an upstream rewrite of the hash function body.",
-    why: "Sync must fail closed. The pending upstream contribution is amended in the same patch object so the open PR can be force-pushed from the refreshed patch.",
+      "Someone rewrites hash() to bind the digest before returning. The logging patch still inserts console.log next to return saltedSha256(value), so git apply fails. Sync records upl_logs as conflict, opens uplink/conflict/upl_logs, and does not move company main.",
+    why: "Sync must fail closed. Later patches — including independent internal-only work — wait. The contribution fork stays empty of logs because that patch was never IP-approved; a conflict is not an export.",
     apply: (state) => {
-      const upstream = {
-        ...state.upstream,
-        "src/tokens.js": `export function hash(value) {
-  return saltedSha256(value);
-}
-
-export function ttl() {
-  return 1800;
-}
-`,
-      };
       const patches = state.patches.map((patch) =>
         patch.id === "upl_logs"
           ? { ...patch, status: "conflict" as const }
@@ -287,75 +322,105 @@ export function ttl() {
       return {
         ...state,
         stepId: "conflict",
-        upstream,
+        upstream: tree(TOKENS_DIGEST),
         patches,
-        company: applyPatches(upstream, patches),
+        company: state.company,
+        contrib: state.contrib,
         conflict: {
           patchId: "upl_logs",
-          ours: 'console.log("hash", value);',
-          theirs: "saltedSha256 already landed; log line needs a new home.",
+          branch: "uplink/conflict/upl_logs",
+          blockedIds: ["upl_vendor"],
+          files: tree(TOKENS_CONFLICT),
+          phase: "stopped",
         },
         log: [
           ...state.log,
-          "Sync conflict on upl_logs. Opened internal PR against uplink/conflict/upl_logs.",
+          "Sync conflict on upl_logs. Opened uplink/conflict/upl_logs. Company main not rebuilt. upl_vendor not applied.",
         ],
       };
     },
   },
   {
-    id: "amend",
-    title: "Resolve once; the upstream PR is amended",
+    id: "conflict-fix",
+    title: "Checkout the conflict branch and fix",
     summary:
-      "Ben fixes the conflict by logging after saltedSha256. Uplink refreshes upl_logs and, because that patch was destined for upstream, the next submit/sync force-pushes the contribution fork branch. Company main now matches upstream plus the amended log line plus vendor telemetry.",
-    why: "One patch identity. Internal conflict resolution and upstream review comments both amend the same object, so nobody maintains a shadow branch.",
+      "Ben fetches, checks out uplink/conflict/upl_logs, and edits the conflicted file. He keeps upstream’s digest local and logs after it. git add stages the resolution. The patch id is unchanged. Status is still conflict until resolve runs.",
+    why: "Humans fix files on the conflict branch. They do not hand-edit company main or the contribution fork. Those refs are derived from the patch object after resolve.",
     apply: (state) => {
-      const files = {
-        "src/tokens.js": `export function hash(value) {
-  const digest = saltedSha256(value);
-  console.log("hash", value);
-  return digest;
-}
-
-export function ttl() {
-  return 1800;
-}
-
-export function vendorTelemetry() {
-  return "emu-only";
-}
-`,
-        "README.md": "tokenkit\n",
+      if (!state.conflict) return state;
+      return {
+        ...state,
+        stepId: "conflict-fix",
+        conflict: {
+          ...state.conflict,
+          files: tree(TOKENS_RESOLVED),
+          phase: "fixed",
+        },
+        log: [
+          ...state.log,
+          "Checked out uplink/conflict/upl_logs. Resolved markers in src/tokens.js and staged the file.",
+        ],
       };
+    },
+  },
+  {
+    id: "resolve",
+    title: "Resolve the same patch id",
+    summary:
+      "git uplink resolve upl_logs rewrites only that patch file, then rebuilds. Remaining patches replay: vendor telemetry applies again. upl_logs returns to queued. Nothing is pushed to the upstream-owned fork.",
+    why: "One patch identity. Internal conflict resolution amends the same object. Resolve is not submit: queued work still needs the oss Environment before it can leave EMU.",
+    apply: (state) => {
       const patches = state.patches.map((patch) => {
         if (patch.id === "upl_logs") {
-          return { ...patch, status: "queued" as const, files };
+          return { ...patch, status: "queued" as const, files: tree(TOKENS_RESOLVED) };
         }
         if (patch.id === "upl_vendor") {
-          return {
-            ...patch,
-            files: {
-              "src/tokens.js": files["src/tokens.js"],
-              "README.md": files["README.md"],
-            },
-          };
+          return { ...patch, files: withVendor(TOKENS_RESOLVED) };
         }
         return patch;
       });
-      const next = rebuild({
+      return rebuild({
         ...state,
-        stepId: "amend",
+        stepId: "resolve",
         patches,
         conflict: undefined,
+        contrib: state.contrib,
+        log: [
+          ...state.log,
+          "Resolved upl_logs. Company main rebuilt (upstream + amended logs + vendor). Fork unchanged — still no IP approval for logs.",
+        ],
+      });
+    },
+  },
+  {
+    id: "submit-logs",
+    title: "IP review, then export the amended patch",
+    summary:
+      "Legal approves the oss GitHub Environment for upl_logs. The same run pushes uplink/upl_logs — the amended log line on current public main — and opens PR #418. vendorTelemetry is not in that tree.",
+    why: "Bytes leave EMU only after oss approval. The fork branch is generated from the patch, so the conflict resolution is what upstream reviews. Internal-only patches still never export.",
+    apply: (state) => {
+      const patches = state.patches.map((patch) =>
+        patch.id === "upl_logs"
+          ? { ...patch, status: "submitted" as const, prNumber: 418 }
+          : patch,
+      );
+      const logs = patches.find((patch) => patch.id === "upl_logs")!;
+      return {
+        ...state,
+        stepId: "submit-logs",
+        patches,
         contrib: [
-          ...state.contrib.filter((branch) => branch.branch !== "uplink/upl_logs"),
-          { branch: "uplink/upl_logs", files, prNumber: undefined },
+          {
+            branch: "uplink/upl_logs",
+            files: logs.files,
+            prNumber: 418,
+          },
         ],
         log: [
           ...state.log,
-          "Amended upl_logs. Company main rebuilt. Contribution branch refreshed for the next submit.",
+          "Approved oss environment for upl_logs. Pushed uplink/upl_logs to the private fork and opened public PR #418.",
         ],
-      });
-      return next;
+      };
     },
   },
 ];

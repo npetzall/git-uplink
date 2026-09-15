@@ -9,7 +9,8 @@ export function LabPage() {
         <p className="text-muted-foreground">
           Same lifecycle the git uplink engine tests against real git: carry patches, stack on
           unmerged work, keep an internal-only escape hatch, export after approval, drop on merge so
-          a later upstream fix survives, then amend the pending contribution after a sync conflict.
+          a later upstream fix survives, then walk a sync conflict through checkout, resolve, and a
+          second oss approval before the amended patch reaches the fork.
         </p>
       </div>
       <LabClient />

@@ -3,30 +3,43 @@ import { ArrowRight, RotateCcw, Play } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { StatusBadge } from "./status-badge";
-import { LAB_STEPS, runThrough, type SimFileMap } from "../lib/simulator";
+import { LAB_STEPS, runThrough, type SimFileMap, type SimPatch } from "../lib/simulator";
 import { cn } from "../lib/utils";
 
 function FileView({ files, highlight }: { files: SimFileMap; highlight?: string }) {
   const entries = Object.entries(files);
   return (
     <div className="space-y-3">
-      {entries.map(([name, contents]) => (
-        <div key={name}>
-          <p className="mb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
-            {name}
-          </p>
-          <pre
-            className={cn(
-              "overflow-x-auto rounded-lg bg-black/40 p-3 font-mono text-xs leading-5 text-zinc-200",
-              highlight && contents.includes(highlight) && "ring-1 ring-teal-400/40",
-            )}
-          >
-            {contents}
-          </pre>
-        </div>
-      ))}
+      {entries.map(([name, contents]) => {
+        const conflicted = contents.includes("<<<<<<<");
+        return (
+          <div key={name}>
+            <p className="mb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+              {name}
+            </p>
+            <pre
+              className={cn(
+                "overflow-x-auto rounded-lg bg-black/40 p-3 font-mono text-xs leading-5 text-zinc-200",
+                highlight && contents.includes(highlight) && "ring-1 ring-teal-400/40",
+                conflicted && "ring-1 ring-rose-400/40",
+              )}
+            >
+              {contents}
+            </pre>
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+function patchLink(patch: SimPatch, blockedBy?: string) {
+  if (patch.mergedVia) return patch.mergedVia;
+  if (patch.prNumber) return `upstream#${patch.prNumber}`;
+  if (patch.status === "conflict") return `uplink/conflict/${patch.id}`;
+  if (blockedBy) return `waiting on ${blockedBy}`;
+  if (patch.dependsOn.length) return `depends ${patch.dependsOn.join(", ")}`;
+  return "internal only";
 }
 
 export function LabClient() {
@@ -34,6 +47,8 @@ export function LabClient() {
   const state = useMemo(() => runThrough(stepCount), [stepCount]);
   const current = stepCount === 0 ? undefined : LAB_STEPS[stepCount - 1];
   const canAdvance = stepCount < LAB_STEPS.length;
+  const conflictIndex = state.patches.findIndex((patch) => patch.status === "conflict");
+  const blockedBy = conflictIndex >= 0 ? state.patches[conflictIndex]?.id : undefined;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
@@ -128,11 +143,13 @@ export function LabClient() {
               <FileView files={state.upstream} highlight="saltedSha256" />
             </CardContent>
           </Card>
-          <Card className="ring-1 ring-teal-400/20">
+          <Card className={cn("ring-1 ring-teal-400/20", state.conflict && "ring-rose-400/30")}>
             <CardHeader>
               <CardTitle className="text-base">Company main (what you build)</CardTitle>
               <p className="text-xs text-muted-foreground">
-                GHEC EMU · upstream + active patches
+                {state.conflict
+                  ? "Rebuild blocked · last successful main"
+                  : "GHEC EMU · upstream + active patches"}
               </p>
             </CardHeader>
             <CardContent>
@@ -149,7 +166,8 @@ export function LabClient() {
             <CardContent>
               {state.contrib.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  Nothing exported yet. Internal work stays inside the enterprise until approval.
+                  Nothing exported yet. Internal work stays inside the enterprise until oss
+                  Environment approval.
                 </p>
               ) : (
                 <div className="space-y-4">
@@ -167,6 +185,23 @@ export function LabClient() {
             </CardContent>
           </Card>
         </div>
+
+        {state.conflict ? (
+          <Card data-testid="lab-conflict-branch" className="border-rose-500/30">
+            <CardHeader>
+              <CardTitle className="text-base">Conflict working tree</CardTitle>
+              <p className="font-mono text-xs text-rose-200">{state.conflict.branch}</p>
+              <p className="text-xs text-muted-foreground">
+                {state.conflict.phase === "fixed"
+                  ? "Markers resolved and staged. Status stays conflict until git uplink resolve."
+                  : "HEAD is here, not on company main. Later patches are not applied."}
+              </p>
+            </CardHeader>
+            <CardContent>
+              <FileView files={state.conflict.files} />
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader>
@@ -189,27 +224,29 @@ export function LabClient() {
                   </tr>
                 </thead>
                 <tbody>
-                  {state.patches.map((patch) => (
-                    <tr key={patch.id} className="border-b border-border/60">
-                      <td className="py-2 pr-3 font-mono text-xs">{patch.id}</td>
-                      <td className="py-2 pr-3">{patch.title}</td>
-                      <td className="py-2 pr-3">
-                        <StatusBadge value={patch.intent} />
-                      </td>
-                      <td className="py-2 pr-3">
-                        <StatusBadge value={patch.status} />
-                      </td>
-                      <td className="py-2 font-mono text-xs text-muted-foreground">
-                        {patch.prNumber
-                          ? `upstream#${patch.prNumber}`
-                          : patch.mergedVia
-                            ? patch.mergedVia
-                            : patch.dependsOn.length
-                              ? `depends ${patch.dependsOn.join(", ")}`
-                              : "internal only"}
-                      </td>
-                    </tr>
-                  ))}
+                  {state.patches.map((patch, index) => {
+                    const waiting = conflictIndex >= 0 && index > conflictIndex;
+                    return (
+                      <tr key={patch.id} className="border-b border-border/60">
+                        <td className="py-2 pr-3 font-mono text-xs">{patch.id}</td>
+                        <td className="py-2 pr-3">{patch.title}</td>
+                        <td className="py-2 pr-3">
+                          <StatusBadge value={patch.intent} />
+                        </td>
+                        <td className="py-2 pr-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <StatusBadge value={patch.status} />
+                            {waiting ? (
+                              <span className="text-xs text-rose-200/80">· blocked</span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="py-2 font-mono text-xs text-muted-foreground">
+                          {patchLink(patch, waiting ? blockedBy : undefined)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -218,8 +255,25 @@ export function LabClient() {
                 data-testid="lab-conflict"
                 className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-100"
               >
-                Queue stopped on {state.conflict.patchId}. Fix the patch once; Uplink will rebuild
-                company main and refresh the contribution branch from the same id.
+                {state.conflict.phase === "fixed" ? (
+                  <>
+                    Working tree on {state.conflict.branch} is clean.{" "}
+                    <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">
+                      git uplink resolve {state.conflict.patchId}
+                    </code>{" "}
+                    will refresh that patch file and rebuild. It will not push the contribution
+                    fork.
+                  </>
+                ) : (
+                  <>
+                    Queue stopped on {state.conflict.patchId}. Company main is frozen.{" "}
+                    {state.conflict.blockedIds.join(", ")} wait. Checkout{" "}
+                    <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">
+                      {state.conflict.branch}
+                    </code>
+                    , fix the files, then resolve the same id.
+                  </>
+                )}
               </div>
             ) : null}
           </CardContent>
