@@ -1,8 +1,14 @@
 # git-uplink
 
-Rust Git subcommand for the Uplink operating model. The binary is named **`git-uplink`**, so Git treats it as `git uplink`.
+Rust Git subcommand for the Uplink operating model. The binary is **`git-uplink`**, so Git treats it as `git uplink`.
 
-It carries a patch queue on company `main` (`upstream/main` plus every patch that is not `merged` or `dropped`), prepares contributions (message cutoff, export author, affiliation scan), and submits through an upstream-owned private fork after IP approval.
+It is for a company on GitHub Enterprise Cloud with Enterprise Managed Users that must build on a public project, keep unreleased work private, pass IP review, and contribute through an **upstream-owned private fork**. Developers keep one internal branch per change. Company `main` is bot-owned and always:
+
+```text
+public upstream/main  +  every patch that is not merged or dropped
+```
+
+`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. On GitHub Enterprise Cloud, dispatch the **oss** Environment workflow; `git uplink report` writes `.uplink/reports/<id>/prepare.md` and `GITHUB_STEP_SUMMARY`.
 
 ```bash
 cargo install --path .
@@ -10,43 +16,54 @@ git uplink status
 git uplink web-ui
 ```
 
-`git uplink web-ui` serves the operator dashboard from files **embedded in the binary**. `build.rs` runs `npm ci` / `npm run build` in `web/` and the dist is compiled in with `rust-embed`. The command opens a browser to the server (pass `--no-open` to skip).
+`git uplink web-ui` serves the operator dashboard from files **embedded in the binary**. `build.rs` runs `npm ci`, `npm test`, and `npm run build` in `web/`; the dist is compiled in with `rust-embed`. The command opens a browser (pass `--no-open` to skip).
 
 Use `git-uplink -h` or `git uplink -h`. Plain `git uplink --help` goes through Git’s man-page path, not clap.
 
 ## Install
 
+Building the crate needs **Rust 1.83+** (`rust-toolchain.toml` pins 1.83.0), **Node.js 22** (for the embedded UI), and `npm`.
+
 ```bash
-cargo build --release
-export PATH="$PWD/target/release:$PATH"
+cargo install --path .
 git uplink -h
 ```
 
-Building the crate needs **Rust 1.83+**, **Node.js 22** (for the embedded UI), and `npm`.
+For a local binary without installing into Cargo’s bin directory:
+
+```bash
+cargo build --release
+export PATH="$PWD/target/release:$PATH"
+```
 
 ## Commands
 
 ```text
 git uplink init [--upstream <url>] [--contrib <url>]
 git uplink add --title <text> [--from <ref>] [--head <ref>] [--internal-only]
-            [--pr <n>] [--pr-url <url>] [--depends-on <id>]... [--push]
-git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--depends-on <id>]...
+            [--pr <n>] [--pr-url <url>] [--depends-on <id>]...
+            [--push] [--refresh <remote>] [--push-remote <remote>]
+git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
+            [--depends-on <id>]... [--pr <n>]
 git uplink prepare [--from <ref>] [--head <ref>] [--title <text>] [--pr <n>]
+            [--internal-only]
 git uplink report <id> [--out <file>]
 git uplink status
-git uplink approve <id>
+git uplink approve <id> [--out <file>]
 git uplink submit <id>
 git uplink sync
-git uplink merged <id> [--via pr|trailer|manual]
-git uplink drop <id> --reason <text>
+git uplink merged <id> [--via pr|trailer|patch-id|empty-rebase|manual]
+git uplink drop <id> [--reason <text>]
 git uplink rebuild
 git uplink resolve <id>
 git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 ```
 
-`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. On GitHub Enterprise Cloud, dispatch the **oss** Environment workflow; `git uplink report` writes `.uplink/reports/<id>/prepare.md` and `GITHUB_STEP_SUMMARY`.
+`init` writes `.uplink/queue.json` and installs `.uplink/commit-msg.template`. `--upstream` / `--contrib` add those remotes. Queue state lives in `.uplink/queue.json` and `.uplink/patches/*.patch`. Rebuild copies the whole `.uplink` tree, including reports.
 
-Queue state lives in `.uplink/queue.json` and `.uplink/patches/*.patch`. Rebuild copies the whole `.uplink` tree, including reports.
+`add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `--depends-on` can also come from `UPLINK_DEPENDS_ON`. `drop --reason` defaults to `dropped by operator`.
+
+`submit` exports the patch onto the contrib fork. Set `UPLINK_GITHUB_TOKEN` (and optionally `UPLINK_GITHUB_API`) to open the upstream pull request from that branch. Merge detection, in order: recorded GitHub PR → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply.
 
 ## Dashboard
 
@@ -62,12 +79,20 @@ cargo test
 
 The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, OSS packets, plus a check that the UI was embedded.
 
-`cargo test` also runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, and every lab step completing. You can run them alone with `npm test --prefix web`.
+`build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, and every lab step completing. You can run them alone with `npm test --prefix web`.
+
+CI (`cargo test --locked` then `cargo build --release`) is in `.github/workflows/ci.yml`.
 
 ## Product-repo workflows
 
-Copy `templates/emu-workflows/` into the company product repository. Those jobs assume `git-uplink` is on `PATH`. Environment setup is in `templates/README.md`. Developer stories: [way-of-working.md](way-of-working.md).
+Copy `templates/emu-workflows/` into the company product repository. Those jobs assume `git-uplink` is on `PATH`.
 
-## Playbook on `main`
+| Workflow | When |
+| --- | --- |
+| `uplink-prepare.yml` | Every PR to `main` — message cutoff, export author, affiliation scan |
+| `uplink-preflight.yml` | Every PR to `main` — apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT` |
+| `uplink-import.yml` | Label `uplink:import` or merge — product gate, status `queued` |
+| `uplink-submit.yml` | Dispatch with a patch id — `oss` Environment IP gate, then approve + submit |
+| `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches, rebuild `main` |
 
-The TypeScript playbook and Next.js dashboard remain on `main`. This branch is the Rust engine, CLI, and embedded UI.
+Environment setup is in `templates/README.md`. Developer stories: [way-of-working.md](way-of-working.md).
