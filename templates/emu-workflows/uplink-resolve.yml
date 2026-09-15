@@ -3,8 +3,9 @@
 #
 # Human pushes to uplink/conflict/<id> after fixing markers. This job
 # runs git uplink resolve, rebuilds company main, and deletes the
-# conflict branch. It must not run when the sync bot publishes the
-# conflict branch (that push is github-actions[bot]).
+# conflict branch. If rebuild stops on a later patch, it publishes that
+# conflict the same way sync does. It must not run when the sync bot
+# publishes the conflict branch (that push is github-actions[bot]).
 name: Uplink resolve
 
 on:
@@ -35,15 +36,55 @@ jobs:
         run: |
           git fetch origin main
           git branch -f main origin/main
+          git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
           id="${GITHUB_REF_NAME#uplink/conflict/}"
           if [ -z "$id" ] || [ "$id" = "$GITHUB_REF_NAME" ]; then
             echo "Could not parse patch id from $GITHUB_REF_NAME"
             exit 1
           fi
+
+          set +e
           git uplink resolve "$id"
-          git push origin HEAD:main --force-with-lease
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+            exit "$code"
+          fi
+
+          head=$(git rev-parse --abbrev-ref HEAD)
+          if [ "$head" != "main" ]; then
+            echo "HEAD is ${head}, not main; refusing to push"
+            exit 1
+          fi
+
+          git push origin main --force-with-lease
+
+          if [ "$code" -eq 2 ]; then
+            conflict_id=$(jq -r '.patches[] | select(.status=="conflict") | .id' .uplink/queue.json | head -n 1)
+            conflict_branch=$(jq -r '.patches[] | select(.status=="conflict") | .conflict.branch' .uplink/queue.json | head -n 1)
+            if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+              echo "resolve exited 2 but no conflict patch was recorded"
+            else
+              if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+                git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+              fi
+
+              if [ -z "$(gh pr list --head "$conflict_branch" --state open --json number --jq '.[0].number')" ]; then
+                gh pr create --base main --head "$conflict_branch" --title "Uplink conflict: ${conflict_id}" --body "$(cat <<EOF
+          Do not merge this PR into \`main\`. Company main is bot-owned.
+
+          Rebuild after resolving \`${id}\` stopped on \`${conflict_id}\`. Checkout \`${conflict_branch}\`, remove the conflict markers, and push. Then run \`git uplink resolve ${conflict_id}\` (or let **Uplink resolve** run on that push).
+
+          Remaining patches wait until this id is resolved.
+          EOF
+          )"
+              fi
+            fi
+          fi
+
           number=$(gh pr list --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
           if [ -n "$number" ]; then
             gh pr close "$number" --comment "Resolved ${id}; company main rebuilt. Do not merge a conflict PR."
           fi
           git push origin --delete "$GITHUB_REF_NAME"
+          exit "$code"

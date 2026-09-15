@@ -577,10 +577,25 @@ fn run() -> Result<(), Error> {
             rebuild(&repo)?;
             println!("rebuild complete");
         }
-        Commands::Resolve { id } => {
-            resolve_conflict(&repo, &id)?;
-            println!("{id} resolved and queue rebuilt");
-        }
+        Commands::Resolve { id } => match resolve_conflict(&repo, &id) {
+            Ok(_) => println!("{id} resolved and queue rebuilt"),
+            Err(Error::Conflict(err)) => {
+                let queue = read_queue(&repo)?;
+                if let Some(conflict) = queue.patches.iter().find(|p| p.status == "conflict") {
+                    eprintln!(
+                        "CONFLICT {} on {}",
+                        conflict.id,
+                        conflict
+                            .conflict
+                            .as_ref()
+                            .map(|c| c.branch.as_str())
+                            .unwrap_or("")
+                    );
+                }
+                return Err(Error::Conflict(err));
+            }
+            Err(err) => return Err(err),
+        },
         Commands::WebUi {
             port,
             bind,
@@ -605,15 +620,17 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            if matches!(err, Error::Message(ref m) if m == "prepare failed" || m == "sync conflict")
-            {
-                if err.to_string() == "prepare failed" {
-                    return ExitCode::from(2);
-                }
-                return ExitCode::from(2);
+            // 1 = this command did not complete. 2 = this command persisted a
+            // follow-on apply conflict (sync, or resolve after a successful amend).
+            let code = match &err {
+                Error::Conflict(_) => 2,
+                Error::Message(m) if m == "prepare failed" || m == "sync conflict" => 2,
+                _ => 1,
+            };
+            if code == 1 || matches!(err, Error::Conflict(_)) {
+                eprintln!("{err}");
             }
-            eprintln!("{err}");
-            ExitCode::FAILURE
+            ExitCode::from(code)
         }
     }
 }

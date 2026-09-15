@@ -249,7 +249,7 @@ git uplink resolve upl_asha
 
 `resolve` refreshes **only** `upl_asha`’s patch file (same id), then rebuilds. Remaining patches replay. If Ben still applies, he stays `queued` / `submitted` and company `main` becomes new upstream + amended Asha + Ben.
 
-If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben`). He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
+If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s conflict branch/PR, then closes Asha’s. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
 
 If Asha was already `submitted`, the next `git uplink submit upl_asha` (or submit-on-sync) force-pushes `uplink/upl_asha` so the open public PR is the amended patch. Same id, same PR, no second branch.
 

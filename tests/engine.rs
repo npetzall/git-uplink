@@ -388,6 +388,156 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
 }
 
 #[test]
+fn resolving_asha_records_a_follow_on_conflict_on_ben() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let asha = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let with_ttl = fs::read_to_string(company.join("src/tokens.js")).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &with_ttl.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let ben = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS
+            .replace("return sha1(value);", "return saltedSha256(value);")
+            .replace("return 3600;", "return 1800;"),
+    );
+    commit_all(upstream, "salt the hash and shorten ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    sync(company).unwrap();
+
+    let queued = git_uplink::read_queue(company).unwrap();
+    let asha_conflicted = queued.patches.iter().find(|p| p.id == asha.id).unwrap();
+    assert_eq!(asha_conflicted.status, "conflict");
+    assert_eq!(
+        queued
+            .patches
+            .iter()
+            .find(|p| p.id == ben.id)
+            .unwrap()
+            .status,
+        "queued"
+    );
+    let asha_branch = asha_conflicted
+        .conflict
+        .as_ref()
+        .map(|c| c.branch.as_str())
+        .unwrap()
+        .to_string();
+
+    git(
+        company,
+        &["checkout", "--quiet", &asha_branch],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS
+            .replace("return sha1(value);", "return saltedSha256(value);")
+            .replace("return 3600;", "return 7200;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["resolve", &asha.id])
+        .current_dir(company)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected resolve exit 2 after amending asha, got {:?}\n{stderr}",
+        output.status.code()
+    );
+    assert!(
+        stderr.contains(&ben.id),
+        "follow-on conflict should name ben, stderr:\n{stderr}"
+    );
+
+    let snapshot = status_snapshot(company).unwrap();
+    let asha_after = snapshot
+        .queue
+        .patches
+        .iter()
+        .find(|p| p.id == asha.id)
+        .unwrap();
+    let ben_after = snapshot
+        .queue
+        .patches
+        .iter()
+        .find(|p| p.id == ben.id)
+        .unwrap();
+    assert_ne!(asha_after.status, "conflict");
+    assert_eq!(ben_after.status, "conflict");
+    let ben_branch = ben_after
+        .conflict
+        .as_ref()
+        .map(|c| c.branch.as_str())
+        .unwrap();
+    assert_eq!(ben_branch, format!("uplink/conflict/{}", ben.id));
+
+    let head = git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
+    assert_eq!(head, "main");
+    git(
+        company,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{ben_branch}"),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+}
+
+#[test]
 fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
     let world = setup_world();
     let company = &world.company;

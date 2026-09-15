@@ -303,8 +303,10 @@ export function PlaybookPage() {
             Fix the files on the conflict branch and push.{" "}
             <code>uplink-resolve.yml</code> skips the Actions bot, runs{" "}
             <code>git uplink resolve &lt;id&gt;</code>, and rebuilds <code>main</code>. Remaining
-            patches then replay. If the patch was already submitted, the next submit/sync
-            force-pushes the contribution branch so the upstream PR is amended.
+            patches then replay. If a later patch fails to apply, resolve exits 2 and the job
+            publishes that conflict the same way sync does. If the patch was already submitted,
+            the next submit/sync force-pushes the contribution branch so the upstream PR is
+            amended.
           </p>
         </Section>
 
