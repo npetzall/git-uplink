@@ -901,9 +901,13 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     .unwrap();
     approve_patch(company, &hash_patch.id).unwrap();
 
-    std::env::set_var("UPLINK_PREFLIGHT", "exit 1");
+    // Isolate the failing command on this repo's queue config. Do not set
+    // UPLINK_PREFLIGHT here: cargo test runs cases in parallel and a process-wide
+    // env override leaks into other adds.
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.preflight_command = Some("exit 1".into());
+    write_queue(company, &queue).unwrap();
     let err = submit_patch(company, &hash_patch.id, None);
-    std::env::remove_var("UPLINK_PREFLIGHT");
     assert!(matches!(err, Err(Error::Preflight(_))));
 
     let snapshot = status_snapshot(company).unwrap();
