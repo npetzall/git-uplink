@@ -299,7 +299,7 @@ export function PlaybookPage() {
             Hourly (and on demand) the bot fetches public upstream, drops merged patches, and
             replays the rest. If apply fails, it records <code>conflict</code> on company{" "}
             <code>main</code> without moving product files, commits{" "}
-            <code>uplink/conflict/&lt;id&gt;</code>, and opens an internal PR. Do not merge that PR.
+            <code>uplink/conflict/&lt;id&gt;</code>, and opens an internal issue. Do not open a PR.
             Fix the files on the conflict branch and push.{" "}
             <code>uplink-resolve.yml</code> skips the Actions bot, runs{" "}
             <code>git uplink resolve &lt;id&gt;</code>, and rebuilds <code>main</code>. Remaining

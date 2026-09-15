@@ -96,7 +96,7 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 | `uplink-prepare.yml` | Every PR to `main` — message cutoff, export author, affiliation scan |
 | `uplink-preflight.yml` | Every PR to `main` — apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT` |
 | `uplink-import.yml` | Label `uplink:import` or merge — product gate, status `queued` |
-| `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches, rebuild `main`; persist conflicts and open an internal PR |
+| `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches, rebuild `main`; persist conflicts and open an internal issue |
 | `uplink-resolve.yml` | Human push to `uplink/conflict/*` — `git uplink resolve`, rebuild `main`; publish a later conflict like sync; skips the Actions bot |
 | `uplink-submit.yml` | Dispatch with a patch id — `oss` Environment IP gate, then approve + submit |
 

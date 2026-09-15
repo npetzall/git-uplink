@@ -224,7 +224,7 @@ Upstream changes a file Asha also changed. Sync:
 
 What you have then:
 
-- `upl_asha` status `conflict`. Sync records that on company `main` (product files stay at the last successful rebuild) and commits `uplink/conflict/upl_asha` with the conflicted files. The Actions sync job opens an internal PR from that branch. **Do not merge it into `main`.**
+- `upl_asha` status `conflict`. Sync records that on company `main` (product files stay at the last successful rebuild) and commits `uplink/conflict/upl_asha` with the conflicted files. The Actions sync job opens an internal issue (`uplink:conflict`). **Do not open a PR for it.**
 - **Ben is not applied**, even though he does not depend on Asha. A blocked patch blocks the rest of the rebuild. Company `main` is not updated to “upstream + Ben, skip Asha.” There is no skip.
 - Ben’s public PR, if he already submitted, is untouched until his patch is replayed.
 
@@ -249,7 +249,7 @@ git uplink resolve upl_asha
 
 `resolve` refreshes **only** `upl_asha`’s patch file (same id), then rebuilds. Remaining patches replay. If Ben still applies, he stays `queued` / `submitted` and company `main` becomes new upstream + amended Asha + Ben.
 
-If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s conflict branch/PR, then closes Asha’s. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
+If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s conflict branch and issue, then closes Asha’s issue. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
 
 If Asha was already `submitted`, the next `git uplink submit upl_asha` (or submit-on-sync) force-pushes `uplink/upl_asha` so the open public PR is the amended patch. Same id, same PR, no second branch.
 

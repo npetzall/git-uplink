@@ -19,6 +19,7 @@ concurrency:
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 jobs:
@@ -62,6 +63,7 @@ jobs:
           if [ "$code" -eq 2 ]; then
             conflict_id=$(jq -r '.patches[] | select(.status=="conflict") | .id' .uplink/queue.json | head -n 1)
             conflict_branch=$(jq -r '.patches[] | select(.status=="conflict") | .conflict.branch' .uplink/queue.json | head -n 1)
+            conflict_onto=$(jq -r '.patches[] | select(.status=="conflict") | .conflict.onto // empty' .uplink/queue.json | head -n 1)
             if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
               echo "resolve exited 2 but no conflict patch was recorded"
             else
@@ -69,22 +71,39 @@ jobs:
                 git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
               fi
 
-              if [ -z "$(gh pr list --head "$conflict_branch" --state open --json number --jq '.[0].number')" ]; then
-                gh pr create --base main --head "$conflict_branch" --title "Uplink conflict: ${conflict_id}" --body "$(cat <<EOF
-          Do not merge this PR into \`main\`. Company main is bot-owned.
+              title="Uplink conflict: ${conflict_id}"
+              existing=$(gh issue list --state open --json number,title --jq ".[] | select(.title==\"${title}\") | .number" | head -n 1)
+              if [ -z "$existing" ]; then
+                gh label create uplink:conflict --description "Uplink sync conflict; checkout the conflict branch, do not open a PR" --color B60205 || true
+                compare=""
+                if [ -n "$conflict_onto" ] && [ "$conflict_onto" != "null" ]; then
+                  compare="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${conflict_onto}...${conflict_branch}"
+                fi
+                body=$(cat <<EOF
+          Company \`main\` is bot-owned. **Do not open or merge a pull request** for this conflict.
 
           Rebuild after resolving \`${id}\` stopped on \`${conflict_id}\`. Checkout \`${conflict_branch}\`, remove the conflict markers, and push. Then run \`git uplink resolve ${conflict_id}\` (or let **Uplink resolve** run on that push).
 
           Remaining patches wait until this id is resolved.
           EOF
-          )"
+          )
+                if [ -n "$compare" ]; then
+                  body="${body}
+
+          Compare the failed apply (not frozen main): ${compare}"
+                fi
+                gh issue create --title "$title" --label uplink:conflict --body "$body"
               fi
             fi
           fi
 
-          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
-          if [ -n "$number" ]; then
-            gh pr close "$number" --comment "Resolved ${id}; company main rebuilt. Do not merge a conflict PR."
+          issue=$(gh issue list --state open --json number,title --jq ".[] | select(.title==\"Uplink conflict: ${id}\") | .number" | head -n 1)
+          if [ -n "$issue" ]; then
+            gh issue close "$issue" --comment "Resolved ${id}; company main rebuilt. Do not open a conflict PR."
+          fi
+          pr=$(gh pr list --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
+          if [ -n "$pr" ]; then
+            gh pr close "$pr" --comment "Resolved ${id}; company main rebuilt. Conflicts are tracked as issues, not PRs. Do not merge a conflict PR."
           fi
           git push origin --delete "$GITHUB_REF_NAME"
           exit "$code"
