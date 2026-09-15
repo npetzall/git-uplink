@@ -17,6 +17,7 @@ fn main() {
 
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     run(npm, &["ci", "--no-fund", "--no-audit"], &web);
+    run(npm, &["test"], &web);
     run(npm, &["run", "build"], &web);
     if !dist.join("index.html").is_file() {
         panic!("vite did not write web/dist/index.html");

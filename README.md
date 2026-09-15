@@ -62,6 +62,8 @@ cargo test
 
 The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, OSS packets, plus a check that the UI was embedded.
 
+`cargo test` also runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, and every lab step completing. You can run them alone with `npm test --prefix web`.
+
 ## Product-repo workflows
 
 Copy `templates/emu-workflows/` into the company product repository. Those jobs assume `git-uplink` is on `PATH`. Environment setup is in `templates/README.md`. Developer stories: [way-of-working.md](way-of-working.md).
