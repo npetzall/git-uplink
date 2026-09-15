@@ -4,7 +4,7 @@ This is how developers use Uplink day to day. Company `main` is bot-owned. You o
 
 Read this alongside `.uplink/queue.json` and `git uplink status`. The binary is `git-uplink` (a Git subcommand). The queue is the source of truth for what company `main` is made of. Git history on `main` is rebuilt and may be force-updated; do not treat it as a human commit log.
 
-Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the commit message. `git commit` uses `.uplink/commit-msg.template` after `git uplink init`.
+Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the commit message. `git commit` uses `.uplink/commit-msg.template` after `git uplink init`. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network commands (`add --push`, `sync`, `submit`) use `UPLINK_GITHUB_TOKEN` / `GITHUB_TOKEN` or `UPLINK_SSH_KEY`, not your default SSH key.
 
 | Phase | What you do | Result |
 | --- | --- | --- |

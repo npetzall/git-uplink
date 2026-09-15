@@ -4,6 +4,42 @@ use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
 
+const BOT_NAME: &str = "Uplink Bot";
+const BOT_EMAIL: &str = "uplink@company.example";
+
+const IDENTITY_CONFIG: &[(&str, &str)] = &[
+    ("user.name", BOT_NAME),
+    ("user.email", BOT_EMAIL),
+    ("commit.gpgsign", "false"),
+    ("tag.gpgsign", "false"),
+    ("push.gpgsign", "false"),
+    ("advice.detachedHead", "false"),
+];
+
+const NETWORK_COMMANDS: &[&str] = &["fetch", "push", "ls-remote", "clone", "pull"];
+
+const FLAGS_TAKING_VALUE: &[&str] = &[
+    "-o",
+    "--push-option",
+    "--upload-pack",
+    "--receive-pack",
+    "--exec",
+    "--recurse-submodules",
+    "--jobs",
+    "-j",
+    "--depth",
+    "--shallow-since",
+    "--shallow-exclude",
+    "--negotiation-tip",
+    "--deepen",
+    "--server-option",
+    "--refmap",
+    "--filter",
+    "--keep",
+    "-c",
+    "-C",
+];
+
 #[derive(Debug, Clone)]
 pub struct GitResult {
     pub stdout: String,
@@ -53,24 +89,232 @@ pub struct GitOpts<'a> {
     pub extra_env: Vec<(String, String)>,
 }
 
+#[derive(Default)]
+struct Transport {
+    remote_url: Option<String>,
+    extra_header: Option<String>,
+    ssh_command: Option<String>,
+    isolate_gitconfig: bool,
+}
+
 fn strip_nl(s: String) -> String {
     s.strip_suffix('\n').unwrap_or(&s).to_string()
 }
 
+fn env_lookup(opts: &GitOpts<'_>, key: &str) -> Option<String> {
+    if let Some((_, value)) = opts.extra_env.iter().rev().find(|(k, _)| k == key) {
+        return if value.is_empty() {
+            None
+        } else {
+            Some(value.clone())
+        };
+    }
+    std::env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+fn network_remote_index(args: &[&str]) -> Option<usize> {
+    let cmd = args.first()?;
+    if !NETWORK_COMMANDS.contains(cmd) {
+        return None;
+    }
+    let mut i = 1;
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--" {
+            return (i + 1 < args.len()).then_some(i + 1);
+        }
+        if arg.starts_with('-') {
+            if arg.contains('=') {
+                i += 1;
+                continue;
+            }
+            if FLAGS_TAKING_VALUE.contains(&arg) {
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        return Some(i);
+    }
+    None
+}
+
+fn is_explicit_url(spec: &str) -> bool {
+    spec.contains("://") || spec.starts_with("git@")
+}
+
+fn is_local_transport(url: &str) -> bool {
+    let url = url.trim();
+    if url.starts_with("file://") {
+        return true;
+    }
+    if url.contains("://") {
+        return false;
+    }
+    if url.contains('@') {
+        return false;
+    }
+    true
+}
+
+fn ssh_to_https(url: &str) -> Option<String> {
+    let url = url.trim();
+    if let Some(rest) = url.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        let path = path.trim_start_matches('/');
+        return Some(format!("https://{host}/{path}"));
+    }
+    let rest = url.strip_prefix("ssh://")?;
+    let rest = rest.strip_prefix("git@").unwrap_or(rest);
+    let (hostport, path) = rest.split_once('/')?;
+    let host = match hostport.rsplit_once(':') {
+        Some((name, port)) if port == "22" => name,
+        Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => {
+            return Some(format!("https://{name}:{port}/{path}"));
+        }
+        _ => hostport,
+    };
+    Some(format!("https://{host}/{path}"))
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~'))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn resolve_remote_url(cwd: &Path, spec: &str, opts: &GitOpts<'_>) -> Result<String> {
+    if is_explicit_url(spec) || spec.starts_with("file://") {
+        return Ok(spec.to_string());
+    }
+    if spec.starts_with('/') || spec.starts_with('.') {
+        return Ok(spec.to_string());
+    }
+    let looked_up = git_inner(
+        cwd,
+        &["remote", "get-url", spec],
+        GitOpts {
+            allow_fail: true,
+            extra_env: opts.extra_env.clone(),
+            ..GitOpts::default()
+        },
+        false,
+    )?;
+    if looked_up.code == 0 && !looked_up.stdout.is_empty() {
+        Ok(looked_up.stdout)
+    } else {
+        Ok(spec.to_string())
+    }
+}
+
+const NETWORK_AUTH_HELP: &str = "Network git needs UPLINK_GITHUB_TOKEN or GITHUB_TOKEN (HTTPS), or UPLINK_SSH_KEY / UPLINK_SSH_COMMAND. git-uplink does not use the operator SSH agent or commit signing key.";
+
+fn transport_for(cwd: &Path, args: &[&str], opts: &GitOpts<'_>) -> Result<Transport> {
+    let Some(index) = network_remote_index(args) else {
+        return Ok(Transport::default());
+    };
+    let spec = args[index];
+    let url = resolve_remote_url(cwd, spec, opts)?;
+    if is_local_transport(&url) {
+        return Ok(Transport::default());
+    }
+
+    if let Some(token) =
+        env_lookup(opts, "UPLINK_GITHUB_TOKEN").or_else(|| env_lookup(opts, "GITHUB_TOKEN"))
+    {
+        let remote_url = ssh_to_https(&url).unwrap_or_else(|| url.clone());
+        return Ok(Transport {
+            remote_url: Some(remote_url),
+            extra_header: Some(format!("Authorization: Bearer {token}")),
+            ssh_command: None,
+            isolate_gitconfig: true,
+        });
+    }
+
+    if let Some(command) = env_lookup(opts, "UPLINK_SSH_COMMAND") {
+        return Ok(Transport {
+            ssh_command: Some(command),
+            isolate_gitconfig: true,
+            ..Transport::default()
+        });
+    }
+
+    if let Some(key) = env_lookup(opts, "UPLINK_SSH_KEY") {
+        return Ok(Transport {
+            ssh_command: Some(format!(
+                "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i {}",
+                shell_quote(&key)
+            )),
+            isolate_gitconfig: true,
+            ..Transport::default()
+        });
+    }
+
+    Err(Error::msg(NETWORK_AUTH_HELP))
+}
+
 pub fn git(cwd: &Path, args: &[&str], opts: GitOpts<'_>) -> Result<GitResult> {
+    git_inner(cwd, args, opts, true)
+}
+
+fn git_inner(
+    cwd: &Path,
+    args: &[&str],
+    opts: GitOpts<'_>,
+    isolate_transport: bool,
+) -> Result<GitResult> {
+    let transport = if isolate_transport {
+        transport_for(cwd, args, &opts)?
+    } else {
+        Transport::default()
+    };
+
+    let mut child_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    if let (Some(index), Some(url)) = (network_remote_index(args), transport.remote_url.as_ref()) {
+        child_args[index] = url.clone();
+    }
+
     let mut cmd = Command::new("git");
+    for (key, value) in IDENTITY_CONFIG {
+        cmd.arg("-c").arg(format!("{key}={value}"));
+    }
+    if let Some(header) = &transport.extra_header {
+        cmd.arg("-c").arg("credential.helper=");
+        cmd.arg("-c").arg(format!("http.extraHeader={header}"));
+    }
+    if transport.isolate_gitconfig {
+        cmd.arg("-c").arg("safe.directory=*");
+    }
     cmd.current_dir(cwd)
-        .args(args)
-        .env("GIT_AUTHOR_NAME", "Uplink Bot")
-        .env("GIT_AUTHOR_EMAIL", "uplink@company.example")
-        .env("GIT_COMMITTER_NAME", "Uplink Bot")
-        .env("GIT_COMMITTER_EMAIL", "uplink@company.example")
+        .args(&child_args)
+        .env("GIT_AUTHOR_NAME", BOT_NAME)
+        .env("GIT_AUTHOR_EMAIL", BOT_EMAIL)
+        .env("GIT_COMMITTER_NAME", BOT_NAME)
+        .env("GIT_COMMITTER_EMAIL", BOT_EMAIL)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for (k, v) in &opts.extra_env {
-        cmd.env(k, v);
+    for (key, value) in &opts.extra_env {
+        if value.is_empty() {
+            cmd.env_remove(key);
+        } else {
+            cmd.env(key, value);
+        }
+    }
+    cmd.env_remove("GIT_SSH").env_remove("GIT_SSH_COMMAND");
+    if transport.isolate_gitconfig {
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    }
+    if let Some(ssh_command) = &transport.ssh_command {
+        cmd.env("GIT_SSH_COMMAND", ssh_command);
     }
     if opts.input.is_some() {
         cmd.stdin(Stdio::piped());
@@ -100,26 +344,71 @@ pub fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(git(cwd, args, GitOpts::default())?.stdout)
 }
 
-pub fn configure_repo(cwd: &Path) -> Result<()> {
-    git(
-        cwd,
-        &["config", "user.name", "Uplink Bot"],
-        GitOpts::default(),
-    )?;
-    git(
-        cwd,
-        &["config", "user.email", "uplink@company.example"],
-        GitOpts::default(),
-    )?;
-    git(
-        cwd,
-        &["config", "commit.gpgsign", "false"],
-        GitOpts::default(),
-    )?;
-    git(
-        cwd,
-        &["config", "advice.detachedHead", "false"],
-        GitOpts::default(),
-    )?;
+/// Identity, signing, and detached-HEAD advice are process-scoped in [`git`].
+/// This stays for callers and tests; it does not write those values into the repo.
+pub fn configure_repo(_cwd: &Path) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_local_transport, network_remote_index, ssh_to_https};
+
+    #[test]
+    fn network_remote_index_skips_flags() {
+        assert_eq!(
+            network_remote_index(&[
+                "fetch",
+                "--quiet",
+                "--prune",
+                "origin",
+                "+refs/heads/main:refs/remotes/origin/main"
+            ]),
+            Some(3)
+        );
+        assert_eq!(
+            network_remote_index(&[
+                "push",
+                "--force-with-lease=refs/heads/main:abc",
+                "origin",
+                "HEAD:refs/heads/main",
+            ]),
+            Some(2)
+        );
+        assert_eq!(
+            network_remote_index(&["clone", "--quiet", "/tmp/repo.git", "/tmp/dest"]),
+            Some(2)
+        );
+        assert_eq!(network_remote_index(&["commit", "-m", "msg"]), None);
+        assert_eq!(network_remote_index(&["remote", "get-url", "origin"]), None);
+    }
+
+    #[test]
+    fn ssh_urls_rewrite_to_https() {
+        assert_eq!(
+            ssh_to_https("git@github.com:acme/app.git").as_deref(),
+            Some("https://github.com/acme/app.git")
+        );
+        assert_eq!(
+            ssh_to_https("ssh://git@github.example.com/acme/app.git").as_deref(),
+            Some("https://github.example.com/acme/app.git")
+        );
+        assert_eq!(
+            ssh_to_https("ssh://git@github.com:22/acme/app.git").as_deref(),
+            Some("https://github.com/acme/app.git")
+        );
+        assert_eq!(ssh_to_https("https://github.com/acme/app.git"), None);
+    }
+
+    #[test]
+    fn file_and_path_remotes_are_local() {
+        assert!(is_local_transport("/tmp/bare.git"));
+        assert!(is_local_transport("file:///tmp/bare.git"));
+        assert!(is_local_transport("../bare.git"));
+        assert!(!is_local_transport("git@github.com:acme/app.git"));
+        assert!(!is_local_transport(
+            "ssh://git@example.invalid/org/repo.git"
+        ));
+        assert!(!is_local_transport("https://github.com/acme/app.git"));
+    }
 }

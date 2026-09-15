@@ -65,6 +65,8 @@ git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 
 `submit` exports the patch onto the contrib fork. Set `UPLINK_GITHUB_TOKEN` (and optionally `UPLINK_GITHUB_API`) to open the upstream pull request from that branch. Merge detection, in order: recorded GitHub PR → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply.
 
+git-uplink shells out to `git`, but it does **not** use the operator’s commit signer or default SSH key. Bot identity and `commit.gpgsign=false` are process-scoped (`git -c`), so `git uplink init` does not rewrite `user.name` / `commit.gpgsign` in the clone. Your own `git commit` in that repo still follows global signing. Fetch/push/clone over the network need `UPLINK_GITHUB_TOKEN` or `GITHUB_TOKEN` (SSH remotes are rewritten to HTTPS for that invocation) or a dedicated `UPLINK_SSH_KEY` / `UPLINK_SSH_COMMAND`. Local `file://` remotes need neither. Without those, network git fails instead of opening ssh-agent / Touch ID.
+
 ## Dashboard
 
 `git uplink web-ui` is the operator UI: control room, live lab, collaboration notes, system playbook, [way-of-working.md](way-of-working.md), and a **This repo** page that reads `.uplink/queue.json` from the directory you started in.
