@@ -22,7 +22,7 @@ Use `git-uplink -h` or `git uplink -h`. Plain `git uplink --help` goes through G
 
 ## Install
 
-Building the crate needs **Rust 1.83+** (`rust-toolchain.toml` pins 1.83.0), **Node.js 22** (for the embedded UI), and `npm`.
+Building the crate needs **Rust 1.98+** (`rust-toolchain.toml` pins 1.98.1), **Node.js 22** (for the embedded UI), and `npm`.
 
 ```bash
 cargo install --path .

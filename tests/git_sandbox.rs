@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use git_uplink::{configure_repo, git, git_ok, init_repo, GitOpts, QueueConfig};
+use git_uplink::{GitOpts, QueueConfig, configure_repo, git, git_ok, init_repo};
 use tempfile::TempDir;
 
 fn temp_dir() -> TempDir {

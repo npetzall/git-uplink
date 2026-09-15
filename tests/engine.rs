@@ -4,10 +4,10 @@ use std::process::Command;
 use std::thread;
 
 use git_uplink::{
-    add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
+    AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts, MergeVia,
+    QueueConfig, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
     format_approver_packet, git, git_ok, init_repo, mark_merged, rebuild, report_paths,
-    resolve_conflict, status_snapshot, submit_patch, sync, write_queue, AddPatchOpts,
-    ApprovalReceipt, ConflictError, Error, GitOpts, MergeVia, QueueConfig, DEFAULT_CUTOFF,
+    resolve_conflict, status_snapshot, submit_patch, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -450,11 +450,13 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
             .status,
         "merged"
     );
-    assert!(after
-        .product_files
-        .get("src/tokens.js")
-        .unwrap()
-        .contains("vendor"));
+    assert!(
+        after
+            .product_files
+            .get("src/tokens.js")
+            .unwrap()
+            .contains("vendor")
+    );
 }
 
 #[test]
@@ -485,11 +487,13 @@ fn can_drop_an_internal_only_patch_from_the_company_build() {
     .unwrap();
     drop_patch(company, &internal.id, "no longer needed").unwrap();
     let snapshot = status_snapshot(company).unwrap();
-    assert!(!snapshot
-        .product_files
-        .get("src/tokens.js")
-        .unwrap()
-        .contains("vendor"));
+    assert!(
+        !snapshot
+            .product_files
+            .get("src/tokens.js")
+            .unwrap()
+            .contains("vendor")
+    );
     assert_eq!(snapshot.queue.patches[0].status, "dropped");
 }
 
@@ -599,16 +603,20 @@ fn serializes_two_adds_in_one_checkout_so_both_patches_survive() {
 
     let snapshot = status_snapshot(&company).unwrap();
     assert_eq!(snapshot.queue.patches.len(), 2);
-    assert!(snapshot
-        .product_files
-        .get("README.md")
-        .unwrap()
-        .contains("from-asha"));
-    assert!(snapshot
-        .product_files
-        .get("NOTES.md")
-        .unwrap()
-        .contains("from-ben"));
+    assert!(
+        snapshot
+            .product_files
+            .get("README.md")
+            .unwrap()
+            .contains("from-asha")
+    );
+    assert!(
+        snapshot
+            .product_files
+            .get("NOTES.md")
+            .unwrap()
+            .contains("from-ben")
+    );
 }
 
 #[test]
@@ -726,16 +734,20 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
         .collect();
     titles.sort();
     assert_eq!(titles, vec!["Notes from Ben", "Readme from Asha"]);
-    assert!(snapshot
-        .product_files
-        .get("README.md")
-        .unwrap()
-        .contains("from-asha"));
-    assert!(snapshot
-        .product_files
-        .get("NOTES.md")
-        .unwrap()
-        .contains("from-ben"));
+    assert!(
+        snapshot
+            .product_files
+            .get("README.md")
+            .unwrap()
+            .contains("from-asha")
+    );
+    assert!(
+        snapshot
+            .product_files
+            .get("NOTES.md")
+            .unwrap()
+            .contains("from-ben")
+    );
     drop((asha_keep, ben_keep));
 }
 
@@ -912,11 +924,13 @@ fn does_not_submit_or_push_when_export_tests_fail() {
 
     let snapshot = status_snapshot(company).unwrap();
     assert_eq!(snapshot.queue.patches[0].status, "approved");
-    assert!(snapshot.queue.patches[0]
-        .upstream
-        .as_ref()
-        .and_then(|u| u.pr_number)
-        .is_none());
+    assert!(
+        snapshot.queue.patches[0]
+            .upstream
+            .as_ref()
+            .and_then(|u| u.pr_number)
+            .is_none()
+    );
 }
 
 #[test]

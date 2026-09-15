@@ -5,7 +5,7 @@ use std::process::Command;
 use uuid::Uuid;
 
 use crate::error::{Error, PreflightError, Result};
-use crate::git::{git, GitOpts};
+use crate::git::{GitOpts, git};
 use crate::prepare::export_commit_message;
 use crate::queue::{active_patches, get_patch, patch_path, read_queue};
 use crate::repo::{has_ref, rev_parse, write_product_patch};
@@ -275,7 +275,11 @@ pub fn assert_export_preflight(
             ),
             suggested,
             "command",
-            if output.is_empty() { None } else { Some(output) },
+            if output.is_empty() {
+                None
+            } else {
+                Some(output)
+            },
         )))
     })
 }

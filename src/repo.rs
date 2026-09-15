@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
-use crate::git::{git, git_ok, GitOpts};
+use crate::git::{GitOpts, git, git_ok};
 use crate::prepare::export_commit_message;
 use crate::queue::{now_iso, patch_path};
-use crate::types::{Patch, QueueState, PATCH_DIR};
+use crate::types::{PATCH_DIR, Patch, QueueState};
 
 pub fn ensure_uplink_dirs(repo: &Path) -> Result<()> {
     fs::create_dir_all(repo.join(PATCH_DIR))?;

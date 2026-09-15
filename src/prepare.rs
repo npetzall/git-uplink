@@ -6,10 +6,10 @@ use std::path::Path;
 use regex::Regex;
 
 use crate::error::{Error, PrepareError, Result};
-use crate::git::{git, git_ok, GitOpts};
+use crate::git::{GitOpts, git, git_ok};
 use crate::queue::now_iso;
 use crate::types::{
-    PrepareCheck, PrepareReport, QueueState, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR,
+    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PrepareCheck, PrepareReport, QueueState,
 };
 
 pub const OSS_ENVIRONMENT: &str = "oss";
@@ -437,7 +437,9 @@ pub fn prepare_from_range(
                     tickets.join(", ")
                 )
             } else {
-                format!("Optional. Add “{marker}” under the public body for issue ids and other internal notes.")
+                format!(
+                    "Optional. Add “{marker}” under the public body for issue ids and other internal notes."
+                )
             },
         },
         PrepareCheck {
@@ -509,7 +511,9 @@ pub fn assert_prepare_ok(report: &PrepareReport, label: &str) -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     Err(Error::Prepare(PrepareError::new(
-        format!("Prepare-for-upstream failed for {label}. No import/approval/submit until this is clean.\n{failed}"),
+        format!(
+            "Prepare-for-upstream failed for {label}. No import/approval/submit until this is clean.\n{failed}"
+        ),
         report.clone(),
     )))
 }

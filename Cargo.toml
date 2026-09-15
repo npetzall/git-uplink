@@ -1,8 +1,8 @@
 [package]
 name = "git-uplink"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.83"
+edition = "2024"
+rust-version = "1.98"
 description = "Git subcommand that carries internal patches on public upstream and contributes through an upstream-owned private fork."
 license = "MIT"
 keywords = ["git", "subcommand", "emu", "oss", "contribution"]

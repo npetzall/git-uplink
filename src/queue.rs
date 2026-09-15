@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::types::{Patch, PatchEvent, QueueConfig, QueueState, PATCH_DIR, QUEUE_PATH};
+use crate::types::{PATCH_DIR, Patch, PatchEvent, QUEUE_PATH, QueueConfig, QueueState};
 
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)

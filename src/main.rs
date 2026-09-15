@@ -6,13 +6,13 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use git_uplink::{
-    add_patch, approve_patch, comment_on_issue, commit_queue, create_upstream_pull_request,
-    drop_patch, format_approval_receipt, format_approver_packet, format_prepare_markdown,
-    get_pull_request, git, git_ok, init_repo, mark_merged, parse_github_repo,
-    preflight_existing_patch, preflight_incoming_change, prepare_from_range, read_queue, rebuild,
-    record_pull_request, report_paths, resolve_conflict, status_snapshot, submit_patch,
-    summarize_queue, sync, AddPatchOpts, ApprovalReceipt, Error, GitOpts, GithubConfig,
-    IncomingPreflight, MergeVia, PreflightError, QueueConfig, OSS_ENVIRONMENT,
+    AddPatchOpts, ApprovalReceipt, Error, GitOpts, GithubConfig, IncomingPreflight, MergeVia,
+    OSS_ENVIRONMENT, PreflightError, QueueConfig, add_patch, approve_patch, comment_on_issue,
+    commit_queue, create_upstream_pull_request, drop_patch, format_approval_receipt,
+    format_approver_packet, format_prepare_markdown, get_pull_request, git, git_ok, init_repo,
+    mark_merged, parse_github_repo, preflight_existing_patch, preflight_incoming_change,
+    prepare_from_range, read_queue, rebuild, record_pull_request, report_paths, resolve_conflict,
+    status_snapshot, submit_patch, summarize_queue, sync,
 };
 
 #[derive(Parser)]

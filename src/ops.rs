@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::error::{ConflictError, Error, Result};
-use crate::git::{configure_repo, git, git_ok, GitOpts};
+use crate::git::{GitOpts, configure_repo, git, git_ok};
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
 use crate::preflight::assert_export_preflight;
 use crate::prepare::{assert_prepare_ok, install_commit_template, prepare_from_range};
@@ -18,8 +18,8 @@ use crate::repo::{
     stable_patch_id_from_contents, stamp, write_product_patch,
 };
 use crate::types::{
-    LastSync, MergeVia, Patch, PatchConflict, PatchMerged, PatchSource, PatchUpstream, QueueConfig,
-    QueueState, QUEUE_PATH,
+    LastSync, MergeVia, Patch, PatchConflict, PatchMerged, PatchSource, PatchUpstream, QUEUE_PATH,
+    QueueConfig, QueueState,
 };
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
