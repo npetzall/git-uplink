@@ -75,13 +75,15 @@ Frontend sources live in `web/` (Vite + React + Tailwind). Do not commit `web/di
 
 ```bash
 cargo test
+npm test --prefix web
+cargo deny check
 ```
 
 The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, OSS packets, plus a check that the UI was embedded.
 
-`build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, and every lab step completing. You can run them alone with `npm test --prefix web`.
+`build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, and every lab step completing. You can run them alone with `npm test --prefix web`. Typecheck is `npm run typecheck --prefix web`.
 
-CI (`cargo test --locked` then `cargo build --release`) is in `.github/workflows/ci.yml`.
+CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a dedicated `web/` job (`npm ci`, typecheck, vitest), and `cargo deny` (RustSec advisories plus licenses, bans, and sources).
 
 ## Product-repo workflows
 
