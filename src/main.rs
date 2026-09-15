@@ -115,6 +115,18 @@ enum Commands {
     Resolve {
         id: String,
     },
+    /// Start the embedded operator dashboard and open a browser.
+    #[command(name = "web-ui")]
+    WebUi {
+        #[arg(long, default_value_t = 43721)]
+        port: u16,
+        /// Bind address. Use 0.0.0.0 to reach the UI from another host.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        /// Do not launch a browser.
+        #[arg(long)]
+        no_open: bool,
+    },
 }
 
 fn depends_from_env() -> Vec<String> {
@@ -568,6 +580,22 @@ fn run() -> Result<(), Error> {
         Commands::Resolve { id } => {
             resolve_conflict(&repo, &id)?;
             println!("{id} resolved and queue rebuilt");
+        }
+        Commands::WebUi {
+            port,
+            bind,
+            no_open,
+        } => {
+            let addr: std::net::SocketAddr = format!("{bind}:{port}")
+                .parse()
+                .map_err(|err| Error::msg(format!("invalid --bind/--port: {err}")))?;
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|err| Error::msg(format!("tokio runtime: {err}")))?;
+            runtime
+                .block_on(git_uplink::webui::serve(repo, addr, !no_open))
+                .map_err(|err| Error::msg(format!("web-ui server: {err}")))?;
         }
     }
     Ok(())

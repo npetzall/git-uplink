@@ -1,0 +1,12 @@
+Use SHA-256 for tokens
+
+Explain the change the way an upstream maintainer should read it.
+Do not mention the company, internal issue trackers, or private
+hostnames above the cutoff.
+
+----- Uplink: internal below this line -----
+
+Internal (stripped before export):
+- Ticket: PROJ-1234
+- Uplink-Depends-On: upl_…
+- Uplink-Export-Author: Jane Public <jane@users.noreply.github.com>

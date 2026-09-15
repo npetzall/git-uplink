@@ -1,0 +1,58 @@
+# Copy into the company product repository.
+#
+# Secondary process on every internal PR to company main: rewrite the
+# contribution as it would leave the enterprise. Strips the internal
+# commit-message section (below the cutoff), replaces author with the
+# machine user or Uplink-Export-Author, and scans the export diff for
+# company keywords / internal emails. Posts a report on the PR so IP
+# approval can read results instead of reconstructing the public PR.
+name: Uplink prepare for upstream
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: uplink-prepare-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  prepare:
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Fetch the candidate change
+        run: |
+          git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
+          git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
+
+      - name: Prepare contribution
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
+          UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
+          UPLINK_EXPORT_AUTHOR: ${{ vars.UPLINK_EXPORT_AUTHOR }}
+          TITLE: ${{ github.event.pull_request.title }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          extra=""
+          if echo "${{ join(github.event.pull_request.labels.*.name, ',') }}" | grep -q 'uplink:internal-only'; then
+            extra="--internal-only"
+          fi
+          git uplink prepare \
+            --title "$TITLE" \
+            --from "$FROM_SHA" \
+            --head "$HEAD_SHA" \
+            --pr "$PR_NUMBER" \
+            $extra

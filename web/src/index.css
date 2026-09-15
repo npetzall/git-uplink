@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, menlo, monaco, consolas, monospace;
+}
+
+.dark {
+  --background: oklch(0.16 0.018 240);
+  --foreground: oklch(0.97 0.01 240);
+  --card: oklch(0.21 0.02 240);
+  --card-foreground: oklch(0.97 0.01 240);
+  --popover: oklch(0.21 0.02 240);
+  --popover-foreground: oklch(0.97 0.01 240);
+  --primary: oklch(0.82 0.1 185);
+  --primary-foreground: oklch(0.2 0.03 240);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --radius: 0.625rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+  html {
+    @apply h-full;
+  }
+}
+
+.markdown-body h1 {
+  @apply mb-4 text-3xl font-semibold tracking-tight text-foreground;
+}
+.markdown-body h2 {
+  @apply mt-10 mb-3 text-xl font-semibold text-foreground;
+}
+.markdown-body h3 {
+  @apply mt-8 mb-2 text-lg font-semibold text-foreground;
+}
+.markdown-body p,
+.markdown-body li {
+  @apply text-[15px] leading-7 text-muted-foreground;
+}
+.markdown-body p {
+  @apply mb-3 text-pretty;
+}
+.markdown-body ul {
+  @apply mb-4 list-disc space-y-1 ps-5;
+}
+.markdown-body ol {
+  @apply mb-4 list-decimal space-y-1 ps-5;
+}
+.markdown-body code {
+  @apply rounded bg-muted px-1.5 py-0.5 text-[13px] text-foreground;
+}
+.markdown-body pre {
+  @apply my-4 overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200;
+}
+.markdown-body pre code {
+  @apply bg-transparent p-0;
+}
+.markdown-body table {
+  @apply my-4 w-full text-sm;
+}
+.markdown-body th,
+.markdown-body td {
+  @apply border-b border-border/60 py-2 pr-3 text-left;
+}
+.markdown-body th {
+  @apply text-xs font-medium tracking-wide text-muted-foreground uppercase;
+}
+.markdown-body hr {
+  @apply my-8 border-border;
+}
+.markdown-body a {
+  @apply text-primary underline-offset-4 hover:underline;
+}
+.markdown-body strong {
+  @apply text-foreground;
+}

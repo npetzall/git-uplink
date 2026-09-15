@@ -1103,3 +1103,14 @@ fn git_uplink_binary_is_named_for_git_subcommand() {
     let text = String::from_utf8_lossy(&status.stdout);
     assert!(text.contains("\"name\":\"git-uplink\""));
 }
+
+#[test]
+fn git_uplink_help_includes_web_ui() {
+    let bin = env!("CARGO_BIN_EXE_git-uplink");
+    let output = Command::new(bin).arg("-h").output().unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("web-ui"),
+        "expected web-ui subcommand in help, got:\n{text}"
+    );
+}

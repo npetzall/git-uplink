@@ -1,0 +1,54 @@
+# Copy into the company product repository.
+#
+# Runs on every internal PR against company main, BEFORE import.
+# Applies the PR's unique diff onto public upstream (+ declared
+# Uplink-Depends-On patches) and runs UPLINK_PREFLIGHT (build/test).
+# Fail the check instead of opening a contribution later that is missing
+# queued work the author used from company main.
+#
+# Put this check in the required status checks for the PR.
+name: Uplink export preflight
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: uplink-preflight-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preflight:
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Fetch the candidate change
+        run: |
+          git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
+          git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
+          git fetch --quiet origin uplink/upstream:uplink/upstream || true
+
+      - name: Export preflight
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+          UPLINK_DEPENDS_ON: ${{ github.event.pull_request.body }}
+          TITLE: ${{ github.event.pull_request.title }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git uplink preflight \
+            --title "$TITLE" \
+            --from "$FROM_SHA" \
+            --head "$HEAD_SHA" \
+            --pr "$PR_NUMBER"

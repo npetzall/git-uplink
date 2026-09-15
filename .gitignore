@@ -1,1 +1,7 @@
 /target
+/web/node_modules
+/web/dist
+/.next
+/node_modules
+next-env.d.ts
+/agent-tools

@@ -12,6 +12,7 @@ mod prepare;
 mod queue;
 mod repo;
 mod types;
+pub mod webui;
 
 pub use error::{ConflictError, Error, PreflightError, PrepareError, Result};
 pub use git::{configure_repo, git, git_ok, GitError, GitOpts, GitResult};
@@ -37,3 +38,14 @@ pub use types::{
     MergeVia, Patch, PatchIntent, PatchStatus, PrepareReport, QueueConfig, QueueState,
     DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, QUEUE_PATH,
 };
+
+#[cfg(test)]
+mod embed_tests {
+    #[test]
+    fn web_ui_index_is_embedded() {
+        assert!(
+            crate::webui::has_embedded_index(),
+            "web/dist/index.html must be produced by build.rs and embedded"
+        );
+    }
+}
