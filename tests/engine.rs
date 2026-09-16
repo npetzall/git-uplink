@@ -158,6 +158,19 @@ fn tree_has_uplink(repo: &Path, git_ref: &str) -> bool {
         == 0
 }
 
+fn has_git_ref(repo: &Path, git_ref: &str) -> bool {
+    let result = git(
+        repo,
+        &["rev-parse", "--verify", "--quiet", git_ref],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .unwrap();
+    result.code == 0 && !result.stdout.is_empty()
+}
+
 #[test]
 fn init_puts_uplink_on_the_orphan_state_branch_not_main() {
     let world = setup_world();
@@ -223,6 +236,119 @@ fn add_applies_the_patch_on_main_and_records_it_on_state() {
     )
     .unwrap();
     assert!(stored.contains("sha256"));
+}
+
+#[test]
+fn add_and_preflight_materialize_uplink_upstream_from_origin() {
+    let world = setup_world();
+    let company = &world.company;
+    let origin = create_bare_from(company);
+    git(
+        company,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let clone_keep = temp_dir();
+    let clone = clone_keep.path().to_path_buf();
+    git(
+        Path::new("/tmp"),
+        &[
+            "clone",
+            "--quiet",
+            origin.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    configure_repo(&clone).unwrap();
+    let _ = git(
+        &clone,
+        &["branch", "-D", "uplink/upstream"],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    );
+    assert!(
+        !has_git_ref(&clone, "uplink/upstream"),
+        "clone should not have a local uplink/upstream (Actions checkout of main)"
+    );
+    assert!(
+        has_git_ref(&clone, "origin/uplink/upstream"),
+        "clone should have origin/uplink/upstream as a tracking ref"
+    );
+
+    git(&clone, &["checkout", "-b", "feat/hash"], GitOpts::default()).unwrap();
+    write(
+        &clone,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(&clone, "use sha256");
+    let from = git_ok(&clone, &["rev-parse", "main"]).unwrap();
+    let head = git_ok(&clone, &["rev-parse", "HEAD"]).unwrap();
+
+    preflight_incoming_change(
+        &clone,
+        IncomingPreflight {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: from.clone(),
+            head_ref: head.clone(),
+            depends_on: Vec::new(),
+            message: None,
+            preflight_command: None,
+        },
+    )
+    .unwrap();
+    assert!(
+        has_git_ref(&clone, "uplink/upstream"),
+        "preflight should create local uplink/upstream from origin"
+    );
+
+    git(
+        &clone,
+        &["branch", "-D", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &clone,
+        &["update-ref", "-d", "refs/remotes/origin/uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    assert!(!has_git_ref(&clone, "uplink/upstream"));
+    assert!(!has_git_ref(&clone, "origin/uplink/upstream"));
+
+    let patch = add_patch(
+        &clone,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(patch.title, "Use SHA-256 for tokens");
+    assert!(
+        has_git_ref(&clone, "uplink/upstream"),
+        "add should fetch uplink/upstream from origin when the tracking ref is missing"
+    );
 }
 
 #[test]

@@ -8,7 +8,7 @@ use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git};
 use crate::prepare::{depends_on_from_message, export_commit_message};
 use crate::queue::{active_patches, get_patch, patch_path, read_queue};
-use crate::repo::{has_ref, rev_parse, write_product_patch};
+use crate::repo::{ensure_upstream_ref, has_ref, rev_parse, write_product_patch};
 use crate::types::{Patch, QueueState};
 
 fn run_shell(command: &str, cwd: &Path) -> (i32, String) {
@@ -60,6 +60,7 @@ fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<&'static str
 }
 
 fn with_upstream_worktree<T>(repo: &Path, f: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
+    ensure_upstream_ref(repo)?;
     if !has_ref(repo, "uplink/upstream")? {
         return Err(Error::msg(
             "No uplink/upstream ref; cannot preflight an export tree.",

@@ -9,6 +9,9 @@ use crate::prepare::{company_commit_message, export_commit_message};
 use crate::queue::{now_iso, patch_path};
 use crate::types::{PATCH_DIR, Patch, QUEUE_PATH, QueueState, STATE_BRANCH};
 
+const UPSTREAM_REF: &str = "uplink/upstream";
+const COMPANY_REMOTE: &str = "origin";
+
 pub fn ensure_uplink_dirs(repo: &Path) -> Result<()> {
     fs::create_dir_all(repo.join(PATCH_DIR))?;
     Ok(())
@@ -236,7 +239,7 @@ pub fn fetch_upstream(repo: &Path, queue: &QueueState) -> Result<String> {
     let sha = git_ok(repo, &["rev-parse", &format!("{remote}/{branch}")])?;
     git(
         repo,
-        &["branch", "-f", "uplink/upstream", &sha],
+        &["branch", "-f", UPSTREAM_REF, &sha],
         GitOpts::default(),
     )?;
     Ok(sha)
@@ -261,11 +264,76 @@ fn state_ref_source(repo: &Path) -> Result<Option<String>> {
     if has_ref(repo, &branch)? {
         return Ok(Some(branch));
     }
-    let origin = format!("origin/{branch}");
+    let origin = format!("{COMPANY_REMOTE}/{branch}");
     if has_ref(repo, &origin)? {
         return Ok(Some(origin));
     }
     Ok(None)
+}
+
+fn has_remote(repo: &Path, name: &str) -> bool {
+    git_ok(repo, &["remote"])
+        .unwrap_or_default()
+        .split('\n')
+        .any(|remote| remote == name)
+}
+
+/// Materialize local `uplink/upstream` from the company repo (`origin`), never from
+/// the public `upstream` remote. Missing origin is not an error; callers still
+/// check `has_ref`.
+pub fn ensure_upstream_ref(repo: &Path) -> Result<()> {
+    if has_ref(repo, UPSTREAM_REF)? {
+        return Ok(());
+    }
+    let tracking = format!("{COMPANY_REMOTE}/{UPSTREAM_REF}");
+    if has_ref(repo, &tracking)? {
+        git(
+            repo,
+            &["branch", "-f", UPSTREAM_REF, &tracking],
+            GitOpts::default(),
+        )?;
+        return Ok(());
+    }
+    if !has_remote(repo, COMPANY_REMOTE) {
+        return Ok(());
+    }
+    let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/heads/{UPSTREAM_REF}");
+    let fetched = git(
+        repo,
+        &["fetch", "--quiet", COMPANY_REMOTE, &spec],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    if fetched.code != 0 {
+        return Ok(());
+    }
+    Ok(())
+}
+
+/// Fetch `uplink/upstream` from the company remote and update the local branch.
+/// Does not talk to the public `upstream` remote (`fetch_upstream` is sync).
+pub fn refresh_upstream_ref(repo: &Path, remote: &str) -> Result<()> {
+    let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/remotes/{remote}/{UPSTREAM_REF}");
+    let fetched = git(
+        repo,
+        &["fetch", "--quiet", "--prune", remote, &spec],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    if fetched.code != 0 {
+        return Ok(());
+    }
+    let sha = git_ok(repo, &["rev-parse", &format!("{remote}/{UPSTREAM_REF}")])?;
+    git(
+        repo,
+        &["update-ref", &format!("refs/heads/{UPSTREAM_REF}"), &sha],
+        GitOpts::default(),
+    )?;
+    Ok(())
 }
 
 fn ensure_uplink_excluded(repo: &Path) -> Result<()> {

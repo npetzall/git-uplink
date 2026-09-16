@@ -16,9 +16,10 @@ use crate::queue::{
 };
 use crate::repo::{
     apply_patch_file, commit_queue, conflicted_files, copy_dir, ensure_state_worktree,
-    fetch_upstream, has_ref, new_patch_id, push_company_branch, push_state_branch,
-    refresh_company_branch, refresh_state_branch, rev_parse, stable_patch_id,
-    stable_patch_id_from_contents, stamp, state_branch, write_product_patch,
+    ensure_upstream_ref, fetch_upstream, has_ref, new_patch_id, push_company_branch,
+    push_state_branch, refresh_company_branch, refresh_state_branch, refresh_upstream_ref,
+    rev_parse, stable_patch_id, stable_patch_id_from_contents, stamp, state_branch,
+    write_product_patch,
 };
 use crate::types::{
     LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
@@ -147,6 +148,7 @@ fn add_patch_attempt(
         let queued = read_queue_file(repo)?;
         refresh_company_branch(repo, remote, &queued.config.company_branch)?;
         refresh_state_branch(repo, remote, &queued.config.state_branch)?;
+        refresh_upstream_ref(repo, remote)?;
     }
     let mut queue = read_queue_file(repo)?;
     let expected_sha = if let Some(remote) = &opts.push_remote {
@@ -681,6 +683,7 @@ pub fn rebuild(repo: &Path) -> Result<QueueState> {
 fn rebuild_once(repo: &Path) -> Result<QueueState> {
     let mut queue = read_queue_file(repo)?;
     let company_branch = queue.config.company_branch.clone();
+    ensure_upstream_ref(repo)?;
     let upstream_ref = if has_ref(repo, "uplink/upstream")? {
         "uplink/upstream"
     } else {
@@ -965,6 +968,7 @@ pub struct SubmitResult {
 
 pub fn submit_patch(repo: &Path, id: &str, pr: Option<(u64, String)>) -> Result<SubmitResult> {
     with_queue_lock(repo, || {
+        ensure_upstream_ref(repo)?;
         let queue = read_queue_file(repo)?;
         let patch = get_patch(&queue, id)?.clone();
         if patch.intent != "upstream" {
@@ -1122,6 +1126,7 @@ fn submit_base(repo: &Path, queue: &QueueState, patch: &Patch) -> Result<String>
             }
         }
     }
+    ensure_upstream_ref(repo)?;
     Ok("uplink/upstream".into())
 }
 
