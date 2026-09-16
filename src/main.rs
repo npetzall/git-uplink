@@ -558,7 +558,7 @@ fn run() -> Result<(), Error> {
                         },
                         &patch.title,
                         &format!(
-                            "Company contribution exported by Uplink.\n\nUplink-Patch-Id: {}\nUplink-Intent: upstream\n",
+                            "Company contribution exported by Uplink.\n\nUplink-Patch-Id: {}\n",
                             patch.id
                         ),
                         &exported.branch,

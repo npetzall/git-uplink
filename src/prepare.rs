@@ -168,7 +168,6 @@ fn with_trailers(message: &str, patch: &Patch) -> String {
     }
     body.push('\n');
     body.push_str(&format!("Uplink-Patch-Id: {}\n", patch.id));
-    body.push_str(&format!("Uplink-Intent: {}\n", patch.intent));
     body
 }
 
