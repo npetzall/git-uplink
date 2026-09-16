@@ -1,0 +1,64 @@
+# Example copy of templates/emu-workflows/uplink-prepare.yml.
+# Keep behavior in sync. This copy installs git-uplink on the runner.
+name: Uplink prepare for upstream
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: uplink-prepare-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  prepare:
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+      - uses: ./.github/actions/install-git-uplink
+        with:
+          src: ${{ vars.UPLINK_SRC }}
+          rev: ${{ vars.UPLINK_REV }}
+      - uses: ./.github/actions/add-uplink-remotes
+
+      - name: Fetch the candidate change
+        run: |
+          git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
+          git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
+          git fetch --quiet origin uplink/state:uplink/state || true
+
+      - name: Prepare contribution
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
+          UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
+          UPLINK_EXPORT_AUTHOR: ${{ vars.UPLINK_EXPORT_AUTHOR }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          extra=""
+          if echo "${{ join(github.event.pull_request.labels.*.name, ',') }}" | grep -q 'uplink:internal-only'; then
+            extra="--internal-only"
+          fi
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > /tmp/uplink-msg.txt
+          git uplink prepare \
+            --title "$TITLE" \
+            --message-file /tmp/uplink-msg.txt \
+            --from "$FROM_SHA" \
+            --head "$HEAD_SHA" \
+            --pr "$PR_NUMBER" \
+            $extra

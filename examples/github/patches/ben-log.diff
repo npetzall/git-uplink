@@ -1,0 +1,11 @@
+diff --git a/src/tokens.js b/src/tokens.js
+--- a/src/tokens.js
++++ b/src/tokens.js
+@@ -9,6 +9,7 @@
+ }
+ 
+ export function hash(value) {
++  console.log("hash");
+   return sha256(value);
+ }
+ 

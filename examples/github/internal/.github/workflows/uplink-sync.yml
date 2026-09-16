@@ -1,0 +1,91 @@
+# Example copy of templates/emu-workflows/uplink-sync.yml.
+# Keep behavior in sync. This copy installs git-uplink and is
+# workflow_dispatch only (no hourly cron) so a walkthrough is not raced.
+name: Uplink sync
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: uplink-mutate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/install-git-uplink
+        with:
+          src: ${{ vars.UPLINK_SRC }}
+          rev: ${{ vars.UPLINK_REV }}
+      - uses: ./.github/actions/add-uplink-remotes
+
+      - name: Sync with upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+          main_before=$(git rev-parse HEAD)
+
+          set +e
+          git uplink sync
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+            exit "$code"
+          fi
+
+          git push origin uplink/state
+          git push origin uplink/upstream --force || true
+
+          main_after=$(git rev-parse HEAD)
+          if [ "$main_after" != "$main_before" ]; then
+            git push origin HEAD:main --force-with-lease
+          fi
+
+          if [ "$code" -ne 2 ]; then
+            exit 0
+          fi
+
+          conflict_id=$(jq -r '.patches[] | select(.status=="conflict") | .id' .uplink/queue.json | head -n 1)
+          conflict_branch=$(jq -r '.patches[] | select(.status=="conflict") | .conflict.branch' .uplink/queue.json | head -n 1)
+          conflict_onto=$(jq -r '.patches[] | select(.status=="conflict") | .conflict.onto // empty' .uplink/queue.json | head -n 1)
+          if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+            echo "sync exited 2 but no conflict patch was recorded"
+            exit 2
+          fi
+          if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+            git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+          fi
+
+          title="Uplink conflict: ${conflict_id}"
+          existing=$(gh issue list --state open --json number,title --jq ".[] | select(.title==\"${title}\") | .number" | head -n 1)
+          if [ -z "$existing" ]; then
+            gh label create uplink:conflict --description "Uplink sync conflict; checkout the conflict branch, do not open a PR" --color B60205 || true
+            compare=""
+            if [ -n "$conflict_onto" ] && [ "$conflict_onto" != "null" ]; then
+              compare="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${conflict_onto}...${conflict_branch}"
+            fi
+            body=$(cat <<EOF
+          Company \`main\` is bot-owned. **Do not open or merge a pull request** for this conflict.
+
+          Sync stopped on \`${conflict_id}\`. Checkout \`${conflict_branch}\`, remove the conflict markers, and push. Then run \`git uplink resolve ${conflict_id}\` (or let **Uplink resolve** run on that push).
+
+          Remaining patches wait until this id is resolved.
+          EOF
+          )
+            if [ -n "$compare" ]; then
+              body="${body}
+
+          Compare the failed apply (not frozen main): ${compare}"
+            fi
+            gh issue create --title "$title" --label uplink:conflict --body "$body"
+          fi
+          exit 2

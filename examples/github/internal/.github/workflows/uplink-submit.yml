@@ -1,0 +1,90 @@
+# Example copy of templates/emu-workflows/uplink-submit.yml.
+# Keep behavior in sync. This copy installs git-uplink on the runner.
+#
+# Default auth is a PAT in the oss Environment secret UPLINK_GITHUB_TOKEN
+# (vars.UPLINK_SUBMIT_AUTH=pat). That works when the contrib fork is on a
+# different GitHub owner than upstream. Set UPLINK_SUBMIT_AUTH=app and
+# fill UPLINK_APP_* secrets to mint an installation token instead
+# (production-shaped; both repos must share the App installation owner).
+name: Uplink submit
+run-name: Uplink submit ${{ inputs.patch_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_id:
+        description: Patch id to export (upl_…)
+        required: true
+
+permissions:
+  contents: write
+  deployments: write
+  pull-requests: write
+
+jobs:
+  packet:
+    name: Write OSS packet
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: uplink-mutate
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/install-git-uplink
+        with:
+          src: ${{ vars.UPLINK_SRC }}
+          rev: ${{ vars.UPLINK_REV }}
+      - uses: ./.github/actions/add-uplink-remotes
+      - name: Write approver packet
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+          git uplink report ${{ inputs.patch_id }}
+          git push origin uplink/state
+
+  submit:
+    name: Approve oss environment and submit
+    needs: packet
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: oss
+      url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/${{ inputs.patch_id }}/prepare.md
+    concurrency:
+      group: uplink-mutate
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - uses: ./.github/actions/install-git-uplink
+        with:
+          src: ${{ vars.UPLINK_SRC }}
+          rev: ${{ vars.UPLINK_REV }}
+      - uses: ./.github/actions/add-uplink-remotes
+      - name: Mint GitHub App token for public github.com
+        id: app
+        if: ${{ vars.UPLINK_SUBMIT_AUTH == 'app' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.UPLINK_APP_ID }}
+          private-key: ${{ secrets.UPLINK_APP_PRIVATE_KEY }}
+          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
+      - name: Record approval, approve, and submit
+        env:
+          UPLINK_GITHUB_TOKEN: ${{ vars.UPLINK_SUBMIT_AUTH == 'app' && steps.app.outputs.token || secrets.UPLINK_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+          UPLINK_OSS_ENVIRONMENT: oss
+        run: |
+          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+          git uplink approve ${{ inputs.patch_id }}
+          git uplink submit ${{ inputs.patch_id }}
+          git push origin uplink/state
+          git push origin "uplink/${{ inputs.patch_id }}" --force

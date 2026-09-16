@@ -1,0 +1,11 @@
+diff --git a/src/tokens.js b/src/tokens.js
+--- a/src/tokens.js
++++ b/src/tokens.js
+@@ -15,3 +15,7 @@
+ export function ttl() {
+   return 7200;
+ }
++
++export function describeToken(value) {
++  return `ttl=${ttl()} hash=${hash(value)}`;
++}

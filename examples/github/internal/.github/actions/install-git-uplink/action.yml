@@ -1,0 +1,37 @@
+name: Install git-uplink
+description: Build git-uplink from source and put it on PATH for this runner.
+inputs:
+  src:
+    description: GitHub repository (owner/name) that contains git-uplink
+    required: true
+  rev:
+    description: Git ref to build
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: 1.98.1
+    - uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.src }}
+        ref: ${{ inputs.rev }}
+        path: _git-uplink-src
+        persist-credentials: false
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: _git-uplink-src
+        cache-on-failure: true
+    - name: Install git-uplink
+      shell: bash
+      run: |
+        cargo install --path _git-uplink-src --locked --force --root "$HOME/.local"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/git-uplink" -h >/dev/null
+    - name: Remove source checkout
+      shell: bash
+      run: rm -rf _git-uplink-src

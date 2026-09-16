@@ -104,3 +104,7 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 | `uplink-submit.yml` | Dispatch with a patch id — `oss` Environment IP gate (full packet or delta), then approve + submit. Skips opening a second PR when `pr_number` is already stored |
 
 Environment setup is in `templates/README.md`. Developer stories: [way-of-working.md](way-of-working.md).
+
+## Try it on GitHub
+
+[`examples/github/`](examples/github/) is a walkthrough on three repositories (`uplink-example-upstream`, `uplink-example-upstream-contrib`, `uplink-example-internal`). Local bootstrap, Actions reset, and apply-able patches: [examples/github/SETUP.md](examples/github/SETUP.md). Stories: [examples/github/README.md](examples/github/README.md).

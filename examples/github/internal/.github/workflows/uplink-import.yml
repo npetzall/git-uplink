@@ -1,0 +1,60 @@
+# Example copy of templates/emu-workflows/uplink-import.yml.
+# Keep behavior in sync. This copy installs git-uplink on the runner.
+name: Uplink import
+
+on:
+  pull_request:
+    types: [labeled, closed]
+
+concurrency:
+  group: uplink-mutate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  import:
+    if: |
+      (github.event.action == 'labeled' && github.event.label.name == 'uplink:import') ||
+      (github.event.action == 'closed' && github.event.pull_request.merged)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref }}
+      - uses: ./.github/actions/install-git-uplink
+        with:
+          src: ${{ vars.UPLINK_SRC }}
+          rev: ${{ vars.UPLINK_REV }}
+      - uses: ./.github/actions/add-uplink-remotes
+
+      - name: Fetch the reviewed change
+        run: |
+          git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
+          git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
+          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+
+      - name: Import as a queued patch
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          INTERNAL_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'uplink:internal-only') }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+        run: |
+          extra=""
+          if [ "$INTERNAL_ONLY" = "true" ]; then extra="--internal-only"; fi
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > /tmp/uplink-msg.txt
+          git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
+            --from "$FROM_SHA" --head "$HEAD_SHA" \
+            --pr "$PR_NUMBER" --pr-url "$PR_URL" --push $extra

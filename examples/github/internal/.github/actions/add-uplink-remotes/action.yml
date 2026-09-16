@@ -1,0 +1,17 @@
+name: Add Uplink remotes
+description: Point upstream and contrib remotes at the example GitHub repositories.
+runs:
+  using: composite
+  steps:
+    - name: Add upstream and contrib remotes
+      shell: bash
+      run: |
+        if [ -z "${{ vars.UPLINK_UPSTREAM }}" ] || [ -z "${{ vars.UPLINK_CONTRIB }}" ]; then
+          echo "Set repository variables UPLINK_UPSTREAM and UPLINK_CONTRIB (owner/name)." >&2
+          exit 1
+        fi
+        git remote remove upstream 2>/dev/null || true
+        git remote add upstream "https://github.com/${{ vars.UPLINK_UPSTREAM }}.git"
+        git remote remove contrib 2>/dev/null || true
+        git remote add contrib "https://github.com/${{ vars.UPLINK_CONTRIB }}.git"
+        git remote -v
