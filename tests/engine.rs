@@ -6,9 +6,9 @@ use std::thread;
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts, MergeVia,
     QueueConfig, STATE_BRANCH, add_patch, approve_patch, configure_repo, drop_patch,
-    format_approval_receipt, format_approver_packet, git, git_ok, init_repo, mark_merged, rebuild,
-    report_paths, resolve_conflict, status_snapshot, strip_html_comments, submit_patch, sync,
-    write_queue,
+    format_approval_receipt, format_approver_packet, format_contribution_packet, git, git_ok,
+    init_repo, mark_merged, rebuild, report_paths, resolve_conflict, status_snapshot,
+    strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -36,6 +36,13 @@ fn write(repo: &Path, file: &str, contents: &str) {
 fn commit_all(repo: &Path, message: &str) {
     git(repo, &["add", "-A"], GitOpts::default()).unwrap();
     git(repo, &["commit", "-m", message], GitOpts::default()).unwrap();
+}
+
+fn commit_oss_packet(repo: &Path, patch: &git_uplink::Patch) {
+    let packet = format_approver_packet(patch);
+    let (_, prepare_path, _) = report_paths(&patch.id);
+    write(repo, &prepare_path, &packet);
+    git_uplink::commit_queue(repo, &format!("uplink: OSS packet {}", patch.id)).unwrap();
 }
 
 fn hash_pr_message() -> String {
@@ -552,10 +559,178 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
     resolve_conflict(company, &ttl_patch.id).unwrap();
 
     let snapshot = status_snapshot(company).unwrap();
-    assert_ne!(snapshot.queue.patches[0].status, "conflict");
+    assert_eq!(snapshot.queue.patches[0].status, "queued");
     let tokens = snapshot.product_files.get("src/tokens.js").unwrap();
     assert!(tokens.contains("return 7200;"));
     assert!(!tokens.contains("return 1800;"));
+}
+
+#[test]
+fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl_patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    commit_oss_packet(company, &ttl_patch);
+    let first = approve_patch(company, &ttl_patch.id).unwrap();
+    assert_eq!(first.approvals.len(), 1);
+    assert_eq!(first.approvals[0].kind, "initial");
+    let still = approve_patch(company, &ttl_patch.id).unwrap();
+    assert_eq!(still.approvals.len(), 1);
+    let submitted = submit_patch(
+        company,
+        &ttl_patch.id,
+        Some((99, "https://github.com/upstream/tokenkit/pull/99".into())),
+    )
+    .unwrap();
+    let noop = approve_patch(company, &ttl_patch.id).unwrap();
+    assert_eq!(noop.status, "submitted");
+    assert_eq!(noop.approvals.len(), 1);
+
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(upstream, "shorten default ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let queued = sync(company).unwrap();
+    let conflicted = queued
+        .patches
+        .iter()
+        .find(|p| p.id == ttl_patch.id)
+        .unwrap();
+    assert_eq!(conflicted.status, "conflict");
+    let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
+    git(
+        company,
+        &["checkout", "--quiet", &conflict_branch],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    resolve_conflict(company, &ttl_patch.id).unwrap();
+
+    let after_resolve = status_snapshot(company).unwrap();
+    let amended = after_resolve
+        .queue
+        .patches
+        .iter()
+        .find(|p| p.id == ttl_patch.id)
+        .unwrap();
+    assert_eq!(amended.status, "amended");
+    assert_eq!(summarize_queue(&after_resolve.queue).amended, 1);
+    let fork_after_resolve =
+        git_ok(company, &["rev-parse", &format!("uplink/{}", ttl_patch.id)]).unwrap();
+    assert_eq!(fork_after_resolve, submitted.sha);
+    let err = submit_patch(company, &ttl_patch.id, None).unwrap_err();
+    assert!(err.to_string().contains("must be approved"), "{}", err);
+
+    let packet = format_contribution_packet(company, amended).unwrap();
+    assert!(packet.contains(&format!("OSS delta packet — {}", ttl_patch.id)));
+    assert!(packet.contains("already IP-approved"));
+    assert!(packet.contains("Already approved (initial)"));
+    assert!(packet.contains("### Upstream contrib"));
+    assert!(packet.contains(&amended.approvals[0].sha));
+    assert!(packet.contains("Uplink-Patch-Id"));
+
+    let (_, prepare_path, _) = report_paths(&ttl_patch.id);
+    write(company, &prepare_path, &packet);
+    git_uplink::commit_queue(company, &format!("uplink: OSS packet {}", ttl_patch.id)).unwrap();
+
+    let second = approve_patch(company, &ttl_patch.id).unwrap();
+    assert_eq!(second.status, "approved");
+    assert_eq!(second.approvals.len(), 2);
+    assert_eq!(second.approvals[1].kind, "delta");
+    assert_ne!(second.approvals[0].sha, second.approvals[1].sha);
+
+    let resubmitted = submit_patch(company, &ttl_patch.id, None).unwrap();
+    let recorded = resubmitted
+        .queue
+        .patches
+        .iter()
+        .find(|p| p.id == ttl_patch.id)
+        .unwrap();
+    assert_eq!(recorded.status, "submitted");
+    assert_eq!(recorded.upstream.as_ref().unwrap().pr_number, Some(99));
+    assert_eq!(
+        recorded.upstream.as_ref().unwrap().pr_url.as_deref(),
+        Some("https://github.com/upstream/tokenkit/pull/99")
+    );
+    let exported = git_ok(
+        company,
+        &["show", &format!("{}:src/tokens.js", resubmitted.branch)],
+    )
+    .unwrap();
+    assert!(exported.contains("return 7200;"));
+    assert!(!exported.contains("return 1800;"));
+
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 900;"),
+    );
+    commit_all(upstream, "even shorter ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let again = sync(company).unwrap();
+    let conflicted = again.patches.iter().find(|p| p.id == ttl_patch.id).unwrap();
+    assert_eq!(conflicted.status, "conflict");
+    let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
+    git(
+        company,
+        &["checkout", "--quiet", &conflict_branch],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    resolve_conflict(company, &ttl_patch.id).unwrap();
+    let third = status_snapshot(company).unwrap();
+    let amended = third
+        .queue
+        .patches
+        .iter()
+        .find(|p| p.id == ttl_patch.id)
+        .unwrap();
+    assert_eq!(amended.status, "amended");
+    let packet = format_contribution_packet(company, amended).unwrap();
+    assert!(packet.contains("Already approved (initial)"));
+    assert!(packet.contains("Already approved (delta)"));
+    assert!(packet.contains(&amended.approvals[1].sha));
 }
 
 #[test]
@@ -1341,11 +1516,7 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     )
     .unwrap();
     assert_eq!(author, "Jane Public <jane@users.noreply.github.com>");
-    let contrib_msg = git_ok(
-        company,
-        &["log", "-1", "--format=%B", &submitted.branch],
-    )
-    .unwrap();
+    let contrib_msg = git_ok(company, &["log", "-1", "--format=%B", &submitted.branch]).unwrap();
     assert!(contrib_msg.contains("Replace SHA-1 in the default hasher."));
     assert!(!contrib_msg.contains("PROJ-9999"));
     assert!(!contrib_msg.contains(DEFAULT_CUTOFF));
@@ -1368,7 +1539,11 @@ fn does_not_squash_git_commit_messages_on_import() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "WIP first");
-    write(company, "src/tokens.js", &TOKENS.replace("return sha1(value);", "return sha256(value);\n"));
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);\n"),
+    );
     commit_all(company, "WIP second");
     let patch = add_patch(
         company,

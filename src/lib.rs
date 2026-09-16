@@ -21,22 +21,23 @@ pub use github::{
     parse_github_repo,
 };
 pub use ops::{
-    AddPatchOpts, QueueCounts, StatusSnapshot, SubmitResult, add_patch, approve_patch, drop_patch,
-    init_repo, mark_merged, read_queue, rebuild, record_pull_request, resolve_conflict,
-    status_snapshot, submit_patch, summarize_queue, sync, write_queue,
+    AddPatchOpts, QueueCounts, StatusSnapshot, SubmitResult, add_patch, approve_patch,
+    approve_patch_at, drop_patch, init_repo, mark_merged, read_queue, rebuild, record_pull_request,
+    resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync, write_queue,
 };
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,
 };
 pub use prepare::{
     ApprovalReceipt, OSS_ENVIRONMENT, assert_prepare_ok, company_commit_message,
-    export_commit_message, format_approval_receipt, format_approver_packet, format_prepare_markdown,
+    export_commit_message, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, format_delta_approver_packet, format_prepare_markdown,
     prepare_from_message, report_paths, split_internal_message, strip_html_comments,
 };
 pub use repo::{commit_queue, patch_state_commit};
 pub use types::{
-    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, MergeVia, Patch, PatchIntent, PatchStatus,
-    PrepareReport, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
+    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, MergeVia, Patch, PatchApproval, PatchIntent,
+    PatchStatus, PrepareReport, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
 };
 
 #[cfg(test)]

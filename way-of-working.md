@@ -99,7 +99,7 @@ Asha needs to change token hashing. Nobody else is in her way.
 
    `approve` is refused if prepare failed or the patch is `internal-only`. `submit` is refused until the patch is `approved` and prepare is still clean. Submit is the first time bytes leave EMU. The public commit uses the prepared author (machine user or `Uplink-Export-Author`) and the scrubbed message, plus `Uplink-Patch-Id`. App credentials are not available until the environment review succeeds.
 
-7. **Upstream review.** Maintainers review a normal GitHub PR. If they want changes, Asha amends the **same** internal patch (fix the files, import again or `git uplink resolve` after a conflict). The next submit force-pushes the fork branch. She still does not grow a second branch.
+7. **Upstream review.** Maintainers review a normal GitHub PR. If they want changes, Asha amends the **same** internal patch (fix the files, import again or `git uplink resolve` after a conflict). If the patch was already submitted, it becomes `amended` and IP approves the delta before submit force-pushes the same fork branch. She still does not grow a second branch.
 
 8. **Flow back.** Upstream squash-merges the PR. Hourly sync (or `git uplink sync`) detects merge in this order: recorded GitHub PR is merged → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply. `upl_asha` becomes `merged` and is **never applied again**.
 
@@ -250,9 +250,9 @@ git uplink resolve upl_asha
 
 `resolve` refreshes **only** `upl_asha`’s patch file (same id), then rebuilds. Remaining patches replay. If Ben still applies, he stays `queued` / `submitted` and company `main` becomes new upstream + amended Asha + Ben.
 
-If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s conflict branch and issue, then closes Asha’s issue. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
+If Asha was never submitted, she returns to `queued`. If she **was** already submitted (public PR still open), she becomes `amended`. Company `main` has the new bytes immediately. The contribution fork still has the last IP-approved bytes. On GHEC, **Uplink resolve** dispatches **Uplink submit** for that id. IP reviews a **delta-first** packet: the change since the last approval, then the historical packet marked already approved. After oss approval, submit force-pushes `uplink/upl_asha`. Same id, same PR, no second branch. `git uplink submit` refuses `amended` until that delta is approved.
 
-If Asha was already `submitted`, the next `git uplink submit upl_asha` (or submit-on-sync) force-pushes `uplink/upl_asha` so the open public PR is the amended patch. Same id, same PR, no second branch.
+If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s conflict branch and issue, then closes Asha’s issue. If Asha is `amended`, it still dispatches submit for her delta. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
 
 ---
 
@@ -316,7 +316,7 @@ Do **not** submit Cam while Asha and Ben are only `submitted` and still unmerged
 
    Cam’s dependency on Ben is now satisfied by upstream itself. Active queue: Asha, then Cam (`dependsOn` still lists Ben, but merged patches are not applied).
 3. If Asha’s hunks disagree with upstream-that-has-Ben, Asha conflicts and **Cam waits** (Story 4). Resolve Asha, then Cam replays.
-4. Re-submit Asha if she already had a public PR, so `uplink/upl_asha` is Asha on the new upstream (the one that includes Ben).
+4. If Asha already had a public PR, resolve left her `amended` and dispatched submit. After IP approves the delta, `uplink/upl_asha` is Asha on the new upstream (the one that includes Ben).
 5. Cam still cannot be submitted until Asha is `submitted` or `merged`. Ben no longer blocks him.
 6. When Asha later merges too, sync drops her. Rebuild is:
 
@@ -341,7 +341,7 @@ You are choosing a **tree to write code against**, not a second long-lived branc
    That is public upstream plus every patch that is not `merged` or `dropped`. If the product should include it, it is already there. This is the correct base for a new independent fix (Story 1, Story 2).
 
 2. **Look at the queue, not `git log main`.**  
-   `git uplink status` and `.uplink/queue.json` on `uplink/state` list patch ids, titles, `queued` / `approved` / `submitted` / `conflict`, and `dependsOn`. Import commits on `main` are ordinary product applies. Sync still may force-update `main` when upstream moved.
+   `git uplink status` and `.uplink/queue.json` on `uplink/state` list patch ids, titles, `queued` / `approved` / `submitted` / `amended` / `conflict`, and `dependsOn`. Import commits on `main` are ordinary product applies. Sync still may force-update `main` when upstream moved.
 
 3. **If you need someone else’s unmerged work:**  
    - Already `queued`? It is on `main`. Branch from `main` (Story 3, Story 5). Record `--depends-on` for every patch your source actually needs so submit cannot skip it.  

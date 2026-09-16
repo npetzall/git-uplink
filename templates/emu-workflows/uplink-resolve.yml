@@ -3,9 +3,11 @@
 #
 # Human pushes to uplink/conflict/<id> after fixing markers. This job
 # runs git uplink resolve, rebuilds company main, and deletes the
-# conflict branch. If rebuild stops on a later patch, it publishes that
-# conflict the same way sync does. It must not run when the sync bot
-# publishes the conflict branch (that push is github-actions[bot]).
+# conflict branch. If the patch was already submitted, status becomes
+# amended and this job dispatches Uplink submit so IP can approve the
+# delta. If rebuild stops on a later patch, it publishes that conflict
+# the same way sync does. It must not run when the sync bot publishes
+# the conflict branch (that push is github-actions[bot]).
 name: Uplink resolve
 
 on:
@@ -21,6 +23,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  actions: write
 
 jobs:
   resolve:
@@ -65,6 +68,18 @@ jobs:
           main_after=$(git rev-parse HEAD)
           if [ "$main_after" != "$main_before" ]; then
             git push origin main --force-with-lease
+          fi
+
+          queue_json=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json)
+          status=$(printf '%s\n' "$queue_json" | jq -r --arg id "$id" '.patches[] | select(.id==$id) | .status')
+          if [ "$status" = "amended" ]; then
+            waiting=$(gh run list --workflow="Uplink submit" --status=waiting --json databaseId,displayTitle,name 2>/dev/null || echo '[]')
+            echo "$waiting" | jq -r --arg id "$id" '.[] | select((.displayTitle // "" | contains($id)) or (.name // "" | contains($id))) | .databaseId' | while read -r run_id; do
+              if [ -n "$run_id" ]; then
+                gh run cancel "$run_id" || true
+              fi
+            done
+            gh workflow run "Uplink submit" --ref main -f "patch_id=$id"
           fi
 
           if [ "$code" -eq 2 ]; then

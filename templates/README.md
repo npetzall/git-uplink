@@ -17,8 +17,8 @@ That repository also needs the `git-uplink` binary on `PATH`. Install this crate
 - **Preflight** (`uplink-preflight.yml`) — required check on every PR to `main`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines from the body, then runs `UPLINK_PREFLIGHT`. Failure comments on the PR; do not import until it is green.
 - **Import** (`uplink-import.yml`) — internal product approval. Label `uplink:import` after engineering review (or merge the PR). The change is recorded on `uplink/state` and applied onto company `main` as status `queued` only if export preflight still passes.
 - **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream, drops merged patches, and rebuilds `main` only when upstream moved. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>`, and opens an internal issue (`uplink:conflict`). Do not open a PR; resolve the patch on that branch instead.
-- **Resolve** (`uplink-resolve.yml`) — on human pushes to `uplink/conflict/<id>` (skips `github-actions[bot]`). Runs `git uplink resolve`, rebuilds `main`, closes the conflict issue, and deletes the conflict branch. If rebuild stops on a later patch, it pushes that `uplink/conflict/<id>` and opens an internal issue, same as sync. Does not export to the contribution fork.
-- **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`oss` GitHub Environment**. Dispatch with a patch id. The packet job commits the report; environment reviewers approve; the same run then `git uplink approve` + `git uplink submit`. Preflight runs again; a failing build/test means no fork push and no public PR.
+- **Resolve** (`uplink-resolve.yml`) — on human pushes to `uplink/conflict/<id>` (skips `github-actions[bot]`). Runs `git uplink resolve`, rebuilds `main`, closes the conflict issue, and deletes the conflict branch. If rebuild stops on a later patch, it pushes that `uplink/conflict/<id>` and opens an internal issue, same as sync. If the resolved patch was already submitted, status becomes `amended` and this workflow dispatches **Uplink submit** so IP can approve the delta. It does not itself push the contribution fork.
+- **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`oss` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits the report (full contribution, or a delta-first packet when status is `amended`); environment reviewers approve; the same run then `git uplink approve` + `git uplink submit`. If `upstream.pr_number` is already stored, submit force-pushes the existing PR and does not open a second one. Preflight runs again; a failing build/test means no fork push and no public PR.
 
 Repo variables:
 
@@ -41,7 +41,7 @@ This is the documented option. Use it instead of asking an operator to run `git 
 
 ### What the reviewer sees
 
-1. **Job summary** — the packet job appends the full contribution packet to `GITHUB_STEP_SUMMARY` (company and upstream commit messages, export author, leak checks, depends-on). Open the workflow run; the summary is on the completed packet job.
+1. **Job summary** — the packet job appends the contribution packet to `GITHUB_STEP_SUMMARY` (company and upstream commit messages, export author, leak checks, depends-on). For an `amended` patch the packet **leads with the delta** since the last approval and includes historical packets marked already approved. Open the workflow run; the summary is on the completed packet job.
 2. **Committed report** — `.uplink/reports/<id>/prepare.md` on `uplink/state`. The `oss` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
 3. **Environment review UI** — GitHub pauses the submit job until a required reviewer approves the `oss` deployment. That click is the IP gate.
 
@@ -110,6 +110,11 @@ approval.md committed; git uplink approve; git uplink submit
         │
         ▼
 fork branch + public PR (first bytes leaving EMU)
+
+If a submitted patch later conflicts, resolve sets amended and
+dispatches this workflow again. The packet leads with the delta;
+historical prepare.md is read from the prior approval SHA on
+uplink/state. Submit skips creating a PR when pr_number is stored.
 ```
 
 Local equivalent when you are not on Actions (engine tests, a break-glass operator):

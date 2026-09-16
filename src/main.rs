@@ -7,10 +7,10 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, Error, GitOpts, GithubConfig, IncomingPreflight, MergeVia,
-    OSS_ENVIRONMENT, PreflightError, QueueConfig, add_patch, approve_patch, comment_on_issue,
-    commit_queue, create_upstream_pull_request, drop_patch, format_approval_receipt,
-    format_approver_packet, format_prepare_markdown, get_pull_request, git, git_ok, init_repo,
-    mark_merged, parse_github_repo, patch_state_commit, preflight_existing_patch,
+    OSS_ENVIRONMENT, PreflightError, QueueConfig, STATE_BRANCH, add_patch, approve_patch_at,
+    comment_on_issue, commit_queue, create_upstream_pull_request, drop_patch,
+    format_approval_receipt, format_contribution_packet, format_prepare_markdown, get_pull_request,
+    git, git_ok, init_repo, mark_merged, parse_github_repo, preflight_existing_patch,
     preflight_incoming_change, prepare_from_message, read_queue, rebuild, record_pull_request,
     report_paths, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
 };
@@ -400,7 +400,7 @@ fn run() -> Result<(), Error> {
                 .iter()
                 .find(|p| p.id == id)
                 .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
-            let packet = format_approver_packet(patch);
+            let packet = format_contribution_packet(&repo, patch)?;
             let default_out = report_paths(&id).1;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &packet);
@@ -472,10 +472,11 @@ fn run() -> Result<(), Error> {
             if !queue.patches.iter().any(|p| p.id == id) {
                 return Err(Error::msg(format!("unknown patch {id}")));
             }
-            let sha = patch_state_commit(&repo, &id).unwrap_or_else(|_| {
+            let sha = git_ok(&repo, &["rev-parse", STATE_BRANCH]).unwrap_or_else(|_| {
                 env::var("GITHUB_SHA")
                     .unwrap_or_else(|_| git_ok(&repo, &["rev-parse", "HEAD"]).unwrap_or_default())
             });
+            let run_url = github_run_url();
             let receipt = format_approval_receipt(ApprovalReceipt {
                 patch_id: &id,
                 environment: env::var("UPLINK_OSS_ENVIRONMENT")
@@ -486,7 +487,7 @@ fn run() -> Result<(), Error> {
                     .ok()
                     .as_deref()
                     .unwrap_or("local operator"),
-                run_url: &github_run_url(),
+                run_url: &run_url,
                 sha: &sha,
                 at: None,
             });
@@ -494,7 +495,7 @@ fn run() -> Result<(), Error> {
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &receipt);
             append_step_summary(&receipt);
-            let patch = approve_patch(&repo, &id)?;
+            let patch = approve_patch_at(&repo, &id, Some(&sha), Some(&run_url))?;
             commit_queue(&repo, &format!("uplink: OSS approval receipt {id}"))?;
             println!("{} approved", patch.id);
             eprintln!("Wrote {}", dest.display());
@@ -520,6 +521,25 @@ fn run() -> Result<(), Error> {
                     return Err(err);
                 }
             };
+            let recorded = exported
+                .queue
+                .patches
+                .iter()
+                .find(|p| p.id == id)
+                .and_then(|p| p.upstream.clone());
+            if let Some(upstream) = recorded.as_ref().filter(|u| u.pr_number.is_some()) {
+                if let Some(url) = &upstream.pr_url {
+                    println!("{url}");
+                } else {
+                    println!(
+                        "exported {} at {} (existing upstream PR #{})",
+                        exported.branch,
+                        exported.sha,
+                        upstream.pr_number.unwrap()
+                    );
+                }
+                return Ok(());
+            }
             if let Some(token) = token {
                 let upstream_url = remote_url(&repo, &queue.config.upstream_remote);
                 let contrib_url = remote_url(&repo, &queue.config.contrib_remote);

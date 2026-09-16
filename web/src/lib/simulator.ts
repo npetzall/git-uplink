@@ -3,6 +3,7 @@ export type Status =
   | "queued"
   | "approved"
   | "submitted"
+  | "amended"
   | "merged"
   | "dropped"
   | "conflict";
