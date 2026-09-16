@@ -1,5 +1,11 @@
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use git_uplink::{GitOpts, QueueConfig, configure_repo, git, git_ok, init_repo};
 use tempfile::TempDir;
@@ -193,4 +199,119 @@ fn ssh_remote_without_token_or_key_fails_closed() {
             && !message.contains("Connection refused"),
         "ssh ran instead of failing closed: {message}"
     );
+}
+
+fn spawn_header_capture() -> (u16, mpsc::Receiver<String>, Arc<AtomicBool>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let port = listener.local_addr().expect("local_addr").port();
+    let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = stop.clone();
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !stop_thread.load(Ordering::Relaxed) && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 1024];
+                    loop {
+                        match stream.read(&mut tmp) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                buf.extend_from_slice(&tmp[..n]);
+                                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&buf);
+                    for line in req.split(['\r', '\n']) {
+                        let Some((name, value)) = line.split_once(':') else {
+                            continue;
+                        };
+                        if name.eq_ignore_ascii_case("authorization") {
+                            let _ = tx.send(value.trim().to_string());
+                        }
+                    }
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    (port, rx, stop)
+}
+
+#[test]
+fn checkout_url_extraheader_does_not_override_uplink_token() {
+    let keep = temp_dir();
+    let repo = keep.path();
+    git(repo, &["init", "-b", "main"], GitOpts::default()).unwrap();
+
+    let (port, rx, stop) = spawn_header_capture();
+    let origin = format!("http://127.0.0.1:{port}");
+    let remote = format!("{origin}/repo.git");
+    git(
+        repo,
+        &[
+            "config",
+            "--local",
+            &format!("http.{origin}/.extraheader"),
+            "AUTHORIZATION: basic BOT",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let fetch = git(
+        repo,
+        &["fetch", &remote],
+        GitOpts {
+            allow_fail: true,
+            extra_env: vec![
+                ("UPLINK_GITHUB_TOKEN".into(), "pat-token".into()),
+                ("GITHUB_TOKEN".into(), String::new()),
+                ("UPLINK_SSH_KEY".into(), String::new()),
+                ("UPLINK_SSH_COMMAND".into(), String::new()),
+            ],
+            ..GitOpts::default()
+        },
+    )
+    .unwrap();
+
+    thread::sleep(Duration::from_millis(200));
+    stop.store(true, Ordering::Relaxed);
+    let auths: Vec<String> = rx.try_iter().collect();
+    assert!(
+        !auths.is_empty(),
+        "git fetch never sent Authorization to the test server (code {} stdout {:?} stderr {:?})",
+        fetch.code,
+        fetch.stdout,
+        fetch.stderr
+    );
+    assert!(
+        auths
+            .iter()
+            .all(|h| !h.to_ascii_uppercase().contains("BOT")),
+        "checkout extraheader leaked: {auths:?}"
+    );
+    // x-access-token:pat-token (no padding; 24 bytes)
+    let expected_basic = "basic eC1hY2Nlc3MtdG9rZW46cGF0LXRva2Vu";
+    for header in &auths {
+        assert!(
+            header.eq_ignore_ascii_case(expected_basic),
+            "unexpected Authorization {header:?}; all: {auths:?}"
+        );
+    }
 }

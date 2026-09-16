@@ -93,6 +93,8 @@ pub struct GitOpts<'a> {
 struct Transport {
     remote_url: Option<String>,
     extra_header: Option<String>,
+    /// `scheme://host[:port]` for blanking `http.<origin>/.extraheader` (Actions checkout).
+    http_origin: Option<String>,
     ssh_command: Option<String>,
     isolate_gitconfig: bool,
 }
@@ -176,6 +178,44 @@ fn ssh_to_https(url: &str) -> Option<String> {
         _ => hostport,
     };
     Some(format!("https://{host}/{path}"))
+}
+
+/// Origin used as the `http.<url>.*` subsection: `scheme://host` or `scheme://host:port`.
+/// Default ports 80/443 are omitted so the key matches actions/checkout (`https://github.com/`).
+fn http_origin(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|part| !part.is_empty())?;
+    let hostport = authority.rsplit('@').next()?;
+    let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
+        let (host, after) = rest.split_once(']')?;
+        let port = after.strip_prefix(':').filter(|p| !p.is_empty());
+        (format!("[{host}]"), port)
+    } else {
+        match hostport.rsplit_once(':') {
+            Some((host, port)) if !host.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+                (host.to_string(), Some(port))
+            }
+            _ => (hostport.to_string(), None),
+        }
+    };
+    if host.is_empty() {
+        return None;
+    }
+    let drop_default_port = matches!(
+        (scheme, port),
+        ("http", Some("80")) | ("https", Some("443"))
+    );
+    match port.filter(|_| !drop_default_port) {
+        Some(port) => Some(format!("{scheme}://{host}:{port}")),
+        None => Some(format!("{scheme}://{host}")),
+    }
 }
 
 fn shell_quote(value: &str) -> String {
@@ -264,6 +304,7 @@ fn transport_for(cwd: &Path, args: &[&str], opts: &GitOpts<'_>) -> Result<Transp
     {
         let remote_url = ssh_to_https(&url).unwrap_or_else(|| url.clone());
         return Ok(Transport {
+            http_origin: http_origin(&remote_url),
             remote_url: Some(remote_url),
             extra_header: Some(git_http_extra_header(&token)),
             ssh_command: None,
@@ -320,7 +361,17 @@ fn git_inner(
     }
     if let Some(header) = &transport.extra_header {
         cmd.arg("-c").arg("credential.helper=");
-        cmd.arg("-c").arg(format!("http.extraHeader={header}"));
+        // actions/checkout persist-credentials writes http.<origin>/.extraheader
+        // (GITHUB_TOKEN). Empty `-c` overrides that multi-value; a following `-c`
+        // on the same key supplies UPLINK_GITHUB_TOKEN / GITHUB_TOKEN. Generic
+        // http.extraHeader is shadowed once the URL-specific key exists.
+        if let Some(origin) = &transport.http_origin {
+            cmd.arg("-c").arg(format!("http.{origin}/.extraheader="));
+            cmd.arg("-c")
+                .arg(format!("http.{origin}/.extraheader={header}"));
+        } else {
+            cmd.arg("-c").arg(format!("http.extraHeader={header}"));
+        }
     }
     if transport.isolate_gitconfig {
         cmd.arg("-c").arg("safe.directory=*");
@@ -386,7 +437,9 @@ pub fn configure_repo(_cwd: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{git_http_extra_header, is_local_transport, network_remote_index, ssh_to_https};
+    use super::{
+        git_http_extra_header, http_origin, is_local_transport, network_remote_index, ssh_to_https,
+    };
 
     #[test]
     fn git_http_header_is_basic_x_access_token() {
@@ -448,6 +501,49 @@ mod tests {
             Some("https://github.com/acme/app.git")
         );
         assert_eq!(ssh_to_https("https://github.com/acme/app.git"), None);
+    }
+
+    #[test]
+    fn http_origin_matches_checkout_extraheader_subsection() {
+        assert_eq!(
+            http_origin("https://github.com/acme/app.git").as_deref(),
+            Some("https://github.com")
+        );
+        assert_eq!(
+            http_origin("https://github.example.com/acme/app.git").as_deref(),
+            Some("https://github.example.com")
+        );
+        assert_eq!(
+            http_origin("http://127.0.0.1:12345/repo.git").as_deref(),
+            Some("http://127.0.0.1:12345")
+        );
+        assert_eq!(
+            http_origin("https://github.com:443/acme/app.git").as_deref(),
+            Some("https://github.com")
+        );
+        assert_eq!(
+            http_origin("http://example.com:80/x").as_deref(),
+            Some("http://example.com")
+        );
+        assert_eq!(
+            http_origin("https://github.com:8443/acme/app.git").as_deref(),
+            Some("https://github.com:8443")
+        );
+        assert_eq!(
+            http_origin("https://x-access-token:tok@github.com/acme/app.git").as_deref(),
+            Some("https://github.com")
+        );
+        assert_eq!(
+            http_origin(&ssh_to_https("git@github.com:acme/app.git").unwrap()).as_deref(),
+            Some("https://github.com")
+        );
+        assert_eq!(
+            http_origin(&ssh_to_https("ssh://git@github.example.com/acme/app.git").unwrap())
+                .as_deref(),
+            Some("https://github.example.com")
+        );
+        assert_eq!(http_origin("file:///tmp/bare.git"), None);
+        assert_eq!(http_origin("git@github.com:acme/app.git"), None);
     }
 
     #[test]
