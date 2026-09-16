@@ -47,9 +47,10 @@ export function CollaborationPage() {
           <p className="text-[15px] leading-7 text-muted-foreground">
             Yes. Treat company main like any protected integration branch, with one extra rule:{" "}
             <strong className="text-foreground">only the Uplink bot writes it</strong>. Developers
-            branch from latest main, open one internal PR per change, and review as usual. After
-            each import or upstream sync the bot rebuilds main as public upstream plus the active
-            patch queue, and may force-update the branch. Rebase in-flight PRs onto that new main.
+            branch from latest main, open one internal PR per change, and review as usual. Import
+            records the patch on <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink/state</code>{" "}
+            and fast-forwards company main. Sync force-updates main only when public upstream moved.
+            Rebase in-flight PRs onto that new main.
           </p>
           <ul className="space-y-2 text-[15px] leading-7 text-muted-foreground [&_li]:ms-5 [&_li]:list-disc">
             <li>N developers, N feature branches, N internal PRs.</li>
@@ -64,8 +65,8 @@ export function CollaborationPage() {
           <h2 className="text-xl font-semibold">How are concurrent adds handled?</h2>
           <p className="text-[15px] leading-7 text-muted-foreground">
             The dangerous case is two imports that both read the same queue, each append one patch,
-            and the later force-push of main drops the earlier patch. Uplink does not take last-write-wins
-            on the queue.
+            and the later push of <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink/state</code>{" "}
+            drops the earlier patch. Uplink does not take last-write-wins on the queue.
           </p>
           <ol className="space-y-2 text-[15px] leading-7 text-muted-foreground [&_li]:ms-5 [&_li]:list-decimal">
             <li>
@@ -83,9 +84,9 @@ export function CollaborationPage() {
               moved under the job cannot fold someone else&apos;s patch into this one.
             </li>
             <li>
-              The job then refreshes latest main, appends, rebuilds, and pushes with{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">--force-with-lease</code>.
-              If another import landed first, the lease fails, the job fetches, and it retries.
+              The job then refreshes latest main and <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink/state</code>,
+              appends, applies the patch onto main, and fast-forward pushes both. If another import
+              landed first, the push fails, the job fetches, and it retries.
               The same internal PR number is imported at most once.
             </li>
           </ol>
@@ -146,6 +147,7 @@ export function CollaborationPage() {
             <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">
               .uplink/reports/&lt;id&gt;/prepare.md
             </code>{" "}
+            on <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink/state</code>{" "}
             and writes the Actions job summary. Approving the waiting deployment is the IP gate;
             GitHub&apos;s audit log already records who clicked. The same run then commits{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">approval.md</code> and

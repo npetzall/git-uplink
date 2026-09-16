@@ -13,9 +13,10 @@ use crate::queue::{
     topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
-    apply_patch_file, commit_message, commit_queue, conflicted_files, copy_dir, fetch_upstream,
-    has_ref, new_patch_id, push_company_branch, refresh_company_branch, rev_parse, stable_patch_id,
-    stable_patch_id_from_contents, stamp, write_product_patch,
+    apply_patch_file, commit_message, commit_queue, conflicted_files, copy_dir,
+    ensure_state_worktree, fetch_upstream, has_ref, new_patch_id, push_company_branch,
+    push_state_branch, refresh_company_branch, refresh_state_branch, rev_parse, stable_patch_id,
+    stable_patch_id_from_contents, stamp, state_branch, write_product_patch,
 };
 use crate::types::{
     LastSync, MergeVia, Patch, PatchConflict, PatchMerged, PatchSource, PatchUpstream, QUEUE_PATH,
@@ -42,6 +43,8 @@ pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
     let queue = empty_queue(config);
     write_queue_file(repo, &queue)?;
     install_commit_template(repo)?;
+    commit_queue(repo, "uplink: initialize patch queue")?;
+    ensure_state_worktree(repo)?;
     let has_head = git(
         repo,
         &["rev-parse", "--verify", "HEAD"],
@@ -50,19 +53,7 @@ pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
             ..GitOpts::default()
         },
     )?;
-    if has_head.code == 0 {
-        git(repo, &["add", "--", ".uplink"], GitOpts::default())?;
-        git(
-            repo,
-            &["commit", "-m", "uplink: initialize patch queue"],
-            GitOpts::default(),
-        )?;
-    }
-    let remotes = if has_head.code == 0 {
-        git_ok(repo, &["remote"]).unwrap_or_default()
-    } else {
-        String::new()
-    };
+    let remotes = git_ok(repo, &["remote"]).unwrap_or_default();
     if remotes
         .split('\n')
         .any(|r| r == queue.config.upstream_remote)
@@ -153,17 +144,9 @@ fn add_patch_attempt(
     if let Some(remote) = refresh_remote {
         let queued = read_queue_file(repo)?;
         refresh_company_branch(repo, remote, &queued.config.company_branch)?;
+        refresh_state_branch(repo, remote, &queued.config.state_branch)?;
     }
     let mut queue = read_queue_file(repo)?;
-    if let Some(pr) = opts.internal_pr_number {
-        if let Some(existing) = queue
-            .patches
-            .iter()
-            .find(|p| p.source.internal_pr_number == Some(pr))
-        {
-            return Ok(existing.clone());
-        }
-    }
     let expected_sha = if let Some(remote) = &opts.push_remote {
         Some(rev_parse(
             repo,
@@ -172,8 +155,26 @@ fn add_patch_attempt(
     } else {
         None
     };
+    if let Some(pr) = opts.internal_pr_number {
+        if let Some(existing) = queue
+            .patches
+            .iter()
+            .find(|p| p.source.internal_pr_number == Some(pr))
+        {
+            let id = existing.id.clone();
+            apply_new_patch_on_company(repo, &id, false)?;
+            if let (Some(remote), Some(expected)) = (&opts.push_remote, expected_sha.as_ref()) {
+                let latest = read_queue_file(repo)?;
+                push_state_branch(repo, remote, &latest.config.state_branch)?;
+                push_company_branch(repo, remote, &queue.config.company_branch, expected)?;
+            }
+            return Ok(get_patch(&read_queue_file(repo)?, &id)?.clone());
+        }
+    }
     let patch = add_patch_once(repo, &mut queue, opts, from_sha, head_sha)?;
     if let (Some(remote), Some(expected)) = (&opts.push_remote, expected_sha) {
+        let latest = read_queue_file(repo)?;
+        push_state_branch(repo, remote, &latest.config.state_branch)?;
         push_company_branch(repo, remote, &queue.config.company_branch, &expected)?;
     }
     Ok(patch)
@@ -281,8 +282,73 @@ fn add_patch_once(
     queue.patches.push(patch);
     write_queue_file(repo, queue)?;
     commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
-    rebuild(repo)?;
+    apply_new_patch_on_company(repo, &id, true)?;
     Ok(get_patch(&read_queue_file(repo)?, &id)?.clone())
+}
+
+fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) -> Result<()> {
+    let mut queue = read_queue_file(repo)?;
+    let company_branch = queue.config.company_branch.clone();
+    let patch = get_patch(&queue, id)?.clone();
+    let snapshot = snapshot_uplink(repo)?;
+    git(
+        repo,
+        &["checkout", "-f", "--quiet", &company_branch],
+        GitOpts::default(),
+    )?;
+    let patch_file = repo.join(format!(".uplink/patches/{id}.patch"));
+    let result = apply_patch_file(repo, &patch, &patch_file, false);
+    let result = match result {
+        Ok(value) => value,
+        Err(err) => {
+            let _ = fs::remove_dir_all(&snapshot);
+            return Err(err);
+        }
+    };
+    if result == "conflict" {
+        let files = conflicted_files(repo)?;
+        let upstream_ref = if has_ref(repo, "uplink/upstream")? {
+            "uplink/upstream"
+        } else {
+            company_branch.as_str()
+        };
+        let err = persist_apply_conflict(
+            repo,
+            &mut queue,
+            &snapshot,
+            &company_branch,
+            upstream_ref,
+            &patch.id,
+            &patch.title,
+            files,
+        )?;
+        let _ = fs::remove_dir_all(&snapshot);
+        return Err(Error::Conflict(err));
+    }
+    let _ = fs::remove_dir_all(&snapshot);
+    if result == "empty" {
+        if mark_empty_merged && patch.intent == "upstream" {
+            let current = get_patch_mut(&mut queue, id)?;
+            current.status = "merged".into();
+            current.merged = Some(PatchMerged {
+                via: MergeVia::EmptyRebase,
+                at: stamp(),
+                upstream_sha: has_ref(repo, "uplink/upstream")?
+                    .then(|| rev_parse(repo, "uplink/upstream"))
+                    .transpose()?,
+            });
+            add_event(
+                current,
+                "merged",
+                "Became empty on import; treating as already present on company main",
+            );
+            write_queue_file(repo, &queue)?;
+            commit_queue(repo, &format!("uplink: empty apply {id}"))?;
+        }
+        return Ok(());
+    }
+    commit_queue(repo, &format!("uplink: record applied patch {id}"))?;
+    Ok(())
 }
 
 pub fn approve_patch(repo: &Path, id: &str) -> Result<Patch> {
@@ -497,11 +563,7 @@ fn persist_apply_conflict(
         &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
         GitOpts::default(),
     )?;
-    git(
-        repo,
-        &["add", "-A", "--", ".", ":!.uplink", ":!.git"],
-        GitOpts::default(),
-    )?;
+    git(repo, &["add", "-A"], GitOpts::default())?;
     let staged = git(
         repo,
         &["diff", "--cached", "--quiet"],
@@ -640,14 +702,7 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
             current.conflict = None;
         }
 
-        fs::create_dir_all(repo.join(".uplink/patches"))?;
-        copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
-        write_queue_file(repo, &queue)?;
-        git(
-            repo,
-            &["add", "-A", "--", ".", ":!.git"],
-            GitOpts::default(),
-        )?;
+        git(repo, &["add", "-A"], GitOpts::default())?;
         let still = git(
             repo,
             &["diff", "--cached", "--quiet"],
@@ -677,6 +732,8 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
             &["checkout", "-f", "--quiet", &company_branch],
             GitOpts::default(),
         )?;
+        fs::create_dir_all(repo.join(".uplink/patches"))?;
+        copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
         queue.last_sync = Some(LastSync {
             at: stamp(),
             upstream_sha: rev_parse(repo, upstream_ref)?,
@@ -694,8 +751,24 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
 pub fn sync(repo: &Path) -> Result<QueueState> {
     with_queue_lock(repo, || {
         let fetched = read_queue_file(repo)?;
+        let previous = fetched
+            .last_sync
+            .as_ref()
+            .map(|sync| sync.upstream_sha.clone());
         let sha = fetch_upstream(repo, &fetched)?;
         let merged = detect_merged_in_upstream(repo, &read_queue_file(repo)?)?;
+        if previous.as_deref() == Some(sha.as_str()) && merged.is_empty() {
+            let mut queue = read_queue_file(repo)?;
+            queue.last_sync = Some(LastSync {
+                at: stamp(),
+                upstream_sha: sha,
+                result: "ok".into(),
+                message: Some("Synced with upstream".into()),
+            });
+            write_queue_file(repo, &queue)?;
+            commit_queue(repo, "uplink: sync with upstream")?;
+            return Ok(queue);
+        }
         match rebuild(repo) {
             Ok(mut queue) => {
                 queue.last_sync = Some(LastSync {
@@ -727,15 +800,18 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
                 "Check out {expected_branch} before resolving {id} (currently on {head})."
             )));
         }
-        let company_branch = if repo.join(QUEUE_PATH).exists() {
-            read_queue_file(repo)?.config.company_branch
-        } else {
-            "main".into()
-        };
-        if has_ref(repo, &company_branch)? {
+        let queue_ref = state_branch(repo);
+        if has_ref(repo, &queue_ref)? {
             git(
                 repo,
-                &["checkout", &company_branch, "--", ".uplink"],
+                &[
+                    "restore",
+                    "--source",
+                    &queue_ref,
+                    "--worktree",
+                    "--",
+                    ".uplink",
+                ],
                 GitOpts::default(),
             )?;
         }
@@ -765,11 +841,7 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
                 markers.stdout.trim().replace('\n', ", ")
             )));
         }
-        git(
-            repo,
-            &["add", "-A", "--", ".", ":!.uplink"],
-            GitOpts::default(),
-        )?;
+        git(repo, &["add", "-A"], GitOpts::default())?;
         let staged = git(
             repo,
             &["diff", "--cached", "--quiet"],

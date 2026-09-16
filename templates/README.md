@@ -10,8 +10,8 @@ That repository also needs the `git-uplink` binary on `PATH`. Install this crate
 
 - **Prepare** (`uplink-prepare.yml`) — on every PR to `main`. Strips the internal commit-message section, rewrites author, scans for company keywords / internal emails, comments a report for approvers, and writes `GITHUB_STEP_SUMMARY`. Required check.
 - **Preflight** (`uplink-preflight.yml`) — required check on every PR to `main`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines from the body, then runs `UPLINK_PREFLIGHT`. Failure comments on the PR; do not import until it is green.
-- **Import** (`uplink-import.yml`) — internal product approval. Label `uplink:import` after engineering review (or merge the PR). The change lands on company `main` as status `queued` only if export preflight still passes.
-- **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream, drops merged patches, rebuilds `main`. If a patch does not apply, it records `conflict` on the queue (committed on `main` without moving product files), pushes `uplink/conflict/<id>`, and opens an internal issue (`uplink:conflict`). Do not open a PR; resolve the patch on that branch instead.
+- **Import** (`uplink-import.yml`) — internal product approval. Label `uplink:import` after engineering review (or merge the PR). The change is recorded on `uplink/state` and applied onto company `main` as status `queued` only if export preflight still passes.
+- **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream, drops merged patches, and rebuilds `main` only when upstream moved. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>`, and opens an internal issue (`uplink:conflict`). Do not open a PR; resolve the patch on that branch instead.
 - **Resolve** (`uplink-resolve.yml`) — on human pushes to `uplink/conflict/<id>` (skips `github-actions[bot]`). Runs `git uplink resolve`, rebuilds `main`, closes the conflict issue, and deletes the conflict branch. If rebuild stops on a later patch, it pushes that `uplink/conflict/<id>` and opens an internal issue, same as sync. Does not export to the contribution fork.
 - **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`oss` GitHub Environment**. Dispatch with a patch id. The packet job commits the report; environment reviewers approve; the same run then `git uplink approve` + `git uplink submit`. Preflight runs again; a failing build/test means no fork push and no public PR.
 
@@ -24,7 +24,7 @@ Repo variables:
 | `UPLINK_INTERNAL_DOMAINS` | Comma-separated email domains flagged in the export diff (example: `acme.com`) |
 | `UPLINK_EXPORT_AUTHOR` | Default public identity `Name <email>` for contribution commits (machine user). Override per change with `Uplink-Export-Author` below the cutoff. |
 
-Import and sync share the Actions concurrency group `uplink-mutate` at workflow level. Resolve uses that group too. Submit uses it **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI also retries `git push --force-with-lease` if another import landed first.
+Import and sync share the Actions concurrency group `uplink-mutate` at workflow level. Resolve uses that group too. Submit uses it **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI retries a rejected fast-forward of `uplink/state` or `main` if another import landed first.
 
 ---
 
@@ -37,7 +37,7 @@ This is the documented option. Use it instead of asking an operator to run `git 
 ### What the reviewer sees
 
 1. **Job summary** — the packet job appends the full contribution packet to `GITHUB_STEP_SUMMARY` (public subject, export author, leak checks, depends-on). Open the workflow run; the summary is on the completed packet job.
-2. **Committed report** — `.uplink/reports/<id>/prepare.md` on company `main`. The `oss` deployment URL points at that file. Reports live under `.uplink/`, so a later queue rebuild copies them rather than dropping them.
+2. **Committed report** — `.uplink/reports/<id>/prepare.md` on `uplink/state`. The `oss` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
 3. **Environment review UI** — GitHub pauses the submit job until a required reviewer approves the `oss` deployment. That click is the IP gate.
 
 After approval, the submit job writes `.uplink/reports/<id>/approval.md` (in-repo receipt), runs `git uplink approve` then `git uplink submit`, and pushes. The public GitHub App token is minted in this job only.
@@ -75,21 +75,21 @@ The App must be installed on the private fork (contents: write) and on the publi
 
 `uplink-sync.yml` fetches public `upstream` over git and detects merge via trailers / patch-id / empty apply. It does **not** mint the write App. If you want hourly sync to treat the GitHub PR as merged via the API, add a **read-only** repo secret (`UPLINK_SYNC_TOKEN`) and wire it later — do not reuse the fork-write App key.
 
-Repository `GITHUB_TOKEN` stays a repo permission: it can commit reports to company `main`. It still cannot open the public pull request.
+Repository `GITHUB_TOKEN` stays a repo permission: it can commit reports to `uplink/state`. It still cannot open the public pull request.
 
 ### Ruleset so reports can be committed
 
-The packet job **fast-forwards** a commit of `.uplink/reports/<id>/prepare.md` (not a force-push). Import and sync still force-update `main`. Allow GitHub Actions (or the Uplink bot) to push to `main`:
+The packet job **fast-forwards** a commit of `.uplink/reports/<id>/prepare.md` on `uplink/state` (not a force-push). Import fast-forwards `main` when it applies a new patch. Sync force-updates `main` only for an upstream rebuild. Allow GitHub Actions (or the Uplink bot) to push:
 
-- Humans still require a pull request.
-- Actions may bypass to commit queue metadata and reports, and to force-push rebuilds.
+- Humans still require a pull request to `main`.
+- Actions may bypass to fast-forward `uplink/state`, and to force-push `main` when upstream (or drop/resolve) requires a replay.
 
-If the ruleset blocks `GITHUB_TOKEN` from pushing `main`, the packet job fails before anyone is asked to approve `oss`.
+If the ruleset blocks `GITHUB_TOKEN` from pushing `uplink/state`, the packet job fails before anyone is asked to approve `oss`.
 
 ### Operator flow
 
 ```text
-queued patch on company main
+queued patch on uplink/state (and applied on company main)
         │
         ▼
 workflow_dispatch Uplink submit (patch_id)

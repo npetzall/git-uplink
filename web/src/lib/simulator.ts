@@ -190,7 +190,7 @@ export const LAB_STEPS: {
         patches: [...state.patches, patch],
         log: [
           ...state.log,
-          "Imported internal PR #88 as upl_hash. Company main rebuilt: upstream + this patch.",
+          "Imported internal PR #88 as upl_hash. Recorded on uplink/state and applied onto company main.",
         ],
       });
     },

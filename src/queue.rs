@@ -17,6 +17,9 @@ pub fn empty_queue(config: QueueConfig) -> QueueState {
 }
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
+    if !repo.join(QUEUE_PATH).is_file() {
+        crate::repo::ensure_state_worktree(repo)?;
+    }
     let raw = fs::read_to_string(repo.join(QUEUE_PATH))?;
     Ok(serde_json::from_str(&raw)?)
 }

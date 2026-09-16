@@ -11,7 +11,7 @@ const GATES = [
   },
   {
     title: "Stay current, keep your deltas",
-    body: "Company main is rebuilt as public upstream plus the active patch queue. Unmerged work is in the product build. Merged work is dropped so later upstream fixes are not reverted.",
+    body: "Company main is public upstream plus the active patch queue. Import applies a new patch as a fast-forward. Sync rebuilds main only when upstream moved. Merged work is dropped so later upstream fixes are not reverted.",
   },
   {
     title: "IP control before publicity",

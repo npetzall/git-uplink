@@ -82,7 +82,7 @@ impl std::fmt::Display for GitError {
 
 impl std::error::Error for GitError {}
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GitOpts<'a> {
     pub allow_fail: bool,
     pub input: Option<&'a [u8]>,

@@ -287,7 +287,7 @@ Review this packet (the same markdown is on the Actions job summary / `GITHUB_ST
 {prepare}\n\
 ## What happens when you approve the oss environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
-2. This workflow writes `.uplink/reports/{id}/approval.md` on company main.\n\
+2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
 3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the oss environment.\n\
 4. No public PR is opened unless export preflight still passes.\n",
         id = patch.id,
@@ -317,7 +317,7 @@ pub fn format_approval_receipt(opts: ApprovalReceipt<'_>) -> String {
 | Workflow actor (dispatcher) | {actor} |\n\
 | Environment reviewers | See the Deployments tab and the GitHub Enterprise audit log for this run |\n\
 | Run | {run} |\n\
-| HEAD | `{sha}` |\n\
+| Queue commit | `{sha}` |\n\
 | Recorded at | {at} |\n\n\
 This file is the in-repo receipt. The authoritative approval event is the GitHub Environment review on **{env}**.\n",
         id = opts.patch_id,

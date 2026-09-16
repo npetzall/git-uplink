@@ -10,9 +10,9 @@ use git_uplink::{
     OSS_ENVIRONMENT, PreflightError, QueueConfig, add_patch, approve_patch, comment_on_issue,
     commit_queue, create_upstream_pull_request, drop_patch, format_approval_receipt,
     format_approver_packet, format_prepare_markdown, get_pull_request, git, git_ok, init_repo,
-    mark_merged, parse_github_repo, preflight_existing_patch, preflight_incoming_change,
-    prepare_from_range, read_queue, rebuild, record_pull_request, report_paths, resolve_conflict,
-    status_snapshot, submit_patch, summarize_queue, sync,
+    mark_merged, parse_github_repo, patch_state_commit, preflight_existing_patch,
+    preflight_incoming_change, prepare_from_range, read_queue, rebuild, record_pull_request,
+    report_paths, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
 };
 
 #[derive(Parser)]
@@ -364,6 +364,7 @@ fn run() -> Result<(), Error> {
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &packet);
             append_step_summary(&packet);
+            commit_queue(&repo, &format!("uplink: OSS packet {id}"))?;
             println!("{packet}");
             eprintln!("Wrote {}", dest.display());
         }
@@ -430,8 +431,10 @@ fn run() -> Result<(), Error> {
             if !queue.patches.iter().any(|p| p.id == id) {
                 return Err(Error::msg(format!("unknown patch {id}")));
             }
-            let sha = env::var("GITHUB_SHA")
-                .unwrap_or_else(|_| git_ok(&repo, &["rev-parse", "HEAD"]).unwrap_or_default());
+            let sha = patch_state_commit(&repo, &id).unwrap_or_else(|_| {
+                env::var("GITHUB_SHA")
+                    .unwrap_or_else(|_| git_ok(&repo, &["rev-parse", "HEAD"]).unwrap_or_default())
+            });
             let receipt = format_approval_receipt(ApprovalReceipt {
                 patch_id: &id,
                 environment: env::var("UPLINK_OSS_ENVIRONMENT")
