@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Bootstrap already-created clones of the three example GitHub repositories.
-# The walker creates and clones the repos first; this script applies seed
-# files, runs git uplink init, imports the internal-only workflows patch,
-# and pushes seed branches.
+# Initialize uplink-example-internal against already-bootstrapped upstream
+# and contrib clones. Runs git uplink init, imports the internal-only
+# workflows patch, and pushes seed branches.
 #
 #   export UPSTREAM_DIR=$HOME/src/uplink-example-upstream
 #   export CONTRIB_DIR=$HOME/src/uplink-example-upstream-contrib
 #   export INTERNAL_DIR=$HOME/src/uplink-example-internal
-#   ./examples/github/scripts/bootstrap.sh
+#   ./examples/github/scripts/bootstrap_internal.sh
 #
 # See examples/github/SETUP.md.
 
@@ -19,76 +18,15 @@ source "$SCRIPT_DIR/env.sh"
 
 need_cmd git
 need_cmd git-uplink
-
-git_bot() {
-  git -c user.name="Uplink Example" \
-    -c user.email="uplink-example@users.noreply.github.com" \
-    -c commit.gpgsign=false "$@"
-}
-
-copy_overlay() {
-  local src=$1 dest=$2
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a "$src/" "$dest/"
-  else
-    cp -R "$src"/. "$dest/"
-  fi
-}
-
-replace_tree() {
-  local src=$1 dest=$2
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete --exclude .git "$src/" "$dest/"
-  else
-    find "$dest" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-    cp -R "$src"/. "$dest/"
-  fi
-}
-
-ensure_remote() {
-  local dir=$1 name=$2 url=$3
-  if git -C "$dir" remote get-url "$name" >/dev/null 2>&1; then
-    git -C "$dir" remote set-url "$name" "$url"
-  else
-    git -C "$dir" remote add "$name" "$url"
-  fi
-}
+require_clone UPSTREAM_DIR
+require_clone CONTRIB_DIR
+require_clone INTERNAL_DIR
+ensure_contrib_owner_differs
 
 echo "Upstream clone: $UPSTREAM_DIR  ($UPSTREAM)"
 echo "Contrib clone:  $CONTRIB_DIR   ($CONTRIB)"
 echo "Internal clone: $INTERNAL_DIR  ($INTERNAL)"
 echo "Uplink source:  $UPLINK_SRC@$UPLINK_REV"
-
-if [[ "$UPSTREAM" == "$CONTRIB" ]]; then
-  echo "Contrib must be a fork under a different owner than upstream." >&2
-  exit 1
-fi
-
-echo "Seeding $UPSTREAM"
-replace_tree "$KIT_DIR/upstream" "$UPSTREAM_DIR"
-git -C "$UPSTREAM_DIR" add -A
-if git -C "$UPSTREAM_DIR" diff --cached --quiet && git -C "$UPSTREAM_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
-  echo "Upstream seed already committed"
-else
-  git_bot -C "$UPSTREAM_DIR" commit -m "initial tokens"
-fi
-git -C "$UPSTREAM_DIR" branch -M main
-git -C "$UPSTREAM_DIR" push -u origin main --force
-git -C "$UPSTREAM_DIR" branch -f seed main
-git -C "$UPSTREAM_DIR" push origin seed --force
-echo "Pushed $UPSTREAM main and seed"
-
-echo "Installing contrib Reset example workflow on $CONTRIB"
-copy_overlay "$KIT_DIR/upstream-contrib" "$CONTRIB_DIR"
-git -C "$CONTRIB_DIR" add -A
-if git -C "$CONTRIB_DIR" diff --cached --quiet && git -C "$CONTRIB_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
-  echo "Contrib reset workflow already committed"
-else
-  git_bot -C "$CONTRIB_DIR" commit -m "Reset example workflow"
-fi
-git -C "$CONTRIB_DIR" branch -M main
-git -C "$CONTRIB_DIR" push -u origin main
-echo "Pushed $CONTRIB main (fork default; not synced from upstream)"
 
 echo "Initializing $INTERNAL"
 ensure_remote "$INTERNAL_DIR" origin "$INTERNAL_URL"
@@ -167,7 +105,7 @@ fi
 echo
 echo "Bootstrap complete."
 echo "  $UPSTREAM  main + seed"
-echo "  $CONTRIB   main (Reset example workflow only)"
+echo "  $CONTRIB   main (Reset example workflow on the fork)"
 echo "  $INTERNAL  main + uplink/state + uplink/upstream + seed refs"
 echo
 echo "Finish SETUP.md (oss reviewer and UPLINK_GITHUB_TOKEN), then walk examples/github/stories/."

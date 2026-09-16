@@ -49,7 +49,7 @@ examples/github/
   internal/             Uplink Actions + internal Reset example
   patches/*.diff        git apply these
   patches/*.pr.md       paste into the GitHub PR body
-  scripts/bootstrap.sh  local init against your clones
+  scripts/bootstrap_*.sh  seed upstream, then contrib fork, then internal
   stories/
 ```
 

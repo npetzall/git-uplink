@@ -1,6 +1,6 @@
 # Set up the GitHub example
 
-Create three GitHub repositories, clone them, run local bootstrap (`git uplink init` plus one internal-only workflows patch), then walk the stories with `git apply` / push and the GitHub UI for PRs and gates.
+Bootstrap upstream first, then fork it (GitHub cannot fork an empty repo), then bootstrap contrib and internal. After that, walk the stories with `git apply` / push and the GitHub UI for PRs and gates.
 
 You need a **GitHub organization** plus your user account. GitHub will not let one account fork its own repository, and `git uplink submit` opens a real pull request from the contrib fork to upstream.
 
@@ -17,46 +17,48 @@ A true private fork of a public parent needs GitHub Enterprise. On github.com th
 - `git`
 - `git-uplink` on `PATH` (`cargo install --path .` from this crate)
 - Node.js 22 only if you run `npm test` locally (Actions uses Node 22)
-- `gh` is optional (bootstrap can set labels and variables if you are logged in)
+- `gh` is optional (`bootstrap_internal.sh` can set labels and variables if you are logged in)
 
-## 1. Create and clone the repositories
+## 1. Upstream
 
-In the GitHub UI:
-
-1. In the org, create public `uplink-example-upstream` (empty is fine).
-2. Fork it to your user as `uplink-example-upstream-contrib`.
-3. In the org, create private `uplink-example-internal` (empty is fine).
-
-Clone all three. `origin` on each clone must point at that GitHub repo.
+In the org, create public `uplink-example-upstream` (empty is fine). Clone it. `origin` must point at that GitHub repo.
 
 ```bash
 git clone https://github.com/YOUR_ORG/uplink-example-upstream.git
-git clone https://github.com/YOUR_USER/uplink-example-upstream-contrib.git
-git clone https://github.com/YOUR_ORG/uplink-example-internal.git
+export UPSTREAM_DIR=/path/to/uplink-example-upstream
+./examples/github/scripts/bootstrap_upstream.sh
 ```
 
-## 2. Bootstrap (local git uplink)
+The script replaces the clone with [`upstream/`](upstream/) (tokenkit + **Reset example**), force-pushes `main`, and creates `seed`.
 
-From the git-uplink checkout:
+## 2. Contrib fork
+
+Fork the bootstrapped upstream to your user as `uplink-example-upstream-contrib`. Clone it.
 
 ```bash
-export UPSTREAM_DIR=/path/to/uplink-example-upstream
+git clone https://github.com/YOUR_USER/uplink-example-upstream-contrib.git
 export CONTRIB_DIR=/path/to/uplink-example-upstream-contrib
+./examples/github/scripts/bootstrap_upstream-contrib.sh
+```
+
+The script adds the contrib **Reset example** workflow from [`upstream-contrib/`](upstream-contrib/) on contrib `main` (the fork already has upstream `main`). If `UPSTREAM_DIR` is still set, it checks that the fork owner differs from upstream.
+
+## 3. Internal
+
+In the org, create private `uplink-example-internal` (empty is fine). Clone it.
+
+```bash
+git clone https://github.com/YOUR_ORG/uplink-example-internal.git
 export INTERNAL_DIR=/path/to/uplink-example-internal
 # optional:
 # export UPLINK_SRC=npetzall/git-uplink
 # export UPLINK_REV=main
 # export UPLINK_SUBMIT_AUTH=pat
 
-./examples/github/scripts/bootstrap.sh
+./examples/github/scripts/bootstrap_internal.sh
 ```
 
-The script:
-
-1. Replaces upstream with [`upstream/`](upstream/) (tokenkit + **Reset example**), force-pushes `main`, creates `seed`
-2. Adds the contrib **Reset example** workflow from [`upstream-contrib/`](upstream-contrib/) on contrib `main` (does not sync contrib from upstream)
-3. On internal: remotes, **`git uplink init`**, overlays [`internal/`](internal/), **`git uplink add --internal-only`**, pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`
-4. If `gh` is authenticated: labels, repo variables, Actions write permission, Environment `oss`
+The script needs all three clones. It sets remotes, runs **`git uplink init`**, overlays [`internal/`](internal/), **`git uplink add --internal-only`**, and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environment `oss`.
 
 `git uplink status` in the internal clone should show one internal-only patch (`Example GitHub workflows`).
 
@@ -66,9 +68,9 @@ Keep the internal and upstream clones for the stories:
 export KIT=/path/to/git-uplink/examples/github
 ```
 
-## 3. GitHub settings (UI)
+## 4. GitHub settings (UI)
 
-If bootstrap did not run `gh`, do this in **uplink-example-internal**:
+If `bootstrap_internal.sh` did not run `gh`, do this in **uplink-example-internal**:
 
 **Labels:** `uplink:import`, `uplink:internal-only`, `uplink:conflict`
 
@@ -118,7 +120,7 @@ Production-shaped; see [`templates/README.md`](../../templates/README.md). An in
 
 Install the App on the contrib fork (contents: write) and on upstream (contents: read, pull requests: write). Set variable `UPLINK_SUBMIT_AUTH` to `app`.
 
-## 4. Reset (Actions)
+## 5. Reset (Actions)
 
 Each story starts by restoring the three repositories. Force-push is expected.
 
