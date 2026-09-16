@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::env;
+use std::fs;
 use std::path::Path;
 
 use regex::Regex;
@@ -7,8 +8,10 @@ use regex::Regex;
 use crate::error::{Error, PrepareError, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::queue::now_iso;
+use crate::repo::{has_ref, show_at, state_branch};
 use crate::types::{
-    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Patch, PrepareCheck, PrepareReport, QueueState,
+    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR, Patch, PrepareCheck, PrepareReport,
+    QueueState,
 };
 
 pub const OSS_ENVIRONMENT: &str = "oss";
@@ -329,6 +332,313 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
         company = format_fenced(&company_commit_message(patch)),
         contrib = format_fenced(&export_commit_message(patch)),
     )
+}
+
+pub fn format_contribution_packet(repo: &Path, patch: &Patch) -> Result<String> {
+    if patch.status == "amended" {
+        format_delta_approver_packet(repo, patch)
+    } else {
+        Ok(format_approver_packet(patch))
+    }
+}
+
+pub fn format_delta_approver_packet(repo: &Path, patch: &Patch) -> Result<String> {
+    let last = patch.last_approval();
+    let amendment = patch.approvals.len();
+    let pr = patch
+        .upstream
+        .as_ref()
+        .and_then(|u| u.pr_url.clone())
+        .or_else(|| {
+            patch
+                .upstream
+                .as_ref()
+                .and_then(|u| u.pr_number)
+                .map(|n| format!("#{n}"))
+        })
+        .unwrap_or_else(|| "not recorded".into());
+    let last_at = last.map(|a| a.at.as_str()).unwrap_or("not recorded");
+    let last_sha = last.map(|a| a.sha.as_str()).unwrap_or("not recorded");
+    let last_run = last
+        .and_then(|a| a.run_url.as_deref())
+        .unwrap_or("not recorded");
+
+    let delta = match last {
+        Some(approval) => format_delta_since(repo, patch, &approval.sha)?,
+        None => {
+            "No prior approval SHA is recorded on this patch. Review the full updated contribution.\n"
+                .into()
+        }
+    };
+    let history = format_historical_approvals(repo, patch)?;
+
+    Ok(format!(
+        "# OSS delta packet — {id}\n\n\
+This contribution was **already IP-approved** and submitted. Review **only the delta** since the last approval. Historical packets below were already approved; do not re-litigate them unless the delta depends on that context.\n\n\
+| Field | Value |\n\
+| --- | --- |\n\
+| Patch | `{id}` |\n\
+| Title | {title} |\n\
+| Intent | {intent} |\n\
+| Queue status | {status} |\n\
+| Amendment | {amendment} |\n\
+| Public PR | {pr} |\n\
+| Last approved at | {last_at} |\n\
+| Last approved commit | `{last_sha}` |\n\
+| Last approval run | {last_run} |\n\n\
+## Delta since last approval\n\n\
+{delta}\n\n\
+## Commit messages that will be used\n\n\
+Company `main` keeps the cutoff and internal notes. The contribution fork does not. **Upstream contrib** below is the message that will be used on the updated fork commit.\n\n\
+### Company main\n\n\
+{company}\n\n\
+### Upstream contrib\n\n\
+{contrib}\n\n\
+## What happens when you approve the oss environment\n\n\
+1. GitHub records the environment reviewer (audit log + Deployments).\n\
+2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
+3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the oss environment.\n\
+4. Submit force-pushes `uplink/{id}` so the existing public PR is updated. No second PR is opened.\n\n\
+{history}",
+        id = patch.id,
+        title = patch.title,
+        intent = patch.intent,
+        status = patch.status,
+        company = format_fenced(&company_commit_message(patch)),
+        contrib = format_fenced(&export_commit_message(patch)),
+    ))
+}
+
+fn format_delta_since(repo: &Path, patch: &Patch, sha: &str) -> Result<String> {
+    let old_path = format!("{PATCH_DIR}/{}.patch", patch.id);
+    let new_path = format!("{PATCH_DIR}/{}.patch", patch.id);
+    let old_patch = match show_at(repo, sha, &old_path) {
+        Ok(body) => body,
+        Err(_) => {
+            return Ok(format!(
+                "Could not read `.uplink/patches/{}.patch` at `{sha}`.\n",
+                patch.id
+            ));
+        }
+    };
+    let new_patch = fs::read_to_string(repo.join(&new_path))
+        .unwrap_or_else(|_| show_at(repo, &state_branch(repo), &new_path).unwrap_or_default());
+    if let Some(tree) = tree_diff_patches(repo, &old_patch, &new_patch) {
+        return Ok(format!(
+            "Source tree diff of the last approved patch vs the current patch, both applied on the same base.\n\n\
+```\n{}\n```\n",
+            tree.trim_end()
+        ));
+    }
+    let file_diff = patch_file_diff(repo, &old_patch, &new_patch);
+    Ok(format!(
+        "The previously approved patch no longer applies cleanly on the current export base (typical after upstream moved). Diff of the two patch files, plus the current patch that will be exported:\n\n\
+### Patch-file diff\n\n\
+```\n{}\n```\n\n\
+### Current patch (will be exported)\n\n\
+```\n{}\n```\n",
+        file_diff.trim_end(),
+        new_patch.trim_end()
+    ))
+}
+
+fn patch_file_diff(repo: &Path, old_patch: &str, new_patch: &str) -> String {
+    let dir = env::temp_dir().join(format!("uplink-delta-files-{}", uuid::Uuid::new_v4()));
+    let _ = fs::create_dir_all(&dir);
+    let old_file = dir.join("approved.patch");
+    let new_file = dir.join("current.patch");
+    let _ = fs::write(&old_file, old_patch);
+    let _ = fs::write(&new_file, new_patch);
+    let result = git(
+        repo,
+        &[
+            "diff",
+            "--no-index",
+            "--",
+            old_file.to_str().unwrap_or(""),
+            new_file.to_str().unwrap_or(""),
+        ],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    );
+    let _ = fs::remove_dir_all(&dir);
+    match result {
+        Ok(out) if !out.stdout.trim().is_empty() => out.stdout,
+        _ => "(no textual difference in patch files)".into(),
+    }
+}
+
+fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<String> {
+    let base = if has_ref(repo, "uplink/upstream").ok()? {
+        "uplink/upstream"
+    } else {
+        "HEAD"
+    };
+    let root = env::temp_dir().join(format!("uplink-delta-tree-{}", uuid::Uuid::new_v4()));
+    let old_dir = root.join("old");
+    let new_dir = root.join("new");
+    let old_file = root.join("approved.patch");
+    let new_file = root.join("current.patch");
+    fs::create_dir_all(&root).ok()?;
+    fs::write(&old_file, old_patch).ok()?;
+    fs::write(&new_file, new_patch).ok()?;
+    let added_old = git(
+        repo,
+        &["worktree", "add", "--detach", old_dir.to_str()?, base],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .ok()?;
+    if added_old.code != 0 {
+        let _ = fs::remove_dir_all(&root);
+        return None;
+    }
+    let added_new = git(
+        repo,
+        &["worktree", "add", "--detach", new_dir.to_str()?, base],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .ok()?;
+    if added_new.code != 0 {
+        let _ = git(
+            repo,
+            &[
+                "worktree",
+                "remove",
+                "--force",
+                old_dir.to_str().unwrap_or(""),
+            ],
+            GitOpts {
+                allow_fail: true,
+                ..GitOpts::default()
+            },
+        );
+        let _ = fs::remove_dir_all(&root);
+        return None;
+    }
+    let applied_old = git(
+        &old_dir,
+        &["apply", old_file.to_str().unwrap_or("")],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .ok();
+    let applied_new = git(
+        &new_dir,
+        &["apply", new_file.to_str().unwrap_or("")],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .ok();
+    let diff =
+        if applied_old.is_some_and(|r| r.code == 0) && applied_new.is_some_and(|r| r.code == 0) {
+            let old_tree = write_worktree_tree(&old_dir);
+            let new_tree = write_worktree_tree(&new_dir);
+            match (old_tree, new_tree) {
+                (Some(old_tree), Some(new_tree)) => git(
+                    repo,
+                    &["diff", &old_tree, &new_tree],
+                    GitOpts {
+                        allow_fail: true,
+                        ..GitOpts::default()
+                    },
+                )
+                .ok()
+                .map(|out| out.stdout)
+                .filter(|s| !s.trim().is_empty()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+    let _ = git(
+        repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            old_dir.to_str().unwrap_or(""),
+        ],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    );
+    let _ = git(
+        repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            new_dir.to_str().unwrap_or(""),
+        ],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    );
+    let _ = fs::remove_dir_all(&root);
+    diff
+}
+
+fn write_worktree_tree(worktree: &Path) -> Option<String> {
+    git(worktree, &["add", "-A"], GitOpts::default()).ok()?;
+    git_ok(worktree, &["write-tree"]).ok()
+}
+
+fn format_historical_approvals(repo: &Path, patch: &Patch) -> Result<String> {
+    if patch.approvals.is_empty() {
+        return Ok(
+            "## Previously approved packets\n\nNo prior approval SHAs are recorded.\n".into(),
+        );
+    }
+    let mut sections = vec![
+        "## Previously approved packets\n\nEach packet below **was already approved**. The delta above is what still needs review.\n"
+            .to_string(),
+    ];
+    let (_, prepare_path, approval_path) = report_paths(&patch.id);
+    for approval in &patch.approvals {
+        let packet = show_at(repo, &approval.sha, &prepare_path)
+            .unwrap_or_else(|_| "No `prepare.md` stored at this commit.\n".into());
+        let receipt = show_at(repo, &approval.sha, &approval_path).ok();
+        let run = approval.run_url.as_deref().unwrap_or("not recorded");
+        let mut body = format!(
+            "### Already approved ({kind}) — {at}\n\n\
+| Field | Value |\n\
+| --- | --- |\n\
+| Version | {version} |\n\
+| Queue commit | `{sha}` |\n\
+| Run | {run} |\n\n\
+This historical report has **already been approved**.\n\n\
+{packet}\n",
+            kind = approval.kind,
+            at = approval.at,
+            version = approval.version,
+            sha = approval.sha,
+        );
+        if let Some(receipt) = receipt {
+            if !receipt.trim().is_empty() {
+                body.push_str(
+                    "\n<details>\n<summary>Approval receipt at this commit</summary>\n\n",
+                );
+                body.push_str(&receipt);
+                body.push_str("\n</details>\n");
+            }
+        }
+        sections.push(body);
+    }
+    Ok(sections.join("\n"))
 }
 
 pub struct ApprovalReceipt<'a> {

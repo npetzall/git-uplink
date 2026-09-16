@@ -1,7 +1,9 @@
 # CONTRIBUTION / IP gate. Dispatch from company main with a patch id.
 # Packet job commits the report on uplink/state. Submit job waits on
-# Environment `oss`.
+# Environment `oss`. Resolve of an already-submitted patch dispatches
+# this workflow so IP can approve the delta.
 name: Uplink submit
+run-name: Uplink submit ${{ inputs.patch_id }}
 
 on:
   workflow_dispatch:

@@ -22,6 +22,12 @@ const GATES = [
     name: "Visible to upstream",
     body: "Bytes are pushed to the upstream-owned private fork and opened as a public PR. This is the first time the work can leave EMU. App credentials exist only on the oss environment.",
   },
+  {
+    when: "Submitted patch hits a sync conflict, then resolve",
+    status: "amended",
+    name: "Delta waiting for IP",
+    body: "Company main already has the resolved patch. The fork still has the last approved bytes. Resolve dispatches Uplink submit; IP reviews a delta packet. Approving force-pushes the same public PR.",
+  },
 ];
 
 export function CollaborationPage() {

@@ -8,7 +8,7 @@ It is for a company on GitHub Enterprise Cloud with Enterprise Managed Users tha
 public upstream/main  +  every patch that is not merged or dropped
 ```
 
-`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. On GitHub Enterprise Cloud, dispatch the **oss** Environment workflow; `git uplink report` writes `.uplink/reports/<id>/prepare.md` on `uplink/state` and `GITHUB_STEP_SUMMARY`.
+`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. On GitHub Enterprise Cloud, dispatch the **oss** Environment workflow (resolve of a submitted patch does this for you); `git uplink report` writes `.uplink/reports/<id>/prepare.md` on `uplink/state` and `GITHUB_STEP_SUMMARY`.
 
 ```bash
 cargo install --path .
@@ -99,7 +99,7 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 | `uplink-preflight.yml` | Every PR to `main` — apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT` |
 | `uplink-import.yml` | Label `uplink:import` or merge — product gate, status `queued` |
 | `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches; rebuild `main` only if upstream moved. Queue commits go to `uplink/state`. Persist conflicts and open an internal issue |
-| `uplink-resolve.yml` | Human push to `uplink/conflict/*` — `git uplink resolve`, rebuild `main`; publish a later conflict like sync; skips the Actions bot |
-| `uplink-submit.yml` | Dispatch with a patch id — `oss` Environment IP gate, then approve + submit |
+| `uplink-resolve.yml` | Human push to `uplink/conflict/*` — `git uplink resolve`, rebuild `main`; if already submitted, status `amended` and dispatch submit for a delta IP pass; publish a later conflict like sync |
+| `uplink-submit.yml` | Dispatch with a patch id — `oss` Environment IP gate (full packet or delta), then approve + submit. Skips opening a second PR when `pr_number` is already stored |
 
 Environment setup is in `templates/README.md`. Developer stories: [way-of-working.md](way-of-working.md).

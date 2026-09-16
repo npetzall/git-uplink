@@ -354,6 +354,7 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
         upstream: None,
         merged: None,
         conflict: None,
+        approvals: Vec::new(),
         events: Vec::new(),
     };
     let message = export_commit_message(&patch);

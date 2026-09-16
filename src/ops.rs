@@ -13,14 +13,14 @@ use crate::queue::{
     topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
-    apply_patch_file, commit_queue, conflicted_files, copy_dir,
-    ensure_state_worktree, fetch_upstream, has_ref, new_patch_id, push_company_branch,
-    push_state_branch, refresh_company_branch, refresh_state_branch, rev_parse, stable_patch_id,
+    apply_patch_file, commit_queue, conflicted_files, copy_dir, ensure_state_worktree,
+    fetch_upstream, has_ref, new_patch_id, push_company_branch, push_state_branch,
+    refresh_company_branch, refresh_state_branch, rev_parse, stable_patch_id,
     stable_patch_id_from_contents, stamp, state_branch, write_product_patch,
 };
 use crate::types::{
-    LastSync, MergeVia, Patch, PatchConflict, PatchMerged, PatchSource, PatchUpstream, QUEUE_PATH,
-    QueueConfig, QueueState,
+    LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
+    PatchUpstream, QUEUE_PATH, QueueConfig, QueueState,
 };
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
@@ -214,6 +214,7 @@ fn add_patch_once(
         upstream: None,
         merged: None,
         conflict: None,
+        approvals: Vec::new(),
         events: Vec::new(),
     };
 
@@ -361,6 +362,15 @@ fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) ->
 }
 
 pub fn approve_patch(repo: &Path, id: &str) -> Result<Patch> {
+    approve_patch_at(repo, id, None, None)
+}
+
+pub fn approve_patch_at(
+    repo: &Path,
+    id: &str,
+    sha: Option<&str>,
+    run_url: Option<&str>,
+) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
         {
@@ -375,26 +385,59 @@ pub fn approve_patch(repo: &Path, id: &str) -> Result<Patch> {
                     "{id} is not ready for contribution. Fix prepare-for-upstream findings first."
                 )));
             }
-            if patch.status == "queued" {
-                patch.status = "approved".into();
-            } else if patch.status != "approved" && patch.status != "submitted" {
+            let kind = if patch.status == "queued" {
+                "initial"
+            } else if patch.status == "amended" {
+                "delta"
+            } else if patch.status == "approved" || patch.status == "submitted" {
+                return Ok(patch.clone());
+            } else {
                 return Err(Error::msg(format!(
                     "{id} is {} and cannot be approved for contribution.",
                     patch.status
                 )));
-            } else {
-                return Ok(patch.clone());
-            }
+            };
+            patch.status = "approved".into();
+            let sha = match sha {
+                Some(value) if !value.is_empty() => value.to_string(),
+                _ => rev_parse(repo, &state_branch(repo))?,
+            };
+            let run_url = run_url
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(github_run_url_opt);
+            let version = patch.approvals.len() as u32 + 1;
+            let at = stamp();
+            patch.approvals.push(PatchApproval {
+                at: at.clone(),
+                version,
+                kind: kind.into(),
+                sha,
+                patch_id_stable: patch.patch_id_stable.clone(),
+                run_url,
+            });
             add_event(
                 patch,
                 "approved",
-                "IP and contribution review passed; patch may leave the enterprise",
+                if kind == "delta" {
+                    "IP approved the delta since the previous contribution approval"
+                } else {
+                    "IP and contribution review passed; patch may leave the enterprise"
+                },
             );
         }
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: approve {id}"))?;
         Ok(get_patch(&queue, id)?.clone())
     })
+}
+
+fn github_run_url_opt() -> Option<String> {
+    let server = std::env::var("GITHUB_SERVER_URL").ok()?;
+    let repository = std::env::var("GITHUB_REPOSITORY").ok()?;
+    let run_id = std::env::var("GITHUB_RUN_ID").ok()?;
+    Some(format!("{server}/{repository}/actions/runs/{run_id}"))
 }
 
 pub fn drop_patch(repo: &Path, id: &str, reason: &str) -> Result<Patch> {
@@ -888,8 +931,8 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         fs::write(repo.join(format!(".uplink/patches/{id}.patch")), body)?;
         {
             let patch = get_patch_mut(&mut queue, id)?;
-            patch.status = if patch.upstream.as_ref().and_then(|u| u.pr_number).is_some() {
-                "submitted"
+            patch.status = if patch.upstream.is_some() {
+                "amended"
             } else {
                 "queued"
             }
@@ -1027,11 +1070,18 @@ pub fn submit_patch(repo: &Path, id: &str, pr: Option<(u64, String)>) -> Result<
         let mut latest = read_queue_file(repo)?;
         {
             let current = get_patch_mut(&mut latest, id)?;
+            let existing = current.upstream.clone();
             current.status = "submitted".into();
             current.upstream = Some(PatchUpstream {
                 contrib_branch: branch.clone(),
-                pr_number: pr.as_ref().map(|p| p.0),
-                pr_url: pr.as_ref().map(|p| p.1.clone()),
+                pr_number: pr
+                    .as_ref()
+                    .map(|p| p.0)
+                    .or_else(|| existing.as_ref().and_then(|u| u.pr_number)),
+                pr_url: pr
+                    .as_ref()
+                    .map(|p| p.1.clone())
+                    .or_else(|| existing.as_ref().and_then(|u| u.pr_url.clone())),
                 submitted_at: Some(stamp()),
             });
             add_event(
@@ -1039,6 +1089,8 @@ pub fn submit_patch(repo: &Path, id: &str, pr: Option<(u64, String)>) -> Result<
                 "submitted",
                 if let Some((_, url)) = &pr {
                     format!("Pushed {branch} and opened {url}")
+                } else if existing.as_ref().and_then(|u| u.pr_number).is_some() {
+                    format!("Updated {branch} on the contribution fork")
                 } else {
                     format!("Pushed {branch} to the contribution fork")
                 },
@@ -1111,6 +1163,7 @@ pub struct QueueCounts {
     pub queued: u32,
     pub approved: u32,
     pub submitted: u32,
+    pub amended: u32,
     pub merged: u32,
     pub dropped: u32,
     pub conflict: u32,
@@ -1122,6 +1175,7 @@ pub fn summarize_queue(queue: &QueueState) -> QueueCounts {
         queued: 0,
         approved: 0,
         submitted: 0,
+        amended: 0,
         merged: 0,
         dropped: 0,
         conflict: 0,
@@ -1132,6 +1186,7 @@ pub fn summarize_queue(queue: &QueueState) -> QueueCounts {
             "queued" => counts.queued += 1,
             "approved" => counts.approved += 1,
             "submitted" => counts.submitted += 1,
+            "amended" => counts.amended += 1,
             "merged" => counts.merged += 1,
             "dropped" => counts.dropped += 1,
             "conflict" => counts.conflict += 1,

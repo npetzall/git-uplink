@@ -111,6 +111,19 @@ pub struct PatchUpstream {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PatchApproval {
+    pub at: String,
+    pub version: u32,
+    pub kind: String,
+    pub sha: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patch_id_stable: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PatchMerged {
     pub via: MergeVia,
     pub at: String,
@@ -150,7 +163,15 @@ pub struct Patch {
     pub merged: Option<PatchMerged>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conflict: Option<PatchConflict>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approvals: Vec<PatchApproval>,
     pub events: Vec<PatchEvent>,
+}
+
+impl Patch {
+    pub fn last_approval(&self) -> Option<&PatchApproval> {
+        self.approvals.last()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

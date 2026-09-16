@@ -63,8 +63,9 @@ export function PlaybookPage() {
           </ul>
           <p>
             Developers never maintain a second branch for the public side. When they fix a conflict
-            or address review, they amend the patch. If it is already submitted, the bot
-            force-pushes the fork branch and the open PR updates.
+            or address review, they amend the patch. If it is already submitted, status becomes{" "}
+            <code>amended</code> until IP approves the delta; then the bot force-pushes the fork
+            branch and the open PR updates.
           </p>
         </Section>
 
@@ -315,8 +316,9 @@ export function PlaybookPage() {
             <code>git uplink resolve &lt;id&gt;</code>, and rebuilds <code>main</code>. Remaining
             patches then replay. If a later patch fails to apply, resolve exits 2 and the job
             publishes that conflict the same way sync does. If the patch was already submitted,
-            the next submit/sync force-pushes the contribution branch so the upstream PR is
-            amended.
+            resolve sets status <code>amended</code> and dispatches <code>Uplink submit</code>.
+            IP reviews a delta-first packet (historical packets are already approved). After
+            oss approval the same public PR is force-pushed; no second PR is opened.
           </p>
         </Section>
 

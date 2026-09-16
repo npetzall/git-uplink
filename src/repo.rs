@@ -390,6 +390,10 @@ pub fn push_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> 
     Ok(())
 }
 
+pub fn show_at(repo: &Path, sha: &str, path: &str) -> Result<String> {
+    git_ok(repo, &["show", &format!("{sha}:{path}")])
+}
+
 pub fn patch_state_commit(repo: &Path, id: &str) -> Result<String> {
     let branch = state_branch(repo);
     let path = format!(".uplink/patches/{id}.patch");
