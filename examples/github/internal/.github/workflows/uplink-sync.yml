@@ -26,6 +26,9 @@ jobs:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}
       - uses: ./.github/actions/add-uplink-remotes
+        with:
+          upstream: ${{ vars.UPLINK_UPSTREAM }}
+          contrib: ${{ vars.UPLINK_CONTRIB }}
 
       - name: Sync with upstream
         env:
