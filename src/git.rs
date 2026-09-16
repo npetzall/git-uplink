@@ -189,6 +189,40 @@ fn shell_quote(value: &str) -> String {
     }
 }
 
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(input: &[u8]) -> String {
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        let n = (u32::from(b0) << 16) | (u32::from(b1) << 8) | u32::from(b2);
+        out.push(BASE64_ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+        out.push(BASE64_ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(BASE64_ALPHABET[((n >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(BASE64_ALPHABET[(n & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// GitHub git smart-HTTP wants Basic `x-access-token`, not Bearer (REST API).
+fn git_http_extra_header(token: &str) -> String {
+    format!(
+        "Authorization: Basic {}",
+        base64_encode(format!("x-access-token:{token}").as_bytes())
+    )
+}
+
 fn resolve_remote_url(cwd: &Path, spec: &str, opts: &GitOpts<'_>) -> Result<String> {
     if is_explicit_url(spec) || spec.starts_with("file://") {
         return Ok(spec.to_string());
@@ -231,7 +265,7 @@ fn transport_for(cwd: &Path, args: &[&str], opts: &GitOpts<'_>) -> Result<Transp
         let remote_url = ssh_to_https(&url).unwrap_or_else(|| url.clone());
         return Ok(Transport {
             remote_url: Some(remote_url),
-            extra_header: Some(format!("Authorization: Bearer {token}")),
+            extra_header: Some(git_http_extra_header(&token)),
             ssh_command: None,
             isolate_gitconfig: true,
         });
@@ -352,7 +386,23 @@ pub fn configure_repo(_cwd: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_local_transport, network_remote_index, ssh_to_https};
+    use super::{git_http_extra_header, is_local_transport, network_remote_index, ssh_to_https};
+
+    #[test]
+    fn git_http_header_is_basic_x_access_token() {
+        let header = git_http_extra_header("test-token");
+        assert_eq!(
+            header,
+            "Authorization: Basic eC1hY2Nlc3MtdG9rZW46dGVzdC10b2tlbg=="
+        );
+        assert!(header.ends_with("=="), "standard base64 must keep padding");
+        assert!(!header.contains("Bearer"));
+        assert!(!header.contains('\n'));
+
+        let padded = git_http_extra_header("a");
+        assert_eq!(padded, "Authorization: Basic eC1hY2Nlc3MtdG9rZW46YQ==");
+        assert!(!padded.contains('\n'));
+    }
 
     #[test]
     fn network_remote_index_skips_flags() {
