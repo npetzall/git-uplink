@@ -118,10 +118,12 @@ export function PlaybookPage() {
           <ol>
             <li>
               <strong>Prepare for upstream (on the internal PR).</strong> A second workflow rewrites
-              the change as a contribution: public commit message above the cutoff, export author
+              the change as a contribution: PR title and body become the single commit message
+              (HTML comments stripped), public text above the cutoff, export author
               (machine user or <code>Uplink-Export-Author</code>), affiliation scan (company name,
-              internal emails in tests and diffs). The report is posted on the PR so IP can approve
-              from results instead of reconstructing the public patch.
+              internal emails in tests and diffs). The report shows both the company commit
+              message (cutoff kept) and the upstream commit message (cutoff removed). The report is
+              posted on the PR so IP can inspect the exact commit texts.
             </li>
             <li>
               <strong>Internal product (status <code>queued</code>).</strong> Engineering review on
@@ -231,10 +233,12 @@ export function PlaybookPage() {
           <ol>
             <li>Branch from company <code>main</code> (already includes unmerged patches).</li>
             <li>
-              Write the public rationale above{" "}
-              <code>----- Uplink: internal below this line -----</code>. Tickets and{" "}
-              <code>Uplink-Export-Author</code> go below it. <code>git uplink init</code> installs that
-              git commit template.
+              Write the public rationale in the PR title and above{" "}
+              <code>----- Uplink: internal below this line -----</code> in the body. Tickets and{" "}
+              <code>Uplink-Export-Author</code> go below the cutoff. Copy{" "}
+              <code>templates/github/pull_request_template.md</code> to{" "}
+              <code>.github/pull_request_template.md</code>. HTML comments are visible while
+              writing the PR and are stripped on import. Git commit logs are not concatenated.
             </li>
             <li>
               Open an internal PR. CI runs prepare (scrub, author, affiliation), export preflight,
@@ -380,7 +384,7 @@ export function PlaybookPage() {
           </CardHeader>
           <CardContent>
             <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`git uplink init --upstream https://github.com/org/proj.git --contrib https://github.com/org/proj-company.git
-git uplink add --title "Use SHA-256 for tokens"
+git uplink add --title "Use SHA-256 for tokens" --message-file msg.txt
 git uplink add --title "Vendor hook" --internal-only
 git uplink report upl_ab12cd34ef
 git uplink approve upl_ab12cd34ef

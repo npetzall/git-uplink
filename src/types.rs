@@ -70,6 +70,8 @@ pub struct PrepareCheck {
 pub struct PrepareReport {
     pub at: String,
     pub ok: bool,
+    #[serde(default)]
+    pub commit_message: String,
     pub public_subject: String,
     pub public_body: String,
     pub author_name: String,
@@ -131,6 +133,8 @@ pub struct PatchConflict {
 pub struct Patch {
     pub id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub commit_message: String,
     pub intent: String,
     pub status: String,
     pub depends_on: Vec<String>,

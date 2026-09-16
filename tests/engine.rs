@@ -7,7 +7,8 @@ use git_uplink::{
     AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts, MergeVia,
     QueueConfig, STATE_BRANCH, add_patch, approve_patch, configure_repo, drop_patch,
     format_approval_receipt, format_approver_packet, git, git_ok, init_repo, mark_merged, rebuild,
-    report_paths, resolve_conflict, status_snapshot, submit_patch, sync, write_queue,
+    report_paths, resolve_conflict, status_snapshot, strip_html_comments, submit_patch, sync,
+    write_queue,
 };
 use tempfile::TempDir;
 
@@ -35,6 +36,17 @@ fn write(repo: &Path, file: &str, contents: &str) {
 fn commit_all(repo: &Path, message: &str) {
     git(repo, &["add", "-A"], GitOpts::default()).unwrap();
     git(repo, &["commit", "-m", message], GitOpts::default()).unwrap();
+}
+
+fn hash_pr_message() -> String {
+    format!(
+        "Use SHA-256 for tokens\n\n\
+<!-- Visible while writing the PR; stripped on import. -->\n\
+Replace SHA-1 in the default hasher.\n\n\
+{DEFAULT_CUTOFF}\n\n\
+Ticket: PROJ-9999\n\
+Uplink-Export-Author: Jane Public <jane@users.noreply.github.com>\n"
+    )
 }
 
 fn create_bare_from(working: &Path) -> PathBuf {
@@ -1287,23 +1299,12 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
         "src/tokens.js",
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
-    git(company, &["add", "-A"], GitOpts::default()).unwrap();
-    git(
-        company,
-        &[
-            "commit",
-            "-m",
-            &format!(
-                "Use SHA-256 for tokens\n\nReplace SHA-1 in the default hasher.\n\n{DEFAULT_CUTOFF}\n\nTicket: PROJ-9999\nUplink-Export-Author: Jane Public <jane@users.noreply.github.com>\n"
-            ),
-        ],
-        GitOpts::default(),
-    )
-    .unwrap();
+    commit_all(company, "wip: ignore this git log");
     let patch = add_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
+            message: Some(hash_pr_message()),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -1313,11 +1314,24 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     assert!(prepare.ok);
     assert!(prepare.cutoff_found);
     assert_eq!(prepare.author_email, "jane@users.noreply.github.com");
+    assert!(!patch.commit_message.contains("Visible while writing"));
+    assert!(!patch.commit_message.contains("wip: ignore this git log"));
+    assert!(patch.commit_message.contains("PROJ-9999"));
+    assert!(patch.commit_message.contains(DEFAULT_CUTOFF));
+
+    let company_msg = git_ok(company, &["log", "-1", "--format=%B", "main"]).unwrap();
+    assert!(company_msg.contains("Replace SHA-1 in the default hasher."));
+    assert!(company_msg.contains("PROJ-9999"));
+    assert!(company_msg.contains(DEFAULT_CUTOFF));
+    assert!(company_msg.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
+    assert!(!company_msg.contains("Visible while writing"));
+    assert!(!company_msg.contains("wip: ignore this git log"));
+
     let stored =
         fs::read_to_string(company.join(format!(".uplink/patches/{}.patch", patch.id))).unwrap();
     assert!(stored.contains("Replace SHA-1 in the default hasher."));
-    assert!(!stored.contains("PROJ-9999"));
-    assert!(!stored.contains("Jane Public"));
+    assert!(stored.contains("PROJ-9999"));
+    assert!(!stored.contains("Visible while writing"));
 
     approve_patch(company, &patch.id).unwrap();
     let submitted = submit_patch(company, &patch.id, None).unwrap();
@@ -1327,6 +1341,59 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     )
     .unwrap();
     assert_eq!(author, "Jane Public <jane@users.noreply.github.com>");
+    let contrib_msg = git_ok(
+        company,
+        &["log", "-1", "--format=%B", &submitted.branch],
+    )
+    .unwrap();
+    assert!(contrib_msg.contains("Replace SHA-1 in the default hasher."));
+    assert!(!contrib_msg.contains("PROJ-9999"));
+    assert!(!contrib_msg.contains(DEFAULT_CUTOFF));
+    assert!(contrib_msg.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
+}
+
+#[test]
+fn does_not_squash_git_commit_messages_on_import() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "WIP first");
+    write(company, "src/tokens.js", &TOKENS.replace("return sha1(value);", "return sha256(value);\n"));
+    commit_all(company, "WIP second");
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let company_msg = git_ok(company, &["log", "-1", "--format=%B", "main"]).unwrap();
+    assert!(company_msg.contains("Use SHA-256 for tokens"));
+    assert!(!company_msg.contains("WIP first"));
+    assert!(!company_msg.contains("WIP second"));
+    assert_eq!(patch.commit_message, "Use SHA-256 for tokens");
+}
+
+#[test]
+fn strips_html_comments_from_the_stored_message() {
+    let raw = "Subject\n\n<!-- keep this out -->\n\nBody\n\n<!--\nmultiline\n-->\n";
+    assert_eq!(strip_html_comments(raw), "Subject\n\nBody");
+    assert_eq!(
+        strip_html_comments("# Heading\n\n<!-- x -->\nbody"),
+        "# Heading\n\nbody"
+    );
 }
 
 #[test]
@@ -1400,6 +1467,10 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
     assert!(packet.contains("**oss** GitHub Environment"));
     assert!(packet.contains("#44"));
     assert!(packet.contains("GITHUB_STEP_SUMMARY"));
+    assert!(packet.contains("Commit messages that will be used"));
+    assert!(packet.contains("### Company main"));
+    assert!(packet.contains("### Upstream contrib"));
+    assert!(packet.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
 
     let (_, prepare_path, approval_path) = report_paths(&patch.id);
     write(company, &prepare_path, &packet);

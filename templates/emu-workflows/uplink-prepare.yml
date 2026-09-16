@@ -1,11 +1,12 @@
 # Copy into the company product repository.
 #
 # Secondary process on every internal PR to company main: rewrite the
-# contribution as it would leave the enterprise. Strips the internal
-# commit-message section (below the cutoff), replaces author with the
-# machine user or Uplink-Export-Author, and scans the export diff for
-# company keywords / internal emails. Posts a report on the PR so IP
-# approval can read results instead of reconstructing the public PR.
+# contribution as it would leave the enterprise. Uses the PR title and
+# body as the single commit message (HTML comments stripped). Internal
+# lines below the cutoff stay on company main and are removed before
+# export. Replaces author with the machine user or Uplink-Export-Author,
+# and scans the export diff for company keywords / internal emails.
+# Posts a report on the PR so IP approval can inspect both messages.
 name: Uplink prepare for upstream
 
 on:
@@ -43,6 +44,7 @@ jobs:
           UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
           UPLINK_EXPORT_AUTHOR: ${{ vars.UPLINK_EXPORT_AUTHOR }}
           TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -51,8 +53,13 @@ jobs:
           if echo "${{ join(github.event.pull_request.labels.*.name, ',') }}" | grep -q 'uplink:internal-only'; then
             extra="--internal-only"
           fi
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > /tmp/uplink-msg.txt
           git uplink prepare \
             --title "$TITLE" \
+            --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" \
             --head "$HEAD_SHA" \
             --pr "$PR_NUMBER" \

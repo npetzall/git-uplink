@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::env;
-use std::fs;
 use std::path::Path;
 
 use regex::Regex;
@@ -9,22 +8,10 @@ use crate::error::{Error, PrepareError, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::queue::now_iso;
 use crate::types::{
-    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PrepareCheck, PrepareReport, QueueState,
+    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Patch, PrepareCheck, PrepareReport, QueueState,
 };
 
 pub const OSS_ENVIRONMENT: &str = "oss";
-
-pub const COMMIT_TEMPLATE: &str = concat!(
-    "Use SHA-256 for tokens\n\n",
-    "Explain the change the way an upstream maintainer should read it.\n",
-    "Do not mention the company, internal issue trackers, or private\n",
-    "hostnames above the cutoff.\n\n",
-    "----- Uplink: internal below this line -----\n\n",
-    "Internal (stripped before export):\n",
-    "- Ticket: PROJ-1234\n",
-    "- Uplink-Depends-On: upl_…\n",
-    "- Uplink-Export-Author: Jane Public <jane@users.noreply.github.com>\n"
-);
 
 pub fn cutoff_marker(queue: &QueueState) -> String {
     queue
@@ -37,19 +24,22 @@ pub fn cutoff_marker(queue: &QueueState) -> String {
         .to_string()
 }
 
+pub fn strip_html_comments(raw: &str) -> String {
+    let comments = Regex::new(r"(?s)<!--.*?-->").expect("html comment regex");
+    let stripped = comments.replace_all(raw, "");
+    let blanks = Regex::new(r"\n[ \t]*\n(?:[ \t]*\n)+").expect("blank-line regex");
+    blanks.replace_all(&stripped, "\n\n").trim().to_string()
+}
+
 pub fn split_internal_message(raw: &str, marker: &str) -> (String, String) {
-    let stripped: String = raw
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let stripped = strip_html_comments(raw);
     if let Some(index) = stripped.find(marker) {
         (
             stripped[..index].trim().to_string(),
             stripped[index + marker.len()..].trim().to_string(),
         )
     } else {
-        (stripped.trim().to_string(), String::new())
+        (stripped, String::new())
     }
 }
 
@@ -168,39 +158,67 @@ fn find_domain_hits(haystack: &str, domains: &[String]) -> Vec<String> {
     hits
 }
 
-pub fn export_commit_message(patch: &crate::types::Patch) -> String {
-    let subject = patch
-        .prepare
-        .as_ref()
-        .map(|p| p.public_subject.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&patch.title);
-    let body = patch
-        .prepare
-        .as_ref()
-        .map(|p| p.public_body.trim())
-        .unwrap_or("");
-    let mut lines = vec![subject.to_string()];
+fn with_trailers(message: &str, patch: &Patch) -> String {
+    let mut body = message.trim_end().to_string();
     if !body.is_empty() {
-        lines.push(String::new());
-        lines.push(body.to_string());
+        body.push('\n');
     }
-    lines.push(String::new());
-    lines.push(format!("Uplink-Patch-Id: {}", patch.id));
-    lines.push(format!("Uplink-Intent: {}", patch.intent));
-    lines.push(String::new());
-    lines.join("\n")
+    body.push('\n');
+    body.push_str(&format!("Uplink-Patch-Id: {}\n", patch.id));
+    body.push_str(&format!("Uplink-Intent: {}\n", patch.intent));
+    body
 }
 
-pub fn install_commit_template(repo: &Path) -> Result<()> {
-    fs::create_dir_all(repo.join(".uplink"))?;
-    fs::write(repo.join(".uplink/commit-msg.template"), COMMIT_TEMPLATE)?;
-    git(
-        repo,
-        &["config", "commit.template", ".uplink/commit-msg.template"],
-        GitOpts::default(),
-    )?;
-    Ok(())
+fn public_subject_and_body(patch: &Patch) -> (String, String) {
+    if let Some(prepare) = &patch.prepare {
+        let subject = if prepare.public_subject.is_empty() {
+            patch.title.clone()
+        } else {
+            prepare.public_subject.clone()
+        };
+        return (subject, prepare.public_body.trim().to_string());
+    }
+    let (public, _) = split_internal_message(&stored_commit_message(patch), DEFAULT_CUTOFF);
+    subject_and_body(&public, &patch.title)
+}
+
+pub fn stored_commit_message(patch: &Patch) -> String {
+    if !patch.commit_message.trim().is_empty() {
+        return patch.commit_message.trim().to_string();
+    }
+    if let Some(prepare) = &patch.prepare {
+        if !prepare.commit_message.trim().is_empty() {
+            return prepare.commit_message.trim().to_string();
+        }
+        let mut parts = vec![prepare.public_subject.clone()];
+        if !prepare.public_body.trim().is_empty() {
+            parts.push(String::new());
+            parts.push(prepare.public_body.trim().to_string());
+        }
+        let joined = parts.join("\n");
+        if !joined.trim().is_empty() {
+            return joined.trim().to_string();
+        }
+    }
+    patch.title.clone()
+}
+
+pub fn company_commit_message(patch: &Patch) -> String {
+    with_trailers(&stored_commit_message(patch), patch)
+}
+
+pub fn export_commit_message(patch: &Patch) -> String {
+    let (subject, body) = public_subject_and_body(patch);
+    let mut lines = vec![subject];
+    if !body.is_empty() {
+        lines.push(String::new());
+        lines.push(body);
+    }
+    with_trailers(&lines.join("\n"), patch)
+}
+
+fn format_fenced(message: &str) -> String {
+    format!("```\n{}\n```", message.trim_end())
 }
 
 pub fn format_prepare_markdown(report: &PrepareReport) -> String {
@@ -221,18 +239,23 @@ pub fn format_prepare_markdown(report: &PrepareReport) -> String {
     } else {
         format!("{}\n\n{}", report.public_subject, report.public_body)
     };
+    let company = if report.commit_message.trim().is_empty() {
+        public.clone()
+    } else {
+        report.commit_message.trim().to_string()
+    };
     format!(
         "## Uplink prepare-for-upstream\n\n\
-This is the contribution as it would leave the enterprise. Internal lines below the cutoff are gone. Author is rewritten. Approvers can use this report instead of reconstructing the public PR by hand.\n\n\
+This is the contribution as it would leave the enterprise. HTML comments from the PR template are stripped. Internal lines below the cutoff stay on company main and are removed before export. Author is rewritten. Approvers can use this report instead of reconstructing the public PR by hand.\n\n\
 **Ready:** {}\n\
 **Public subject:** {}\n\
 **Export author:** {} <{}>\n\
 **Original author:** {} <{}>\n\
 **Cutoff found:** {}\n\n\
-### Public message\n\n\
-```\n\
-{public}\n\
-```\n\n\
+### Company commit message\n\n\
+{}\n\n\
+### Upstream commit message\n\n\
+{}\n\n\
 ### Checks\n\n\
 {checks}\n",
         if report.ok { "yes" } else { "no" },
@@ -245,7 +268,9 @@ This is the contribution as it would leave the enterprise. Internal lines below 
             "yes"
         } else {
             "no — whole message treated as public"
-        }
+        },
+        format_fenced(&company),
+        format_fenced(&public),
     )
 }
 
@@ -284,6 +309,12 @@ Review this packet (the same markdown is on the Actions job summary / `GITHUB_ST
 | Queue status | {status} |\n\
 | Depends on | {depends} |\n\
 | Internal PR | {pr} |\n\n\
+## Commit messages that will be used\n\n\
+Company `main` keeps the cutoff and internal notes. The contribution fork does not.\n\n\
+### Company main\n\n\
+{company}\n\n\
+### Upstream contrib\n\n\
+{contrib}\n\n\
 {prepare}\n\
 ## What happens when you approve the oss environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
@@ -295,6 +326,8 @@ Review this packet (the same markdown is on the Actions job summary / `GITHUB_ST
         title = patch.title,
         intent = patch.intent,
         status = patch.status,
+        company = format_fenced(&company_commit_message(patch)),
+        contrib = format_fenced(&export_commit_message(patch)),
     )
 }
 
@@ -338,41 +371,22 @@ pub fn report_paths(id: &str) -> (String, String, String) {
     )
 }
 
-pub fn prepare_from_range(
+pub fn prepare_from_message(
     repo: &Path,
     queue: &QueueState,
     from_ref: &str,
     head_ref: &str,
+    message: &str,
     title: Option<&str>,
     intent: &str,
 ) -> Result<PrepareReport> {
     let marker = cutoff_marker(queue);
-    let log = git(
-        repo,
-        &[
-            "log",
-            "--reverse",
-            "--format=%B%x1e",
-            &format!("{from_ref}..{head_ref}"),
-        ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    let messages: Vec<&str> = log
-        .stdout
-        .split('\u{1e}')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
     let fallback = title.unwrap_or("Contribution");
-    let combined = if messages.is_empty() {
-        fallback.to_string()
-    } else {
-        messages.join("\n\n")
-    };
-    let (public_text, internal_text) = split_internal_message(&combined, &marker);
+    let mut stored = strip_html_comments(message);
+    if stored.is_empty() {
+        stored = fallback.to_string();
+    }
+    let (public_text, internal_text) = split_internal_message(&stored, &marker);
     let (subject, body) = subject_and_body(&public_text, fallback);
     let author = resolve_export_author(queue, &internal_text);
     let original = git(
@@ -417,7 +431,7 @@ pub fn prepare_from_range(
             detail: if !internal_text.is_empty() {
                 "Internal section removed. Public body is what upstream will see.".into()
             } else {
-                "No cutoff in the commits. The whole message is treated as public.".into()
+                "No cutoff in the message. The whole message is treated as public.".into()
             },
         },
         PrepareCheck {
@@ -485,16 +499,18 @@ pub fn prepare_from_range(
     }
 
     let ok = checks.iter().all(|c| c.status != "fail");
+    let cutoff_found = !internal_text.is_empty() || stored.contains(&marker);
     Ok(PrepareReport {
         at: now_iso(),
         ok,
+        commit_message: stored,
         public_subject: subject,
         public_body: body,
         author_name: author.0,
         author_email: author.1,
         original_author,
         original_email,
-        cutoff_found: !internal_text.is_empty() || combined.contains(&marker),
+        cutoff_found,
         checks,
     })
 }

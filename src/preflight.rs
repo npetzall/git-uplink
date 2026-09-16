@@ -348,6 +348,7 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
         created_at: String::new(),
         updated_at: String::new(),
         patch_id_stable: None,
+        commit_message: String::new(),
         source: Default::default(),
         prepare: None,
         upstream: None,

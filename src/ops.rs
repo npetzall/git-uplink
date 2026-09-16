@@ -7,13 +7,13 @@ use crate::error::{ConflictError, Error, Result};
 use crate::git::{GitOpts, configure_repo, git, git_ok};
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
 use crate::preflight::assert_export_preflight;
-use crate::prepare::{assert_prepare_ok, install_commit_template, prepare_from_range};
+use crate::prepare::{assert_prepare_ok, company_commit_message, prepare_from_message};
 use crate::queue::{
     add_event, empty_queue, get_patch, get_patch_mut, read_queue as read_queue_file,
     topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
-    apply_patch_file, commit_message, commit_queue, conflicted_files, copy_dir,
+    apply_patch_file, commit_queue, conflicted_files, copy_dir,
     ensure_state_worktree, fetch_upstream, has_ref, new_patch_id, push_company_branch,
     push_state_branch, refresh_company_branch, refresh_state_branch, rev_parse, stable_patch_id,
     stable_patch_id_from_contents, stamp, state_branch, write_product_patch,
@@ -42,7 +42,6 @@ pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
     crate::repo::ensure_uplink_dirs(repo)?;
     let queue = empty_queue(config);
     write_queue_file(repo, &queue)?;
-    install_commit_template(repo)?;
     commit_queue(repo, "uplink: initialize patch queue")?;
     ensure_state_worktree(repo)?;
     let has_head = git(
@@ -81,6 +80,7 @@ pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
 #[derive(Default)]
 pub struct AddPatchOpts {
     pub title: String,
+    pub message: Option<String>,
     pub internal_only: bool,
     pub author: Option<String>,
     pub depends_on: Vec<String>,
@@ -197,6 +197,7 @@ fn add_patch_once(
     let mut patch = Patch {
         id: id.clone(),
         title: opts.title.clone(),
+        commit_message: String::new(),
         intent: intent.into(),
         status: "queued".into(),
         depends_on: opts.depends_on.clone(),
@@ -240,21 +241,29 @@ fn add_patch_once(
         },
     );
 
-    patch.prepare = Some(prepare_from_range(
+    let raw_message = opts
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(opts.title.as_str());
+    patch.prepare = Some(prepare_from_message(
         repo,
         queue,
         from_sha,
         head_sha,
+        raw_message,
         Some(&opts.title),
         intent,
     )?);
-    if intent == "upstream" {
-        if let Some(report) = &patch.prepare {
+    if let Some(report) = &patch.prepare {
+        patch.commit_message = report.commit_message.clone();
+        if intent == "upstream" {
             assert_prepare_ok(report, &opts.title)?;
         }
     }
 
-    let message = commit_message(&patch);
+    let message = company_commit_message(&patch);
     write_product_patch(repo, &id, from_sha, &message, head_sha)?;
     patch.patch_id_stable = Some(stable_patch_id(
         repo,
@@ -851,7 +860,7 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
             },
         )?;
         if staged.code != 0 {
-            let message = commit_message(&patch);
+            let message = company_commit_message(&patch);
             git(repo, &["commit", "-m", &message], GitOpts::default())?;
         }
         if let Some(onto) = patch.conflict.as_ref().and_then(|c| c.onto.as_deref()) {
@@ -865,7 +874,7 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
                 },
             )?;
             if staged.code != 0 {
-                let message = commit_message(&patch);
+                let message = company_commit_message(&patch);
                 git(repo, &["commit", "-m", &message], GitOpts::default())?;
             }
         }

@@ -4,11 +4,11 @@ This is how developers use Uplink day to day. Company `main` is bot-owned. You o
 
 Read this alongside `.uplink/queue.json` (on `uplink/state`) and `git uplink status`. The binary is `git-uplink` (a Git subcommand). Durable queue history lives on the orphan branch `uplink/state`. Company `main` is product-only: public upstream plus every patch that is not merged or dropped. Sync force-updates `main` only when upstream moved (or a drop/resolve requires a replay).
 
-Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the commit message. `git commit` uses `.uplink/commit-msg.template` after `git uplink init`. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network commands (`add --push`, `sync`, `submit`) use `UPLINK_GITHUB_TOKEN` / `GITHUB_TOKEN` or `UPLINK_SSH_KEY`, not your default SSH key.
+Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. Copy `templates/github/pull_request_template.md` to `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network commands (`add --push`, `sync`, `submit`) use `UPLINK_GITHUB_TOKEN` / `GITHUB_TOKEN` or `UPLINK_SSH_KEY`, not your default SSH key.
 
 | Phase | What you do | Result |
 | --- | --- | --- |
-| Write | Branch from company `main`. Public rationale above the cutoff. | One internal branch. |
+| Write | Branch from company `main`. Public rationale in the PR title and above the cutoff in the body. | One internal branch. |
 | Prepare | Opens with the internal PR. `git uplink prepare` | Scrubbed message, rewritten author, affiliation scan. Report on the PR and in `GITHUB_STEP_SUMMARY`. |
 | Export preflight | Same PR | Diff must stand on public `main` + declared deps; `UPLINK_PREFLIGHT` must pass. |
 | Internal product | Review + `uplink:import` | Status `queued`. Product builds it. |
@@ -65,7 +65,7 @@ Asha needs to change token hashing. Nobody else is in her way.
    git checkout -b feat/sha256
    ```
 
-2. **Write upstream-first.** One branch, one logical change. Public commit message above the cutoff; ticket ids and other internal notes below:
+2. **Write upstream-first.** One branch, one logical change. The PR title is the commit subject. Public rationale above the cutoff in the PR body; ticket ids and other internal notes below. Git commit messages on the branch are not concatenated.
 
    ```
    Use SHA-256 for tokens
@@ -78,7 +78,7 @@ Asha needs to change token hashing. Nobody else is in her way.
    Uplink-Export-Author: Asha <asha@users.noreply.github.com>
    ```
 
-   Open an internal PR against company `main`. Two checks start: **prepare** (scrub, author rewrite, affiliation scan) and **export preflight**. Approvers read the prepare report on the PR.
+   Open an internal PR against company `main`. Two checks start: **prepare** (scrub, author rewrite, affiliation scan) and **export preflight**. Approvers read the prepare report on the PR, including both the company commit message (cutoff kept) and the upstream commit message (cutoff removed).
 
 3. **Engineering review.** Required reviewers / CODEOWNERS. This is not IP review. Import is blocked until prepare and preflight are green.
 
@@ -86,6 +86,7 @@ Asha needs to change token hashing. Nobody else is in her way.
 
    ```bash
    git uplink add --title "Use SHA-256 for tokens" \
+     --message-file <title-and-body> \
      --from <PR base sha> --head <PR head sha> \
      --pr <number> --push
    ```
