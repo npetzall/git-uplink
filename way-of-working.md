@@ -91,7 +91,7 @@ Asha needs to change token hashing. Nobody else is in her way.
      --pr <number> --push
    ```
 
-   Uplink isolates Asha’s product diff (not `.uplink/`), appends patch `upl_asha` with status `queued` on `uplink/state`, and applies that patch onto company `main` as a fast-forward. Asha still has only `feat/sha256`. She does not open a public branch.
+   Uplink isolates Asha’s product diff (not `.uplink/`), appends patch `upl_asha` with status `queued` on `uplink/state`, and applies that patch onto company `main` as a fast-forward. If the internal PR was already merged, the apply is empty on `main` and the patch still stays `queued` — `uplink/upstream` does not have it yet. Asha still has only `feat/sha256`. She does not open a public branch.
 
 5. **Other developers now build her change** the next time they branch from `main`. IP has not run. Nothing has left the enterprise.
 

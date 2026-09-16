@@ -16,10 +16,10 @@ use crate::queue::{
 };
 use crate::repo::{
     apply_patch_file, commit_queue, conflicted_files, copy_dir, ensure_state_worktree,
-    ensure_upstream_ref, fetch_upstream, has_ref, new_patch_id, push_company_branch,
-    push_state_branch, refresh_company_branch, refresh_state_branch, refresh_upstream_ref,
-    rev_parse, stable_patch_id, stable_patch_id_from_contents, stamp, state_branch,
-    write_product_patch,
+    ensure_upstream_ref, fetch_upstream, has_ref, new_patch_id, patch_already_applied_on,
+    push_company_branch, push_state_branch, refresh_company_branch, refresh_state_branch,
+    refresh_upstream_ref, rev_parse, stable_patch_id, stable_patch_id_from_contents, stamp,
+    state_branch, write_product_patch,
 };
 use crate::types::{
     LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
@@ -301,16 +301,45 @@ fn add_patch_once(
 }
 
 fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) -> Result<()> {
+    ensure_upstream_ref(repo)?;
     let mut queue = read_queue_file(repo)?;
     let company_branch = queue.config.company_branch.clone();
     let patch = get_patch(&queue, id)?.clone();
+    let patch_file = repo.join(format!(".uplink/patches/{id}.patch"));
+
+    if mark_empty_merged
+        && patch.intent == "upstream"
+        && has_ref(repo, "uplink/upstream")?
+        && patch_already_applied_on(repo, "uplink/upstream", &patch_file)?
+    {
+        let current = get_patch_mut(&mut queue, id)?;
+        current.status = "merged".into();
+        current.merged = Some(PatchMerged {
+            via: MergeVia::EmptyRebase,
+            at: stamp(),
+            upstream_sha: Some(rev_parse(repo, "uplink/upstream")?),
+        });
+        add_event(
+            current,
+            "merged",
+            "Became empty on import; treating as already present upstream",
+        );
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, &format!("uplink: empty apply {id}"))?;
+        git(
+            repo,
+            &["checkout", "-f", "--quiet", &company_branch],
+            GitOpts::default(),
+        )?;
+        return Ok(());
+    }
+
     let snapshot = snapshot_uplink(repo)?;
     git(
         repo,
         &["checkout", "-f", "--quiet", &company_branch],
         GitOpts::default(),
     )?;
-    let patch_file = repo.join(format!(".uplink/patches/{id}.patch"));
     let result = apply_patch_file(repo, &patch, &patch_file, false);
     let result = match result {
         Ok(value) => value,
@@ -341,24 +370,6 @@ fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) ->
     }
     let _ = fs::remove_dir_all(&snapshot);
     if result == "empty" {
-        if mark_empty_merged && patch.intent == "upstream" {
-            let current = get_patch_mut(&mut queue, id)?;
-            current.status = "merged".into();
-            current.merged = Some(PatchMerged {
-                via: MergeVia::EmptyRebase,
-                at: stamp(),
-                upstream_sha: has_ref(repo, "uplink/upstream")?
-                    .then(|| rev_parse(repo, "uplink/upstream"))
-                    .transpose()?,
-            });
-            add_event(
-                current,
-                "merged",
-                "Became empty on import; treating as already present on company main",
-            );
-            write_queue_file(repo, &queue)?;
-            commit_queue(repo, &format!("uplink: empty apply {id}"))?;
-        }
         return Ok(());
     }
     commit_queue(repo, &format!("uplink: record applied patch {id}"))?;

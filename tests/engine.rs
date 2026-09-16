@@ -1182,6 +1182,104 @@ fn imports_as_queued_not_contribution_approved() {
 }
 
 #[test]
+fn merge_then_import_stays_queued_and_approvable() {
+    let world = setup_world();
+    let company = &world.company;
+    let from_sha = git_ok(company, &["rev-parse", "main"]).unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let head_sha = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    git(company, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["merge", "--ff-only", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some(from_sha),
+            head_ref: Some(head_sha),
+            internal_pr_number: Some(12),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(patch.status, "queued");
+    let upstream_tokens = git_ok(company, &["show", "uplink/upstream:src/tokens.js"]).unwrap();
+    assert!(upstream_tokens.contains("return sha1(value);"));
+    assert!(!upstream_tokens.contains("return sha256(value);"));
+    approve_patch(company, &patch.id).unwrap();
+    assert_eq!(
+        status_snapshot(company).unwrap().queue.patches[0].status,
+        "approved"
+    );
+}
+
+#[test]
+fn import_marks_merged_when_already_on_upstream() {
+    let world = setup_world();
+    let company = &world.company;
+    let from_sha = git_ok(company, &["rev-parse", "main"]).unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let head_sha = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    git(
+        company,
+        &["branch", "-f", "uplink/upstream", &head_sha],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(company, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["merge", "--ff-only", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let main_before = git_ok(company, &["rev-parse", "main"]).unwrap();
+
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some(from_sha),
+            head_ref: Some(head_sha),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(patch.status, "merged");
+    assert_eq!(
+        git_ok(company, &["rev-parse", "main"]).unwrap(),
+        main_before
+    );
+}
+
+#[test]
 fn serializes_two_adds_in_one_checkout_so_both_patches_survive() {
     let world = setup_world();
     let company = world.company.clone();

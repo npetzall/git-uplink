@@ -218,6 +218,42 @@ pub fn apply_patch_file(
     Ok("applied")
 }
 
+/// True when `git apply --reverse --check` succeeds against `git_ref`'s tree.
+/// Uses a throwaway index so HEAD and the worktree stay put.
+pub fn patch_already_applied_on(repo: &Path, git_ref: &str, patch_file_abs: &Path) -> Result<bool> {
+    let index = repo.join(format!(".git/uplink-apply-check-{}", Uuid::new_v4()));
+    let index_s = index.to_string_lossy().into_owned();
+    let index_opts = GitOpts {
+        extra_env: vec![("GIT_INDEX_FILE".into(), index_s)],
+        allow_fail: true,
+        ..GitOpts::default()
+    };
+    let outcome = (|| -> Result<bool> {
+        git(
+            repo,
+            &["read-tree", git_ref],
+            GitOpts {
+                extra_env: index_opts.extra_env.clone(),
+                ..GitOpts::default()
+            },
+        )?;
+        let reverse = git(
+            repo,
+            &[
+                "apply",
+                "--cached",
+                "--reverse",
+                "--check",
+                patch_file_abs.to_str().unwrap_or(""),
+            ],
+            index_opts,
+        )?;
+        Ok(reverse.code == 0)
+    })();
+    let _ = fs::remove_file(&index);
+    outcome
+}
+
 pub fn conflicted_files(repo: &Path) -> Result<Vec<String>> {
     let output = git_ok(repo, &["diff", "--name-only", "--diff-filter=U"])?;
     Ok(output

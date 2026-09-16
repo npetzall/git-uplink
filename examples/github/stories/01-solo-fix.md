@@ -39,7 +39,7 @@ Wait until **Uplink prepare for upstream** and **Uplink export preflight** are g
 
 ## Import (product gate)
 
-On the PR, add label `uplink:import`. Watch **Uplink import**. Then:
+On the PR, add label `uplink:import` (or merge the PR; that also triggers import). Watch **Uplink import**. Then:
 
 ```bash
 git fetch origin
@@ -49,7 +49,7 @@ git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
 git uplink status
 ```
 
-Asha’s patch is `queued` (`upl_` + 10 hex digits). `src/tokens.js` on `main` calls `sha256`. Copy the id.
+Asha’s patch is `queued` (`upl_` + 10 hex digits), including if you merged the PR instead of only labeling. `src/tokens.js` on `main` calls `sha256`. Copy the id.
 
 ## Submit (IP gate)
 
