@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Add the Reset example workflow to the contrib fork of upstream.
+# Publish the contrib Reset example script on orphan example-reset.
+# Do not change contrib main (it must stay a fork of upstream).
 # Upstream must already be bootstrapped and forked.
 #
 #   export CONTRIB_DIR=$HOME/src/uplink-example-upstream-contrib
@@ -25,16 +26,10 @@ fi
 
 echo "Contrib clone:  $CONTRIB_DIR   ($CONTRIB)"
 
-echo "Installing contrib Reset example workflow on $CONTRIB"
-copy_overlay "$KIT_DIR/upstream-contrib" "$CONTRIB_DIR"
-git -C "$CONTRIB_DIR" add -A
-if git -C "$CONTRIB_DIR" diff --cached --quiet && git -C "$CONTRIB_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
-  echo "Contrib reset workflow already committed"
-else
-  git_bot -C "$CONTRIB_DIR" commit -m "Reset example workflow"
-fi
-git -C "$CONTRIB_DIR" branch -M main
-git -C "$CONTRIB_DIR" push -u origin main
-echo "Pushed $CONTRIB main (Reset example workflow on the fork)"
+echo "Publishing contrib Reset example on orphan example-reset"
+git -C "$CONTRIB_DIR" fetch origin
+git -C "$CONTRIB_DIR" checkout -B main origin/main 2>/dev/null || git -C "$CONTRIB_DIR" checkout main
+publish_example_reset "$CONTRIB_DIR" "$KIT_DIR/reset/contrib.sh"
+echo "Pushed $CONTRIB example-reset (main unchanged, still the upstream fork)"
 echo
 echo "Create uplink-example-internal, then run bootstrap_internal.sh."

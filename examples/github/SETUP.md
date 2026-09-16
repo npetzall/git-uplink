@@ -29,7 +29,7 @@ export UPSTREAM_DIR=/path/to/uplink-example-upstream
 ./examples/github/scripts/bootstrap_upstream.sh
 ```
 
-The script replaces the clone with [`upstream/`](upstream/) (tokenkit + **Reset example**), force-pushes `main`, and creates `seed`.
+The script replaces the clone with [`upstream/`](upstream/) (tokenkit), installs the shared **Reset example** stub workflow, force-pushes `main`, creates `seed`, and publishes orphan `example-reset` (the per-repo reset script).
 
 ## 2. Contrib fork
 
@@ -41,7 +41,19 @@ export CONTRIB_DIR=/path/to/uplink-example-upstream-contrib
 ./examples/github/scripts/bootstrap_upstream-contrib.sh
 ```
 
-The script adds the contrib **Reset example** workflow from [`upstream-contrib/`](upstream-contrib/) on contrib `main` (the fork already has upstream `main`). If `UPSTREAM_DIR` is still set, it checks that the fork owner differs from upstream.
+The script does **not** change contrib `main` (it must stay a fork of upstream `main` so submit does not rewrite workflows). It publishes orphan `example-reset` with the contrib reset script. If `UPSTREAM_DIR` is still set, it checks that the fork owner differs from upstream.
+
+If you already bootstrapped an older layout that committed reset files on contrib `main`:
+
+```bash
+git remote add upstream https://github.com/YOUR_ORG/uplink-example-upstream.git  # if missing
+git fetch upstream
+git checkout main
+git reset --hard upstream/main
+git push origin main --force
+```
+
+Then re-run `bootstrap_upstream-contrib.sh`. Do not run the old contrib **Reset example** first: it deleted every branch except `main`.
 
 ## 3. Internal
 
@@ -58,7 +70,7 @@ export INTERNAL_DIR=/path/to/uplink-example-internal
 ./examples/github/scripts/bootstrap_internal.sh
 ```
 
-The script needs all three clones. It sets remotes, runs **`git uplink init`**, overlays [`internal/`](internal/), **`git uplink add --internal-only`**, and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environment `oss`.
+The script needs all three clones. It sets remotes, runs **`git uplink init`**, overlays [`internal/`](internal/) (Uplink Actions only; reset lives on `example-reset`), **`git uplink add --internal-only`**, and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environment `oss`.
 
 `git uplink status` in the internal clone should show one internal-only patch (`Example GitHub workflows`).
 
@@ -124,13 +136,13 @@ Install the App on the contrib fork (contents: write) and on upstream (contents:
 
 Each story starts by restoring the three repositories. Force-push is expected.
 
-On **each** repo: **Actions → Reset example → Run workflow**.
+On **each** repo: **Actions → Reset example → Run workflow**. The stub YAML always checks out orphan `example-reset`, so the branch you dispatch from does not matter. If the workflow is missing on a wrecked default branch, use **Use workflow from** `example-reset`.
 
-| Repo | Branch to run from | What it does |
-| --- | --- | --- |
-| `uplink-example-upstream` | `seed` | Close PRs; delete extra branches; `main` ← `seed` |
-| `uplink-example-upstream-contrib` | `main` | Delete extra branches (`uplink/<id>`). Does not move `main`. No PRs on this repo |
-| `uplink-example-internal` | `seed` | Close PRs and `uplink:conflict` issues; `main` ← `seed`; `uplink/state` ← `seed-state`; `uplink/upstream` ← `seed-upstream` |
+| Repo | What it does |
+| --- | --- |
+| `uplink-example-upstream` | Close PRs; delete extra branches (keeps `main`, `seed`, `example-reset`); `main` ← `seed` |
+| `uplink-example-upstream-contrib` | Delete extra branches (`uplink/<id>`). Keeps `main`, `seed`, `example-reset`. Does not move `main`. No PRs on this repo |
+| `uplink-example-internal` | Close PRs and `uplink:conflict` issues; keeps `example-reset` and seed refs; `main` ← `seed`; `uplink/state` ← `seed-state`; `uplink/upstream` ← `seed-upstream` |
 
 Then in the clones:
 

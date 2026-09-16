@@ -1,5 +1,5 @@
-# Wipe uplink/<id> and other leftover heads on the contrib fork.
-# Does not move main and does not close PRs (those live on upstream).
+# Checks out orphan example-reset and runs that tree's reset script.
+# Dispatch branch does not matter.
 name: Reset example
 
 on:
@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   reset:
@@ -15,7 +17,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Delete extra branches
+          ref: example-reset
+      - name: Reset example
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/reset-example.sh

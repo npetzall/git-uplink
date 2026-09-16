@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Reset this repository's main from the seed branch.
-# Run from GitHub Actions (workflow_dispatch) with GH_TOKEN.
-# Keeps: main, seed. Closes open PRs. Force-push is expected.
+# Reset the company product repo from seed / seed-state / seed-upstream.
+# Run from GitHub Actions with GH_TOKEN. Force-push is expected.
+# Keeps: main, seed, seed-state, seed-upstream, uplink/state, uplink/upstream,
+# example-reset.
 
 set -euo pipefail
 
@@ -23,6 +24,19 @@ close_open_prs() {
   done <<<"$numbers"
 }
 
+close_conflict_issues() {
+  local numbers
+  numbers=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label uplink:conflict --json number --jq '.[].number' 2>/dev/null || true)
+  if [[ -z "$numbers" ]]; then
+    return
+  fi
+  while IFS= read -r n; do
+    [[ -z "$n" ]] && continue
+    echo "Closing issue #$n"
+    gh issue close "$n" --repo "$GITHUB_REPOSITORY" --comment "$comment" || true
+  done <<<"$numbers"
+}
+
 delete_extra_heads() {
   local refs
   refs=$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads" --jq '.[].ref' 2>/dev/null || true)
@@ -30,7 +44,7 @@ delete_extra_heads() {
     [[ -z "$ref" ]] && continue
     local name=${ref#refs/heads/}
     case "$name" in
-      main|seed) continue ;;
+      main|seed|seed-state|seed-upstream|uplink/state|uplink/upstream|example-reset) continue ;;
       *)
         echo "Deleting ${name}"
         gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/${ref}" >/dev/null || true
@@ -39,10 +53,13 @@ delete_extra_heads() {
   done <<<"$refs"
 }
 
-echo "Reset $GITHUB_REPOSITORY: seed -> main"
+echo "Reset $GITHUB_REPOSITORY from seed refs"
 close_open_prs
+close_conflict_issues
 delete_extra_heads
 
-git fetch origin seed
+git fetch origin seed seed-state seed-upstream
 git push --force origin "refs/remotes/origin/seed:refs/heads/main"
-echo "main now matches seed"
+git push --force origin "refs/remotes/origin/seed-state:refs/heads/uplink/state"
+git push --force origin "refs/remotes/origin/seed-upstream:refs/heads/uplink/upstream"
+echo "main, uplink/state, and uplink/upstream match seed refs"

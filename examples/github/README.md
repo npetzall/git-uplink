@@ -44,9 +44,10 @@ Reset all three repos at the start of each story: **Actions → Reset example** 
 ```text
 examples/github/
   SETUP.md
-  upstream/             tokenkit + upstream Reset example
-  upstream-contrib/     contrib Reset example (delete extra branches)
-  internal/             Uplink Actions + internal Reset example
+  example-reset.yml     stub workflow (checkout orphan example-reset)
+  reset/                per-repo reset scripts (published on example-reset)
+  upstream/             tokenkit
+  internal/             Uplink Actions (product overlay)
   patches/*.diff        git apply these
   patches/*.pr.md       paste into the GitHub PR body
   scripts/bootstrap_*.sh  seed upstream, then contrib fork, then internal

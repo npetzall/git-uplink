@@ -10,7 +10,7 @@ Work in your **internal** clone unless a step says otherwise.
 
 ## Reset
 
-On GitHub, **Actions → Reset example → Run workflow** on all three repos (upstream and internal: branch `seed`; contrib: `main`). Then:
+On GitHub, **Actions → Reset example → Run workflow** on all three repos (any branch; the job checks out `example-reset`). Then:
 
 ```bash
 git fetch origin

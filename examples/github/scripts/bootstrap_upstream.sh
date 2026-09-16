@@ -19,6 +19,7 @@ echo "Upstream clone: $UPSTREAM_DIR  ($UPSTREAM)"
 
 echo "Seeding $UPSTREAM"
 replace_tree "$KIT_DIR/upstream" "$UPSTREAM_DIR"
+install_example_reset_stub "$UPSTREAM_DIR"
 git -C "$UPSTREAM_DIR" add -A
 if git -C "$UPSTREAM_DIR" diff --cached --quiet && git -C "$UPSTREAM_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
   echo "Upstream seed already committed"
@@ -29,6 +30,7 @@ git -C "$UPSTREAM_DIR" branch -M main
 git -C "$UPSTREAM_DIR" push -u origin main --force
 git -C "$UPSTREAM_DIR" branch -f seed main
 git -C "$UPSTREAM_DIR" push origin seed --force
-echo "Pushed $UPSTREAM main and seed"
+publish_example_reset "$UPSTREAM_DIR" "$KIT_DIR/reset/upstream.sh"
+echo "Pushed $UPSTREAM main, seed, and example-reset"
 echo
 echo "Fork $UPSTREAM to your user as uplink-example-upstream-contrib, then run bootstrap_upstream-contrib.sh."

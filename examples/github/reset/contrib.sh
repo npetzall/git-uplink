@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Wipe leftover heads on the contrib fork. Do not move main, do not
-# close PRs (contribution PRs live on upstream), do not use a seed branch.
+# close PRs (contribution PRs live on upstream).
+# Keeps: main, seed, example-reset.
 
 set -euo pipefail
 
@@ -11,11 +12,13 @@ refs=$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads" --jq '.[].ref
 while IFS= read -r ref; do
   [[ -z "$ref" ]] && continue
   name=${ref#refs/heads/}
-  if [[ "$name" == "main" ]]; then
-    continue
-  fi
-  echo "Deleting ${name}"
-  gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/${ref}" >/dev/null || true
+  case "$name" in
+    main|seed|example-reset) continue ;;
+    *)
+      echo "Deleting ${name}"
+      gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/${ref}" >/dev/null || true
+      ;;
+  esac
 done <<<"$refs"
 
 echo "Contrib reset: extra branches removed; main unchanged"

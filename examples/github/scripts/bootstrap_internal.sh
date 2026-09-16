@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Initialize uplink-example-internal against already-bootstrapped upstream
 # and contrib clones. Runs git uplink init, imports the internal-only
-# workflows patch, and pushes seed branches.
+# workflows patch, pushes seed branches, and publishes orphan example-reset.
 #
 #   export UPSTREAM_DIR=$HOME/src/uplink-example-upstream
 #   export CONTRIB_DIR=$HOME/src/uplink-example-upstream-contrib
@@ -63,7 +63,8 @@ git -C "$INTERNAL_DIR" branch -f seed main
 git -C "$INTERNAL_DIR" branch -f seed-state uplink/state
 git -C "$INTERNAL_DIR" branch -f seed-upstream uplink/upstream
 git -C "$INTERNAL_DIR" push origin seed seed-state seed-upstream --force
-echo "Pushed $INTERNAL main, uplink/state, uplink/upstream, and seed refs"
+publish_example_reset "$INTERNAL_DIR" "$KIT_DIR/reset/internal.sh"
+echo "Pushed $INTERNAL main, uplink/state, uplink/upstream, seed refs, and example-reset"
 
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   echo "Setting labels and repository variables with gh"
@@ -104,8 +105,8 @@ fi
 
 echo
 echo "Bootstrap complete."
-echo "  $UPSTREAM  main + seed"
-echo "  $CONTRIB   main (Reset example workflow on the fork)"
-echo "  $INTERNAL  main + uplink/state + uplink/upstream + seed refs"
+echo "  $UPSTREAM  main + seed + example-reset"
+echo "  $CONTRIB   main (upstream fork) + example-reset"
+echo "  $INTERNAL  main + uplink/state + uplink/upstream + seed refs + example-reset"
 echo
 echo "Finish SETUP.md (oss reviewer and UPLINK_GITHUB_TOKEN), then walk examples/github/stories/."

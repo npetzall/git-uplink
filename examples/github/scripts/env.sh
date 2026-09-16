@@ -111,3 +111,34 @@ ensure_remote() {
     git -C "$dir" remote add "$name" "$url"
   fi
 }
+
+install_example_reset_stub() {
+  local dest=$1
+  mkdir -p "$dest/.github/workflows"
+  cp "$KIT_DIR/example-reset.yml" "$dest/.github/workflows/example-reset.yml"
+}
+
+# publish_example_reset CLONE_DIR SCRIPT_SRC
+# Orphan branch example-reset: stub workflow + that repo's reset script.
+publish_example_reset() {
+  local dir=$1
+  local script_src=$2
+  local return_branch
+  return_branch=$(git -C "$dir" branch --show-current 2>/dev/null || true)
+  if [[ -z "$return_branch" ]]; then
+    return_branch=main
+  fi
+
+  git -C "$dir" switch --orphan example-reset_tmp
+  git -C "$dir" branch -D example-reset 2>/dev/null || true
+  git -C "$dir" switch --orphan example-reset
+  install_example_reset_stub "$dir"
+  mkdir -p "$dir/scripts"
+  cp "$script_src" "$dir/scripts/reset-example.sh"
+  git -C "$dir" add -- \
+    .github/workflows/example-reset.yml \
+    scripts/reset-example.sh
+  git_bot -C "$dir" commit -m "Reset example"
+  git -C "$dir" push origin example-reset --force
+  git -C "$dir" switch -f "$return_branch"
+}
