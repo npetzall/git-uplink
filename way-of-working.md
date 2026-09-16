@@ -2,7 +2,7 @@
 
 This is how developers use Uplink day to day. Company `main` is bot-owned. You open one internal PR per change. You never maintain a second branch for upstream. Operators can walk the model with `git uplink web-ui`.
 
-Read this alongside `.uplink/queue.json` and `git uplink status`. The binary is `git-uplink` (a Git subcommand). The queue is the source of truth for what company `main` is made of. Git history on `main` is rebuilt and may be force-updated; do not treat it as a human commit log.
+Read this alongside `.uplink/queue.json` (on `uplink/state`) and `git uplink status`. The binary is `git-uplink` (a Git subcommand). Durable queue history lives on the orphan branch `uplink/state`. Company `main` is product-only: public upstream plus every patch that is not merged or dropped. Sync force-updates `main` only when upstream moved (or a drop/resolve requires a replay).
 
 Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the commit message. `git commit` uses `.uplink/commit-msg.template` after `git uplink init`. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network commands (`add --push`, `sync`, `submit`) use `UPLINK_GITHUB_TOKEN` / `GITHUB_TOKEN` or `UPLINK_SSH_KEY`, not your default SSH key.
 
@@ -22,7 +22,7 @@ On GitHub Enterprise Cloud this is an option, and it is the option to use. Do no
 
 Create a repository Environment named **`oss`**. Required reviewers are IP/legal. Put the GitHub App secrets that can push the upstream-owned private fork **on that environment only**. Dispatch `Uplink submit` with the patch id. The workflow:
 
-1. **Packet job** (no environment, no App secrets). Runs `git uplink report <id>`, which writes `.uplink/reports/<id>/prepare.md` and appends the same markdown to `GITHUB_STEP_SUMMARY`. Commits the report to company `main` as a fast-forward (not a force-push). Reports sit under `.uplink/`, so a later queue rebuild copies them.
+1. **Packet job** (no environment, no App secrets). Runs `git uplink report <id>`, which writes `.uplink/reports/<id>/prepare.md` and appends the same markdown to `GITHUB_STEP_SUMMARY`. Commits the report to `uplink/state` as a fast-forward (not a force-push). Reports stay on that orphan branch, so a later product rebuild does not drop them.
 2. **Submit job** (`environment: oss`). GitHub holds the job until a required reviewer approves the deployment. That click is the IP gate. GitHub records it on the Deployments tab and in the enterprise audit log. The dispatcher is not the approver; turn on **Prevent self-review**.
 3. After approval, the job writes `.uplink/reports/<id>/approval.md` (receipt pointing at the run), then `git uplink approve` and `git uplink submit`. App credentials exist only now. Submit is still the first time contribution bytes leave EMU.
 
@@ -90,7 +90,7 @@ Asha needs to change token hashing. Nobody else is in her way.
      --pr <number> --push
    ```
 
-   Uplink isolates Asha’s product diff (not `.uplink/`), appends patch `upl_asha` with status `queued`, rebuilds `main` as upstream plus the queue, and force-with-lease pushes `main`. Asha still has only `feat/sha256`. She does not open a public branch.
+   Uplink isolates Asha’s product diff (not `.uplink/`), appends patch `upl_asha` with status `queued` on `uplink/state`, and applies that patch onto company `main` as a fast-forward. Asha still has only `feat/sha256`. She does not open a public branch.
 
 5. **Other developers now build her change** the next time they branch from `main`. IP has not run. Nothing has left the enterprise.
 
@@ -118,9 +118,9 @@ Asha and Ben start from the same company `main`. Their changes are independent (
 2. Review can overlap. Import is serialized:
    - Actions group `uplink-mutate` (import / sync / submit wait; they do not cancel each other).
    - `.git/uplink.lock` in one checkout.
-   - Each job isolates **that PR’s** `base.sha..head.sha`, then refreshes latest `main`, appends, rebuilds, and pushes `--force-with-lease`. If the other import landed first, the lease fails and the job retries. The same internal PR number is imported at most once.
+   - Each job isolates **that PR’s** `base.sha..head.sha`, then refreshes latest `main` and `uplink/state`, appends the patch on the state branch, applies it onto `main`, and fast-forward pushes both. If the other import landed first, the push fails and the job retries. The same internal PR number is imported at most once.
 3. Asha’s PR is imported first. Queue: `[upl_asha]`. Company `main` = upstream + Asha.
-4. Ben’s import runs second. His diff is still *his* unique delta against the base he branched from, not a replay of live `main`. It is appended. Queue: `[upl_asha, upl_ben]`. Rebuild applies Asha then Ben onto upstream. Both are `queued`. Neither has been IP-approved.
+4. Ben’s import runs second. His diff is still *his* unique delta against the base he branched from, not a replay of live `main`. It is appended on `uplink/state`. Queue: `[upl_asha, upl_ben]`. Company `main` fast-forwards by applying Ben on top of Asha. Both are `queued`. Neither has been IP-approved.
 
 Ben must rebase `feat/ben` onto the new `main` after Asha’s import if he still has an open PR; that is ordinary “integration branch moved.”
 
@@ -224,7 +224,7 @@ Upstream changes a file Asha also changed. Sync:
 
 What you have then:
 
-- `upl_asha` status `conflict`. Sync records that on company `main` (product files stay at the last successful rebuild) and commits `uplink/conflict/upl_asha` with the conflicted files. The Actions sync job opens an internal issue (`uplink:conflict`). **Do not open a PR for it.**
+- `upl_asha` status `conflict`. Sync records that on `uplink/state` (product files on `main` stay at the last successful rebuild) and commits `uplink/conflict/upl_asha` with the conflicted files. The Actions sync job opens an internal issue (`uplink:conflict`). **Do not open a PR for it.**
 - **Ben is not applied**, even though he does not depend on Asha. A blocked patch blocks the rest of the rebuild. Company `main` is not updated to “upstream + Ben, skip Asha.” There is no skip.
 - Ben’s public PR, if he already submitted, is untouched until his patch is replayed.
 
@@ -340,7 +340,7 @@ You are choosing a **tree to write code against**, not a second long-lived branc
    That is public upstream plus every patch that is not `merged` or `dropped`. If the product should include it, it is already there. This is the correct base for a new independent fix (Story 1, Story 2).
 
 2. **Look at the queue, not `git log main`.**  
-   `git uplink status` and `.uplink/queue.json` list patch ids, titles, `queued` / `approved` / `submitted` / `conflict`, and `dependsOn`. `main`’s commits are synthetic and may disappear on the next rebuild.
+   `git uplink status` and `.uplink/queue.json` on `uplink/state` list patch ids, titles, `queued` / `approved` / `submitted` / `conflict`, and `dependsOn`. Import commits on `main` are ordinary product applies. Sync still may force-update `main` when upstream moved.
 
 3. **If you need someone else’s unmerged work:**  
    - Already `queued`? It is on `main`. Branch from `main` (Story 3, Story 5). Record `--depends-on` for every patch your source actually needs so submit cannot skip it.  
@@ -350,12 +350,13 @@ You are choosing a **tree to write code against**, not a second long-lived branc
    Still branch from latest `main` (it may already contain their patch; that is fine — your isolated diff will not include it). Do **not** record `dependsOn`. You stay an independent public PR. Their earlier queue position does not trap you into merging after them (Story 2).
 
 5. **Never branch from these to start product work:**  
+   - `uplink/state` — queue, patches, and OSS reports. Do not commit product work here.  
    - `uplink/upstream` — public `main` without company patches. You would reinvent the queue in your working tree.  
    - `uplink/<id>` on the contribution fork — generated, bot-owned, may be force-pushed.  
    - `uplink/conflict/<id>` — only to resolve that patch, then `git uplink resolve`.
 
-6. **After every import or sync, rebase in-flight branches onto new `main`.**  
-   The bot may have force-updated it. Same habit as any integration branch.
+6. **After every import or sync that moved `main`, rebase in-flight branches onto new `main`.**  
+   Import is a fast-forward apply. Sync force-updates `main` only when upstream (or drop/resolve) requires a replay.
 
 7. **If `git uplink status` shows `conflict`:**  
    You cannot treat `main` as current. The queue is blocked on that patch. The owner of that id resolves it before anyone else’s later patch (including independent ones) will rebuild (Story 4).

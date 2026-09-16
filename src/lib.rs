@@ -33,10 +33,10 @@ pub use prepare::{
     format_approval_receipt, format_approver_packet, format_prepare_markdown,
     install_commit_template, prepare_from_range, report_paths, split_internal_message,
 };
-pub use repo::commit_queue;
+pub use repo::{commit_queue, patch_state_commit};
 pub use types::{
     DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, MergeVia, Patch, PatchIntent, PatchStatus,
-    PrepareReport, QUEUE_PATH, QueueConfig, QueueState,
+    PrepareReport, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
 };
 
 #[cfg(test)]

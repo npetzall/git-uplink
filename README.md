@@ -8,7 +8,7 @@ It is for a company on GitHub Enterprise Cloud with Enterprise Managed Users tha
 public upstream/main  +  every patch that is not merged or dropped
 ```
 
-`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. On GitHub Enterprise Cloud, dispatch the **oss** Environment workflow; `git uplink report` writes `.uplink/reports/<id>/prepare.md` and `GITHUB_STEP_SUMMARY`.
+`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. On GitHub Enterprise Cloud, dispatch the **oss** Environment workflow; `git uplink report` writes `.uplink/reports/<id>/prepare.md` on `uplink/state` and `GITHUB_STEP_SUMMARY`.
 
 ```bash
 cargo install --path .
@@ -59,7 +59,7 @@ git uplink resolve <id>
 git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 ```
 
-`init` writes `.uplink/queue.json` and installs `.uplink/commit-msg.template`. `--upstream` / `--contrib` add those remotes. Queue state lives in `.uplink/queue.json` and `.uplink/patches/*.patch`. Rebuild copies the whole `.uplink` tree, including reports.
+`init` writes `.uplink/queue.json` and installs `.uplink/commit-msg.template` on the orphan branch `uplink/state`. `--upstream` / `--contrib` add those remotes. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Import applies the new patch as a fast-forward; sync rebuilds `main` only when upstream moved.
 
 `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `--depends-on` can also come from `UPLINK_DEPENDS_ON`. `drop --reason` defaults to `dropped by operator`.
 
@@ -69,7 +69,7 @@ git-uplink shells out to `git`, but it does **not** use the operator’s commit 
 
 ## Dashboard
 
-`git uplink web-ui` is the operator UI: control room, live lab, collaboration notes, system playbook, [way-of-working.md](way-of-working.md), and a **This repo** page that reads `.uplink/queue.json` from the directory you started in.
+`git uplink web-ui` is the operator UI: control room, live lab, collaboration notes, system playbook, [way-of-working.md](way-of-working.md), and a **This repo** page that reads `.uplink/queue.json` from `uplink/state` in the directory you started in.
 
 Frontend sources live in `web/` (Vite + React + Tailwind). Do not commit `web/dist`; cargo rebuilds it.
 
@@ -96,7 +96,7 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 | `uplink-prepare.yml` | Every PR to `main` — message cutoff, export author, affiliation scan |
 | `uplink-preflight.yml` | Every PR to `main` — apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT` |
 | `uplink-import.yml` | Label `uplink:import` or merge — product gate, status `queued` |
-| `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches, rebuild `main`; persist conflicts and open an internal issue |
+| `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches; rebuild `main` only if upstream moved. Queue commits go to `uplink/state`. Persist conflicts and open an internal issue |
 | `uplink-resolve.yml` | Human push to `uplink/conflict/*` — `git uplink resolve`, rebuild `main`; publish a later conflict like sync; skips the Actions bot |
 | `uplink-submit.yml` | Dispatch with a patch id — `oss` Environment IP gate, then approve + submit |
 

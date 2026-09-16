@@ -105,6 +105,7 @@ fn markdown(body: &'static str) -> impl IntoResponse {
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
     let cwd = state.repo.display().to_string();
+    let _ = crate::repo::ensure_state_worktree(&state.repo);
     if !state.repo.join(QUEUE_PATH).is_file() {
         return Json(StatusResponse {
             present: false,

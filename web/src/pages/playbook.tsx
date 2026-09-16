@@ -44,7 +44,8 @@ export function PlaybookPage() {
         <Section title="The invariant">
           <p>
             There is exactly one object per logical change: a patch with a stable id
-            (<code>upl_…</code>) stored in <code>.uplink/</code>. Every other git ref is derived.
+            (<code>upl_…</code>) stored in <code>.uplink/</code> on <code>uplink/state</code>. Every
+            other git ref is derived.
           </p>
           <ul>
             <li>Internal PR → creates or amends that patch.</li>
@@ -71,9 +72,9 @@ export function PlaybookPage() {
           <p>
             <strong>Company product repo</strong> lives in the EMU enterprise. It is a mirror, not a
             GitHub fork network member — EMU cannot fork public repositories. Humans open PRs only
-            here. <code>main</code> is bot-owned and may be force-updated on sync. Branch from
-            latest <code>main</code>; rebase in-flight work after a sync the same way you would
-            after any integration branch update.
+            here. <code>main</code> is bot-owned product history. Import fast-forwards it; sync may
+            force-update it when upstream moved. Branch from latest <code>main</code>; rebase
+            in-flight work after a sync the same way you would after any integration branch update.
           </p>
           <p>
             <strong>Contribution fork</strong> is a private fork of the public project, owned by the
@@ -94,14 +95,17 @@ export function PlaybookPage() {
           <p>
             Yes. Company <code>main</code> is a shared integration branch, but humans do not push
             it. Any number of developers branch from latest <code>main</code>, open ordinary
-            internal PRs, and review each other.               The Uplink bot is the only writer of{" "}
-              <code>main</code>. After each import or sync it may force-update that branch; packet
-              commits of <code>.uplink/reports/</code> are fast-forwards. In-flight PRs rebase onto
-              the new main the same way they would after any integration-branch update.
+            internal PRs, and review each other. The Uplink bot is the only writer of{" "}
+            <code>main</code> and of <code>uplink/state</code>. Import applies the new patch as a
+            fast-forward on both. Sync force-updates <code>main</code> only when upstream moved.
+            Packet commits of <code>.uplink/reports/</code> are fast-forwards on{" "}
+            <code>uplink/state</code>. In-flight PRs rebase onto the new main the same way they
+            would after any integration-branch update.
           </p>
           <p>
             Ruleset: require a pull request from humans; allow the Uplink bot (and only that bot)
-            to bypass and force-push. Developers keep one feature branch per change. They never
+            to bypass and force-push <code>main</code> on upstream rebuilds, and to fast-forward{" "}
+            <code>uplink/state</code>. Developers keep one feature branch per change. They never
             maintain a second branch for upstream.
           </p>
         </Section>
@@ -152,10 +156,10 @@ export function PlaybookPage() {
           <p>
             Dispatch <code>Uplink submit</code> from company <code>main</code>. A packet job writes{" "}
             <code>.uplink/reports/&lt;id&gt;/prepare.md</code>, appends{" "}
-            <code>GITHUB_STEP_SUMMARY</code>, and fast-forwards that file onto <code>main</code>.
-            Reports stay under <code>.uplink/</code>, so queue rebuilds copy them. The submit job
-            then waits on <code>environment: oss</code>. After review, it commits{" "}
-            <code>approval.md</code> and runs <code>git uplink approve</code> then{" "}
+            <code>GITHUB_STEP_SUMMARY</code>, and fast-forwards that file onto{" "}
+            <code>uplink/state</code>. Reports stay on the orphan branch, so a product rebuild does
+            not drop them. The submit job then waits on <code>environment: oss</code>. After review,
+            it commits <code>approval.md</code> and runs <code>git uplink approve</code> then{" "}
             <code>git uplink submit</code> in the same workflow.
           </p>
           <p>
@@ -174,8 +178,8 @@ export function PlaybookPage() {
         <Section title="Concurrent adds">
           <p>
             Two PRs can be reviewed at the same time. They must not both rewrite{" "}
-            <code>.uplink/queue.json</code> from a stale checkout, or the later force-push would
-            drop the earlier patch.
+            <code>.uplink/queue.json</code> from a stale checkout of <code>uplink/state</code>, or
+            the later push would drop the earlier patch.
           </p>
           <p>Uplink handles that in three layers:</p>
           <ul>
@@ -191,10 +195,10 @@ export function PlaybookPage() {
             </li>
             <li>
               Each import isolates the PR&apos;s unique diff from the PR&apos;s own{" "}
-              <code>base.sha..head.sha</code> (not from live main), then fetches the latest queue,
-              appends, rebuilds, and pushes with <code>--force-with-lease</code>. If another import
-              landed first, the lease fails, the job refreshes, and it retries. Re-importing the
-              same internal PR number is a no-op.
+              <code>base.sha..head.sha</code> (not from live main), then fetches the latest{" "}
+              <code>uplink/state</code>, appends, applies the patch onto <code>main</code>, and
+              fast-forward pushes both. If another import landed first, the push fails, the job
+              refreshes, and it retries. Re-importing the same internal PR number is a no-op.
             </li>
           </ul>
           <p>
@@ -247,7 +251,8 @@ export function PlaybookPage() {
             <li>
               Label <code>uplink:import</code>. That is internal product approval. Actions runs{" "}
               <code>git uplink add</code>, extracts the product diff, excluding{" "}
-              <code>.uplink/</code>, and rebuilds main.
+              <code>.uplink/</code>, records it on <code>uplink/state</code>, and applies it onto
+              main.
             </li>
             <li>
               When legal signs off, an operator dispatches <code>Uplink submit</code>. IP approves
@@ -297,8 +302,9 @@ export function PlaybookPage() {
         <Section title="Sync conflicts">
           <p>
             Hourly (and on demand) the bot fetches public upstream, drops merged patches, and
-            replays the rest. If apply fails, it records <code>conflict</code> on company{" "}
-            <code>main</code> without moving product files, commits{" "}
+            replays the rest onto <code>main</code> only if upstream moved. Queue status is
+            recorded on <code>uplink/state</code>. If apply fails, it records{" "}
+            <code>conflict</code> without moving product files, commits{" "}
             <code>uplink/conflict/&lt;id&gt;</code>, and opens an internal issue. Do not open a PR.
             Fix the files on the conflict branch and push.{" "}
             <code>uplink-resolve.yml</code> skips the Actions bot, runs{" "}
@@ -357,8 +363,8 @@ export function PlaybookPage() {
             </li>
             <li>
               Protect company <code>main</code>: only the Uplink bot / GitHub Actions may push.
-              Require PRs from humans. Allow Actions to fast-forward{" "}
-              <code>.uplink/reports/</code> and to force-push rebuilds.
+              Require PRs from humans. Allow Actions to fast-forward <code>uplink/state</code> and
+              to force-push rebuilds of <code>main</code> when upstream moved.
             </li>
             <li>
               Optional: Private Mirrors App if you later want a company-owned public fork as well.

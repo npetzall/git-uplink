@@ -30,6 +30,7 @@ jobs:
         run: |
           git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
           git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
+          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
 
       - name: Import as a queued patch
         env:

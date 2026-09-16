@@ -5,9 +5,9 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts, MergeVia,
-    QueueConfig, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
-    format_approver_packet, git, git_ok, init_repo, mark_merged, rebuild, report_paths,
-    resolve_conflict, status_snapshot, submit_patch, sync, write_queue,
+    QueueConfig, STATE_BRANCH, add_patch, approve_patch, configure_repo, drop_patch,
+    format_approval_receipt, format_approver_packet, git, git_ok, init_repo, mark_merged, rebuild,
+    report_paths, resolve_conflict, status_snapshot, submit_patch, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -122,6 +122,165 @@ fn setup_world() -> World {
         upstream,
         company,
     }
+}
+
+fn tree_has_uplink(repo: &Path, git_ref: &str) -> bool {
+    git(
+        repo,
+        &["cat-file", "-e", &format!("{git_ref}:.uplink")],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .unwrap()
+    .code
+        == 0
+}
+
+#[test]
+fn init_puts_uplink_on_the_orphan_state_branch_not_main() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{STATE_BRANCH}"),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    assert!(company.join(".uplink/queue.json").is_file());
+    assert!(!tree_has_uplink(company, "main"));
+    let stored = git_ok(
+        company,
+        &["show", &format!("{STATE_BRANCH}:.uplink/queue.json")],
+    )
+    .unwrap();
+    assert!(stored.contains("\"version\": 1"));
+}
+
+#[test]
+fn add_applies_the_patch_on_main_and_records_it_on_state() {
+    let world = setup_world();
+    let company = &world.company;
+    let main_before = git_ok(company, &["rev-parse", "main"]).unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let main_after = git_ok(company, &["rev-parse", "main"]).unwrap();
+    assert_ne!(main_before, main_after);
+    let parent = git_ok(company, &["rev-parse", "main^"]).unwrap();
+    assert_eq!(parent, main_before);
+    assert!(!tree_has_uplink(company, "main"));
+    let stored = git_ok(
+        company,
+        &[
+            "show",
+            &format!("{STATE_BRANCH}:.uplink/patches/{}.patch", patch.id),
+        ],
+    )
+    .unwrap();
+    assert!(stored.contains("sha256"));
+}
+
+#[test]
+fn sync_skips_rebuilding_main_when_upstream_is_unchanged() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    sync(company).unwrap();
+    let main_after_first = git_ok(company, &["rev-parse", "main"]).unwrap();
+    sync(company).unwrap();
+    let main_after_second = git_ok(company, &["rev-parse", "main"]).unwrap();
+    assert_eq!(main_after_first, main_after_second);
+    assert!(!tree_has_uplink(company, "main"));
+}
+
+#[test]
+fn approve_receipt_records_the_state_branch_commit() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let sha = git_uplink::patch_state_commit(company, &patch.id).unwrap();
+    let receipt = format_approval_receipt(ApprovalReceipt {
+        patch_id: &patch.id,
+        environment: "oss",
+        actor: "dispatcher",
+        run_url: "https://github.example/run/1",
+        sha: &sha,
+        at: Some("2026-09-14T00:00:00.000Z".into()),
+    });
+    assert!(receipt.contains(&format!("`{sha}`")));
+    assert!(receipt.contains("Queue commit"));
+    assert!(!tree_has_uplink(company, "main"));
 }
 
 #[test]
@@ -811,6 +970,12 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
         GitOpts::default(),
     )
     .unwrap();
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
 
     let clone_company = |origin: &Path, upstream: &Path| {
         let dir_keep = temp_dir();
@@ -835,6 +1000,12 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
                 "origin",
                 "uplink/upstream:uplink/upstream",
             ],
+            GitOpts::default(),
+        )
+        .unwrap();
+        git(
+            &dir,
+            &["fetch", "--quiet", "origin", "uplink/state:uplink/state"],
             GitOpts::default(),
         )
         .unwrap();
@@ -1244,18 +1415,7 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
             at: Some("2026-09-14T00:00:00.000Z".into()),
         }),
     );
-    git(
-        company,
-        &["add", "--", ".uplink/reports"],
-        GitOpts::default(),
-    )
-    .unwrap();
-    git(
-        company,
-        &["commit", "-m", &format!("uplink: OSS packet {}", patch.id)],
-        GitOpts::default(),
-    )
-    .unwrap();
+    git_uplink::commit_queue(company, &format!("uplink: OSS packet {}", patch.id)).unwrap();
 
     rebuild(company).unwrap();
     let kept = fs::read_to_string(company.join(&prepare_path)).unwrap();
@@ -1264,8 +1424,18 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
     assert!(receipt.contains("authoritative approval event"));
     assert!(receipt.contains("`oss`"));
     assert!(receipt.contains("dispatcher"));
-    let tracked = git_ok(company, &["show", &format!("HEAD:{prepare_path}")]).unwrap();
+    let tracked = git_ok(company, &["show", &format!("uplink/state:{prepare_path}")]).unwrap();
     assert!(tracked.contains("Use SHA-256 for tokens"));
+    let on_main = git(
+        company,
+        &["cat-file", "-e", "main:.uplink"],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .unwrap();
+    assert_ne!(on_main.code, 0, ".uplink must not live on main");
 }
 
 #[test]

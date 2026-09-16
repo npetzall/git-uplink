@@ -2,7 +2,12 @@ use serde::{Deserialize, Serialize};
 
 pub const QUEUE_PATH: &str = ".uplink/queue.json";
 pub const PATCH_DIR: &str = ".uplink/patches";
+pub const STATE_BRANCH: &str = "uplink/state";
 pub const DEFAULT_CUTOFF: &str = "----- Uplink: internal below this line -----";
+
+fn default_state_branch() -> String {
+    STATE_BRANCH.to_string()
+}
 
 pub const DEFAULT_EXPORT_AUTHOR: (&str, &str) =
     ("Uplink Contributor", "uplink@users.noreply.github.com");
@@ -151,6 +156,8 @@ pub struct QueueConfig {
     pub upstream_branch: String,
     pub contrib_remote: String,
     pub company_branch: String,
+    #[serde(default = "default_state_branch")]
+    pub state_branch: String,
     pub trailer_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preflight_command: Option<String>,
@@ -173,6 +180,7 @@ impl Default for QueueConfig {
             upstream_branch: "main".into(),
             contrib_remote: "contrib".into(),
             company_branch: "main".into(),
+            state_branch: STATE_BRANCH.into(),
             trailer_key: "Uplink-Patch-Id".into(),
             preflight_command: None,
             cutoff_marker: Some(DEFAULT_CUTOFF.into()),

@@ -34,6 +34,7 @@ jobs:
         run: |
           git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
           git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
+          git fetch --quiet origin uplink/state:uplink/state || true
 
       - name: Prepare contribution
         env:
