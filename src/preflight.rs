@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git};
-use crate::prepare::export_commit_message;
+use crate::prepare::{depends_on_from_message, export_commit_message};
 use crate::queue::{active_patches, get_patch, patch_path, read_queue};
 use crate::repo::{has_ref, rev_parse, write_product_patch};
 use crate::types::{Patch, QueueState};
@@ -330,6 +330,7 @@ pub struct IncomingPreflight {
     pub from_ref: String,
     pub head_ref: String,
     pub depends_on: Vec<String>,
+    pub message: Option<String>,
     pub preflight_command: Option<String>,
 }
 
@@ -339,12 +340,14 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
         "upl_preflight_{}",
         &Uuid::new_v4().simple().to_string()[..8]
     );
+    let depends_on =
+        depends_on_from_message(opts.message.as_deref().unwrap_or(""), &opts.depends_on);
     let patch = Patch {
         id: id.clone(),
         title: opts.title.clone(),
         intent: "upstream".into(),
         status: "queued".into(),
-        depends_on: opts.depends_on,
+        depends_on,
         created_at: String::new(),
         updated_at: String::new(),
         patch_id_stable: None,

@@ -30,9 +30,10 @@ pub use preflight::{
 };
 pub use prepare::{
     ApprovalReceipt, OSS_ENVIRONMENT, assert_prepare_ok, company_commit_message,
-    export_commit_message, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, format_delta_approver_packet, format_prepare_markdown,
-    prepare_from_message, report_paths, split_internal_message, strip_html_comments,
+    depends_on_from_message, export_commit_message, format_approval_receipt,
+    format_approver_packet, format_contribution_packet, format_delta_approver_packet,
+    format_prepare_markdown, parse_depends_on, prepare_from_message, report_paths,
+    split_internal_message, strip_html_comments,
 };
 pub use repo::{commit_queue, patch_state_commit};
 pub use types::{

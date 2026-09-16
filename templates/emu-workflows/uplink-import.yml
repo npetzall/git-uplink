@@ -43,7 +43,6 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
-          UPLINK_DEPENDS_ON: ${{ github.event.pull_request.body }}
         run: |
           extra=""
           if [ "$INTERNAL_ONLY" = "true" ]; then extra="--internal-only"; fi

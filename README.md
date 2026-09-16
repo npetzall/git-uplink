@@ -45,6 +45,7 @@ git uplink add --title <text> [--message <text> | --message-file <path>]
             [--pr <n>] [--pr-url <url>] [--depends-on <id>]...
             [--push] [--refresh <remote>] [--push-remote <remote>]
 git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
+            [--message <text> | --message-file <path>]
             [--depends-on <id>]... [--pr <n>]
 git uplink prepare [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>] [--pr <n>]
@@ -63,7 +64,7 @@ git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 
 `init` writes `.uplink/queue.json` on the orphan branch `uplink/state`. `--upstream` / `--contrib` add those remotes. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Import applies the new patch as a fast-forward; sync rebuilds `main` only when upstream moved.
 
-`add --title` is the queue entry name. `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `--depends-on` can also come from `UPLINK_DEPENDS_ON`. `drop --reason` defaults to `dropped by operator`.
+`add --title` is the queue entry name. `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `Uplink-Depends-On: upl_…` lines in that message (after HTML comments are stripped) become `dependsOn`; `--depends-on` is an optional overlay. Incoming `preflight` reads the same trailers from `--message` / `--message-file`. `drop --reason` defaults to `dropped by operator`.
 
 `submit` exports the patch onto the contrib fork. Set `UPLINK_GITHUB_TOKEN` (and optionally `UPLINK_GITHUB_API`) to open the upstream pull request from that branch. Merge detection, in order: recorded GitHub PR → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply.
 

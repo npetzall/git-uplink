@@ -46,6 +46,42 @@ pub fn split_internal_message(raw: &str, marker: &str) -> (String, String) {
     }
 }
 
+/// Patch ids recorded on `Uplink-Depends-On:` lines after HTML comments are stripped.
+/// Only `upl_` plus 10 hex digits match (`new_patch_id`); placeholders and prose do not.
+pub fn parse_depends_on(message: &str) -> Vec<String> {
+    let stripped = strip_html_comments(message);
+    let header = Regex::new(r"(?im)^Uplink-Depends-On:\s*(.+)$").expect("depends-on header");
+    let id = Regex::new(r"(?i)^upl_[0-9a-f]{10}$").expect("patch id");
+    let mut ids = Vec::new();
+    for caps in header.captures_iter(&stripped) {
+        for token in caps[1].split(|c: char| c.is_whitespace() || c == ',') {
+            let token = token.trim();
+            if token.is_empty() || !id.is_match(token) {
+                continue;
+            }
+            let token = token.to_ascii_lowercase();
+            if !ids.contains(&token) {
+                ids.push(token);
+            }
+        }
+    }
+    ids
+}
+
+fn union_depends_on(from_message: Vec<String>, extra: &[String]) -> Vec<String> {
+    let mut ids = from_message;
+    for id in extra {
+        if !id.is_empty() && !ids.contains(id) {
+            ids.push(id.clone());
+        }
+    }
+    ids
+}
+
+pub fn depends_on_from_message(message: &str, extra: &[String]) -> Vec<String> {
+    union_depends_on(parse_depends_on(message), extra)
+}
+
 pub fn parse_person(value: Option<&str>) -> Option<(String, String)> {
     let value = value?.trim();
     if value.is_empty() {

@@ -74,6 +74,10 @@ enum Commands {
         head: Option<String>,
         #[arg(long)]
         title: Option<String>,
+        #[arg(long, conflicts_with = "message_file")]
+        message: Option<String>,
+        #[arg(long = "message-file", conflicts_with = "message")]
+        message_file: Option<PathBuf>,
         #[arg(long = "depends-on")]
         depends_on: Vec<String>,
         #[arg(long)]
@@ -136,16 +140,6 @@ enum Commands {
         #[arg(long)]
         no_open: bool,
     },
-}
-
-fn depends_from_env() -> Vec<String> {
-    env::var("UPLINK_DEPENDS_ON")
-        .unwrap_or_default()
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .map(str::trim)
-        .filter(|id| id.starts_with("upl_"))
-        .map(str::to_string)
-        .collect()
 }
 
 fn read_commit_message(
@@ -317,12 +311,11 @@ fn run() -> Result<(), Error> {
             internal_only,
             pr,
             pr_url,
-            mut depends_on,
+            depends_on,
             push,
             refresh,
             push_remote,
         } => {
-            depends_on.extend(depends_from_env());
             let message = read_commit_message(message, message_file, &title)?;
             let opts = AddPatchOpts {
                 title,
@@ -414,10 +407,13 @@ fn run() -> Result<(), Error> {
             from,
             head,
             title,
-            mut depends_on,
+            message,
+            message_file,
+            depends_on,
             pr,
         } => {
-            depends_on.extend(depends_from_env());
+            let title = title.unwrap_or_else(|| "candidate change".into());
+            let message = read_commit_message(message, message_file, &title)?;
             let result = if let Some(id) = id {
                 let queue = read_queue(&repo)?;
                 preflight_existing_patch(&repo, &queue, &id)
@@ -425,10 +421,11 @@ fn run() -> Result<(), Error> {
                 preflight_incoming_change(
                     &repo,
                     IncomingPreflight {
-                        title: title.unwrap_or_else(|| "candidate change".into()),
+                        title,
                         from_ref: from.unwrap_or_else(|| "main".into()),
                         head_ref: head.unwrap_or_else(|| "HEAD".into()),
                         depends_on,
+                        message: Some(message),
                         preflight_command: None,
                     },
                 )

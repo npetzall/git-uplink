@@ -7,7 +7,9 @@ use crate::error::{ConflictError, Error, Result};
 use crate::git::{GitOpts, configure_repo, git, git_ok};
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
 use crate::preflight::assert_export_preflight;
-use crate::prepare::{assert_prepare_ok, company_commit_message, prepare_from_message};
+use crate::prepare::{
+    assert_prepare_ok, company_commit_message, depends_on_from_message, prepare_from_message,
+};
 use crate::queue::{
     add_event, empty_queue, get_patch, get_patch_mut, read_queue as read_queue_file,
     topological_active, write_queue as write_queue_file,
@@ -194,13 +196,20 @@ fn add_patch_once(
     };
     let id = new_patch_id();
     let created_at = stamp();
+    let raw_message = opts
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(opts.title.as_str());
+    let depends_on = depends_on_from_message(raw_message, &opts.depends_on);
     let mut patch = Patch {
         id: id.clone(),
         title: opts.title.clone(),
         commit_message: String::new(),
         intent: intent.into(),
         status: "queued".into(),
-        depends_on: opts.depends_on.clone(),
+        depends_on,
         created_at: created_at.clone(),
         updated_at: created_at,
         patch_id_stable: None,
@@ -241,13 +250,6 @@ fn add_patch_once(
             )
         },
     );
-
-    let raw_message = opts
-        .message
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(opts.title.as_str());
     patch.prepare = Some(prepare_from_message(
         repo,
         queue,

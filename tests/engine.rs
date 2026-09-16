@@ -4,10 +4,11 @@ use std::process::Command;
 use std::thread;
 
 use git_uplink::{
-    AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts, MergeVia,
-    QueueConfig, STATE_BRANCH, add_patch, approve_patch, configure_repo, drop_patch,
-    format_approval_receipt, format_approver_packet, format_contribution_packet, git, git_ok,
-    init_repo, mark_merged, rebuild, report_paths, resolve_conflict, status_snapshot,
+    AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts,
+    IncomingPreflight, MergeVia, QueueConfig, STATE_BRANCH, add_patch, approve_patch,
+    configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, git, git_ok, init_repo, mark_merged, parse_depends_on,
+    preflight_incoming_change, rebuild, report_paths, resolve_conflict, status_snapshot,
     strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
 };
 use tempfile::TempDir;
@@ -1413,6 +1414,156 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
 }
 
 #[test]
+fn records_depends_on_from_commit_message_trailers() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash_patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(company, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &fs::read_to_string(company.join("src/tokens.js"))
+            .unwrap()
+            .replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "extend ttl");
+    let ttl_patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend token TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/logs"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let hashed = fs::read_to_string(company.join("src/tokens.js")).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &hashed.replace(
+            "return sha256(value);",
+            "console.log(\"hash\");\n  return sha256(value);",
+        ),
+    );
+    commit_all(company, "add log");
+
+    let imported = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Log token hashes".into(),
+            message: Some(format!(
+                "Log token hashes\n\n\
+Public rationale.\n\n\
+<!--\nUplink-Depends-On: upl_deadbeef00\n-->\n\n\
+See also {} in the queue.\n\n\
+{DEFAULT_CUTOFF}\n\n\
+Uplink-Depends-On: {}\n\
+Uplink-Depends-On: {}\n",
+                ttl_patch.id, hash_patch.id, ttl_patch.id
+            )),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        imported.depends_on,
+        vec![hash_patch.id.clone(), ttl_patch.id.clone()]
+    );
+}
+
+#[test]
+fn incoming_preflight_reads_depends_on_from_the_message() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash_patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/logs"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let hashed = fs::read_to_string(company.join("src/tokens.js")).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &hashed.replace(
+            "return sha256(value);",
+            "console.log(\"hash\");\n  return sha256(value);",
+        ),
+    );
+    commit_all(company, "add log");
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    let from = git_ok(company, &["rev-parse", "main"]).unwrap();
+
+    preflight_incoming_change(
+        company,
+        IncomingPreflight {
+            title: "Log token hashes".into(),
+            from_ref: from,
+            head_ref: head,
+            depends_on: Vec::new(),
+            message: Some(format!(
+                "Log token hashes\n\nUplink-Depends-On: {}\n",
+                hash_patch.id
+            )),
+            preflight_command: None,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
 fn does_not_submit_or_push_when_export_tests_fail() {
     let world = setup_world();
     let company = &world.company;
@@ -1569,6 +1720,29 @@ fn strips_html_comments_from_the_stored_message() {
         strip_html_comments("# Heading\n\n<!-- x -->\nbody"),
         "# Heading\n\nbody"
     );
+}
+
+#[test]
+fn parses_uplink_depends_on_from_the_commit_message() {
+    let a = "upl_aaaaaaaaaa";
+    let b = "upl_bbbbbbbbbb";
+    let mentioned = "upl_cccccccccc";
+    let message = format!(
+        "Subject\n\n\
+See also {mentioned} in a paragraph.\n\n\
+<!--\nUplink-Depends-On: upl_deadbeef00\nUplink-Depends-On: {mentioned}\n-->\n\n\
+{DEFAULT_CUTOFF}\n\n\
+Uplink-Depends-On: {a}\n\
+Uplink-Depends-On: {b}\n\
+Uplink-Depends-On: upl_…\n\
+Uplink-Depends-On: upl_asha\n"
+    );
+    assert_eq!(parse_depends_on(&message), vec![a, b]);
+    assert_eq!(
+        parse_depends_on(&format!("Uplink-Depends-On: {a}, {b}")),
+        vec![a, b]
+    );
+    assert!(parse_depends_on("depends on upl_aaaaaaaaaa").is_empty());
 }
 
 #[test]
