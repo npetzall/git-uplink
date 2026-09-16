@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -11,7 +11,7 @@ use git_uplink::{
     commit_queue, create_upstream_pull_request, drop_patch, format_approval_receipt,
     format_approver_packet, format_prepare_markdown, get_pull_request, git, git_ok, init_repo,
     mark_merged, parse_github_repo, patch_state_commit, preflight_existing_patch,
-    preflight_incoming_change, prepare_from_range, read_queue, rebuild, record_pull_request,
+    preflight_incoming_change, prepare_from_message, read_queue, rebuild, record_pull_request,
     report_paths, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
 };
 
@@ -21,10 +21,11 @@ use git_uplink::{
     bin_name = "git uplink",
     about = "Carry internal patches on upstream, contribute once, drop when merged.",
     long_about = "Company main is bot-owned. Developers open PRs; they never push main.\n\
-add is the internal product gate (status: queued). prepare rewrites the\n\
-export author, strips the internal commit-message section, and scans for\n\
-company affiliation. On GitHub Enterprise Cloud, contribution approval is\n\
-the oss Environment; approve/submit run after that review."
+add is the internal product gate (status: queued). prepare uses the PR title\n\
+and body as the single commit message, rewrites the export author, strips the\n\
+internal section before contrib export, and scans for company affiliation. On\n\
+GitHub Enterprise Cloud, contribution approval is the oss Environment;\n\
+approve/submit run after that review."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -42,6 +43,10 @@ enum Commands {
     Add {
         #[arg(long)]
         title: String,
+        #[arg(long, conflicts_with = "message_file")]
+        message: Option<String>,
+        #[arg(long = "message-file", conflicts_with = "message")]
+        message_file: Option<PathBuf>,
         #[arg(long)]
         from: Option<String>,
         #[arg(long)]
@@ -81,6 +86,10 @@ enum Commands {
         head: Option<String>,
         #[arg(long)]
         title: Option<String>,
+        #[arg(long, conflicts_with = "message_file")]
+        message: Option<String>,
+        #[arg(long = "message-file", conflicts_with = "message")]
+        message_file: Option<PathBuf>,
         #[arg(long)]
         pr: Option<u64>,
         #[arg(long)]
@@ -137,6 +146,29 @@ fn depends_from_env() -> Vec<String> {
         .filter(|id| id.starts_with("upl_"))
         .map(str::to_string)
         .collect()
+}
+
+fn read_commit_message(
+    message: Option<String>,
+    message_file: Option<PathBuf>,
+    fallback: &str,
+) -> Result<String, Error> {
+    if let Some(path) = message_file {
+        let text = if path.as_os_str() == "-" {
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            buf
+        } else {
+            fs::read_to_string(&path).map_err(|err| {
+                Error::msg(format!(
+                    "could not read --message-file {}: {err}",
+                    path.display()
+                ))
+            })?
+        };
+        return Ok(text);
+    }
+    Ok(message.unwrap_or_else(|| fallback.to_string()))
 }
 
 fn append_step_summary(markdown: &str) {
@@ -278,6 +310,8 @@ fn run() -> Result<(), Error> {
         }
         Commands::Add {
             title,
+            message,
+            message_file,
             from,
             head,
             internal_only,
@@ -289,8 +323,10 @@ fn run() -> Result<(), Error> {
             push_remote,
         } => {
             depends_on.extend(depends_from_env());
+            let message = read_commit_message(message, message_file, &title)?;
             let opts = AddPatchOpts {
                 title,
+                message: Some(message),
                 internal_only,
                 from_ref: from,
                 head_ref: head,
@@ -328,16 +364,21 @@ fn run() -> Result<(), Error> {
             from,
             head,
             title,
+            message,
+            message_file,
             pr,
             internal_only,
         } => {
             let queue = read_queue(&repo)?;
-            let report = prepare_from_range(
+            let title = title.unwrap_or_else(|| "candidate change".into());
+            let message = read_commit_message(message, message_file, &title)?;
+            let report = prepare_from_message(
                 &repo,
                 &queue,
                 from.as_deref().unwrap_or("main"),
                 head.as_deref().unwrap_or("HEAD"),
-                Some(title.as_deref().unwrap_or("candidate change")),
+                &message,
+                Some(&title),
                 if internal_only {
                     "internal-only"
                 } else {

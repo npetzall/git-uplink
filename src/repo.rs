@@ -5,17 +5,13 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok};
-use crate::prepare::export_commit_message;
+use crate::prepare::{company_commit_message, export_commit_message};
 use crate::queue::{now_iso, patch_path};
 use crate::types::{PATCH_DIR, Patch, QUEUE_PATH, QueueState, STATE_BRANCH};
 
 pub fn ensure_uplink_dirs(repo: &Path) -> Result<()> {
     fs::create_dir_all(repo.join(PATCH_DIR))?;
     Ok(())
-}
-
-pub fn commit_message(patch: &Patch) -> String {
-    export_commit_message(patch)
 }
 
 pub fn rev_parse(repo: &Path, git_ref: &str) -> Result<String> {
@@ -200,7 +196,11 @@ pub fn apply_patch_file(
             ];
         }
     }
-    let message = commit_message(patch);
+    let message = if export_identity {
+        export_commit_message(patch)
+    } else {
+        company_commit_message(patch)
+    };
     git(repo, &["commit", "-m", &message], opts)?;
     let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;
     if let Some(parent) = patch_file_abs.parent() {

@@ -40,12 +40,14 @@ export PATH="$PWD/target/release:$PATH"
 
 ```text
 git uplink init [--upstream <url>] [--contrib <url>]
-git uplink add --title <text> [--from <ref>] [--head <ref>] [--internal-only]
+git uplink add --title <text> [--message <text> | --message-file <path>]
+            [--from <ref>] [--head <ref>] [--internal-only]
             [--pr <n>] [--pr-url <url>] [--depends-on <id>]...
             [--push] [--refresh <remote>] [--push-remote <remote>]
 git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--depends-on <id>]... [--pr <n>]
-git uplink prepare [--from <ref>] [--head <ref>] [--title <text>] [--pr <n>]
+git uplink prepare [--from <ref>] [--head <ref>] [--title <text>]
+            [--message <text> | --message-file <path>] [--pr <n>]
             [--internal-only]
 git uplink report <id> [--out <file>]
 git uplink status
@@ -59,9 +61,9 @@ git uplink resolve <id>
 git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 ```
 
-`init` writes `.uplink/queue.json` and installs `.uplink/commit-msg.template` on the orphan branch `uplink/state`. `--upstream` / `--contrib` add those remotes. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Import applies the new patch as a fast-forward; sync rebuilds `main` only when upstream moved.
+`init` writes `.uplink/queue.json` on the orphan branch `uplink/state`. `--upstream` / `--contrib` add those remotes. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Import applies the new patch as a fast-forward; sync rebuilds `main` only when upstream moved.
 
-`add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `--depends-on` can also come from `UPLINK_DEPENDS_ON`. `drop --reason` defaults to `dropped by operator`.
+`add --title` is the queue entry name. `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `--depends-on` can also come from `UPLINK_DEPENDS_ON`. `drop --reason` defaults to `dropped by operator`.
 
 `submit` exports the patch onto the contrib fork. Set `UPLINK_GITHUB_TOKEN` (and optionally `UPLINK_GITHUB_API`) to open the upstream pull request from that branch. Merge detection, in order: recorded GitHub PR → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply.
 
@@ -93,7 +95,7 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 
 | Workflow | When |
 | --- | --- |
-| `uplink-prepare.yml` | Every PR to `main` — message cutoff, export author, affiliation scan |
+| `uplink-prepare.yml` | Every PR to `main` — PR title/body as the commit message, cutoff, export author, affiliation scan |
 | `uplink-preflight.yml` | Every PR to `main` — apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT` |
 | `uplink-import.yml` | Label `uplink:import` or merge — product gate, status `queued` |
 | `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches; rebuild `main` only if upstream moved. Queue commits go to `uplink/state`. Persist conflicts and open an internal issue |

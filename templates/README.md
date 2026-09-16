@@ -2,13 +2,18 @@
 
 Copy these files into the **company product repository** on GitHub Enterprise Cloud.
 
+- `templates/emu-workflows/*.yml` → `.github/workflows/`
+- `templates/github/pull_request_template.md` → `.github/pull_request_template.md`
+
+The PR template is the commit message. Title + body become one stored message (HTML comments stripped). Keep the cutoff line; company `main` includes it, contrib export does not.
+
 That repository also needs the `git-uplink` binary on `PATH`. Install this crate on the runner (`cargo install --path vendor/git-uplink` or a release binary).
 
 `GITHUB_TOKEN` in these workflows is the **EMU** token and only pushes to the company repo. It cannot open the public pull request.
 
 ## Two gates
 
-- **Prepare** (`uplink-prepare.yml`) — on every PR to `main`. Strips the internal commit-message section, rewrites author, scans for company keywords / internal emails, comments a report for approvers, and writes `GITHUB_STEP_SUMMARY`. Required check.
+- **Prepare** (`uplink-prepare.yml`) — on every PR to `main`. Uses the PR title and body as the single commit message, strips HTML comments, keeps the cutoff on company main, rewrites author, scans for company keywords / internal emails, comments a report (both commit texts) for approvers, and writes `GITHUB_STEP_SUMMARY`. Required check.
 - **Preflight** (`uplink-preflight.yml`) — required check on every PR to `main`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines from the body, then runs `UPLINK_PREFLIGHT`. Failure comments on the PR; do not import until it is green.
 - **Import** (`uplink-import.yml`) — internal product approval. Label `uplink:import` after engineering review (or merge the PR). The change is recorded on `uplink/state` and applied onto company `main` as status `queued` only if export preflight still passes.
 - **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream, drops merged patches, and rebuilds `main` only when upstream moved. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>`, and opens an internal issue (`uplink:conflict`). Do not open a PR; resolve the patch on that branch instead.
@@ -36,7 +41,7 @@ This is the documented option. Use it instead of asking an operator to run `git 
 
 ### What the reviewer sees
 
-1. **Job summary** — the packet job appends the full contribution packet to `GITHUB_STEP_SUMMARY` (public subject, export author, leak checks, depends-on). Open the workflow run; the summary is on the completed packet job.
+1. **Job summary** — the packet job appends the full contribution packet to `GITHUB_STEP_SUMMARY` (company and upstream commit messages, export author, leak checks, depends-on). Open the workflow run; the summary is on the completed packet job.
 2. **Committed report** — `.uplink/reports/<id>/prepare.md` on `uplink/state`. The `oss` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
 3. **Environment review UI** — GitHub pauses the submit job until a required reviewer approves the `oss` deployment. That click is the IP gate.
 

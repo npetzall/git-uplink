@@ -35,6 +35,7 @@ jobs:
       - name: Import as a queued patch
         env:
           TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
           INTERNAL_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'uplink:internal-only') }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -46,5 +47,10 @@ jobs:
         run: |
           extra=""
           if [ "$INTERNAL_ONLY" = "true" ]; then extra="--internal-only"; fi
-          git uplink add --title "$TITLE" --from "$FROM_SHA" --head "$HEAD_SHA" \
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > /tmp/uplink-msg.txt
+          git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
+            --from "$FROM_SHA" --head "$HEAD_SHA" \
             --pr "$PR_NUMBER" --pr-url "$PR_URL" --push $extra
