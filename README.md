@@ -46,16 +46,18 @@ git uplink add --title <text> [--message <text> | --message-file <path>]
             [--push] [--refresh <remote>] [--push-remote <remote>]
 git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
-            [--depends-on <id>]... [--pr <n>]
+            [--depends-on <id>]...
 git uplink prepare [--from <ref>] [--head <ref>] [--title <text>]
-            [--message <text> | --message-file <path>] [--pr <n>]
+            [--message <text> | --message-file <path>]
             [--internal-only]
 git uplink report <id> [--out <file>]
 git uplink status
 git uplink approve <id> [--out <file>]
 git uplink submit <id>
+git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote origin]
 git uplink sync
-git uplink merged <id> [--via pr|trailer|patch-id|empty-rebase|manual]
+git uplink conflicted <id> --issue-url <url> [--issue <n>] [--push-remote origin]
+git uplink merged <id> [--via pr|trailer|patch-id|empty-rebase|manual] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
 git uplink rebuild
 git uplink resolve <id>
@@ -66,7 +68,7 @@ git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 
 `add --title` is the queue entry name. `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `Uplink-Depends-On: upl_…` lines in that message (after HTML comments are stripped) become `dependsOn`; `--depends-on` is an optional overlay. Incoming `preflight` reads the same trailers from `--message` / `--message-file`. `drop --reason` defaults to `dropped by operator`.
 
-`submit` exports the patch onto the contrib fork. Set `UPLINK_GITHUB_TOKEN` (and optionally `UPLINK_GITHUB_API`) to open the upstream pull request from that branch. Merge detection, in order: recorded GitHub PR → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply.
+`submit` exports the patch onto the contrib fork (git only) and prints JSON for `gh pr create`. `submitted` records the PR URL, commits the queue, and pushes company `uplink/state`. Merge detection, in order: recorded GitHub PR on the queue → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply. `sync` / `resolve` print issue create/close JSON for `gh`; `conflicted` records the issue on the patch.
 
 git-uplink shells out to `git`, but it does **not** use the operator’s commit signer or default SSH key. Bot identity and `commit.gpgsign=false` are process-scoped (`git -c`), so `git uplink init` does not rewrite `user.name` / `commit.gpgsign` in the clone. Your own `git commit` in that repo still follows global signing. Fetch/push/clone over the network need `UPLINK_GITHUB_TOKEN` or `GITHUB_TOKEN` (SSH remotes are rewritten to HTTPS for that invocation) or a dedicated `UPLINK_SSH_KEY` / `UPLINK_SSH_COMMAND`. Local `file://` remotes need neither. Without those, network git fails instead of opening ssh-agent / Touch ID.
 

@@ -37,7 +37,7 @@ jobs:
           main_before=$(git rev-parse HEAD)
 
           set +e
-          git uplink sync
+          sync_json=$(git uplink sync)
           code=$?
           set -e
           if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
@@ -56,9 +56,8 @@ jobs:
             exit 0
           fi
 
-          conflict_id=$(jq -r '.patches[] | select(.status=="conflict") | .id' .uplink/queue.json | head -n 1)
-          conflict_branch=$(jq -r '.patches[] | select(.status=="conflict") | .conflict.branch' .uplink/queue.json | head -n 1)
-          conflict_onto=$(jq -r '.patches[] | select(.status=="conflict") | .conflict.onto // empty' .uplink/queue.json | head -n 1)
+          conflict_id=$(jq -r '.conflict.id // empty' <<<"$sync_json")
+          conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$sync_json")
           if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
             echo "sync exited 2 but no conflict patch was recorded"
             exit 2
@@ -67,27 +66,14 @@ jobs:
             git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
           fi
 
-          title="Uplink conflict: ${conflict_id}"
-          existing=$(gh issue list --state open --json number,title --jq ".[] | select(.title==\"${title}\") | .number" | head -n 1)
+          title=$(jq -r '.gh.issueCreate.title' <<<"$sync_json")
+          body_file=$(jq -r '.gh.issueCreate.bodyFile' <<<"$sync_json")
+          existing=$(gh issue list --state open --json url,title --jq ".[] | select(.title==\"${title}\") | .url" | head -n 1)
           if [ -z "$existing" ]; then
             gh label create uplink:conflict --description "Uplink sync conflict; checkout the conflict branch, do not open a PR" --color B60205 || true
-            compare=""
-            if [ -n "$conflict_onto" ] && [ "$conflict_onto" != "null" ]; then
-              compare="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${conflict_onto}...${conflict_branch}"
-            fi
-            body=$(cat <<EOF
-          Company \`main\` is bot-owned. **Do not open or merge a pull request** for this conflict.
-
-          Sync stopped on \`${conflict_id}\`. Checkout \`${conflict_branch}\`, remove the conflict markers, and push. Then run \`git uplink resolve ${conflict_id}\` (or let **Uplink resolve** run on that push).
-
-          Remaining patches wait until this id is resolved.
-          EOF
-          )
-            if [ -n "$compare" ]; then
-              body="${body}
-
-          Compare the failed apply (not frozen main): ${compare}"
-            fi
-            gh issue create --title "$title" --label uplink:conflict --body "$body"
+            url=$(gh issue create --title "$title" --label uplink:conflict --body-file "$body_file")
+          else
+            url="$existing"
           fi
+          git uplink conflicted "$conflict_id" --issue-url "$url"
           exit 2

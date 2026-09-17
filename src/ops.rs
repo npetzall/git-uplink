@@ -501,9 +501,34 @@ pub fn record_pull_request(
     number: u64,
     url: &str,
     branch: &str,
+    push_remote: Option<&str>,
 ) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
+        let state_branch = queue.config.state_branch.clone();
+        let patch = get_patch(&queue, id)?.clone();
+        if let Some(existing) = patch.upstream.as_ref() {
+            if existing.pr_number == Some(number)
+                && existing.pr_url.as_deref() == Some(url)
+                && patch.status == "submitted"
+            {
+                if let Some(remote) = push_remote {
+                    push_state_branch(repo, remote, &state_branch)?;
+                }
+                return Ok(patch);
+            }
+            if existing.pr_number.is_some()
+                && (existing.pr_number != Some(number) || existing.pr_url.as_deref() != Some(url))
+            {
+                let recorded = existing
+                    .pr_url
+                    .clone()
+                    .unwrap_or_else(|| format!("#{}", existing.pr_number.unwrap()));
+                return Err(Error::msg(format!(
+                    "{id} is already submitted as {recorded}; will not retarget to {url}"
+                )));
+            }
+        }
         {
             let patch = get_patch_mut(&mut queue, id)?;
             patch.status = "submitted".into();
@@ -517,6 +542,61 @@ pub fn record_pull_request(
         }
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: submit {id} as PR {number}"))?;
+        if let Some(remote) = push_remote {
+            push_state_branch(repo, remote, &state_branch)?;
+        }
+        Ok(get_patch(&queue, id)?.clone())
+    })
+}
+
+pub fn record_conflict_issue(
+    repo: &Path,
+    id: &str,
+    number: u64,
+    url: &str,
+    push_remote: Option<&str>,
+) -> Result<Patch> {
+    with_queue_lock(repo, || {
+        let mut queue = read_queue_file(repo)?;
+        let state_branch = queue.config.state_branch.clone();
+        let patch = get_patch(&queue, id)?.clone();
+        if patch.status != "conflict" {
+            return Err(Error::msg(format!("{id} is not in conflict")));
+        }
+        let Some(conflict) = patch.conflict.clone() else {
+            return Err(Error::msg(format!("{id} has no conflict record")));
+        };
+        if conflict.issue_number == Some(number) && conflict.issue_url.as_deref() == Some(url) {
+            if let Some(remote) = push_remote {
+                push_state_branch(repo, remote, &state_branch)?;
+            }
+            return Ok(patch);
+        }
+        if conflict.issue_number.is_some()
+            && (conflict.issue_number != Some(number) || conflict.issue_url.as_deref() != Some(url))
+        {
+            let recorded = conflict
+                .issue_url
+                .unwrap_or_else(|| format!("#{}", conflict.issue_number.unwrap()));
+            return Err(Error::msg(format!(
+                "{id} already has conflict issue {recorded}; will not retarget to {url}"
+            )));
+        }
+        {
+            let patch = get_patch_mut(&mut queue, id)?;
+            let conflict = patch
+                .conflict
+                .as_mut()
+                .ok_or_else(|| Error::msg(format!("{id} has no conflict record")))?;
+            conflict.issue_number = Some(number);
+            conflict.issue_url = Some(url.into());
+            add_event(patch, "conflict-issue", format!("Conflict issue {url}"));
+        }
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, &format!("uplink: conflict issue {id} #{number}"))?;
+        if let Some(remote) = push_remote {
+            push_state_branch(repo, remote, &queue.config.state_branch)?;
+        }
         Ok(get_patch(&queue, id)?.clone())
     })
 }
@@ -661,6 +741,8 @@ fn persist_apply_conflict(
             files: files.clone(),
             message: message.clone(),
             onto: Some(onto),
+            issue_number: None,
+            issue_url: None,
         });
         add_event(
             current,
@@ -977,7 +1059,7 @@ pub struct SubmitResult {
     pub sha: String,
 }
 
-pub fn submit_patch(repo: &Path, id: &str, pr: Option<(u64, String)>) -> Result<SubmitResult> {
+pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
     with_queue_lock(repo, || {
         ensure_upstream_ref(repo)?;
         let queue = read_queue_file(repo)?;
@@ -1084,39 +1166,8 @@ pub fn submit_patch(repo: &Path, id: &str, pr: Option<(u64, String)>) -> Result<
             )?;
         }
 
-        let mut latest = read_queue_file(repo)?;
-        {
-            let current = get_patch_mut(&mut latest, id)?;
-            let existing = current.upstream.clone();
-            current.status = "submitted".into();
-            current.upstream = Some(PatchUpstream {
-                contrib_branch: branch.clone(),
-                pr_number: pr
-                    .as_ref()
-                    .map(|p| p.0)
-                    .or_else(|| existing.as_ref().and_then(|u| u.pr_number)),
-                pr_url: pr
-                    .as_ref()
-                    .map(|p| p.1.clone())
-                    .or_else(|| existing.as_ref().and_then(|u| u.pr_url.clone())),
-                submitted_at: Some(stamp()),
-            });
-            add_event(
-                current,
-                "submitted",
-                if let Some((_, url)) = &pr {
-                    format!("Pushed {branch} and opened {url}")
-                } else if existing.as_ref().and_then(|u| u.pr_number).is_some() {
-                    format!("Updated {branch} on the contribution fork")
-                } else {
-                    format!("Pushed {branch} to the contribution fork")
-                },
-            );
-        }
-        write_queue_file(repo, &latest)?;
-        commit_queue(repo, &format!("uplink: submit {id}"))?;
         Ok(SubmitResult {
-            queue: latest,
+            queue: read_queue_file(repo)?,
             branch,
             sha,
         })

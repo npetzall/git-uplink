@@ -222,7 +222,7 @@ export function PlaybookPage() {
           </p>
           <p>
             Failure blocks import, does not push the contribution fork, and does not open an
-            upstream PR. The internal PR is commented with suggested{" "}
+            upstream PR. The workflow comments the internal PR with suggested{" "}
             <code>Uplink-Depends-On</code> lines. Copy{" "}
             <code>templates/emu-workflows/uplink-preflight.yml</code> and make it a required check.
             Set Actions variable <code>UPLINK_PREFLIGHT</code> to the command that must pass for a
@@ -280,8 +280,8 @@ export function PlaybookPage() {
           </p>
           <ol>
             <li>
-              GitHub API: the recorded pull request is merged. Authoritative even if upstream edited
-              the diff.
+              Recorded pull request: <code>git uplink merged --via pr</code> after the workflow
+              sees the upstream PR is merged. Authoritative even if upstream edited the diff.
             </li>
             <li>
               Trailer: <code>git log --grep=&apos;Uplink-Patch-Id: upl_…&apos;</code> on

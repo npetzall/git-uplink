@@ -16,14 +16,12 @@ pub mod webui;
 
 pub use error::{ConflictError, Error, PreflightError, PrepareError, Result};
 pub use git::{GitError, GitOpts, GitResult, configure_repo, git, git_ok};
-pub use github::{
-    GithubConfig, GithubPr, comment_on_issue, create_upstream_pull_request, get_pull_request,
-    parse_github_repo,
-};
+pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use ops::{
     AddPatchOpts, QueueCounts, StatusSnapshot, SubmitResult, add_patch, approve_patch,
-    approve_patch_at, drop_patch, init_repo, mark_merged, read_queue, rebuild, record_pull_request,
-    resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync, write_queue,
+    approve_patch_at, drop_patch, init_repo, mark_merged, read_queue, rebuild,
+    record_conflict_issue, record_pull_request, resolve_conflict, status_snapshot, submit_patch,
+    summarize_queue, sync, write_queue,
 };
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,

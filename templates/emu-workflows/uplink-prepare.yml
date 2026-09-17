@@ -39,7 +39,7 @@ jobs:
 
       - name: Prepare contribution
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
           UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
           UPLINK_EXPORT_AUTHOR: ${{ vars.UPLINK_EXPORT_AUTHOR }}
@@ -57,10 +57,14 @@ jobs:
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
+          set +e
           git uplink prepare \
             --title "$TITLE" \
             --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" \
             --head "$HEAD_SHA" \
-            --pr "$PR_NUMBER" \
-            $extra
+            $extra > /tmp/uplink-prepare.md
+          code=$?
+          set -e
+          gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-prepare.md
+          exit "$code"

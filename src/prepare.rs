@@ -357,8 +357,8 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 ## What happens when you approve the oss environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
-3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the oss environment.\n\
-4. No public PR is opened unless export preflight still passes.\n",
+3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the oss environment (git push to the contrib fork).\n\
+4. The workflow runs `gh pr create` and `git uplink submitted`. No public PR is opened unless export preflight still passes.\n",
         id = patch.id,
         env = OSS_ENVIRONMENT,
         title = patch.title,
@@ -432,8 +432,8 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 ## What happens when you approve the oss environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
-3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the oss environment.\n\
-4. Submit force-pushes `uplink/{id}` so the existing public PR is updated. No second PR is opened.\n\n\
+3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the oss environment (git push to the contrib fork).\n\
+4. The workflow runs `gh pr create` (or reuses the recorded PR) and `git uplink submitted`. No second PR is opened.\n\n\
 {history}",
         id = patch.id,
         title = patch.title,

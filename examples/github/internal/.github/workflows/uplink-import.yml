@@ -50,6 +50,7 @@ jobs:
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
         run: |
           extra=""
@@ -58,6 +59,15 @@ jobs:
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
+          set +e
           git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" --head "$HEAD_SHA" \
-            --pr "$PR_NUMBER" --pr-url "$PR_URL" --push $extra
+            --pr "$PR_NUMBER" --pr-url "$PR_URL" --push $extra > /tmp/uplink-add.out
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            if [ -s /tmp/uplink-add.out ]; then
+              gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-add.out
+            fi
+            exit "$code"
+          fi

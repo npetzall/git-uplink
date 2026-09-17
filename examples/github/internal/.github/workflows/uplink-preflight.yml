@@ -41,7 +41,7 @@ jobs:
 
       - name: Export preflight
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
@@ -53,9 +53,15 @@ jobs:
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
+          set +e
           git uplink preflight \
             --title "$TITLE" \
             --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" \
-            --head "$HEAD_SHA" \
-            --pr "$PR_NUMBER"
+            --head "$HEAD_SHA" > /tmp/uplink-preflight.md
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-preflight.md
+            exit "$code"
+          fi

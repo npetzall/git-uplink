@@ -8,8 +8,9 @@ use git_uplink::{
     IncomingPreflight, MergeVia, QueueConfig, STATE_BRANCH, add_patch, approve_patch,
     configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
     format_contribution_packet, git, git_ok, init_repo, mark_merged, parse_depends_on,
-    preflight_incoming_change, rebuild, report_paths, resolve_conflict, status_snapshot,
-    strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
+    preflight_incoming_change, rebuild, record_conflict_issue, record_pull_request, report_paths,
+    resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
+    write_queue,
 };
 use tempfile::TempDir;
 
@@ -719,10 +720,14 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert_eq!(first.approvals[0].kind, "initial");
     let still = approve_patch(company, &ttl_patch.id).unwrap();
     assert_eq!(still.approvals.len(), 1);
-    let submitted = submit_patch(
+    let submitted = submit_patch(company, &ttl_patch.id).unwrap();
+    record_pull_request(
         company,
         &ttl_patch.id,
-        Some((99, "https://github.com/upstream/tokenkit/pull/99".into())),
+        99,
+        "https://github.com/upstream/tokenkit/pull/99",
+        &submitted.branch,
+        None,
     )
     .unwrap();
     let noop = approve_patch(company, &ttl_patch.id).unwrap();
@@ -775,7 +780,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     let fork_after_resolve =
         git_ok(company, &["rev-parse", &format!("uplink/{}", ttl_patch.id)]).unwrap();
     assert_eq!(fork_after_resolve, submitted.sha);
-    let err = submit_patch(company, &ttl_patch.id, None).unwrap_err();
+    let err = submit_patch(company, &ttl_patch.id).unwrap_err();
     assert!(err.to_string().contains("must be approved"), "{}", err);
 
     let packet = format_contribution_packet(company, amended).unwrap();
@@ -796,13 +801,16 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert_eq!(second.approvals[1].kind, "delta");
     assert_ne!(second.approvals[0].sha, second.approvals[1].sha);
 
-    let resubmitted = submit_patch(company, &ttl_patch.id, None).unwrap();
-    let recorded = resubmitted
-        .queue
-        .patches
-        .iter()
-        .find(|p| p.id == ttl_patch.id)
-        .unwrap();
+    let resubmitted = submit_patch(company, &ttl_patch.id).unwrap();
+    let recorded = record_pull_request(
+        company,
+        &ttl_patch.id,
+        99,
+        "https://github.com/upstream/tokenkit/pull/99",
+        &resubmitted.branch,
+        None,
+    )
+    .unwrap();
     assert_eq!(recorded.status, "submitted");
     assert_eq!(recorded.upstream.as_ref().unwrap().pr_number, Some(99));
     assert_eq!(
@@ -1063,10 +1071,14 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
     let err = approve_patch(company, &internal.id).unwrap_err();
     assert!(err.to_string().contains("internal-only"));
     approve_patch(company, &hash_patch.id).unwrap();
-    let submitted = submit_patch(
+    let submitted = submit_patch(company, &hash_patch.id).unwrap();
+    record_pull_request(
         company,
         &hash_patch.id,
-        Some((42, "https://github.com/upstream/tokenkit/pull/42".into())),
+        42,
+        "https://github.com/upstream/tokenkit/pull/42",
+        &submitted.branch,
+        None,
     )
     .unwrap();
     assert_eq!(submitted.branch, format!("uplink/{}", hash_patch.id));
@@ -1165,7 +1177,7 @@ fn imports_as_queued_not_contribution_approved() {
     )
     .unwrap();
     assert_eq!(patch.status, "queued");
-    let err = submit_patch(company, &patch.id, None).unwrap_err();
+    let err = submit_patch(company, &patch.id).unwrap_err();
     assert!(err.to_string().contains("must be approved"));
     let again = add_patch(
         company,
@@ -1820,7 +1832,7 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     let mut queue = git_uplink::read_queue(company).unwrap();
     queue.config.preflight_command = Some("exit 1".into());
     write_queue(company, &queue).unwrap();
-    let err = submit_patch(company, &hash_patch.id, None);
+    let err = submit_patch(company, &hash_patch.id);
     assert!(matches!(err, Err(Error::Preflight(_))));
 
     let snapshot = status_snapshot(company).unwrap();
@@ -1884,7 +1896,7 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     assert!(!stored.contains("Visible while writing"));
 
     approve_patch(company, &patch.id).unwrap();
-    let submitted = submit_patch(company, &patch.id, None).unwrap();
+    let submitted = submit_patch(company, &patch.id).unwrap();
     let author = git_ok(
         company,
         &["log", "-1", "--format=%an <%ae>", &submitted.branch],
@@ -2090,6 +2102,135 @@ fn conflict_error_is_an_error() {
 }
 
 #[test]
+fn submit_does_not_commit_queue_until_submitted() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    approve_patch(company, &patch.id).unwrap();
+    let exported = submit_patch(company, &patch.id).unwrap();
+    let after_submit = status_snapshot(company).unwrap();
+    assert_eq!(after_submit.queue.patches[0].status, "approved");
+    assert!(
+        after_submit.queue.patches[0]
+            .upstream
+            .as_ref()
+            .and_then(|u| u.pr_number)
+            .is_none()
+    );
+
+    let url = "https://github.com/upstream/tokenkit/pull/7";
+    let recorded = record_pull_request(company, &patch.id, 7, url, &exported.branch, None).unwrap();
+    assert_eq!(recorded.status, "submitted");
+    assert_eq!(recorded.upstream.as_ref().unwrap().pr_number, Some(7));
+    assert_eq!(
+        recorded.upstream.as_ref().unwrap().pr_url.as_deref(),
+        Some(url)
+    );
+
+    let again = record_pull_request(company, &patch.id, 7, url, &exported.branch, None).unwrap();
+    assert_eq!(again.status, "submitted");
+    let submitted_events = again
+        .events
+        .iter()
+        .filter(|e| e.kind == "submitted")
+        .count();
+    assert_eq!(submitted_events, 1);
+
+    let err = record_pull_request(
+        company,
+        &patch.id,
+        8,
+        "https://github.com/upstream/tokenkit/pull/8",
+        &exported.branch,
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("will not retarget"), "{err}");
+}
+
+#[test]
+fn conflicted_records_the_issue_on_the_patch() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl_patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(upstream, "shorten default ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let queued = sync(company).unwrap();
+    let conflicted = queued
+        .patches
+        .iter()
+        .find(|p| p.id == ttl_patch.id)
+        .unwrap();
+    assert_eq!(conflicted.status, "conflict");
+
+    let url = "https://github.com/acme/product/issues/12";
+    let recorded = record_conflict_issue(company, &ttl_patch.id, 12, url, None).unwrap();
+    assert_eq!(recorded.conflict.as_ref().unwrap().issue_number, Some(12));
+    assert_eq!(
+        recorded.conflict.as_ref().unwrap().issue_url.as_deref(),
+        Some(url)
+    );
+    let again = record_conflict_issue(company, &ttl_patch.id, 12, url, None).unwrap();
+    assert_eq!(again.conflict.as_ref().unwrap().issue_number, Some(12));
+    let err = record_conflict_issue(
+        company,
+        &ttl_patch.id,
+        13,
+        "https://github.com/acme/product/issues/13",
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("will not retarget"), "{err}");
+}
+
+#[test]
 fn git_uplink_binary_is_named_for_git_subcommand() {
     let status = Command::new("cargo")
         .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -2108,5 +2249,13 @@ fn git_uplink_help_includes_web_ui() {
     assert!(
         text.contains("web-ui"),
         "expected web-ui subcommand in help, got:\n{text}"
+    );
+    assert!(
+        text.contains("submitted"),
+        "expected submitted subcommand in help, got:\n{text}"
+    );
+    assert!(
+        text.contains("conflicted"),
+        "expected conflicted subcommand in help, got:\n{text}"
     );
 }

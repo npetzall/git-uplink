@@ -4,7 +4,7 @@ This is how developers use Uplink day to day. Company `main` is bot-owned. You o
 
 Read this alongside `.uplink/queue.json` (on `uplink/state`) and `git uplink status`. The binary is `git-uplink` (a Git subcommand). Durable queue history lives on the orphan branch `uplink/state`. Company `main` is product-only: public upstream plus every patch that is not merged or dropped. Sync force-updates `main` only when upstream moved (or a drop/resolve requires a replay).
 
-Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. Copy `templates/github/pull_request_template.md` to `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network commands (`add --push`, `sync`, `submit`) use `UPLINK_GITHUB_TOKEN` / `GITHUB_TOKEN` or `UPLINK_SSH_KEY`, not your default SSH key.
+Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. Copy `templates/github/pull_request_template.md` to `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`add --push`, `sync`, `submit`) uses `UPLINK_GITHUB_TOKEN` / `GITHUB_TOKEN` or `UPLINK_SSH_KEY`, not your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `conflicted` record the result.
 
 | Phase | What you do | Result |
 | --- | --- | --- |
@@ -192,7 +192,7 @@ Export is the part that hurts:
 
 - `git uplink submit upl_ben` **refuses** while `upl_asha` is an unmerged, unsubmitted upstream-bound dependency (`Submit upl_asha before upl_ben`).
 - If Ben omits `dependsOn`, **import already refuses** when his diff does not apply on public `main` alone, or when `UPLINK_PREFLIGHT` fails on that export tree. He is not queued on company `main` until he records `Uplink-Depends-On: upl_asha` (or rewrites the change so it stands on public `main`). That is the guard: company `main` is not allowed to become the silent base of a later incomplete upstream PR.
-- Submit runs the same preflight again. If it fails, Ben stays `approved`, the contrib fork is not pushed, and no public PR is opened. The internal PR is commented.
+- Submit runs the same preflight again. If it fails, Ben stays `approved`, the contrib fork is not pushed, and no public PR is opened. The workflow comments the internal PR.
 - If Asha is reclassified `internal-only`, an upstream-bound Ben **cannot** depend on her. The engine rejects that at add time. Ben must be rewritten so it applies on public `main`, or Ben becomes internal-only too, or Asha must stay an upstream-bound patch that will eventually be submitted.
 
 So: Asha never merging is fine for the **internal product**. It blocks **Ben’s contribution** until Asha is submitted or Ben is rewritten not to need her.

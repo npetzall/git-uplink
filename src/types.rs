@@ -139,6 +139,14 @@ pub struct PatchConflict {
     /// Prefix commit the conflict branch was cut from (upstream + earlier patches).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onto: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "issueNumber"
+    )]
+    pub issue_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "issueUrl")]
+    pub issue_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

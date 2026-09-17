@@ -61,15 +61,30 @@ jobs:
           private-key: ${{ secrets.UPLINK_APP_PRIVATE_KEY }}
           owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
           repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
-      - name: Record approval, approve, and submit
+      - name: Record approval, export, and record the public PR
         env:
           UPLINK_GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_OSS_ENVIRONMENT: oss
         run: |
           git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
           git uplink approve ${{ inputs.patch_id }}
-          git uplink submit ${{ inputs.patch_id }}
-          git push origin uplink/state
+          submit_json=$(git uplink submit ${{ inputs.patch_id }})
           git push origin "uplink/${{ inputs.patch_id }}" --force
+
+          repo=$(jq -r '.gh.prCreate.repo // empty' <<<"$submit_json")
+          head=$(jq -r '.gh.prCreate.head // empty' <<<"$submit_json")
+          url=$(jq -r '.existingPr.url // empty' <<<"$submit_json")
+          if [ -z "$url" ] && [ -n "$repo" ] && [ -n "$head" ]; then
+            url=$(gh pr list -R "$repo" --head "$head" --state open --json url --jq '.[0].url')
+          fi
+          if [ -z "$url" ]; then
+            url=$(gh pr create -R "$repo" \
+              --head "$head" \
+              --base "$(jq -r .gh.prCreate.base <<<"$submit_json")" \
+              --title "$(jq -r .gh.prCreate.title <<<"$submit_json")" \
+              --body-file "$(jq -r .gh.prCreate.bodyFile <<<"$submit_json")")
+          fi
+          env -u UPLINK_GITHUB_TOKEN git uplink submitted ${{ inputs.patch_id }} --pr-url "$url"
