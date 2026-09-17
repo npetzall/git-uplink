@@ -5,9 +5,9 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts,
-    IncomingPreflight, MergeVia, QueueConfig, STATE_BRANCH, add_patch, approve_patch,
-    configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, git, git_ok, init_repo, mark_merged, parse_depends_on,
+    IncomingPreflight, InitOpts, MergeVia, QueueConfig, QueueState, STATE_BRANCH, add_patch,
+    approve_patch, configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, git, git_ok, init, init_repo, mark_merged, parse_depends_on,
     preflight_incoming_change, rebuild, record_conflict_issue, record_pull_request, report_paths,
     resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
     write_queue,
@@ -91,7 +91,7 @@ struct World {
     company: PathBuf,
 }
 
-fn setup_world() -> World {
+fn setup_uninitialized() -> World {
     let upstream_keep = temp_dir();
     let upstream = upstream_keep.path().to_path_buf();
     git(&upstream, &["init", "-b", "main"], GitOpts::default()).unwrap();
@@ -135,7 +135,6 @@ fn setup_world() -> World {
         GitOpts::default(),
     )
     .unwrap();
-    init_repo(&company, QueueConfig::default()).unwrap();
 
     World {
         _upstream_keep: upstream_keep,
@@ -143,6 +142,23 @@ fn setup_world() -> World {
         upstream,
         company,
     }
+}
+
+fn setup_world() -> World {
+    let world = setup_uninitialized();
+    init_repo(&world.company, QueueConfig::default()).unwrap();
+    world
+}
+
+fn remote_get_url(repo: &Path, name: &str) -> String {
+    git_ok(repo, &["remote", "get-url", name]).unwrap()
+}
+
+fn keep_dir() -> PathBuf {
+    let dir = temp_dir();
+    let path = dir.path().to_path_buf();
+    std::mem::forget(dir);
+    path
 }
 
 fn tree_has_uplink(repo: &Path, git_ref: &str) -> bool {
@@ -195,6 +211,222 @@ fn init_puts_uplink_on_the_orphan_state_branch_not_main() {
     )
     .unwrap();
     assert!(stored.contains("\"version\": 1"));
+}
+
+fn init_with_recorded_urls(world: &World) -> QueueState {
+    init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn publish_origin(company: &Path) -> PathBuf {
+    let origin = keep_dir();
+    git(
+        &origin,
+        &["init", "--bare", "-b", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &[
+            "push",
+            "--quiet",
+            "origin",
+            "main",
+            "uplink/state",
+            "uplink/upstream",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    origin
+}
+
+#[test]
+fn init_records_remote_urls_and_internal_branch() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    assert_eq!(
+        queue.config.upstream_url.as_deref(),
+        Some(world.upstream.to_str().unwrap())
+    );
+    assert_eq!(
+        queue.config.contrib_url.as_deref(),
+        Some(remote_get_url(&world.company, "contrib").as_str())
+    );
+    assert_eq!(queue.config.internal_branch, "main");
+    assert_eq!(
+        remote_get_url(&world.company, "upstream"),
+        world.upstream.to_str().unwrap()
+    );
+    let stored = git_ok(
+        &world.company,
+        &["show", &format!("{STATE_BRANCH}:.uplink/queue.json")],
+    )
+    .unwrap();
+    assert!(stored.contains("\"internalBranch\": \"main\""));
+    assert!(stored.contains("\"upstreamUrl\""));
+    assert!(stored.contains("\"contribUrl\""));
+    assert!(!stored.contains("companyBranch"));
+}
+
+#[test]
+fn init_without_args_hydrates_remotes_from_origin_state() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    let remotes = git_ok(&clone, &["remote"]).unwrap();
+    assert!(!remotes.split('\n').any(|r| r == "upstream"));
+    assert!(!remotes.split('\n').any(|r| r == "contrib"));
+
+    init(&clone, InitOpts::default()).unwrap();
+    assert_eq!(
+        remote_get_url(&clone, "upstream"),
+        world.upstream.to_str().unwrap()
+    );
+    assert_eq!(
+        remote_get_url(&clone, "contrib"),
+        remote_get_url(&world.company, "contrib")
+    );
+    assert!(has_git_ref(&clone, "uplink/upstream"));
+    assert!(clone.join(".uplink/queue.json").is_file());
+}
+
+#[test]
+fn init_without_args_fails_when_state_is_missing() {
+    let keep = temp_dir();
+    let repo = keep.path();
+    git(repo, &["init", "-b", "main"], GitOpts::default()).unwrap();
+    let missing_origin = init(repo, InitOpts::default()).unwrap_err().to_string();
+    assert!(
+        missing_origin.contains("origin remote is missing"),
+        "{missing_origin}"
+    );
+
+    let origin = keep_dir();
+    git(
+        &origin,
+        &["init", "--bare", "-b", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let missing_state = init(repo, InitOpts::default()).unwrap_err().to_string();
+    assert!(missing_state.contains("not initialized"), "{missing_state}");
+}
+
+#[test]
+fn init_with_matching_args_is_a_noop_on_the_queue() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    init_with_recorded_urls(&world);
+    let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn init_rejects_remote_or_branch_renames_on_an_existing_queue() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let err = init(
+        &world.company,
+        InitOpts {
+            upstream_remote_name: Some("public".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("upstreamRemote"), "{err}");
+    assert!(err.contains("stored \"upstream\""), "{err}");
+    assert!(err.contains("requested \"public\""), "{err}");
+
+    let err = init(
+        &world.company,
+        InitOpts {
+            internal_branch: Some("trunk".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("internalBranch"), "{err}");
+}
+
+#[test]
+fn init_updates_recorded_urls_on_an_existing_queue() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let new_upstream = keep_dir();
+    git(
+        &new_upstream,
+        &["init", "--bare", "-b", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let queue = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(new_upstream.to_str().unwrap().into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        queue.config.upstream_url.as_deref(),
+        Some(new_upstream.to_str().unwrap())
+    );
+    assert_eq!(
+        remote_get_url(&world.company, "upstream"),
+        new_upstream.to_str().unwrap()
+    );
+}
+
+#[test]
+fn queue_config_reads_legacy_company_branch_alias() {
+    let raw = r#"{
+      "version": 1,
+      "config": {
+        "upstreamRemote": "upstream",
+        "upstreamBranch": "main",
+        "contribRemote": "contrib",
+        "companyBranch": "release",
+        "trailerKey": "Uplink-Patch-Id"
+      },
+      "patches": []
+    }"#;
+    let queue: QueueState = serde_json::from_str(raw).unwrap();
+    assert_eq!(queue.config.internal_branch, "release");
+    let out = serde_json::to_string(&queue).unwrap();
+    assert!(out.contains("internalBranch"));
+    assert!(!out.contains("companyBranch"));
 }
 
 #[test]

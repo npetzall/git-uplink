@@ -182,13 +182,22 @@ impl Patch {
     }
 }
 
+fn skip_empty_option(value: &Option<String>) -> bool {
+    value.as_ref().is_none_or(|s| s.is_empty())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueConfig {
     pub upstream_remote: String,
     pub upstream_branch: String,
     pub contrib_remote: String,
-    pub company_branch: String,
+    #[serde(alias = "companyBranch")]
+    pub internal_branch: String,
+    #[serde(default, skip_serializing_if = "skip_empty_option")]
+    pub upstream_url: Option<String>,
+    #[serde(default, skip_serializing_if = "skip_empty_option")]
+    pub contrib_url: Option<String>,
     #[serde(default = "default_state_branch")]
     pub state_branch: String,
     pub trailer_key: String,
@@ -212,7 +221,9 @@ impl Default for QueueConfig {
             upstream_remote: "upstream".into(),
             upstream_branch: "main".into(),
             contrib_remote: "contrib".into(),
-            company_branch: "main".into(),
+            internal_branch: "main".into(),
+            upstream_url: None,
+            contrib_url: None,
             state_branch: STATE_BRANCH.into(),
             trailer_key: "Uplink-Patch-Id".into(),
             preflight_command: None,

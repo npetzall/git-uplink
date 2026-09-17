@@ -27,10 +27,8 @@ jobs:
         with:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}
-      - uses: ./.github/actions/add-uplink-remotes
-        with:
-          upstream: ${{ vars.UPLINK_UPSTREAM }}
-          contrib: ${{ vars.UPLINK_CONTRIB }}
+      - name: Configure uplink remotes
+        run: git uplink init
 
       - name: Fetch the candidate change
         run: |

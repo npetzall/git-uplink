@@ -9,6 +9,8 @@ The PR template is the commit message. Title + body become one stored message (H
 
 That repository also needs the `git-uplink` binary on `PATH`. Install this crate on the runner (`cargo install --path vendor/git-uplink` or a release binary).
 
+Jobs start with `git uplink init`, which fetches `origin` `uplink/state` and adds the `upstream` and `contrib` remotes from URLs stored in `.uplink/queue.json`. First-time setup is `git uplink init --upstream <url> --contrib <url>` in the product clone (then push `uplink/state`).
+
 `GITHUB_TOKEN` in these workflows is the **EMU** token and only pushes to the company repo. It cannot open the public pull request.
 
 ## Two gates

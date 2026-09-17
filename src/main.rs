@@ -6,10 +6,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use git_uplink::{
-    AddPatchOpts, ApprovalReceipt, Error, GitOpts, IncomingPreflight, MergeVia, OSS_ENVIRONMENT,
-    PreflightError, QueueConfig, STATE_BRANCH, add_patch, approve_patch_at, commit_queue,
-    drop_patch, format_approval_receipt, format_contribution_packet, format_prepare_markdown, git,
-    git_ok, init_repo, mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
+    AddPatchOpts, ApprovalReceipt, Error, IncomingPreflight, InitOpts, MergeVia, OSS_ENVIRONMENT,
+    PreflightError, STATE_BRANCH, add_patch, approve_patch_at, commit_queue, drop_patch,
+    format_approval_receipt, format_contribution_packet, format_prepare_markdown, git_ok, init,
+    mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, prepare_from_message, read_queue, rebuild,
     record_conflict_issue, record_pull_request, report_paths, resolve_conflict, status_snapshot,
     submit_patch, summarize_queue, sync,
@@ -41,6 +41,14 @@ enum Commands {
         upstream: Option<String>,
         #[arg(long)]
         contrib: Option<String>,
+        #[arg(long = "upstream-remote-name")]
+        upstream_remote_name: Option<String>,
+        #[arg(long = "upstream-branch")]
+        upstream_branch: Option<String>,
+        #[arg(long = "contrib-remote-name")]
+        contrib_remote_name: Option<String>,
+        #[arg(long = "internal-branch")]
+        internal_branch: Option<String>,
     },
     Add {
         #[arg(long)]
@@ -406,8 +414,16 @@ fn submit_artifact(repo: &Path, queue: &QueueState, patch: &Patch, branch: &str,
     });
     let mut gh = serde_json::Map::new();
     if existing.is_none() {
-        let upstream_url = remote_url(repo, &queue.config.upstream_remote);
-        let contrib_url = remote_url(repo, &queue.config.contrib_remote);
+        let upstream_url = queue
+            .config
+            .upstream_url
+            .clone()
+            .or_else(|| remote_url(repo, &queue.config.upstream_remote));
+        let contrib_url = queue
+            .config
+            .contrib_url
+            .clone()
+            .or_else(|| remote_url(repo, &queue.config.contrib_remote));
         if let (Some((uo, ur)), Some((co, _))) = (
             upstream_url.as_deref().and_then(parse_github_repo),
             contrib_url.as_deref().and_then(parse_github_repo),
@@ -440,42 +456,25 @@ fn run() -> Result<(), Error> {
     let cli = Cli::parse();
     let repo = env::current_dir()?;
     match cli.command {
-        Commands::Init { upstream, contrib } => {
-            let mut config = QueueConfig::default();
-            if upstream.is_some() {
-                config.upstream_remote = "upstream".into();
-            }
-            let queue = init_repo(&repo, config)?;
-            if let Some(url) = upstream {
-                let _ = git(
-                    &repo,
-                    &["remote", "remove", "upstream"],
-                    GitOpts {
-                        allow_fail: true,
-                        ..GitOpts::default()
-                    },
-                );
-                git(
-                    &repo,
-                    &["remote", "add", "upstream", &url],
-                    GitOpts::default(),
-                )?;
-            }
-            if let Some(url) = contrib {
-                let _ = git(
-                    &repo,
-                    &["remote", "remove", "contrib"],
-                    GitOpts {
-                        allow_fail: true,
-                        ..GitOpts::default()
-                    },
-                );
-                git(
-                    &repo,
-                    &["remote", "add", "contrib", &url],
-                    GitOpts::default(),
-                )?;
-            }
+        Commands::Init {
+            upstream,
+            contrib,
+            upstream_remote_name,
+            upstream_branch,
+            contrib_remote_name,
+            internal_branch,
+        } => {
+            let queue = init(
+                &repo,
+                InitOpts {
+                    upstream_url: upstream,
+                    contrib_url: contrib,
+                    upstream_remote_name,
+                    upstream_branch,
+                    contrib_remote_name,
+                    internal_branch,
+                },
+            )?;
             println!("{}", serde_json::to_string_pretty(&queue)?);
         }
         Commands::Add {

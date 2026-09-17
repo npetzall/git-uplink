@@ -87,8 +87,6 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   set_var UPLINK_SRC "$UPLINK_SRC"
   set_var UPLINK_REV "$UPLINK_REV"
   set_var UPLINK_SUBMIT_AUTH "$UPLINK_SUBMIT_AUTH"
-  set_var UPLINK_UPSTREAM "$UPSTREAM"
-  set_var UPLINK_CONTRIB "$CONTRIB"
 
   gh api --method PUT "repos/${INTERNAL}/actions/permissions" \
     -F enabled=true -f allowed_actions=all >/dev/null || true

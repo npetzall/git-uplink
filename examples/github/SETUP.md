@@ -97,8 +97,6 @@ If `bootstrap_internal.sh` did not run `gh`, do this in **uplink-example-interna
 | `UPLINK_SRC` | `npetzall/git-uplink` |
 | `UPLINK_REV` | `main` |
 | `UPLINK_SUBMIT_AUTH` | `pat` |
-| `UPLINK_UPSTREAM` | `YOUR_ORG/uplink-example-upstream` |
-| `UPLINK_CONTRIB` | `YOUR_USER/uplink-example-upstream-contrib` |
 
 **Actions:** workflow permissions **Read and write**.
 

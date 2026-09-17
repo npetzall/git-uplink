@@ -15,11 +15,12 @@ use crate::queue::{
     topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
-    apply_patch_file, commit_queue, conflicted_files, copy_dir, ensure_state_worktree,
-    ensure_upstream_ref, fetch_upstream, has_ref, new_patch_id, patch_already_applied_on,
-    push_company_branch, push_state_branch, refresh_company_branch, refresh_state_branch,
-    refresh_upstream_ref, rev_parse, stable_patch_id, stable_patch_id_from_contents, stamp,
-    state_branch, write_product_patch,
+    COMPANY_REMOTE, apply_patch_file, commit_queue, conflicted_files, copy_dir,
+    ensure_configured_remotes, ensure_state_worktree, ensure_upstream_ref, fetch_origin_state,
+    fetch_upstream, has_ref, new_patch_id, patch_already_applied_on, push_company_branch,
+    push_state_branch, refresh_company_branch, refresh_state_branch, refresh_upstream_ref,
+    rev_parse, stable_patch_id, stable_patch_id_from_contents, stamp, state_branch, state_exists,
+    try_fetch_origin_state, write_product_patch,
 };
 use crate::types::{
     LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
@@ -40,6 +41,153 @@ fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct InitOpts {
+    pub upstream_url: Option<String>,
+    pub contrib_url: Option<String>,
+    pub upstream_remote_name: Option<String>,
+    pub upstream_branch: Option<String>,
+    pub contrib_remote_name: Option<String>,
+    pub internal_branch: Option<String>,
+}
+
+impl InitOpts {
+    pub fn has_args(&self) -> bool {
+        self.upstream_url.is_some()
+            || self.contrib_url.is_some()
+            || self.upstream_remote_name.is_some()
+            || self.upstream_branch.is_some()
+            || self.contrib_remote_name.is_some()
+            || self.internal_branch.is_some()
+    }
+}
+
+fn nonempty(value: Option<String>) -> Option<String> {
+    value.filter(|s| !s.is_empty())
+}
+
+fn config_from_opts(opts: &InitOpts) -> QueueConfig {
+    let mut config = QueueConfig::default();
+    if let Some(name) = &opts.upstream_remote_name {
+        config.upstream_remote = name.clone();
+    }
+    if let Some(branch) = &opts.upstream_branch {
+        config.upstream_branch = branch.clone();
+    }
+    if let Some(name) = &opts.contrib_remote_name {
+        config.contrib_remote = name.clone();
+    }
+    if let Some(branch) = &opts.internal_branch {
+        config.internal_branch = branch.clone();
+    }
+    config.upstream_url = nonempty(opts.upstream_url.clone());
+    config.contrib_url = nonempty(opts.contrib_url.clone());
+    config
+}
+
+/// Create or hydrate an uplink queue. No CLI args fetches `origin` `uplink/state`
+/// and reconstitutes remotes from stored URLs. Args create the queue when state
+/// is missing, or sanity-check an existing queue.
+pub fn init(repo: &Path, opts: InitOpts) -> Result<QueueState> {
+    configure_repo(repo)?;
+    if !opts.has_args() {
+        return hydrate_from_origin(repo);
+    }
+    try_fetch_origin_state(repo)?;
+    if state_exists(repo)? {
+        return init_existing(repo, &opts);
+    }
+    init_repo(repo, config_from_opts(&opts))
+}
+
+fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
+    fetch_origin_state(repo)?;
+    let queue = read_queue_file(repo)?;
+    require_stored_urls(&queue.config)?;
+    ensure_configured_remotes(repo, &queue.config)?;
+    refresh_upstream_ref(repo, COMPANY_REMOTE)?;
+    Ok(queue)
+}
+
+fn require_stored_urls(config: &QueueConfig) -> Result<()> {
+    let missing_upstream = config.upstream_url.as_deref().is_none_or(|s| s.is_empty());
+    let missing_contrib = config.contrib_url.as_deref().is_none_or(|s| s.is_empty());
+    if missing_upstream || missing_contrib {
+        return Err(Error::msg(
+            "uplink/state is missing upstreamUrl or contribUrl. \
+Re-run `git uplink init --upstream <url> --contrib <url>` to record remotes.",
+        ));
+    }
+    Ok(())
+}
+
+fn check_name(out: &mut Vec<String>, field: &str, requested: Option<&str>, stored: &str) {
+    if let Some(requested) = requested {
+        if requested != stored {
+            out.push(format!(
+                "  {field}: stored \"{stored}\", requested \"{requested}\""
+            ));
+        }
+    }
+}
+
+fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
+    ensure_state_worktree(repo)?;
+    let mut queue = read_queue_file(repo)?;
+    let mut mismatches = Vec::new();
+    check_name(
+        &mut mismatches,
+        "upstreamRemote",
+        opts.upstream_remote_name.as_deref(),
+        &queue.config.upstream_remote,
+    );
+    check_name(
+        &mut mismatches,
+        "upstreamBranch",
+        opts.upstream_branch.as_deref(),
+        &queue.config.upstream_branch,
+    );
+    check_name(
+        &mut mismatches,
+        "contribRemote",
+        opts.contrib_remote_name.as_deref(),
+        &queue.config.contrib_remote,
+    );
+    check_name(
+        &mut mismatches,
+        "internalBranch",
+        opts.internal_branch.as_deref(),
+        &queue.config.internal_branch,
+    );
+    if !mismatches.is_empty() {
+        return Err(Error::msg(format!(
+            "Cannot change uplink remote or branch names on an existing queue:\n{}",
+            mismatches.join("\n")
+        )));
+    }
+
+    let mut urls_changed = false;
+    if let Some(url) = nonempty(opts.upstream_url.clone()) {
+        if queue.config.upstream_url.as_deref() != Some(url.as_str()) {
+            queue.config.upstream_url = Some(url);
+            urls_changed = true;
+        }
+    }
+    if let Some(url) = nonempty(opts.contrib_url.clone()) {
+        if queue.config.contrib_url.as_deref() != Some(url.as_str()) {
+            queue.config.contrib_url = Some(url);
+            urls_changed = true;
+        }
+    }
+    if urls_changed {
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, "uplink: update remote urls")?;
+    }
+    ensure_configured_remotes(repo, &queue.config)?;
+    refresh_upstream_ref(repo, COMPANY_REMOTE)?;
+    read_queue_file(repo)
+}
+
 pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
     configure_repo(repo)?;
     crate::repo::ensure_uplink_dirs(repo)?;
@@ -47,6 +195,7 @@ pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
     write_queue_file(repo, &queue)?;
     commit_queue(repo, "uplink: initialize patch queue")?;
     ensure_state_worktree(repo)?;
+    ensure_configured_remotes(repo, &queue.config)?;
     let has_head = git(
         repo,
         &["rev-parse", "--verify", "HEAD"],
@@ -104,7 +253,7 @@ pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
         repo,
         opts.from_ref
             .as_deref()
-            .unwrap_or(&queued.config.company_branch),
+            .unwrap_or(&queued.config.internal_branch),
     )?;
 
     with_queue_lock(repo, || {
@@ -146,7 +295,7 @@ fn add_patch_attempt(
 ) -> Result<Patch> {
     if let Some(remote) = refresh_remote {
         let queued = read_queue_file(repo)?;
-        refresh_company_branch(repo, remote, &queued.config.company_branch)?;
+        refresh_company_branch(repo, remote, &queued.config.internal_branch)?;
         refresh_state_branch(repo, remote, &queued.config.state_branch)?;
         refresh_upstream_ref(repo, remote)?;
     }
@@ -154,7 +303,7 @@ fn add_patch_attempt(
     let expected_sha = if let Some(remote) = &opts.push_remote {
         Some(rev_parse(
             repo,
-            &format!("{remote}/{}", queue.config.company_branch),
+            &format!("{remote}/{}", queue.config.internal_branch),
         )?)
     } else {
         None
@@ -170,7 +319,7 @@ fn add_patch_attempt(
             if let (Some(remote), Some(expected)) = (&opts.push_remote, expected_sha.as_ref()) {
                 let latest = read_queue_file(repo)?;
                 push_state_branch(repo, remote, &latest.config.state_branch)?;
-                push_company_branch(repo, remote, &queue.config.company_branch, expected)?;
+                push_company_branch(repo, remote, &queue.config.internal_branch, expected)?;
             }
             return Ok(get_patch(&read_queue_file(repo)?, &id)?.clone());
         }
@@ -179,7 +328,7 @@ fn add_patch_attempt(
     if let (Some(remote), Some(expected)) = (&opts.push_remote, expected_sha) {
         let latest = read_queue_file(repo)?;
         push_state_branch(repo, remote, &latest.config.state_branch)?;
-        push_company_branch(repo, remote, &queue.config.company_branch, &expected)?;
+        push_company_branch(repo, remote, &queue.config.internal_branch, &expected)?;
     }
     Ok(patch)
 }
@@ -303,7 +452,7 @@ fn add_patch_once(
 fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) -> Result<()> {
     ensure_upstream_ref(repo)?;
     let mut queue = read_queue_file(repo)?;
-    let company_branch = queue.config.company_branch.clone();
+    let company_branch = queue.config.internal_branch.clone();
     let patch = get_patch(&queue, id)?.clone();
     let patch_file = repo.join(format!(".uplink/patches/{id}.patch"));
 
@@ -775,7 +924,7 @@ pub fn rebuild(repo: &Path) -> Result<QueueState> {
 
 fn rebuild_once(repo: &Path) -> Result<QueueState> {
     let mut queue = read_queue_file(repo)?;
-    let company_branch = queue.config.company_branch.clone();
+    let company_branch = queue.config.internal_branch.clone();
     ensure_upstream_ref(repo)?;
     let upstream_ref = if has_ref(repo, "uplink/upstream")? {
         "uplink/upstream"
@@ -1119,7 +1268,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
             let files = conflicted_files(repo).unwrap_or_default();
             git(
                 repo,
-                &["checkout", "-f", "--quiet", &queue.config.company_branch],
+                &["checkout", "-f", "--quiet", &queue.config.internal_branch],
                 GitOpts::default(),
             )?;
             let _ = fs::remove_dir_all(&snapshot);
@@ -1132,7 +1281,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
         if applied == "empty" {
             git(
                 repo,
-                &["checkout", "-f", "--quiet", &queue.config.company_branch],
+                &["checkout", "-f", "--quiet", &queue.config.internal_branch],
                 GitOpts::default(),
             )?;
             let _ = fs::remove_dir_all(&snapshot);
@@ -1146,7 +1295,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
         let sha = rev_parse(repo, &branch)?;
         git(
             repo,
-            &["checkout", "-f", "--quiet", &queue.config.company_branch],
+            &["checkout", "-f", "--quiet", &queue.config.internal_branch],
             GitOpts::default(),
         )?;
         let remotes = git_ok(repo, &["remote"]).unwrap_or_default();
@@ -1201,7 +1350,7 @@ pub struct StatusSnapshot {
 
 pub fn status_snapshot(repo: &Path) -> Result<StatusSnapshot> {
     let queue = read_queue_file(repo)?;
-    let company_head = rev_parse(repo, &queue.config.company_branch)?;
+    let company_head = rev_parse(repo, &queue.config.internal_branch)?;
     let upstream_head = if has_ref(repo, "uplink/upstream")? {
         Some(rev_parse(repo, "uplink/upstream")?)
     } else {

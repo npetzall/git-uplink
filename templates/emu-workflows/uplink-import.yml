@@ -26,6 +26,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.base.ref }}
 
+      - name: Configure uplink remotes
+        run: git uplink init
+
       - name: Fetch the reviewed change
         run: |
           git fetch --quiet origin ${{ github.event.pull_request.head.sha }}

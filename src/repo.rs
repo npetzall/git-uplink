@@ -7,10 +7,10 @@ use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::prepare::{company_commit_message, export_commit_message};
 use crate::queue::{now_iso, patch_path};
-use crate::types::{PATCH_DIR, Patch, QUEUE_PATH, QueueState, STATE_BRANCH};
+use crate::types::{PATCH_DIR, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH};
 
 const UPSTREAM_REF: &str = "uplink/upstream";
-const COMPANY_REMOTE: &str = "origin";
+pub(crate) const COMPANY_REMOTE: &str = "origin";
 
 pub fn ensure_uplink_dirs(repo: &Path) -> Result<()> {
     fs::create_dir_all(repo.join(PATCH_DIR))?;
@@ -312,6 +312,93 @@ fn has_remote(repo: &Path, name: &str) -> bool {
         .unwrap_or_default()
         .split('\n')
         .any(|remote| remote == name)
+}
+
+pub fn ensure_remote(repo: &Path, name: &str, url: &str) -> Result<()> {
+    if has_remote(repo, name) {
+        git(repo, &["remote", "set-url", name, url], GitOpts::default())?;
+    } else {
+        git(repo, &["remote", "add", name, url], GitOpts::default())?;
+    }
+    Ok(())
+}
+
+pub fn ensure_configured_remotes(repo: &Path, config: &QueueConfig) -> Result<()> {
+    if let Some(url) = config.upstream_url.as_deref().filter(|u| !u.is_empty()) {
+        ensure_remote(repo, &config.upstream_remote, url)?;
+    }
+    if let Some(url) = config.contrib_url.as_deref().filter(|u| !u.is_empty()) {
+        ensure_remote(repo, &config.contrib_remote, url)?;
+    }
+    Ok(())
+}
+
+fn not_initialized_error() -> Error {
+    Error::msg(
+        "Could not fetch origin uplink/state; this clone is not initialized. \
+Run `git uplink init --upstream <url> --contrib <url>` to create a queue.",
+    )
+}
+
+/// Fetch `uplink/state` from origin into the local branch and restore `.uplink/`.
+pub fn fetch_origin_state(repo: &Path) -> Result<()> {
+    if !has_remote(repo, COMPANY_REMOTE) {
+        return Err(Error::msg(
+            "origin remote is missing; cannot fetch uplink/state. \
+Run `git uplink init --upstream <url> --contrib <url>` to create a queue.",
+        ));
+    }
+    let spec = format!("+refs/heads/{STATE_BRANCH}:refs/heads/{STATE_BRANCH}");
+    let fetched = git(
+        repo,
+        &["fetch", "--quiet", COMPANY_REMOTE, &spec],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    if fetched.code != 0 {
+        return Err(not_initialized_error());
+    }
+    ensure_uplink_excluded(repo)?;
+    restore_state_worktree(repo, STATE_BRANCH)?;
+    if !repo.join(QUEUE_PATH).is_file() {
+        return Err(not_initialized_error());
+    }
+    Ok(())
+}
+
+/// Fetch `uplink/state` from origin when that remote exists. Missing origin or
+/// a missing state branch is not an error (first-time create still needs to run).
+pub fn try_fetch_origin_state(repo: &Path) -> Result<()> {
+    if !has_remote(repo, COMPANY_REMOTE) {
+        return Ok(());
+    }
+    let spec = format!("+refs/heads/{STATE_BRANCH}:refs/heads/{STATE_BRANCH}");
+    let fetched = git(
+        repo,
+        &["fetch", "--quiet", COMPANY_REMOTE, &spec],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    if fetched.code != 0 {
+        return Ok(());
+    }
+    ensure_uplink_excluded(repo)?;
+    restore_state_worktree(repo, STATE_BRANCH)?;
+    Ok(())
+}
+
+pub fn state_exists(repo: &Path) -> Result<bool> {
+    if has_ref(repo, STATE_BRANCH)? {
+        return Ok(true);
+    }
+    if has_ref(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))? {
+        return Ok(true);
+    }
+    Ok(repo.join(QUEUE_PATH).is_file())
 }
 
 /// Materialize local `uplink/upstream` from the company repo (`origin`), never from

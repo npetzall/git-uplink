@@ -386,6 +386,7 @@ export function PlaybookPage() {
           </CardHeader>
           <CardContent>
             <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`git uplink init --upstream https://github.com/org/proj.git --contrib https://github.com/org/proj-company.git
+git uplink init
 git uplink add --title "Use SHA-256 for tokens" --message-file msg.txt
 git uplink add --title "Vendor hook" --internal-only
 git uplink report upl_ab12cd34ef
