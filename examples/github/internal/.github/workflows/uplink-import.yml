@@ -41,16 +41,10 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      - name: Configure uplink remotes
-        env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-        run: git uplink init
-
       - name: Fetch the reviewed change
         run: |
           git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
           git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
-          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
 
       - name: Import as a queued patch
         env:
@@ -65,6 +59,7 @@ jobs:
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: |
+          git uplink init
           extra=""
           if [ "$INTERNAL_ONLY" = "true" ]; then extra="--internal-only"; fi
           {

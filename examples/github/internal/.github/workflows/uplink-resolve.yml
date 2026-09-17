@@ -52,21 +52,15 @@ jobs:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}
 
-      - name: Configure uplink remotes
-        env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-        run: git uplink init
-
       - name: Resolve patch and rebuild main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
         run: |
+          git uplink init
           git fetch origin main
           git branch -f main origin/main
-          git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
-          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
           id="${GITHUB_REF_NAME#uplink/conflict/}"
           if [ -z "$id" ] || [ "$id" = "$GITHUB_REF_NAME" ]; then
             echo "Could not parse patch id from $GITHUB_REF_NAME"

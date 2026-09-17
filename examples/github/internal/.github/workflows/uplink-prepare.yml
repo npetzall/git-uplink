@@ -27,14 +27,10 @@ jobs:
         with:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}
-      - name: Configure uplink remotes
-        run: git uplink init
-
       - name: Fetch the candidate change
         run: |
           git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
           git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
-          git fetch --quiet origin uplink/state:uplink/state || true
 
       - name: Prepare contribution
         env:
@@ -48,6 +44,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          git uplink init
           extra=""
           if echo "${{ join(github.event.pull_request.labels.*.name, ',') }}" | grep -q 'uplink:internal-only'; then
             extra="--internal-only"

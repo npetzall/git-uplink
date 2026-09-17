@@ -42,15 +42,11 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      - name: Configure uplink remotes
-        env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-        run: git uplink init
       - name: Write approver packet
         env:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: |
-          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+          git uplink init
           git uplink report ${{ inputs.patch_id }}
           git push origin uplink/state
 
@@ -94,10 +90,6 @@ jobs:
           owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
           repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
 
-      - name: Configure uplink remotes
-        env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-        run: git uplink init
       - name: Record approval, export, and record the public PR
         env:
           GH_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
@@ -106,7 +98,7 @@ jobs:
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_OSS_ENVIRONMENT: oss
         run: |
-          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+          git uplink init
           git uplink approve ${{ inputs.patch_id }}
           submit_json=$(git uplink submit ${{ inputs.patch_id }})
 

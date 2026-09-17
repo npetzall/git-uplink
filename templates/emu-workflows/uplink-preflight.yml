@@ -31,15 +31,10 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.base.ref }}
 
-      - name: Configure uplink remotes
-        run: git uplink init
-
       - name: Fetch the candidate change
         run: |
           git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
           git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
-          git fetch --quiet origin uplink/upstream:uplink/upstream || true
-          git fetch --quiet origin uplink/state:uplink/state || true
 
       - name: Export preflight
         env:
@@ -51,6 +46,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          git uplink init
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"

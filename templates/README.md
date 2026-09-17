@@ -9,7 +9,7 @@ The PR template is the commit message. Title + body become one stored message (H
 
 That repository also needs the `git-uplink` binary on `PATH`. Install this crate on the runner (`cargo install --path vendor/git-uplink` or a release binary).
 
-Jobs start with `git uplink init`, which fetches `origin` `uplink/state` and adds the `upstream` and `contrib` remotes from URLs stored in `.uplink/queue.json`. First-time setup is `git uplink init --upstream <url> --contrib <url>` in the product clone (then push `uplink/state`).
+Each job’s first `git uplink` command is `git uplink init`, which fetches `origin` `uplink/state` and `uplink/upstream` and adds the `upstream` and `contrib` remotes from URLs stored in `.uplink/queue.json`. First-time setup is `git uplink init --upstream <url> --contrib <url>` in the product clone (then push `uplink/state`).
 
 Sync and resolve mint `UPLINK_INTERNAL_TOKEN` first and pass it to `actions/checkout`, so shell `git fetch` / `git push` of **origin** can include `.github/workflows` (GitHub rejects `GITHUB_TOKEN` for those files). Other jobs still persist `GITHUB_TOKEN` on checkout. `git uplink` blanks the checkout extraheader and authenticates by remote (`UPLINK_INTERNAL_*` for origin, `UPLINK_UPSTREAM_*` for public upstream fetch, `UPLINK_CONTRIB_*` for contrib force-push). `GITHUB_TOKEN` is `GH_TOKEN` for `gh` on the company repo (issues, PR comments, dispatching submit). It cannot open the public pull request. Import/sync/resolve/submit mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write.
 

@@ -51,18 +51,13 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
-      - name: Configure uplink remotes
-        env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-        run: git uplink init
-
       - name: Sync with upstream
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
         run: |
-          git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+          git uplink init
           main_before=$(git rev-parse HEAD)
 
           set +e
