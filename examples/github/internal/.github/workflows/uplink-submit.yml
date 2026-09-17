@@ -89,7 +89,6 @@ jobs:
           git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
           git uplink approve ${{ inputs.patch_id }}
           submit_json=$(git uplink submit ${{ inputs.patch_id }})
-          git push origin "uplink/${{ inputs.patch_id }}" --force
 
           repo=$(jq -r '.gh.prCreate.repo // empty' <<<"$submit_json")
           head=$(jq -r '.gh.prCreate.head // empty' <<<"$submit_json")
