@@ -4,7 +4,7 @@ This is how developers use Uplink day to day. Company `main` is bot-owned. You o
 
 Read this alongside `.uplink/queue.json` (on `uplink/state`) and `git uplink status`. The binary is `git-uplink` (a Git subcommand). Durable queue history lives on the orphan branch `uplink/state`. Company `main` is product-only: public upstream plus every patch that is not merged or dropped. Sync force-updates `main` only when upstream moved (or a drop/resolve requires a replay).
 
-Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. Copy `templates/github/pull_request_template.md` to `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`add --push`, `sync`, `submit`) uses `UPLINK_GITHUB_TOKEN` / `GITHUB_TOKEN` or `UPLINK_SSH_KEY`, not your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `conflicted` record the result.
+Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. Copy `templates/github/pull_request_template.md` to `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`add --push`, `sync`, `submit`) uses per-remote `UPLINK_INTERNAL_*`, `UPLINK_CONTRIB_*`, or `UPLINK_UPSTREAM_*` KEY or TOKEN (KEY wins; keys must be passwordless), not `GITHUB_TOKEN` or your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `conflicted` record the result.
 
 | Phase | What you do | Result |
 | --- | --- | --- |
@@ -242,7 +242,7 @@ git commit -m "Resolve upl_asha onto the new upstream"
 git push origin uplink/conflict/upl_asha
 ```
 
-On GHEC, pushing that branch runs **Uplink resolve** (`uplink-resolve.yml`), which skips the Actions bot that published the conflict. Locally (or if the workflow is not installed), stay on the conflict branch:
+On GHEC, pushing that branch runs **Uplink resolve** (`uplink-resolve.yml`), which skips `Uplink Bot`-authored conflict publishes (and `github-actions[bot]`). Locally (or if the workflow is not installed), stay on the conflict branch:
 
 ```bash
 git uplink resolve upl_asha

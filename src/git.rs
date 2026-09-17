@@ -89,7 +89,7 @@ pub struct GitOpts<'a> {
     pub extra_env: Vec<(String, String)>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Transport {
     remote_url: Option<String>,
     extra_header: Option<String>,
@@ -287,7 +287,143 @@ fn resolve_remote_url(cwd: &Path, spec: &str, opts: &GitOpts<'_>) -> Result<Stri
     }
 }
 
-const NETWORK_AUTH_HELP: &str = "Network git needs UPLINK_GITHUB_TOKEN or GITHUB_TOKEN (HTTPS), or UPLINK_SSH_KEY / UPLINK_SSH_COMMAND. git-uplink does not use the operator SSH agent or commit signing key.";
+const NETWORK_AUTH_HELP: &str = "Network git needs UPLINK_INTERNAL_KEY or UPLINK_INTERNAL_TOKEN (origin), UPLINK_CONTRIB_KEY or UPLINK_CONTRIB_TOKEN (contrib), or UPLINK_UPSTREAM_KEY or UPLINK_UPSTREAM_TOKEN (upstream). Keys must be passwordless. git-uplink does not use the operator SSH agent, GITHUB_TOKEN, or a commit signing key.";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthRole {
+    Internal,
+    Contrib,
+    Upstream,
+}
+
+impl AuthRole {
+    fn key_env(self) -> &'static str {
+        match self {
+            Self::Internal => "UPLINK_INTERNAL_KEY",
+            Self::Contrib => "UPLINK_CONTRIB_KEY",
+            Self::Upstream => "UPLINK_UPSTREAM_KEY",
+        }
+    }
+
+    fn token_env(self) -> &'static str {
+        match self {
+            Self::Internal => "UPLINK_INTERNAL_TOKEN",
+            Self::Contrib => "UPLINK_CONTRIB_TOKEN",
+            Self::Upstream => "UPLINK_UPSTREAM_TOKEN",
+        }
+    }
+
+    fn remote_label(self) -> &'static str {
+        match self {
+            Self::Internal => "origin",
+            Self::Contrib => "contrib",
+            Self::Upstream => "upstream",
+        }
+    }
+
+    fn help(self) -> String {
+        format!(
+            "Network git to {} needs {} or {}. Keys must be passwordless. git-uplink does not use the operator SSH agent, GITHUB_TOKEN, or a commit signing key.",
+            self.remote_label(),
+            self.key_env(),
+            self.token_env()
+        )
+    }
+}
+
+fn normalize_remote_url(url: &str) -> String {
+    let url = ssh_to_https(url).unwrap_or_else(|| url.trim().to_string());
+    url.trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_ascii_lowercase()
+}
+
+fn urls_match(a: &str, b: &str) -> bool {
+    normalize_remote_url(a) == normalize_remote_url(b)
+}
+
+fn remote_get_url(cwd: &Path, name: &str, opts: &GitOpts<'_>) -> Option<String> {
+    let looked_up = git_inner(
+        cwd,
+        &["remote", "get-url", name],
+        GitOpts {
+            allow_fail: true,
+            extra_env: opts.extra_env.clone(),
+            ..GitOpts::default()
+        },
+        false,
+    )
+    .ok()?;
+    if looked_up.code == 0 && !looked_up.stdout.is_empty() {
+        Some(looked_up.stdout)
+    } else {
+        None
+    }
+}
+
+fn named_auth_role(spec: &str) -> Option<AuthRole> {
+    match spec {
+        "origin" => Some(AuthRole::Internal),
+        "contrib" => Some(AuthRole::Contrib),
+        "upstream" => Some(AuthRole::Upstream),
+        _ => None,
+    }
+}
+
+fn auth_role_for(cwd: &Path, spec: &str, url: &str, opts: &GitOpts<'_>) -> Result<AuthRole> {
+    if let Some(role) = named_auth_role(spec) {
+        return Ok(role);
+    }
+    for (name, role) in [
+        ("origin", AuthRole::Internal),
+        ("upstream", AuthRole::Upstream),
+        ("contrib", AuthRole::Contrib),
+    ] {
+        if let Some(remote_url) = remote_get_url(cwd, name, opts) {
+            if urls_match(&remote_url, url) {
+                return Ok(role);
+            }
+        }
+    }
+    if !is_explicit_url(spec)
+        && !spec.starts_with('/')
+        && !spec.starts_with('.')
+        && spec != "origin"
+        && spec != "upstream"
+        && remote_get_url(cwd, spec, opts).is_some()
+    {
+        return Ok(AuthRole::Contrib);
+    }
+    Err(Error::msg(NETWORK_AUTH_HELP))
+}
+
+fn ssh_command_for_key(key: &str) -> String {
+    format!(
+        "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i {}",
+        shell_quote(key)
+    )
+}
+
+fn transport_from_role(url: &str, role: AuthRole, opts: &GitOpts<'_>) -> Result<Transport> {
+    if let Some(key) = env_lookup(opts, role.key_env()) {
+        return Ok(Transport {
+            ssh_command: Some(ssh_command_for_key(&key)),
+            isolate_gitconfig: true,
+            ..Transport::default()
+        });
+    }
+    if let Some(token) = env_lookup(opts, role.token_env()) {
+        let remote_url = ssh_to_https(url).unwrap_or_else(|| url.to_string());
+        return Ok(Transport {
+            http_origin: http_origin(&remote_url),
+            remote_url: Some(remote_url),
+            extra_header: Some(git_http_extra_header(&token)),
+            ssh_command: None,
+            isolate_gitconfig: true,
+        });
+    }
+    Err(Error::msg(role.help()))
+}
 
 fn transport_for(cwd: &Path, args: &[&str], opts: &GitOpts<'_>) -> Result<Transport> {
     let Some(index) = network_remote_index(args) else {
@@ -298,40 +434,8 @@ fn transport_for(cwd: &Path, args: &[&str], opts: &GitOpts<'_>) -> Result<Transp
     if is_local_transport(&url) {
         return Ok(Transport::default());
     }
-
-    if let Some(token) =
-        env_lookup(opts, "UPLINK_GITHUB_TOKEN").or_else(|| env_lookup(opts, "GITHUB_TOKEN"))
-    {
-        let remote_url = ssh_to_https(&url).unwrap_or_else(|| url.clone());
-        return Ok(Transport {
-            http_origin: http_origin(&remote_url),
-            remote_url: Some(remote_url),
-            extra_header: Some(git_http_extra_header(&token)),
-            ssh_command: None,
-            isolate_gitconfig: true,
-        });
-    }
-
-    if let Some(command) = env_lookup(opts, "UPLINK_SSH_COMMAND") {
-        return Ok(Transport {
-            ssh_command: Some(command),
-            isolate_gitconfig: true,
-            ..Transport::default()
-        });
-    }
-
-    if let Some(key) = env_lookup(opts, "UPLINK_SSH_KEY") {
-        return Ok(Transport {
-            ssh_command: Some(format!(
-                "ssh -o BatchMode=yes -o IdentitiesOnly=yes -i {}",
-                shell_quote(&key)
-            )),
-            isolate_gitconfig: true,
-            ..Transport::default()
-        });
-    }
-
-    Err(Error::msg(NETWORK_AUTH_HELP))
+    let role = auth_role_for(cwd, spec, &url, opts)?;
+    transport_from_role(&url, role, opts)
 }
 
 pub fn git(cwd: &Path, args: &[&str], opts: GitOpts<'_>) -> Result<GitResult> {
@@ -363,8 +467,9 @@ fn git_inner(
         cmd.arg("-c").arg("credential.helper=");
         // actions/checkout persist-credentials writes http.<origin>/.extraheader
         // (GITHUB_TOKEN). Empty `-c` overrides that multi-value; a following `-c`
-        // on the same key supplies UPLINK_GITHUB_TOKEN / GITHUB_TOKEN. Generic
-        // http.extraHeader is shadowed once the URL-specific key exists.
+        // on the same key supplies UPLINK_INTERNAL_TOKEN / UPLINK_CONTRIB_TOKEN /
+        // UPLINK_UPSTREAM_TOKEN. Generic http.extraHeader is shadowed once the
+        // URL-specific key exists.
         if let Some(origin) = &transport.http_origin {
             cmd.arg("-c").arg(format!("http.{origin}/.extraheader="));
             cmd.arg("-c")
@@ -438,7 +543,8 @@ pub fn configure_repo(_cwd: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_http_extra_header, http_origin, is_local_transport, network_remote_index, ssh_to_https,
+        AuthRole, GitOpts, git_http_extra_header, http_origin, is_local_transport, named_auth_role,
+        network_remote_index, ssh_to_https, transport_from_role, urls_match,
     };
 
     #[test]
@@ -556,5 +662,80 @@ mod tests {
             "ssh://git@example.invalid/org/repo.git"
         ));
         assert!(!is_local_transport("https://github.com/acme/app.git"));
+    }
+
+    #[test]
+    fn named_remotes_map_to_auth_roles() {
+        assert_eq!(named_auth_role("origin"), Some(AuthRole::Internal));
+        assert_eq!(named_auth_role("contrib"), Some(AuthRole::Contrib));
+        assert_eq!(named_auth_role("upstream"), Some(AuthRole::Upstream));
+        assert_eq!(named_auth_role("other"), None);
+    }
+
+    #[test]
+    fn ssh_and_https_remote_urls_match() {
+        assert!(urls_match(
+            "git@github.com:acme/app.git",
+            "https://github.com/acme/app"
+        ));
+        assert!(!urls_match(
+            "https://github.com/acme/app.git",
+            "https://github.com/acme/other.git"
+        ));
+    }
+
+    #[test]
+    fn key_wins_over_token_for_role() {
+        let opts = GitOpts {
+            extra_env: vec![
+                ("UPLINK_INTERNAL_KEY".into(), "/tmp/id_uplink".into()),
+                ("UPLINK_INTERNAL_TOKEN".into(), "pat-token".into()),
+            ],
+            ..GitOpts::default()
+        };
+        let transport =
+            transport_from_role("git@github.com:acme/app.git", AuthRole::Internal, &opts).unwrap();
+        assert!(
+            transport
+                .ssh_command
+                .as_deref()
+                .is_some_and(|cmd| cmd.contains("/tmp/id_uplink") && cmd.contains("BatchMode=yes")),
+            "key should drive GIT_SSH_COMMAND: {:?}",
+            transport.ssh_command
+        );
+        assert!(transport.extra_header.is_none());
+        assert!(transport.remote_url.is_none());
+    }
+
+    #[test]
+    fn token_rewrites_ssh_origin_to_https() {
+        let opts = GitOpts {
+            extra_env: vec![("UPLINK_INTERNAL_TOKEN".into(), "pat-token".into())],
+            ..GitOpts::default()
+        };
+        let transport =
+            transport_from_role("git@github.com:acme/app.git", AuthRole::Internal, &opts).unwrap();
+        assert_eq!(
+            transport.remote_url.as_deref(),
+            Some("https://github.com/acme/app.git")
+        );
+        assert!(
+            transport
+                .extra_header
+                .as_deref()
+                .is_some_and(|h| h.starts_with("Authorization: Basic "))
+        );
+        assert!(transport.ssh_command.is_none());
+    }
+
+    #[test]
+    fn missing_role_creds_name_that_role() {
+        let opts = GitOpts::default();
+        let err = transport_from_role("https://github.com/acme/app.git", AuthRole::Upstream, &opts)
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("UPLINK_UPSTREAM_KEY"));
+        assert!(message.contains("UPLINK_UPSTREAM_TOKEN"));
+        assert!(!message.contains("UPLINK_CONTRIB_TOKEN"));
     }
 }

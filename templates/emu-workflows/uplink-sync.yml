@@ -1,5 +1,6 @@
 # Copy into the company product repository on GitHub Enterprise Cloud.
 # Requires `git-uplink` on PATH.
+# Empty UPLINK_*_AUTH defaults to app.
 #
 # Fetches public upstream, drops merged patches, rebuilds company main
 # only when upstream moved. Queue history lives on uplink/state (FF-only).
@@ -25,16 +26,41 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Configure uplink remotes
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: git uplink init
 
       - name: Sync with upstream
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
         run: |
           git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
           main_before=$(git rev-parse HEAD)

@@ -1,5 +1,6 @@
 # Copy into the company product repository on GitHub Enterprise Cloud.
 # Requires `git-uplink` on PATH (cargo install this crate on the runner).
+# Empty UPLINK_*_AUTH defaults to app.
 name: Uplink import
 
 on:
@@ -26,7 +27,19 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.base.ref }}
 
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Configure uplink remotes
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: git uplink init
 
       - name: Fetch the reviewed change
@@ -44,9 +57,9 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: |
           extra=""
           if [ "$INTERNAL_ONLY" = "true" ]; then extra="--internal-only"; fi

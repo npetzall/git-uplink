@@ -312,7 +312,8 @@ export function PlaybookPage() {
             <code>conflict</code> without moving product files, commits{" "}
             <code>uplink/conflict/&lt;id&gt;</code>, and opens an internal issue. Do not open a PR.
             Fix the files on the conflict branch and push.{" "}
-            <code>uplink-resolve.yml</code> skips the Actions bot, runs{" "}
+            <code>uplink-resolve.yml</code> skips <code>Uplink Bot</code>-authored
+            conflict publishes (and <code>github-actions[bot]</code>), runs{" "}
             <code>git uplink resolve &lt;id&gt;</code>, and rebuilds <code>main</code>. Remaining
             patches then replay. If a later patch fails to apply, resolve exits 2 and the job
             publishes that conflict the same way sync does. If the patch was already submitted,
@@ -324,24 +325,36 @@ export function PlaybookPage() {
 
         <Section title="Credentials on GHEC EMU">
           <p>
-            Prefer a GitHub App registered on public github.com and installed on the private fork
-            (contents: write) and the public parent (pull requests: write, contents: read). Store
-            the App ID and private key in EMU org secrets. Mint a one-hour installation token in
-            Actions with <code>actions/create-github-app-token</code> and pass it as{" "}
-            <code>UPLINK_GITHUB_TOKEN</code>. An EMU-created App may be enterprise-scoped and unable
-            to talk to repositories outside the enterprise, so do not assume the company can
-            register this App from an EMU admin account. Upstream, or a non-EMU admin, should own
-            it.
+            Use three isolated roles. On Actions, <code>origin</code> uses{" "}
+            <code>UPLINK_INTERNAL_TOKEN</code> (PAT or a minted App token). Public{" "}
+            <code>upstream</code> fetch uses <code>UPLINK_UPSTREAM_TOKEN</code> (authenticated
+            rate limits; read-only on the public parent). Contrib force-push uses{" "}
+            <code>UPLINK_CONTRIB_TOKEN</code>. Locally, git-uplink also accepts a passwordless{" "}
+            <code>UPLINK_*_KEY</code> (KEY wins over TOKEN). Workflow vars{" "}
+            <code>UPLINK_INTERNAL_AUTH</code>, <code>UPLINK_UPSTREAM_AUTH</code>, and{" "}
+            <code>UPLINK_CONTRIB_AUTH</code> select <code>pat</code> or <code>app</code>.
           </p>
           <p>
-            A machine-user fine-grained PAT also works: contents write on the fork, pull requests
-            write on the public parent. It is worse to rotate and is tied to a person. Use it only
-            if the App cannot be installed on the public parent.
+            Prefer a GitHub App registered on public github.com for contrib: install it on the
+            private fork (contents: write) and the public parent (pull requests: write, contents:
+            read). Store the App ID and private key on the <code>oss</code> environment only. Mint
+            a one-hour installation token in Actions with{" "}
+            <code>actions/create-github-app-token</code> as <code>UPLINK_CONTRIB_TOKEN</code>. An
+            EMU-created App may be enterprise-scoped and unable to talk to repositories outside the
+            enterprise, so do not assume the company can register this App from an EMU admin
+            account. Upstream, or a non-EMU admin, should own it. A separate internal App (or PAT)
+            lives as repo secrets (contents and workflows write) so sync can force-push
+            company <code>main</code>{" "}
+            without holding fork-write creds. A third read-only upstream App or PAT is a repo
+            secret so hourly sync can fetch github.com without the contrib write App.
           </p>
           <p>
-            Fetching public upstream does not need a token. EMU Actions on GitHub-hosted runners
-            can clone github.com anonymously. Pushing back into the EMU repo uses the default{" "}
-            <code>GITHUB_TOKEN</code> with contents write and a ruleset exception for the bot.
+            A machine-user fine-grained PAT also works per role. It is worse to rotate and is tied
+            to a person. Use it only if the matching App cannot be installed. EMU{" "}
+            <code>GITHUB_TOKEN</code> stays for <code>gh</code> on the company repo (issues,
+            comments). Sync and resolve check out with the internal token so shell origin
+            git can push workflow files. <code>git uplink</code> does not use{" "}
+            <code>GITHUB_TOKEN</code> as transport. It cannot open the public pull request.
           </p>
         </Section>
 
@@ -362,10 +375,11 @@ export function PlaybookPage() {
               This crate: the <code>git-uplink</code> binary, the git engine, this operator dashboard (`git uplink web-ui`), and <code>way-of-working.md</code> (developer stories).
             </li>
             <li>
-              Copy <code>templates/emu-workflows/</code> into the company product repo. Make
-              prepare and export preflight required checks. Create Environment <code>oss</code> with
-              IP/legal as required reviewers and the GitHub App secrets on that environment only.
-              Set <code>UPLINK_REDACT_KEYWORDS</code> and <code>UPLINK_EXPORT_AUTHOR</code>.
+              Copy <code>templates/emu-workflows/</code> into the company product repo.
+              Make prepare and export preflight required checks. Create Environment{" "}
+              <code>oss</code> with IP/legal as required reviewers and the contrib GitHub App
+              secrets on that environment only. Store internal and upstream git secrets at repo
+              level. Set <code>UPLINK_REDACT_KEYWORDS</code> and <code>UPLINK_EXPORT_AUTHOR</code>.
             </li>
             <li>
               Protect company <code>main</code>: only the Uplink bot / GitHub Actions may push.

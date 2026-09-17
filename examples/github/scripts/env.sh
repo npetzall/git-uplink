@@ -19,7 +19,9 @@ if [[ -z "$UPLINK_SRC" ]]; then
   fi
 fi
 UPLINK_REV="${UPLINK_REV:-main}"
-UPLINK_SUBMIT_AUTH="${UPLINK_SUBMIT_AUTH:-pat}"
+UPLINK_INTERNAL_AUTH="${UPLINK_INTERNAL_AUTH:-pat}"
+UPLINK_CONTRIB_AUTH="${UPLINK_CONTRIB_AUTH:-${UPLINK_SUBMIT_AUTH:-pat}}"
+UPLINK_UPSTREAM_AUTH="${UPLINK_UPSTREAM_AUTH:-pat}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

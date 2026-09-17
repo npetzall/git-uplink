@@ -65,7 +65,9 @@ export INTERNAL_DIR=/path/to/uplink-example-internal
 # optional:
 # export UPLINK_SRC=npetzall/git-uplink
 # export UPLINK_REV=main
-# export UPLINK_SUBMIT_AUTH=pat
+# export UPLINK_INTERNAL_AUTH=pat
+# export UPLINK_CONTRIB_AUTH=pat
+# export UPLINK_UPSTREAM_AUTH=pat
 
 ./examples/github/scripts/bootstrap_internal.sh
 ```
@@ -96,7 +98,11 @@ If `bootstrap_internal.sh` did not run `gh`, do this in **uplink-example-interna
 | `UPLINK_EXPORT_AUTHOR` | `Uplink Example <uplink@users.noreply.github.com>` |
 | `UPLINK_SRC` | `npetzall/git-uplink` |
 | `UPLINK_REV` | `main` |
-| `UPLINK_SUBMIT_AUTH` | `pat` |
+| `UPLINK_INTERNAL_AUTH` | `pat` |
+| `UPLINK_CONTRIB_AUTH` | `pat` |
+| `UPLINK_UPSTREAM_AUTH` | `pat` |
+
+Each `UPLINK_*_AUTH` is `pat` or `app`. Empty defaults to `pat` in this example (production templates default to `app`).
 
 **Actions:** workflow permissions **Read and write**.
 
@@ -104,9 +110,35 @@ If `bootstrap_internal.sh` did not run `gh`, do this in **uplink-example-interna
 
 1. **Required reviewers** — add yourself. For a solo walkthrough leave **Prevent self-review** off.
 2. **Deployment branches** — restrict to `main` if the UI offers it.
-3. **Environment secrets** (not repository secrets):
+3. **Secrets** — contrib write credentials live on **oss**. Internal force-push and upstream fetch credentials are **repository** secrets (sync cannot wait on oss).
 
-### PAT (default, `UPLINK_SUBMIT_AUTH=pat`)
+### Internal (repo secrets; origin force-push)
+
+Used by import, sync, resolve, and the submit packet job.
+
+#### PAT (default, `UPLINK_INTERNAL_AUTH=pat`)
+
+Fine-grained or classic PAT with contents read/write **and workflows write** on `uplink-example-internal` (sync/resolve push `main` and conflict branches that include `.github/workflows`). Store as repo secret `UPLINK_INTERNAL_TOKEN`.
+
+#### GitHub App (`UPLINK_INTERNAL_AUTH=app`)
+
+Install an App on the internal repo (contents: write, workflows: write). Repo secrets: `UPLINK_INTERNAL_APP_ID`, `UPLINK_INTERNAL_APP_PRIVATE_KEY`.
+
+### Upstream (repo secrets; authenticated `git fetch` of public parent)
+
+Used by sync and resolve so github.com applies authenticated rate limits. Read-only. Do not reuse contrib write creds.
+
+#### PAT (default, `UPLINK_UPSTREAM_AUTH=pat`)
+
+Fine-grained PAT with contents **read** on `uplink-example-upstream`. Store as repo secret `UPLINK_UPSTREAM_TOKEN`. The same token is what a future GitHub PR merge check would use (no separate `UPLINK_SYNC_TOKEN`).
+
+#### GitHub App (`UPLINK_UPSTREAM_AUTH=app`)
+
+Install an App on the public parent (contents: read). Repo secrets: `UPLINK_UPSTREAM_APP_ID`, `UPLINK_UPSTREAM_APP_PRIVATE_KEY`, plus `UPLINK_UPSTREAM_OWNER` and `UPLINK_UPSTREAM_REPO` (`uplink-example-upstream`).
+
+### Contrib (`oss` environment secrets; fork write + public PR)
+
+#### PAT (default, `UPLINK_CONTRIB_AUTH=pat`)
 
 The contrib fork is on a **different owner** than upstream, so a personal access token can both push the fork and open the upstream PR.
 
@@ -115,20 +147,20 @@ Fine-grained or classic PAT with:
 - `uplink-example-upstream-contrib`: Contents read/write
 - `uplink-example-upstream`: Contents read, Pull requests read/write
 
-Store it on the **oss** environment as `UPLINK_GITHUB_TOKEN`.
+Store it on the **oss** environment as `UPLINK_CONTRIB_TOKEN`. `gh pr create` uses this token (`GH_TOKEN`).
 
-### GitHub App (`UPLINK_SUBMIT_AUTH=app`)
+#### GitHub App (`UPLINK_CONTRIB_AUTH=app`)
 
 Production-shaped; see [`templates/README.md`](../../templates/README.md). An installation token is one owner. On the **oss** environment:
 
 | Secret | Purpose |
 | --- | --- |
-| `UPLINK_APP_ID` | GitHub App id |
-| `UPLINK_APP_PRIVATE_KEY` | App private key |
+| `UPLINK_CONTRIB_APP_ID` | GitHub App id |
+| `UPLINK_CONTRIB_APP_PRIVATE_KEY` | App private key |
 | `UPLINK_UPSTREAM_OWNER` | Owner of the contrib repository |
 | `UPLINK_CONTRIB_REPO` | `uplink-example-upstream-contrib` |
 
-Install the App on the contrib fork (contents: write) and on upstream (contents: read, pull requests: write). Set variable `UPLINK_SUBMIT_AUTH` to `app`.
+Install the App on the contrib fork (contents: write) and on upstream (contents: read, pull requests: write). Set variable `UPLINK_CONTRIB_AUTH` to `app`.
 
 ## 5. Reset (Actions)
 
@@ -160,7 +192,7 @@ git reset --hard origin/main
 
 ## Optional: branch protection
 
-Not required. `GITHUB_TOKEN` with write permissions can push `main` and `uplink/state`. Production rulesets are in [`templates/README.md`](../../templates/README.md).
+Not required. Sync and resolve persist `UPLINK_INTERNAL_TOKEN` on checkout so shell origin git can push workflow files. `git uplink` origin transport uses the same token. Production rulesets are in [`templates/README.md`](../../templates/README.md).
 
 ## Next
 

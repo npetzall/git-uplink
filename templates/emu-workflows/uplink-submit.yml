@@ -2,6 +2,8 @@
 # Packet job commits the report on uplink/state. Submit job waits on
 # Environment `oss`. Resolve of an already-submitted patch dispatches
 # this workflow so IP can approve the delta.
+#
+# Empty UPLINK_*_AUTH defaults to app.
 name: Uplink submit
 run-name: Uplink submit ${{ inputs.patch_id }}
 
@@ -29,11 +31,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Configure uplink remotes
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: git uplink init
       - name: Write approver packet
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: |
           git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
           git uplink report ${{ inputs.patch_id }}
@@ -55,21 +69,35 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
-      - name: Configure uplink remotes
-        run: git uplink init
-      - name: Mint GitHub App token for public github.com
-        id: app
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ secrets.UPLINK_APP_ID }}
-          private-key: ${{ secrets.UPLINK_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Mint contrib GitHub App token
+        id: contrib-app
+        if: ${{ vars.UPLINK_CONTRIB_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.UPLINK_CONTRIB_APP_ID }}
+          private-key: ${{ secrets.UPLINK_CONTRIB_APP_PRIVATE_KEY }}
           owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
           repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
+
+      - name: Configure uplink remotes
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+        run: git uplink init
       - name: Record approval, export, and record the public PR
         env:
-          UPLINK_GITHUB_TOKEN: ${{ steps.app.outputs.token }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_OSS_ENVIRONMENT: oss
         run: |
@@ -90,4 +118,4 @@ jobs:
               --title "$(jq -r .gh.prCreate.title <<<"$submit_json")" \
               --body-file "$(jq -r .gh.prCreate.bodyFile <<<"$submit_json")")
           fi
-          env -u UPLINK_GITHUB_TOKEN git uplink submitted ${{ inputs.patch_id }} --pr-url "$url"
+          git uplink submitted ${{ inputs.patch_id }} --pr-url "$url"

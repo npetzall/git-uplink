@@ -86,7 +86,9 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   set_var UPLINK_EXPORT_AUTHOR "Uplink Example <uplink@users.noreply.github.com>"
   set_var UPLINK_SRC "$UPLINK_SRC"
   set_var UPLINK_REV "$UPLINK_REV"
-  set_var UPLINK_SUBMIT_AUTH "$UPLINK_SUBMIT_AUTH"
+  set_var UPLINK_INTERNAL_AUTH "$UPLINK_INTERNAL_AUTH"
+  set_var UPLINK_CONTRIB_AUTH "$UPLINK_CONTRIB_AUTH"
+  set_var UPLINK_UPSTREAM_AUTH "$UPLINK_UPSTREAM_AUTH"
 
   gh api --method PUT "repos/${INTERNAL}/actions/permissions" \
     -F enabled=true -f allowed_actions=all >/dev/null || true
@@ -107,4 +109,4 @@ echo "  $UPSTREAM  main + seed + example-reset"
 echo "  $CONTRIB   main (upstream fork) + example-reset"
 echo "  $INTERNAL  main + uplink/state + uplink/upstream + seed refs + example-reset"
 echo
-echo "Finish SETUP.md (oss reviewer and UPLINK_GITHUB_TOKEN), then walk examples/github/stories/."
+echo "Finish SETUP.md (oss reviewer, UPLINK_INTERNAL_TOKEN, UPLINK_UPSTREAM_TOKEN, UPLINK_CONTRIB_TOKEN), then walk examples/github/stories/."
