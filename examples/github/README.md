@@ -26,7 +26,7 @@ After bootstrap, the queue already has one **internal-only** patch (the GitHub w
 
 **Git (your clones):** branch, `git apply`, commit, `git push`. After import or reset: `git fetch` and `git reset --hard origin/main`. `git uplink status` for the queue.
 
-**GitHub UI (not the file editor):** Compare & pull request, paste the matching [`patches/*.pr.md`](patches/) into the body, add labels (`uplink:internal-only` when needed), merge after checks, Actions (**Reset example**, **Uplink submit**, **Uplink sync**), Review deployments for `to-upstream`, merge the upstream PR.
+**GitHub UI (not the file editor):** Compare & pull request, paste the matching [`patches/*.pr.md`](patches/) into the body, add labels (`uplink:internal-only` when needed), merge after checks, Actions (**Reset example**, **Uplink submit**, **Uplink sync**), Review deployments for `to-upstream` (export) and `from-upstream` (inbound foreign commits), merge the upstream PR.
 
 ## Stories
 

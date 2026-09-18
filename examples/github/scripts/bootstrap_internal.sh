@@ -103,9 +103,13 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     --input - >/dev/null <<'EOF'
 {"wait_timer":0,"prevent_self_review":false}
 EOF
+  gh api --method PUT "repos/${INTERNAL}/environments/from-upstream" \
+    --input - >/dev/null <<'EOF'
+{"wait_timer":0,"prevent_self_review":false}
+EOF
 else
   echo
-  echo "gh is not available; set labels, variables, Actions write permission, and Environment to-upstream in the GitHub UI (SETUP.md)."
+  echo "gh is not available; set labels, variables, Actions write permission, and Environments to-upstream and from-upstream in the GitHub UI (SETUP.md)."
 fi
 
 echo
@@ -114,4 +118,4 @@ echo "  $UPSTREAM  main + seed + example-reset"
 echo "  $CONTRIB   main (upstream fork) + example-reset"
 echo "  $INTERNAL  main + uplink/state + uplink/upstream + seed refs + example-reset"
 echo
-echo "Finish SETUP.md (to-upstream reviewer, UPLINK_INTERNAL_TOKEN, UPLINK_UPSTREAM_TOKEN, UPLINK_CONTRIB_TOKEN), then walk examples/github/stories/."
+echo "Finish SETUP.md (to-upstream and from-upstream reviewers, UPLINK_INTERNAL_TOKEN, UPLINK_UPSTREAM_TOKEN, UPLINK_CONTRIB_TOKEN), then walk examples/github/stories/."

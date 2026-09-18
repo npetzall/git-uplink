@@ -13,6 +13,7 @@ Write every change **as if it were the upstream submission**. Company-only detai
 | Export preflight | Same PR | Diff must stand on public `main` + declared deps; `UPLINK_PREFLIGHT` must pass. |
 | Internal product | Review + merge | Status `queued`. Product builds it. |
 | Contribution / IP | Dispatch **Uplink submit**. IP approves GitHub Environment **`to-upstream`**. Same run submits. | Report + approval committed under `.uplink/reports/`. Public PR uses the prepared identity. GitHub audit log records the reviewer. |
+| Inbound upstream | Hourly **Uplink sync**. Foreign public commits wait on GitHub Environment **`from-upstream`**. Flow-back of our patches skips that wait. | `uplink/upstream` updates; company `main` rebuilds. |
 
 Default intent is upstream. `uplink:internal-only` is the escape hatch and never goes through the second gate.
 
@@ -35,6 +36,19 @@ Why this fits a workflow:
 Setup steps, secrets table, and ruleset notes: `templates/README.md`. The workflow file is `templates/emu-workflows/uplink-submit.yml`.
 
 Local engine tests still call `git uplink approve` directly. That does not create an Environment review. On GHEC, dispatch the workflow.
+
+## Inbound approval via the from-upstream GitHub Environment
+
+Public `main` can move for reasons that are not a company contribution flowing back. Sync must not rebuild company `main` onto those commits until someone reviews them.
+
+Create a repository Environment named **`from-upstream`**. Required reviewers are inbound/security (not the `to-upstream` IP reviewers unless you want the same people). Do not put origin-push or contrib secrets on it.
+
+1. **Inspect job** (no environment). `git uplink sync` fetches public `main` but does not move `uplink/upstream`. Commits that match a company patch (trailer / `patch-id`) apply immediately. Unchanged public `main` is a no-op.
+2. **Apply job** (`environment: from-upstream`). Only scheduled when inspect found unmatched commits. GitHub holds the job until a reviewer approves. The packet is `.uplink/reports/from-upstream/incoming.md` on `uplink/state` (and `GITHUB_STEP_SUMMARY`). After approval, `git uplink accept-upstream` promotes the frozen SHA, marks flowed-back patches `merged`, and rebuilds. Apply conflicts still open `uplink/conflict/<id>` — after this gate, not instead of it.
+
+Workflow group `uplink-sync` serializes inbound reviews (hourly cron will not stack deployments). Inspect/apply take `uplink-mutate` per job so the wait does not freeze imports.
+
+Local engine tests call `git uplink accept-upstream` directly after a sync that set `needsApproval`.
 
 **Export preflight** is the guard against “I branched from company `main` so I thought Asha came with me.” Before import, and again before an upstream PR is opened, Uplink applies the candidate onto **public `main` plus declared `dependsOn` only** — not onto company `main`. Then it runs `UPLINK_PREFLIGHT` (the product’s build and test) on that export tree.
 
@@ -101,9 +115,9 @@ Asha needs to change token hashing. Nobody else is in her way.
 
 7. **Upstream review.** Maintainers review a normal GitHub PR. If they want changes, Asha amends the **same** internal patch (fix the files, import again or `git uplink resolve` after a conflict). If the patch was already submitted, it becomes `amended` and IP approves the delta before submit force-pushes the same fork branch. She still does not grow a second branch.
 
-8. **Flow back.** Upstream squash-merges the PR. Hourly sync (or `git uplink sync`) detects merge in this order: recorded GitHub PR is merged → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply. `upl_asha` becomes `merged` and is **never applied again**.
+8. **Flow back.** Upstream squash-merges the PR. Hourly sync (or `git uplink sync`) classifies new public commits. If the only new commits match Asha (trailer / `patch-id`), it skips **`from-upstream`** approval, marks `upl_asha` `merged`, and is **never applied again**. If public `main` also has commits that are not ours, inspect writes `.uplink/reports/from-upstream/incoming.md` and waits on Environment **`from-upstream`** before `uplink/upstream` moves.
 
-9. **Rebuild.** Company `main` becomes upstream (now containing Asha’s change, including any maintainer follow-up on those lines) plus remaining patches. The internal copy is gone, so a later upstream salt-the-hash fix is not reverted by re-applying Asha’s old delta.
+9. **Rebuild.** After auto-apply or `from-upstream` approval, company `main` becomes upstream (now containing Asha’s change, including any maintainer follow-up on those lines) plus remaining patches. The internal copy is gone, so a later upstream salt-the-hash fix is not reverted by re-applying Asha’s old delta. That follow-up is a foreign commit: it goes through `from-upstream` first.
 
 Asha’s job during this: one internal branch, rebase it if `main` moved, talk to reviewers. The bot owns the public fork branch; humans merge product PRs.
 
@@ -217,11 +231,12 @@ Ben still has one branch. He never cloned Asha’s public fork branch.
 
 Queue before the sync: `[upl_asha, upl_ben]`. Ben did not record `dependsOn`. He branched from `main` *before* Asha was imported, or from `main` after her import but his diff does not use her API — either way, his patch is independent.
 
-Upstream changes a file Asha also changed. Sync:
+Upstream changes a file Asha also changed. That is a foreign commit. Sync:
 
-1. Fetch public `main` into `uplink/upstream`.
-2. Drop any patches already merged (none in this story).
-3. Replay the queue from that upstream. **Asha’s patch does not apply.** Rebuild **stops**.
+1. Fetch public `main` **without** moving `uplink/upstream`. Classify the range. Unmatched commits write `.uplink/reports/from-upstream/incoming.md`.
+2. A required reviewer approves Environment **`from-upstream`**. The apply job runs `git uplink accept-upstream`, which points `uplink/upstream` at the reviewed SHA.
+3. Drop any patches already merged (none in this story).
+4. Replay the queue from that upstream. **Asha’s patch does not apply.** Rebuild **stops**.
 
 What you have then:
 

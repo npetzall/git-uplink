@@ -18,25 +18,26 @@ pub use error::{ConflictError, Error, PreflightError, PrepareError, Result};
 pub use git::{GitError, GitOpts, GitResult, configure_repo, git, git_ok};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use ops::{
-    AddPatchOpts, InitOpts, QueueCounts, StatusSnapshot, SubmitResult, add_patch, approve_patch,
-    approve_patch_at, drop_patch, init, init_repo, mark_merged, read_queue, rebuild,
-    record_conflict_issue, record_pull_request, resolve_conflict, status_snapshot, submit_patch,
-    summarize_queue, sync, write_queue,
+    AddPatchOpts, InitOpts, QueueCounts, StatusSnapshot, SubmitResult, SyncResult, accept_upstream,
+    add_patch, approve_patch, approve_patch_at, drop_patch, init, init_repo, mark_merged,
+    read_queue, rebuild, record_conflict_issue, record_pull_request, resolve_conflict,
+    status_snapshot, submit_patch, summarize_queue, sync, write_queue,
 };
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,
 };
 pub use prepare::{
-    ApprovalReceipt, OSS_ENVIRONMENT, assert_prepare_ok, company_commit_message,
-    depends_on_from_message, export_commit_message, format_approval_receipt,
-    format_approver_packet, format_contribution_packet, format_delta_approver_packet,
-    format_prepare_markdown, parse_depends_on, prepare_from_message, report_paths,
+    ApprovalReceipt, FROM_UPSTREAM_ENVIRONMENT, IncomingFlowedBack, OSS_ENVIRONMENT,
+    assert_prepare_ok, company_commit_message, depends_on_from_message, export_commit_message,
+    format_approval_receipt, format_approver_packet, format_contribution_packet,
+    format_delta_approver_packet, format_incoming_packet, format_prepare_markdown,
+    from_upstream_report_paths, parse_depends_on, prepare_from_message, report_paths,
     split_internal_message, strip_html_comments,
 };
 pub use repo::{commit_queue, patch_state_commit};
 pub use types::{
     DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, MergeVia, Patch, PatchApproval, PatchIntent,
-    PatchStatus, PrepareReport, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
+    PatchStatus, PendingUpstream, PrepareReport, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
 };
 
 #[cfg(test)]

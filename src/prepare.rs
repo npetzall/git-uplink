@@ -15,6 +15,7 @@ use crate::types::{
 };
 
 pub const OSS_ENVIRONMENT: &str = "to-upstream";
+pub const FROM_UPSTREAM_ENVIRONMENT: &str = "from-upstream";
 
 pub fn cutoff_marker(queue: &QueueState) -> String {
     queue
@@ -715,6 +716,94 @@ pub fn report_paths(id: &str) -> (String, String, String) {
         format!("{dir}/prepare.md"),
         format!("{dir}/approval.md"),
     )
+}
+
+pub fn from_upstream_report_paths() -> (String, String, String) {
+    let dir = ".uplink/reports/from-upstream".to_string();
+    (
+        dir.clone(),
+        format!("{dir}/incoming.md"),
+        format!("{dir}/approval.md"),
+    )
+}
+
+pub struct IncomingFlowedBack<'a> {
+    pub id: &'a str,
+    pub via: &'a str,
+    pub title: &'a str,
+    pub sha: &'a str,
+}
+
+pub fn format_incoming_packet(
+    repo: &Path,
+    from_sha: Option<&str>,
+    pending_sha: &str,
+    flowed_back: &[IncomingFlowedBack<'_>],
+    foreign_shas: &[String],
+) -> Result<String> {
+    let env = FROM_UPSTREAM_ENVIRONMENT;
+    let current = from_sha.unwrap_or("not recorded");
+    let flowed_list = if flowed_back.is_empty() {
+        "None.\n".to_string()
+    } else {
+        flowed_back
+            .iter()
+            .map(|item| {
+                format!(
+                    "- `{id}` via {via} at `{sha}` — {title}\n",
+                    id = item.id,
+                    via = item.via,
+                    sha = item.sha,
+                    title = item.title,
+                )
+            })
+            .collect()
+    };
+    let mut foreign = String::new();
+    if foreign_shas.is_empty() {
+        foreign.push_str("None.\n");
+    } else {
+        for sha in foreign_shas {
+            let shown = git(
+                repo,
+                &["show", "--pretty=fuller", sha],
+                GitOpts {
+                    allow_fail: true,
+                    ..GitOpts::default()
+                },
+            )?;
+            let body = if shown.stdout.trim().is_empty() {
+                format!("(no `git show` output for `{sha}`)\n")
+            } else {
+                format_fenced(&shown.stdout)
+            };
+            foreign.push_str(&format!("### `{sha}`\n\n{body}\n\n"));
+        }
+    }
+    Ok(format!(
+        "# Incoming upstream — {env}\n\n\
+These commits on public main are not matched to any company patch. Review this packet (the same markdown is on the Actions job summary / `GITHUB_STEP_SUMMARY`), then approve the **{env}** GitHub Environment on the waiting Actions run. That approval updates `uplink/upstream` and rebuilds company main. GitHub records it in the environment deployment history and the enterprise audit log.\n\n\
+| Field | Value |\n\
+| --- | --- |\n\
+| Current `uplink/upstream` | `{current}` |\n\
+| Pending public main | `{pending}` |\n\
+| Flowed back | {flowed_n} |\n\
+| Foreign commits | {foreign_n} |\n\n\
+## Flowed back (no extra review)\n\n\
+These commits match a company patch (`{trailer}` trailer or `git patch-id --stable`). They will be marked `merged` when you approve.\n\n\
+{flowed_list}\n\
+## Foreign commits\n\n\
+{foreign}\
+## What happens when you approve the {env} environment\n\n\
+1. GitHub records the environment reviewer (audit log + Deployments).\n\
+2. This workflow writes `.uplink/reports/from-upstream/approval.md` on `uplink/state`.\n\
+3. `git uplink accept-upstream` moves `uplink/upstream` to `{pending}` and rebuilds company main.\n\
+4. Flowed-back patches are marked merged and are not applied again. Remaining patches replay onto the new upstream.\n",
+        trailer = "Uplink-Patch-Id",
+        pending = pending_sha,
+        flowed_n = flowed_back.len(),
+        foreign_n = foreign_shas.len(),
+    ))
 }
 
 pub fn prepare_from_message(

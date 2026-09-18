@@ -2,8 +2,11 @@
 # Requires `git-uplink` on PATH.
 # Empty UPLINK_*_AUTH defaults to app.
 #
-# Fetches public upstream, drops merged patches, rebuilds company main
-# only when upstream moved. Queue history lives on uplink/state (FF-only).
+# Inspect fetches public upstream without moving uplink/upstream. Flowed-back
+# patches (trailer / patch-id) apply immediately. Foreign commits write
+# .uplink/reports/from-upstream/incoming.md and wait on Environment
+# `from-upstream`. After approval, accept-upstream promotes uplink/upstream
+# and rebuilds company main. Queue history lives on uplink/state (FF-only).
 # On apply failure it records the patch as conflict on uplink/state,
 # commits uplink/conflict/<id> (with markers), and opens an internal
 # issue. Do not open a PR for the conflict.
@@ -15,16 +18,23 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: uplink-mutate
+  group: uplink-sync
   cancel-in-progress: false
 
 permissions:
   contents: write
   issues: write
+  deployments: write
 
 jobs:
-  sync:
+  inspect:
+    name: Inspect upstream
     runs-on: ubuntu-latest
+    concurrency:
+      group: uplink-mutate
+      cancel-in-progress: false
+    outputs:
+      needs_approval: ${{ steps.sync.outputs.needs_approval }}
     steps:
       - name: Mint internal GitHub App token
         id: internal-app
@@ -52,6 +62,7 @@ jobs:
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Sync with upstream
+        id: sync
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
@@ -62,6 +73,103 @@ jobs:
 
           set +e
           sync_json=$(git uplink sync)
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+            exit "$code"
+          fi
+
+          needs_approval=$(jq -r '.needsApproval // false' <<<"$sync_json")
+          echo "needs_approval=${needs_approval}" >> "$GITHUB_OUTPUT"
+
+          git push origin uplink/state
+          if [ "$needs_approval" = "true" ]; then
+            exit 0
+          fi
+
+          git push origin uplink/upstream --force || true
+
+          main_after=$(git rev-parse HEAD)
+          if [ "$main_after" != "$main_before" ]; then
+            git push origin HEAD:main --force-with-lease
+          fi
+
+          if [ "$code" -ne 2 ]; then
+            exit 0
+          fi
+
+          conflict_id=$(jq -r '.conflict.id // empty' <<<"$sync_json")
+          conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$sync_json")
+          if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+            echo "sync exited 2 but no conflict patch was recorded"
+            exit 2
+          fi
+          if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+            git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+          fi
+
+          title=$(jq -r '.gh.issueCreate.title' <<<"$sync_json")
+          body_file=$(jq -r '.gh.issueCreate.bodyFile' <<<"$sync_json")
+          existing=$(gh issue list --state open --json url,title --jq ".[] | select(.title==\"${title}\") | .url" | head -n 1)
+          if [ -z "$existing" ]; then
+            gh label create uplink:conflict --description "Uplink sync conflict; checkout the conflict branch, do not open a PR" --color B60205 || true
+            url=$(gh issue create --title "$title" --label uplink:conflict --body-file "$body_file")
+          else
+            url="$existing"
+          fi
+          git uplink conflicted "$conflict_id" --issue-url "$url"
+          exit 2
+
+  apply:
+    name: Approve from-upstream environment and apply
+    needs: inspect
+    if: needs.inspect.outputs.needs_approval == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: from-upstream
+      url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/from-upstream/incoming.md
+    concurrency:
+      group: uplink-mutate
+      cancel-in-progress: false
+    steps:
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+
+      - name: Accept pending upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          UPLINK_FROM_UPSTREAM_ENVIRONMENT: from-upstream
+        run: |
+          git uplink init
+          main_before=$(git rev-parse HEAD)
+
+          set +e
+          sync_json=$(git uplink accept-upstream)
           code=$?
           set -e
           if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
@@ -83,7 +191,7 @@ jobs:
           conflict_id=$(jq -r '.conflict.id // empty' <<<"$sync_json")
           conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$sync_json")
           if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
-            echo "sync exited 2 but no conflict patch was recorded"
+            echo "accept-upstream exited 2 but no conflict patch was recorded"
             exit 2
           fi
           if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then

@@ -18,7 +18,7 @@ Sync and resolve mint `UPLINK_INTERNAL_TOKEN` first and pass it to `actions/chec
 - **Prepare** (`uplink-prepare.yml`) — on every PR to `main`. Uses the PR title and body as the single commit message, strips HTML comments, keeps the cutoff on company main, rewrites author, scans for company keywords / internal emails, writes `GITHUB_STEP_SUMMARY`, and the workflow posts the report with `gh pr comment`. Required check.
 - **Preflight** (`uplink-preflight.yml`) — required check on every PR to `main`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines from the body, then runs `UPLINK_PREFLIGHT`. Failure prints a comment body; the workflow posts it with `gh pr comment`. Do not merge until it is green.
 - **Import** (`uplink-import.yml`) — internal product approval. Merge the PR after engineering review. The change is already on company `main`; import records it on `uplink/state` as status `queued` only if export preflight still passes.
-- **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream, drops merged patches, and rebuilds `main` only when upstream moved. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>`, and emits issue JSON. The workflow runs `gh issue create` then `git uplink conflicted`. Do not open a PR; resolve the patch on that branch instead.
+- **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream without moving `uplink/upstream` until inbound review. Commits that match a company patch (trailer / `patch-id`) apply immediately. Any unmatched commit writes `.uplink/reports/from-upstream/incoming.md` and waits on Environment **`from-upstream`**; after approval, `git uplink accept-upstream` promotes `uplink/upstream` and rebuilds `main`. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>`, and emits issue JSON. The workflow runs `gh issue create` then `git uplink conflicted`. Do not open a PR; resolve the patch on that branch instead.
 - **Resolve** (`uplink-resolve.yml`) — on human pushes to `uplink/conflict/<id>` (skips `Uplink Bot` authors and `github-actions[bot]`). Runs `git uplink resolve`, rebuilds `main`, emits `gh issue close` JSON (or a new issue create if rebuild stops later), and deletes the conflict branch. If the resolved patch was already submitted, status becomes `amended` and this workflow dispatches **Uplink submit** so IP can approve the delta. It does not itself push the contribution fork.
 - **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`to-upstream` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits the report (full contribution, or a delta-first packet when status is `amended`); environment reviewers approve; the same run then `git uplink approve` + `git uplink submit` (contrib git push) + `gh pr create` + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR.
 
@@ -34,7 +34,7 @@ Repo variables:
 | `UPLINK_UPSTREAM_AUTH` | Same models for public upstream fetch. Empty defaults to `app`. |
 | `UPLINK_CONTRIB_AUTH` | Same models for contrib force-push. Empty defaults to `app`. |
 
-Import and sync share the Actions concurrency group `uplink-mutate` at workflow level. Resolve uses that group too. Submit uses it **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI retries a rejected fast-forward of `uplink/state` if another import landed first.
+Import and resolve share the Actions concurrency group `uplink-mutate` at workflow level. Sync uses workflow group **`uplink-sync`** so a waiting `from-upstream` review does not stack hourly runs, and job-level `uplink-mutate` on inspect/apply so that wait does not freeze imports. Submit uses `uplink-mutate` **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI retries a rejected fast-forward of `uplink/state` if another import landed first.
 
 ---
 
@@ -71,7 +71,7 @@ In the company product repo (EMU):
 4. Optional wait timer if policy wants a cooling-off period.
 5. **Credentials** — three isolated roles. Workflows use a PAT (`UPLINK_*_TOKEN`) or mint an App installation token (`UPLINK_*_AUTH=app`). `gh pr create` uses the contrib TOKEN.
 
-**Repository secrets** (sync/import/resolve must not wait on `to-upstream`):
+**Repository secrets** (sync/import/resolve must not wait on `to-upstream` or `from-upstream`):
 
 | Secret | Purpose |
 | --- | --- |
@@ -95,7 +95,7 @@ Scope upstream as **read-only** on the public parent (contents: read). Do not gi
 
 The contrib App must be installed on the private fork (contents: write) and on the public parent (pull requests: write, contents: read). Do not register that App from an EMU account if the App would then be enterprise-scoped and unable to see public github.com repositories.
 
-`uplink-sync.yml` fetches public `upstream` over git with `UPLINK_UPSTREAM_*` and detects merge via trailers / patch-id / empty apply. It does **not** mint the contrib write App. If hourly sync later treats the GitHub PR as merged via the API, that call uses `UPLINK_UPSTREAM_TOKEN` (read on the public parent; same token as authenticated `git fetch`).
+`uplink-sync.yml` fetches public `upstream` over git with `UPLINK_UPSTREAM_*` and classifies new commits against the queue (trailer / patch-id). Flow-back of our patches updates `uplink/upstream` immediately. Foreign commits wait on Environment **`from-upstream`** (review gate only; do not put `UPLINK_INTERNAL_*` there). It does **not** mint the contrib write App. If hourly sync later treats the GitHub PR as merged via the API, that call uses `UPLINK_UPSTREAM_TOKEN` (read on the public parent; same token as authenticated `git fetch`).
 
 EMU `GITHUB_TOKEN` is still used for `gh issue create` / `gh pr comment` on the company repo. Sync and resolve shell origin git uses the persisted internal token; other jobs still use checkout’s `GITHUB_TOKEN`. It cannot open the public pull request. `git uplink` does not use it as git transport.
 
@@ -148,3 +148,32 @@ git uplink submitted upl_… --pr-url <url>
 ```
 
 That still writes the same markdown under `.uplink/reports/`. It does **not** create a GitHub Environment review. On GHEC, use the workflow.
+
+---
+
+## from-upstream environment (inbound public main)
+
+Hourly sync must not silently take unrelated upstream commits onto company `main`. Create a second repository Environment named **`from-upstream`**. Required reviewers are whoever should review inbound public changes (security / engineering). Do **not** put `UPLINK_INTERNAL_*` or contrib secrets on this environment: inspect and import must not wait, and this gate is review-only. The contrib write App stays on **`to-upstream`**.
+
+The **Uplink sync** workflow:
+
+1. **Inspect job** (no environment). Runs `git uplink sync`, which fetches public `main` without moving `uplink/upstream`. Commits that match a company patch (`Uplink-Patch-Id` trailer or `git patch-id --stable`) apply immediately: promote `uplink/upstream`, mark those patches `merged`, rebuild company `main`. If every new commit is ours (or nothing moved), that is the whole run.
+2. If any commit does not match a company patch, inspect writes `.uplink/reports/from-upstream/incoming.md` (foreign `git show`, plus which patches flowed back), appends `GITHUB_STEP_SUMMARY`, and fast-forwards `uplink/state` only. It does not push `uplink/upstream` or `main`.
+3. **Apply job** (`environment: from-upstream`). GitHub holds the job until a required reviewer approves the deployment. The deployment URL points at `incoming.md` on `uplink/state`. After approval the same run writes `approval.md` and runs `git uplink accept-upstream`, then pushes `uplink/upstream` and rebuilds `main`. Patch apply conflicts are recorded the same way as an auto-apply (conflict branch + issue).
+
+Workflow concurrency group `uplink-sync` (`cancel-in-progress: false`) keeps one inbound review at a time so hourly cron does not stack deployments. Inspect and apply still take `uplink-mutate` **per job**, so the environment wait does not freeze imports.
+
+### Create the environment
+
+1. Settings → Environments → New environment → name **`from-upstream`** (exact name; the workflow references `environment: from-upstream`).
+2. **Required reviewers** — add the inbound review team. Turn on **Prevent self-review**.
+3. **Deployment branches** — restrict to `main`.
+4. No environment secrets.
+
+Local equivalent:
+
+```bash
+git uplink sync                 # may print needsApproval and write incoming.md
+git uplink accept-upstream      # after you have reviewed the packet
+```
+

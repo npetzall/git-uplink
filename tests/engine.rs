@@ -6,11 +6,11 @@ use std::thread;
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts,
     IncomingPreflight, InitOpts, MergeVia, Patch, QueueConfig, QueueState, Result, STATE_BRANCH,
-    add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
-    format_approver_packet, format_contribution_packet, git, git_ok, init, init_repo, mark_merged,
-    parse_depends_on, preflight_incoming_change, rebuild, record_conflict_issue,
-    record_pull_request, report_paths, resolve_conflict, status_snapshot, strip_html_comments,
-    submit_patch, summarize_queue, sync, write_queue,
+    accept_upstream, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
+    format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
+    init, init_repo, mark_merged, parse_depends_on, preflight_incoming_change, rebuild,
+    record_conflict_issue, record_pull_request, report_paths, resolve_conflict, status_snapshot,
+    strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -45,6 +45,15 @@ fn commit_oss_packet(repo: &Path, patch: &Patch) {
     let (_, prepare_path, _) = report_paths(&patch.id);
     write(repo, &prepare_path, &packet);
     git_uplink::commit_queue(repo, &format!("uplink: OSS packet {}", patch.id)).unwrap();
+}
+
+fn sync_apply(repo: &Path) -> QueueState {
+    let result = sync(repo).unwrap();
+    if result.needs_approval {
+        accept_upstream(repo).unwrap().queue
+    } else {
+        result.queue
+    }
 }
 
 fn hash_pr_message() -> String {
@@ -1069,7 +1078,10 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
         GitOpts::default(),
     )
     .unwrap();
-    sync(company).unwrap();
+    let inspected = sync(company).unwrap();
+    assert!(inspected.needs_approval, "salt follow-up is foreign");
+    assert!(inspected.flowed_back.iter().any(|id| id == &hash_patch.id));
+    accept_upstream(company).unwrap();
 
     let snapshot = status_snapshot(company).unwrap();
     let merged = snapshot
@@ -1084,6 +1096,178 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
     assert!(tokens.contains("saltedSha256"));
     assert!(!tokens.contains("return sha256(value)"));
     assert!(tokens.contains("return 7200;"));
+}
+
+#[test]
+fn sync_applies_flowed_back_commits_without_approval() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    git(upstream, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        upstream,
+        &[
+            "commit",
+            "-m",
+            &format!(
+                "Use SHA-256 for tokens\n\nUplink-Patch-Id: {}\n",
+                hash_patch.id
+            ),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let result = sync(company).unwrap();
+    assert!(!result.needs_approval);
+    assert_eq!(result.flowed_back, vec![hash_patch.id.clone()]);
+    assert!(result.queue.pending_upstream.is_none());
+    let merged = result
+        .queue
+        .patches
+        .iter()
+        .find(|p| p.id == hash_patch.id)
+        .unwrap();
+    assert_eq!(merged.status, "merged");
+    let upstream_tokens = git_ok(company, &["show", "uplink/upstream:src/tokens.js"]).unwrap();
+    assert!(upstream_tokens.contains("sha256"));
+}
+
+#[test]
+fn sync_holds_foreign_commits_until_accept_upstream() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    let before = git_ok(company, &["rev-parse", "uplink/upstream"]).unwrap();
+
+    write(upstream, "CHANGELOG.md", "upstream 1.2\n");
+    commit_all(upstream, "document 1.2");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let result = sync(company).unwrap();
+    assert!(result.needs_approval);
+    assert!(!result.foreign_commits.is_empty());
+    assert_eq!(
+        git_ok(company, &["rev-parse", "uplink/upstream"]).unwrap(),
+        before
+    );
+    let incoming = company.join(from_upstream_report_paths().1);
+    let packet = fs::read_to_string(&incoming).unwrap();
+    assert!(packet.contains("from-upstream"));
+    assert!(packet.contains("document 1.2"));
+    assert_eq!(
+        result.queue.pending_upstream.as_ref().unwrap().sha,
+        result.pending_sha.as_deref().unwrap()
+    );
+
+    let applied = accept_upstream(company).unwrap();
+    assert!(!applied.needs_approval);
+    assert!(applied.queue.pending_upstream.is_none());
+    let after = git_ok(company, &["rev-parse", "uplink/upstream"]).unwrap();
+    assert_ne!(after, before);
+    let changelog = git_ok(company, &["show", "uplink/upstream:CHANGELOG.md"]).unwrap();
+    assert!(changelog.contains("upstream 1.2"));
+}
+
+#[test]
+fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    git(upstream, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        upstream,
+        &[
+            "commit",
+            "-m",
+            &format!(
+                "Use SHA-256 for tokens\n\nUplink-Patch-Id: {}\n",
+                hash_patch.id
+            ),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(upstream, "CHANGELOG.md", "also a release note\n");
+    commit_all(upstream, "release notes");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let result = sync(company).unwrap();
+    assert!(result.needs_approval);
+    assert!(result.flowed_back.iter().any(|id| id == &hash_patch.id));
+    assert_eq!(result.queue.patches[0].status, "queued");
+    accept_upstream(company).unwrap();
+    let snapshot = status_snapshot(company).unwrap();
+    assert_eq!(snapshot.queue.patches[0].status, "merged");
+    let changelog = snapshot.product_files.get("CHANGELOG.md").unwrap();
+    assert!(changelog.contains("release note"));
 }
 
 #[test]
@@ -1120,7 +1304,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
         GitOpts::default(),
     )
     .unwrap();
-    let queued = sync(company).unwrap();
+    let queued = sync_apply(company);
     let conflicted = queued
         .patches
         .iter()
@@ -1219,7 +1403,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         GitOpts::default(),
     )
     .unwrap();
-    let queued = sync(company).unwrap();
+    let queued = sync_apply(company);
     let conflicted = queued
         .patches
         .iter()
@@ -1310,7 +1494,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         GitOpts::default(),
     )
     .unwrap();
-    let again = sync(company).unwrap();
+    let again = sync_apply(company);
     let conflicted = again.patches.iter().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(conflicted.status, "conflict");
     let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
@@ -1401,7 +1585,7 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
         GitOpts::default(),
     )
     .unwrap();
-    sync(company).unwrap();
+    sync_apply(company);
 
     let queued = git_uplink::read_queue(company).unwrap();
     let asha_conflicted = queued.patches.iter().find(|p| p.id == asha.id).unwrap();
@@ -2724,7 +2908,7 @@ fn conflicted_records_the_issue_on_the_patch() {
         GitOpts::default(),
     )
     .unwrap();
-    let queued = sync(company).unwrap();
+    let queued = sync_apply(company);
     let conflicted = queued
         .patches
         .iter()

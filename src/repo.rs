@@ -329,7 +329,9 @@ pub fn conflicted_files(repo: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-pub fn fetch_upstream(repo: &Path, queue: &QueueState) -> Result<String> {
+/// Fetch public upstream into `refs/remotes/<remote>/<branch>` without moving
+/// `uplink/upstream`. Sync classifies the range before promoting.
+pub fn fetch_upstream_remote(repo: &Path, queue: &QueueState) -> Result<String> {
     let remote = &queue.config.upstream_remote;
     let branch = &queue.config.upstream_branch;
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
@@ -338,12 +340,21 @@ pub fn fetch_upstream(repo: &Path, queue: &QueueState) -> Result<String> {
         &["fetch", "--quiet", "--prune", remote, &spec],
         GitOpts::default(),
     )?;
-    let sha = git_ok(repo, &["rev-parse", &format!("{remote}/{branch}")])?;
+    git_ok(repo, &["rev-parse", &format!("{remote}/{branch}")])
+}
+
+pub fn promote_upstream(repo: &Path, sha: &str) -> Result<()> {
     git(
         repo,
-        &["branch", "-f", UPSTREAM_REF, &sha],
+        &["branch", "-f", UPSTREAM_REF, sha],
         GitOpts::default(),
     )?;
+    Ok(())
+}
+
+pub fn fetch_upstream(repo: &Path, queue: &QueueState) -> Result<String> {
+    let sha = fetch_upstream_remote(repo, queue)?;
+    promote_upstream(repo, &sha)?;
     Ok(sha)
 }
 

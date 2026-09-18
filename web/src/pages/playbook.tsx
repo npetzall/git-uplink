@@ -74,7 +74,9 @@ export function PlaybookPage() {
             <strong>Company product repo</strong> lives in the EMU enterprise. It is a mirror, not a
             GitHub fork network member — EMU cannot fork public repositories. Humans open PRs only
             here. Humans merge PRs onto <code>main</code>. Import records the patch on{" "}
-            <code>uplink/state</code>; sync may force-update <code>main</code> when upstream moved.
+            <code>uplink/state</code>; sync may force-update <code>main</code> when upstream moved
+            (immediately for flowed-back patches, or after <code>from-upstream</code> approval for
+            foreign commits).
             Branch from latest <code>main</code>; rebase in-flight work after a merge or sync the
             same way you would after any integration branch update.
           </p>
@@ -169,12 +171,41 @@ export function PlaybookPage() {
             The dispatcher is not the IP approver. GitHub records the environment reviewer on the
             Deployments tab and in the enterprise audit log. Turn on Prevent self-review. Do not put
             the write App secrets at repo or org level, or a job without the environment can still
-            mint a token. Packet and submit use job-level <code>uplink-mutate</code> concurrency so
+            mint a token.             Packet and submit use job-level <code>uplink-mutate</code> concurrency so
             the environment wait does not freeze imports.
           </p>
           <p>
             Setup: <code>templates/README.md</code>. Workflow:{" "}
             <code>templates/emu-workflows/uplink-submit.yml</code>.
+          </p>
+        </Section>
+
+        <Section title="from-upstream Environment as the inbound gate">
+          <p>
+            Public <code>main</code> can move for reasons that are not a company contribution
+            flowing back. Hourly sync fetches that tip but does not move{" "}
+            <code>uplink/upstream</code> until inbound review, unless every new commit matches a
+            company patch (<code>Uplink-Patch-Id</code> trailer or <code>git patch-id --stable</code>
+            ).
+          </p>
+          <p>
+            Create a repository Environment named <code>from-upstream</code>. Required reviewers
+            are inbound/security. Do not put origin-push or contrib secrets on it — inspect and
+            import must not wait, and the contrib write App stays on{" "}
+            <code>to-upstream</code>. Inspect writes{" "}
+            <code>.uplink/reports/from-upstream/incoming.md</code> (foreign diffs plus which
+            patches flowed back) onto <code>uplink/state</code> and{" "}
+            <code>GITHUB_STEP_SUMMARY</code>. The apply job waits on{" "}
+            <code>environment: from-upstream</code>. After review, the same run writes{" "}
+            <code>approval.md</code> and runs <code>git uplink accept-upstream</code>, which
+            promotes the frozen SHA and rebuilds company <code>main</code>. Patch apply conflicts
+            are recorded after that promotion, not instead of the gate.
+          </p>
+          <p>
+            Workflow group <code>uplink-sync</code> keeps one inbound review at a time. Inspect and
+            apply still take job-level <code>uplink-mutate</code> so the wait does not freeze
+            imports. Setup: <code>templates/README.md</code>. Workflow:{" "}
+            <code>templates/emu-workflows/uplink-sync.yml</code>.
           </p>
         </Section>
 
@@ -187,10 +218,12 @@ export function PlaybookPage() {
           <p>Uplink handles that in three layers:</p>
           <ul>
             <li>
-              GitHub Actions <code>concurrency: uplink-mutate</code> on import and sync (workflow
-              level) and on the submit packet/submit jobs (job level, so the <code>to-upstream</code>{" "}
-              environment wait does not freeze imports). One mutation at a time; later jobs wait
-              rather than cancel.
+              GitHub Actions <code>concurrency: uplink-mutate</code> on import and resolve
+              (workflow level), on the sync inspect/apply jobs (job level, with workflow group{" "}
+              <code>uplink-sync</code> so a waiting <code>from-upstream</code> review does not
+              stack hourly runs or freeze imports), and on the submit packet/submit jobs (job
+              level, so the <code>to-upstream</code> environment wait does not freeze imports).
+              One mutation at a time; later jobs wait rather than cancel.
             </li>
             <li>
               A process lock in <code>.git/uplink.lock</code> so two CLI processes in the same
@@ -291,6 +324,9 @@ export function PlaybookPage() {
             </li>
             <li>
               Empty apply / reverse-apply check: the tree already contains an identical change.
+              That runs after <code>uplink/upstream</code> has been promoted (immediately when
+              every new commit is ours, or after <code>from-upstream</code> approval when any
+              commit is foreign).
             </li>
           </ol>
           <p>

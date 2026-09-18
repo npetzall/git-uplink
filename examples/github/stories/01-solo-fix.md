@@ -63,7 +63,7 @@ After it finishes, `git uplink status` shows `submitted`. GitHub has a PR from `
 
 On that **upstream** PR, squash-merge in the GitHub UI.
 
-**Actions → Uplink sync → Run workflow** on internal `main`.
+**Actions → Uplink sync → Run workflow** on internal `main`. The squash-merge is Asha’s trailer, so inspect applies immediately (no `from-upstream` wait).
 
 ```bash
 git fetch origin
@@ -85,4 +85,4 @@ git commit -am "follow-up: salt the hash"
 git push origin main
 ```
 
-Run **Uplink sync** again. Company `main` has `saltedSha256` and does **not** re-apply Asha’s old `return sha256(value)`.
+Run **Uplink sync** again. The salt commit is not a company patch, so the apply job waits on Environment **from-upstream**. Approve it. Company `main` then has `saltedSha256` and does **not** re-apply Asha’s old `return sha256(value)`.

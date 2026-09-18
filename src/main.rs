@@ -6,15 +6,16 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use git_uplink::{
-    AddPatchOpts, ApprovalReceipt, Error, IncomingPreflight, InitOpts, MergeVia, OSS_ENVIRONMENT,
-    PreflightError, STATE_BRANCH, add_patch, approve_patch_at, commit_queue, drop_patch,
-    format_approval_receipt, format_contribution_packet, format_prepare_markdown, git_ok, init,
+    AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, IncomingPreflight, InitOpts,
+    MergeVia, OSS_ENVIRONMENT, PreflightError, STATE_BRANCH, accept_upstream, add_patch,
+    approve_patch_at, commit_queue, drop_patch, format_approval_receipt,
+    format_contribution_packet, format_prepare_markdown, from_upstream_report_paths, git_ok, init,
     mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, prepare_from_message, read_queue, rebuild,
     record_conflict_issue, record_pull_request, report_paths, resolve_conflict, status_snapshot,
     submit_patch, summarize_queue, sync,
 };
-use git_uplink::{Patch, QueueState};
+use git_uplink::{Patch, QueueState, SyncResult};
 
 #[derive(Parser)]
 #[command(
@@ -129,6 +130,9 @@ enum Commands {
         push_remote: String,
     },
     Sync,
+    /// Promote a pending public main after from-upstream environment approval.
+    #[command(name = "accept-upstream")]
+    AcceptUpstream,
     Conflicted {
         id: String,
         #[arg(long = "issue-url")]
@@ -336,10 +340,16 @@ fn issue_close_artifact(patch: &Patch) -> Option<serde_json::Value> {
     }))
 }
 
-fn print_sync_artifact(repo: &Path, queue: &QueueState) {
+fn print_sync_artifact(repo: &Path, result: &SyncResult) {
+    let queue = &result.queue;
     let conflict = queue.patches.iter().find(|p| p.status == "conflict");
     let mut value = serde_json::json!({
         "lastSync": queue.last_sync,
+        "needsApproval": result.needs_approval,
+        "pendingSha": result.pending_sha,
+        "flowedBack": result.flowed_back,
+        "foreignCommits": result.foreign_commits,
+        "reportPath": result.report_path,
     });
     if let Some(patch) = conflict {
         value["conflict"] = serde_json::json!({
@@ -352,6 +362,28 @@ fn print_sync_artifact(repo: &Path, queue: &QueueState) {
         });
     }
     println!("{value}");
+}
+
+fn finish_sync(repo: &Path, result: SyncResult) -> Result<(), Error> {
+    if let Some(report) = &result.report {
+        append_step_summary(report);
+    }
+    print_sync_artifact(repo, &result);
+    if result.queue.patches.iter().any(|p| p.status == "conflict") {
+        if let Some(conflict) = result.queue.patches.iter().find(|p| p.status == "conflict") {
+            eprintln!(
+                "CONFLICT {} on {}",
+                conflict.id,
+                conflict
+                    .conflict
+                    .as_ref()
+                    .map(|c| c.branch.as_str())
+                    .unwrap_or("")
+            );
+        }
+        return Err(Error::msg("sync conflict"));
+    }
+    Ok(())
 }
 
 fn print_resolve_artifact(
@@ -702,22 +734,38 @@ fn run() -> Result<(), Error> {
             println!("{} submitted as {pr_url}", patch.id);
         }
         Commands::Sync => {
-            let queue = sync(&repo)?;
-            print_sync_artifact(&repo, &queue);
-            if queue.patches.iter().any(|p| p.status == "conflict") {
-                if let Some(conflict) = queue.patches.iter().find(|p| p.status == "conflict") {
-                    eprintln!(
-                        "CONFLICT {} on {}",
-                        conflict.id,
-                        conflict
-                            .conflict
-                            .as_ref()
-                            .map(|c| c.branch.as_str())
-                            .unwrap_or("")
-                    );
-                }
-                return Err(Error::msg("sync conflict"));
+            finish_sync(&repo, sync(&repo)?)?;
+        }
+        Commands::AcceptUpstream => {
+            let queue = read_queue(&repo)?;
+            if queue.pending_upstream.is_none() {
+                return Err(Error::msg(
+                    "No pending upstream to accept. Run `git uplink sync` first.",
+                ));
             }
+            let sha = git_ok(&repo, &["rev-parse", STATE_BRANCH]).unwrap_or_else(|_| {
+                env::var("GITHUB_SHA")
+                    .unwrap_or_else(|_| git_ok(&repo, &["rev-parse", "HEAD"]).unwrap_or_default())
+            });
+            let run_url = github_run_url();
+            let receipt = format_approval_receipt(ApprovalReceipt {
+                patch_id: "incoming",
+                environment: env::var("UPLINK_FROM_UPSTREAM_ENVIRONMENT")
+                    .ok()
+                    .as_deref()
+                    .unwrap_or(FROM_UPSTREAM_ENVIRONMENT),
+                actor: env::var("GITHUB_ACTOR")
+                    .ok()
+                    .as_deref()
+                    .unwrap_or("local operator"),
+                run_url: &run_url,
+                sha: &sha,
+                at: None,
+            });
+            let dest = PathBuf::from(from_upstream_report_paths().2);
+            write_markdown_file(&repo, &dest, &receipt);
+            append_step_summary(&receipt);
+            finish_sync(&repo, accept_upstream(&repo)?)?;
         }
         Commands::Conflicted {
             id,

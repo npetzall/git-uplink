@@ -247,11 +247,26 @@ pub struct LastSync {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingUpstream {
+    pub sha: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_sha: Option<String>,
+    pub at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flowed_back: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub foreign_commits: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueState {
     pub version: u32,
     pub config: QueueConfig,
     #[serde(rename = "lastSync", skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<LastSync>,
+    #[serde(rename = "pendingUpstream", skip_serializing_if = "Option::is_none")]
+    pub pending_upstream: Option<PendingUpstream>,
     pub patches: Vec<Patch>,
 }
 
@@ -261,6 +276,7 @@ impl QueueState {
             version: 1,
             config,
             last_sync: None,
+            pending_upstream: None,
             patches: Vec::new(),
         }
     }

@@ -55,7 +55,7 @@ Both patches are `queued`. `src/tokens.js` has `sha256` and `ttl() == 7200`. Not
 
 Each public PR is the patch on public `main`, not stacked on the other.
 
-On **upstream**, squash-merge **Ben’s** PR first. Then **Actions → Uplink sync** on internal.
+On **upstream**, squash-merge **Ben’s** PR first. Then **Actions → Uplink sync** on internal. Ben’s trailer is the only new commit, so inspect applies immediately (no `from-upstream` wait).
 
 ```bash
 git fetch origin && git reset --hard origin/main

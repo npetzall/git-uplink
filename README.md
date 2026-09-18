@@ -58,6 +58,7 @@ git uplink approve <id> [--out <file>]
 git uplink submit <id>
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote origin]
 git uplink sync
+git uplink accept-upstream
 git uplink conflicted <id> --issue-url <url> [--issue <n>] [--push-remote origin]
 git uplink merged <id> [--via pr|trailer|patch-id|empty-rebase|manual] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
@@ -70,7 +71,7 @@ git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 
 `add --title` is the queue entry name. `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `Uplink-Depends-On: upl_…` lines in that message (after HTML comments are stripped) become `dependsOn`; `--depends-on` is an optional overlay. Incoming `preflight` reads the same trailers from `--message` / `--message-file`. `drop --reason` defaults to `dropped by operator`.
 
-`submit` exports the patch onto the contrib fork (git only) and prints JSON for `gh pr create`. `submitted` records the PR URL, commits the queue, and pushes company `uplink/state`. Merge detection, in order: recorded GitHub PR on the queue → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply. `sync` / `resolve` print issue create/close JSON for `gh`; `conflicted` records the issue on the patch.
+`submit` exports the patch onto the contrib fork (git only) and prints JSON for `gh pr create`. `submitted` records the PR URL, commits the queue, and pushes company `uplink/state`. Merge detection, in order: recorded GitHub PR on the queue → `Uplink-Patch-Id` trailer → `git patch-id --stable` → empty apply. `sync` classifies new public commits: matching company patches apply immediately; unmatched commits write a from-upstream packet and wait. `accept-upstream` promotes the pending SHA after that review. `sync` / `resolve` / `accept-upstream` print issue create/close JSON for `gh`; `conflicted` records the issue on the patch.
 
 git-uplink shells out to `git`, but it does **not** use the operator’s commit signer, default SSH key, or `GITHUB_TOKEN`. Bot identity and `commit.gpgsign=false` are process-scoped (`git -c`), so `git uplink init` does not rewrite `user.name` / `commit.gpgsign` in the clone. Your own `git commit` in that repo still follows global signing. Network git picks credentials by remote: `origin` uses `UPLINK_INTERNAL_KEY` or `UPLINK_INTERNAL_TOKEN`, `contrib` uses `UPLINK_CONTRIB_KEY` or `UPLINK_CONTRIB_TOKEN`, and `upstream` uses `UPLINK_UPSTREAM_KEY` or `UPLINK_UPSTREAM_TOKEN`. If both KEY and TOKEN are set, KEY wins. A KEY is a path to a **passwordless** private key (`BatchMode=yes`); a passphrase-protected key fails closed. TOKEN rewrites SSH remotes to HTTPS for that invocation. Local `file://` remotes need neither. Without the matching role’s creds, network git fails instead of opening ssh-agent / Touch ID.
 
@@ -103,7 +104,7 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 | `uplink-prepare.yml` | Every PR to `main` — PR title/body as the commit message, cutoff, export author, affiliation scan |
 | `uplink-preflight.yml` | Every PR to `main` — apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT` |
 | `uplink-import.yml` | Merge to `main` — product gate, records the patch as status `queued` |
-| `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches; rebuild `main` only if upstream moved. Queue commits go to `uplink/state`. Persist conflicts and open an internal issue |
+| `uplink-sync.yml` | Hourly / manual — fetch upstream; apply flowed-back patches immediately; foreign commits wait on `from-upstream` then `accept-upstream`. Rebuild `main` only if upstream was accepted. Queue commits go to `uplink/state`. Persist conflicts and open an internal issue |
 | `uplink-resolve.yml` | Human push to `uplink/conflict/*` — `git uplink resolve`, rebuild `main`; if already submitted, status `amended` and dispatch submit for a delta IP pass; publish a later conflict like sync |
 | `uplink-submit.yml` | Dispatch with a patch id — `to-upstream` Environment IP gate (full packet or delta), then approve + submit. Skips opening a second PR when `pr_number` is already stored |
 

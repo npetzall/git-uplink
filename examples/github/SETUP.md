@@ -72,7 +72,7 @@ export INTERNAL_DIR=/path/to/uplink-example-internal
 ./examples/github/scripts/bootstrap_internal.sh
 ```
 
-The script needs all three clones. It sets remotes, runs **`git uplink init`**, overlays [`internal/`](internal/) (Uplink Actions only; reset lives on `example-reset`), **`git uplink add --internal-only`**, and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environment `to-upstream`.
+The script needs all three clones. It sets remotes, runs **`git uplink init`**, overlays [`internal/`](internal/) (Uplink Actions only; reset lives on `example-reset`), **`git uplink add --internal-only`**, and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environments `to-upstream` and `from-upstream`.
 
 `git uplink status` in the internal clone should show one internal-only patch (`Example GitHub workflows`).
 
@@ -111,6 +111,12 @@ Each `UPLINK_*_AUTH` is `pat` or `app`. Empty defaults to `pat` in this example 
 1. **Required reviewers** — add yourself. For a solo walkthrough leave **Prevent self-review** off.
 2. **Deployment branches** — restrict to `main` if the UI offers it.
 3. **Secrets** — contrib write credentials live on **to-upstream**. Internal force-push and upstream fetch credentials are **repository** secrets (sync cannot wait on to-upstream).
+
+**Environment `from-upstream`:** Settings → Environments → New environment → `from-upstream`.
+
+1. **Required reviewers** — add yourself (solo walkthrough: leave **Prevent self-review** off).
+2. **Deployment branches** — restrict to `main` if the UI offers it.
+3. **Secrets** — none. This is the inbound review gate only. Sync inspect must not wait on it.
 
 ### Internal (repo secrets; origin force-push)
 
