@@ -21,7 +21,7 @@ git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
 git uplink status
 ```
 
-Queue: only the internal-only workflows patch.
+Queue: only the internal-only tooling patch.
 
 ## Apply the patch and push
 

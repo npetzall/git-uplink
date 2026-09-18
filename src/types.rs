@@ -4,6 +4,8 @@ pub const QUEUE_PATH: &str = ".uplink/queue.json";
 pub const PATCH_DIR: &str = ".uplink/patches";
 pub const STATE_BRANCH: &str = "uplink/state";
 pub const DEFAULT_CUTOFF: &str = "----- Uplink: internal below this line -----";
+pub const TOOLING_PATCH_KIND: &str = "uplink-tooling";
+pub const TOOLING_PATCH_TITLE: &str = "Uplink tooling";
 
 fn default_state_branch() -> String {
     STATE_BRANCH.to_string()
@@ -14,6 +16,38 @@ pub const DEFAULT_EXPORT_AUTHOR: (&str, &str) =
 
 pub type PatchIntent = String;
 pub type PatchStatus = String;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+#[value(rename_all = "kebab-case")]
+pub enum Forge {
+    Ghec,
+    ExampleGithub,
+}
+
+impl Forge {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ghec => "ghec",
+            Self::ExampleGithub => "example-github",
+        }
+    }
+
+    pub fn family(self) -> ForgeFamily {
+        ForgeFamily::Github
+    }
+}
+
+impl std::fmt::Display for Forge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeFamily {
+    Github,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -174,6 +208,8 @@ pub struct Patch {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approvals: Vec<PatchApproval>,
     pub events: Vec<PatchEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl Patch {
@@ -213,6 +249,8 @@ pub struct QueueConfig {
     pub redact_keywords: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub internal_email_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<Forge>,
 }
 
 impl Default for QueueConfig {
@@ -232,6 +270,7 @@ impl Default for QueueConfig {
             export_author_email: Some(DEFAULT_EXPORT_AUTHOR.1.into()),
             redact_keywords: Vec::new(),
             internal_email_domains: Vec::new(),
+            forge: None,
         }
     }
 }

@@ -4,7 +4,7 @@ This is how developers use Uplink day to day. You open one internal PR per chang
 
 Read this alongside `.uplink/queue.json` (on `uplink/state`) and `git uplink status`. The binary is `git-uplink` (a Git subcommand). Durable queue history lives on the orphan branch `uplink/state`. Company `main` is product-only: public upstream plus every patch that is not merged or dropped. Sync force-updates `main` only when upstream moved (or a drop/resolve requires a replay).
 
-Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. Copy `templates/github/pull_request_template.md` to `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`add --push`, `sync`, `submit`) uses per-remote `UPLINK_INTERNAL_*`, `UPLINK_CONTRIB_*`, or `UPLINK_UPSTREAM_*` KEY or TOKEN (KEY wins; keys must be passwordless), not `GITHUB_TOKEN` or your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `conflicted` record the result.
+Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. `git uplink init --forge ghec` installs `templates/github/pull_request_template.md` as `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`add --push`, `sync`, `submit`) uses per-remote `UPLINK_INTERNAL_*`, `UPLINK_CONTRIB_*`, or `UPLINK_UPSTREAM_*` KEY or TOKEN (KEY wins; keys must be passwordless), not `GITHUB_TOKEN` or your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `conflicted` record the result.
 
 | Phase | What you do | Result |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ Why this fits a workflow:
 - The **approval is committed** as a receipt, and GitHub already has the stronger record (environment review + audit log).
 - **`GITHUB_STEP_SUMMARY`** is the page the approver can read without cloning.
 
-Setup steps, secrets table, and ruleset notes: `templates/README.md`. The workflow file is `templates/emu-workflows/uplink-submit.yml`.
+Setup steps, secrets table, and ruleset notes: `templates/README.md`. The workflow file is `templates/ghec/.github/workflows/uplink-submit.yml`.
 
 Local engine tests still call `git uplink approve` directly. That does not create an Environment review. On GHEC, dispatch the workflow.
 

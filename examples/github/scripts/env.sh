@@ -86,15 +86,6 @@ git_bot() {
     -c commit.gpgsign=false "$@"
 }
 
-copy_overlay() {
-  local src=$1 dest=$2
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a "$src/" "$dest/"
-  else
-    cp -R "$src"/. "$dest/"
-  fi
-}
-
 replace_tree() {
   local src=$1 dest=$2
   if command -v rsync >/dev/null 2>&1; then

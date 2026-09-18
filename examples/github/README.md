@@ -18,9 +18,7 @@ Company `main` is always:
 public upstream/main  +  every patch that is not merged or dropped
 ```
 
-After bootstrap, the queue already has one **internal-only** patch (the GitHub workflows). Product stories start from that baseline.
-
-After bootstrap, the queue already has one **internal-only** patch (the GitHub workflows). Product stories start from that baseline.
+After bootstrap, the queue already has one **internal-only** patch (Uplink tooling: GitHub workflows and the PR template). Product stories start from that baseline.
 
 ## How a story step works
 
@@ -49,7 +47,6 @@ examples/github/
   example-reset.yml     stub workflow (checkout orphan example-reset)
   reset/                per-repo reset scripts (published on example-reset)
   upstream/             tokenkit
-  internal/             Uplink Actions (product overlay)
   patches/*.diff        git apply these
   patches/*.pr.md       paste into the GitHub PR body
   scripts/bootstrap_*.sh  seed upstream, then contrib fork, then internal

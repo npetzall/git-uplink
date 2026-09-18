@@ -72,9 +72,9 @@ export INTERNAL_DIR=/path/to/uplink-example-internal
 ./examples/github/scripts/bootstrap_internal.sh
 ```
 
-The script needs all three clones. It sets remotes, runs **`git uplink init`**, overlays [`internal/`](internal/) (Uplink Actions only; reset lives on `example-reset`), **`git uplink add --internal-only`**, and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environments `to-upstream` and `from-upstream`.
+The script needs all three clones. It sets remotes, runs **`git uplink init --forge example-github`** (installs the internal-only Uplink Actions pack), and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environments `to-upstream` and `from-upstream`.
 
-`git uplink status` in the internal clone should show one internal-only patch (`Example GitHub workflows`).
+`git uplink status` in the internal clone should show one internal-only patch (`Uplink tooling`).
 
 Keep the internal and upstream clones for the stories:
 

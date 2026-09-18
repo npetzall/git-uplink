@@ -4,13 +4,14 @@ use std::process::Command;
 use std::thread;
 
 use git_uplink::{
-    AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts,
+    AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge, GitOpts,
     IncomingPreflight, InitOpts, MergeVia, Patch, QueueConfig, QueueState, Result, STATE_BRANCH,
-    accept_upstream, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
-    format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
-    init, init_repo, mark_merged, parse_depends_on, preflight_incoming_change, rebuild,
-    record_conflict_issue, record_pull_request, report_paths, resolve_conflict, status_snapshot,
-    strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
+    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, accept_upstream, add_patch, approve_patch,
+    configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, from_upstream_report_paths, git, git_ok, init, init_repo,
+    mark_merged, parse_depends_on, preflight_incoming_change, rebuild, record_conflict_issue,
+    record_pull_request, report_paths, resolve_conflict, status_snapshot, strip_html_comments,
+    submit_patch, summarize_queue, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -282,6 +283,7 @@ fn init_with_recorded_urls(world: &World) -> QueueState {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            forge: Some(Forge::Ghec),
             ..Default::default()
         },
     )
@@ -343,7 +345,32 @@ fn init_records_remote_urls_and_internal_branch() {
     assert!(stored.contains("\"internalBranch\": \"main\""));
     assert!(stored.contains("\"upstreamUrl\""));
     assert!(stored.contains("\"contribUrl\""));
+    assert!(stored.contains("\"forge\": \"ghec\""));
     assert!(!stored.contains("companyBranch"));
+    assert_eq!(queue.config.forge, Some(Forge::Ghec));
+    assert_eq!(queue.patches.len(), 1);
+    assert_eq!(queue.patches[0].kind.as_deref(), Some(TOOLING_PATCH_KIND));
+    assert_eq!(queue.patches[0].intent, "internal-only");
+    assert_eq!(queue.patches[0].title, TOOLING_PATCH_TITLE);
+    assert!(
+        world
+            .company
+            .join(".github/workflows/uplink-prepare.yml")
+            .is_file()
+    );
+    assert!(
+        world
+            .company
+            .join(".github/pull_request_template.md")
+            .is_file()
+    );
+    assert!(
+        !world
+            .company
+            .join(".github/actions/install-git-uplink/action.yml")
+            .is_file()
+    );
+    assert!(!tree_has_uplink(&world.company, "main"));
 }
 
 #[test]
@@ -470,6 +497,195 @@ fn init_updates_recorded_urls_on_an_existing_queue() {
         remote_get_url(&world.company, "upstream"),
         new_upstream.to_str().unwrap()
     );
+}
+
+#[test]
+fn init_requires_forge_when_creating_a_queue() {
+    let world = setup_uninitialized();
+    let err = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("--forge"), "{err}");
+}
+
+#[test]
+fn init_example_github_includes_install_action_and_shared_pr_template() {
+    let world = setup_uninitialized();
+    let queue = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            forge: Some(Forge::ExampleGithub),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(queue.config.forge, Some(Forge::ExampleGithub));
+    assert!(
+        world
+            .company
+            .join(".github/actions/install-git-uplink/action.yml")
+            .is_file()
+    );
+    let ghec_template = fs::read_to_string("templates/github/pull_request_template.md").unwrap();
+    let installed =
+        fs::read_to_string(world.company.join(".github/pull_request_template.md")).unwrap();
+    assert_eq!(installed, ghec_template);
+}
+
+#[test]
+fn init_without_args_does_not_rewrite_workflows() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    fs::remove_dir_all(clone.join(".github")).unwrap();
+    assert!(!clone.join(".github/workflows/uplink-prepare.yml").is_file());
+    init(&clone, InitOpts::default()).unwrap();
+    assert!(!clone.join(".github/workflows/uplink-prepare.yml").is_file());
+}
+
+#[test]
+fn init_rejects_forge_renames_on_an_existing_queue() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let err = init(
+        &world.company,
+        InitOpts {
+            forge: Some(Forge::ExampleGithub),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("forge"), "{err}");
+    assert!(err.contains("ghec"), "{err}");
+    assert!(err.contains("example-github"), "{err}");
+}
+
+#[test]
+fn init_upgrade_refreshes_the_same_tooling_patch() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    let id = queue.patches[0].id.clone();
+    assert_eq!(queue.patches[0].kind.as_deref(), Some(TOOLING_PATCH_KIND));
+
+    let original = git_ok(&world.company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
+    git(
+        &world.company,
+        &["checkout", "--quiet", "--detach", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        &world.company,
+        ".github/workflows/uplink-prepare.yml",
+        "stale\n",
+    );
+    git(&world.company, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        &world.company,
+        &["commit", "-m", "stale tooling"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let stale = git_ok(
+        &world.company,
+        &["format-patch", "--full-index", "-1", "--stdout"],
+    )
+    .unwrap();
+    git(
+        &world.company,
+        &["checkout", "-f", "--quiet", &original],
+        GitOpts::default(),
+    )
+    .unwrap();
+    fs::write(
+        world.company.join(format!(".uplink/patches/{id}.patch")),
+        stale,
+    )
+    .unwrap();
+    let mut queue = git_uplink::read_queue(&world.company).unwrap();
+    queue.patches[0].patch_id_stable = Some("stale".into());
+    git_uplink::write_queue(&world.company, &queue).unwrap();
+    git_uplink::commit_queue(&world.company, "uplink: stale tooling patch").unwrap();
+
+    let upgraded = init(
+        &world.company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(upgraded.patches.len(), 1);
+    assert_eq!(upgraded.patches[0].id, id);
+    assert_eq!(
+        upgraded.patches[0].kind.as_deref(),
+        Some(TOOLING_PATCH_KIND)
+    );
+    assert_ne!(
+        upgraded.patches[0].patch_id_stable.as_deref(),
+        Some("stale")
+    );
+    let prepare =
+        fs::read_to_string(world.company.join(".github/workflows/uplink-prepare.yml")).unwrap();
+    assert!(
+        prepare.contains("name: Uplink prepare for upstream"),
+        "{prepare}"
+    );
+    assert!(!prepare.trim().eq("stale"));
+}
+
+#[test]
+fn init_upgrade_is_a_noop_when_the_pack_matches() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    let id = queue.patches[0].id.clone();
+    let stable = queue.patches[0].patch_id_stable.clone();
+    let before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let upgraded = init(
+        &world.company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    assert_eq!(before, after);
+    assert_eq!(upgraded.patches[0].id, id);
+    assert_eq!(upgraded.patches[0].patch_id_stable, stable);
+}
+
+#[test]
+fn init_upgrade_before_init_errors() {
+    let world = setup_uninitialized();
+    let err = init(
+        &world.company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("not initialized"), "{err}");
 }
 
 #[test]

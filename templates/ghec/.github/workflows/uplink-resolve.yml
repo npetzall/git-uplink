@@ -1,4 +1,4 @@
-# Copy into the company product repository on GitHub Enterprise Cloud.
+# ghec forge pack (`git uplink init --forge ghec`).
 # Requires `git-uplink` on PATH.
 # Empty UPLINK_*_AUTH defaults to app.
 #

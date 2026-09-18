@@ -1,6 +1,6 @@
-# Copy into the company product repository on GitHub Enterprise Cloud.
-# Requires `git-uplink` on PATH (cargo install this crate on the runner).
-# Empty UPLINK_*_AUTH defaults to app.
+# example-github forge pack (`git uplink init --forge example-github`).
+# Installs git-uplink on the runner.
+# Empty UPLINK_*_AUTH defaults to pat.
 name: Uplink import
 
 on:
@@ -24,10 +24,14 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - uses: ./.github/actions/install-git-uplink
+        with:
+          src: ${{ vars.UPLINK_SRC }}
+          rev: ${{ vars.UPLINK_REV }}
 
       - name: Mint internal GitHub App token
         id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}

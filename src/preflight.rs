@@ -360,6 +360,7 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
         conflict: None,
         approvals: Vec::new(),
         events: Vec::new(),
+        kind: None,
     };
     let message = export_commit_message(&patch);
     let shas = ensure_revs(repo, &[&opts.from_ref, &opts.head_ref])?;

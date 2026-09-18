@@ -1,4 +1,4 @@
-# Copy into the company product repository.
+# ghec forge pack (`git uplink init --forge ghec`).
 #
 # Secondary process on every internal PR to company main: rewrite the
 # contribution as it would leave the enterprise. Uses the PR title and

@@ -1,5 +1,5 @@
-# Example copy of templates/emu-workflows/uplink-preflight.yml.
-# Keep behavior in sync. This copy installs git-uplink on the runner.
+# example-github forge pack (`git uplink init --forge example-github`).
+# Installs git-uplink on the runner.
 name: Uplink export preflight
 
 on:

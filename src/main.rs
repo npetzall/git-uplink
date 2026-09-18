@@ -6,9 +6,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use git_uplink::{
-    AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, IncomingPreflight, InitOpts,
-    MergeVia, PreflightError, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch,
-    approve_patch_at, commit_queue, drop_patch, format_approval_receipt,
+    AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight,
+    InitOpts, MergeVia, PreflightError, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream,
+    add_patch, approve_patch_at, commit_queue, drop_patch, format_approval_receipt,
     format_contribution_packet, format_prepare_markdown, from_upstream_report_paths, git_ok, init,
     mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, prepare_from_message, read_queue, rebuild,
@@ -50,6 +50,10 @@ enum Commands {
         contrib_remote_name: Option<String>,
         #[arg(long = "internal-branch")]
         internal_branch: Option<String>,
+        #[arg(long, value_enum)]
+        forge: Option<Forge>,
+        #[arg(long)]
+        upgrade: bool,
     },
     Add {
         #[arg(long)]
@@ -495,6 +499,8 @@ fn run() -> Result<(), Error> {
             upstream_branch,
             contrib_remote_name,
             internal_branch,
+            forge,
+            upgrade,
         } => {
             let queue = init(
                 &repo,
@@ -505,6 +511,8 @@ fn run() -> Result<(), Error> {
                     upstream_branch,
                     contrib_remote_name,
                     internal_branch,
+                    forge,
+                    upgrade,
                 },
             )?;
             println!("{}", serde_json::to_string_pretty(&queue)?);

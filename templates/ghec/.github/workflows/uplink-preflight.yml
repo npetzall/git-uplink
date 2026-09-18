@@ -1,13 +1,20 @@
-# Example copy of templates/emu-workflows/uplink-prepare.yml.
-# Keep behavior in sync. This copy installs git-uplink on the runner.
-name: Uplink prepare for upstream
+# ghec forge pack (`git uplink init --forge ghec`).
+#
+# Runs on every internal PR against company main, BEFORE import.
+# Applies the PR's unique diff onto public upstream (+ declared
+# Uplink-Depends-On patches) and runs UPLINK_PREFLIGHT (build/test).
+# Fail the check instead of opening a contribution later that is missing
+# queued work the author used from company main.
+#
+# Put this check in the required status checks for the PR.
+name: Uplink export preflight
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
 concurrency:
-  group: uplink-prepare-${{ github.event.pull_request.number }}
+  group: uplink-preflight-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -15,7 +22,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  prepare:
+  preflight:
     if: github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
@@ -23,16 +30,11 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.base.ref }}
-      - uses: ./.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
-      - name: Prepare contribution
+
+      - name: Export preflight
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
-          UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
-          UPLINK_EXPORT_AUTHOR: ${{ vars.UPLINK_EXPORT_AUTHOR }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
@@ -40,22 +42,19 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           git uplink init
-          extra=""
-          if echo "${{ join(github.event.pull_request.labels.*.name, ',') }}" | grep -q 'uplink:internal-only'; then
-            extra="--internal-only"
-          fi
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
           set +e
-          git uplink prepare \
+          git uplink preflight \
             --title "$TITLE" \
             --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" \
-            --head "$HEAD_SHA" \
-            $extra > /tmp/uplink-prepare.md
+            --head "$HEAD_SHA" > /tmp/uplink-preflight.md
           code=$?
           set -e
-          gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-prepare.md
-          exit "$code"
+          if [ "$code" -ne 0 ]; then
+            gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-preflight.md
+            exit "$code"
+          fi

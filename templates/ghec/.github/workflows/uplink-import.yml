@@ -1,6 +1,6 @@
-# Example copy of templates/emu-workflows/uplink-import.yml.
-# Keep behavior in sync. This copy installs git-uplink on the runner.
-# Empty UPLINK_*_AUTH defaults to pat.
+# ghec forge pack (`git uplink init --forge ghec`).
+# Requires `git-uplink` on PATH (cargo install this crate on the runner).
+# Empty UPLINK_*_AUTH defaults to app.
 name: Uplink import
 
 on:
@@ -24,14 +24,10 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.merge_commit_sha }}
-      - uses: ./.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
 
       - name: Mint internal GitHub App token
         id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}

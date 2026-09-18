@@ -14,6 +14,9 @@ fn main() {
     println!("cargo:rerun-if-changed=web/src");
     println!("cargo:rerun-if-changed=way-of-working.md");
     println!("cargo:rerun-if-changed=templates/README.md");
+    println!("cargo:rerun-if-changed=templates/github");
+    println!("cargo:rerun-if-changed=templates/ghec");
+    println!("cargo:rerun-if-changed=templates/example-github");
 
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     run(npm, &["ci", "--no-fund", "--no-audit"], &web);

@@ -25,7 +25,7 @@ use crate::repo::{
     write_product_patch,
 };
 use crate::types::{
-    LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
+    Forge, LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
     PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig, QueueState,
 };
 
@@ -51,6 +51,8 @@ pub struct InitOpts {
     pub upstream_branch: Option<String>,
     pub contrib_remote_name: Option<String>,
     pub internal_branch: Option<String>,
+    pub forge: Option<Forge>,
+    pub upgrade: bool,
 }
 
 impl InitOpts {
@@ -84,22 +86,31 @@ fn config_from_opts(opts: &InitOpts) -> QueueConfig {
     }
     config.upstream_url = nonempty(opts.upstream_url.clone());
     config.contrib_url = nonempty(opts.contrib_url.clone());
+    config.forge = opts.forge;
     config
 }
 
 /// Create or hydrate an uplink queue. No CLI args fetches `origin` `uplink/state`
 /// and reconstitutes remotes from stored URLs. Args create the queue when state
-/// is missing, or sanity-check an existing queue.
+/// is missing, or sanity-check an existing queue. `--forge` is required when
+/// creating a queue. `--upgrade` amends the stored forge pack in place.
 pub fn init(repo: &Path, opts: InitOpts) -> Result<QueueState> {
     configure_repo(repo)?;
-    if !opts.has_args() {
+    if opts.upgrade {
+        return init_upgrade(repo, &opts);
+    }
+    if !opts.has_args() && opts.forge.is_none() {
         return hydrate_from_origin(repo);
     }
     try_fetch_origin_state(repo)?;
     if state_exists(repo)? {
         return init_existing(repo, &opts);
     }
-    init_repo(repo, config_from_opts(&opts))
+    let forge = opts.forge.ok_or_else(missing_forge_error)?;
+    let mut config = config_from_opts(&opts);
+    config.forge = Some(forge);
+    init_repo(repo, config)?;
+    ensure_tooling_patch(repo)
 }
 
 fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
@@ -109,6 +120,10 @@ fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
     ensure_configured_remotes(repo, &queue.config)?;
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
     Ok(queue)
+}
+
+fn missing_forge_error() -> Error {
+    Error::msg("pass --forge ghec or --forge example-github when creating an uplink queue")
 }
 
 fn require_stored_urls(config: &QueueConfig) -> Result<()> {
@@ -161,9 +176,16 @@ fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
         opts.internal_branch.as_deref(),
         &queue.config.internal_branch,
     );
+    if let (Some(stored), Some(requested)) = (queue.config.forge, opts.forge) {
+        if stored != requested {
+            mismatches.push(format!(
+                "  forge: stored \"{stored}\", requested \"{requested}\""
+            ));
+        }
+    }
     if !mismatches.is_empty() {
         return Err(Error::msg(format!(
-            "Cannot change uplink remote or branch names on an existing queue:\n{}",
+            "Cannot change uplink remote, branch, or forge names on an existing queue:\n{}",
             mismatches.join("\n")
         )));
     }
@@ -188,6 +210,39 @@ fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
     ensure_configured_remotes(repo, &queue.config)?;
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
     read_queue_file(repo)
+}
+
+fn init_upgrade(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
+    try_fetch_origin_state(repo)?;
+    if !state_exists(repo)? {
+        return Err(Error::msg(
+            "not initialized; run `git uplink init --upstream <url> --contrib <url> --forge <forge>` first",
+        ));
+    }
+    init_existing(repo, opts)?;
+    let mut queue = read_queue_file(repo)?;
+    if queue.config.forge.is_none() {
+        let forge = opts.forge.ok_or_else(|| {
+            Error::msg(
+                "queue.json has no forge. Re-run `git uplink init --upgrade --forge ghec` \
+(or --forge example-github) to record it.",
+            )
+        })?;
+        queue.config.forge = Some(forge);
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, "uplink: record forge")?;
+    }
+    ensure_tooling_patch(repo)
+}
+
+fn ensure_tooling_patch(repo: &Path) -> Result<QueueState> {
+    crate::lock::with_queue_lock(repo, || {
+        let refresh = crate::tooling::refresh_tooling_patch(repo)?;
+        if refresh.changed {
+            rebuild_once(repo)?;
+        }
+        read_queue_file(repo)
+    })
 }
 
 pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
@@ -369,6 +424,7 @@ fn add_patch_once(
         conflict: None,
         approvals: Vec::new(),
         events: Vec::new(),
+        kind: None,
     };
 
     for dep_id in &patch.depends_on {

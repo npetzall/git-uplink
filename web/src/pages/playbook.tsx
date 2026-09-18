@@ -176,7 +176,7 @@ export function PlaybookPage() {
           </p>
           <p>
             Setup: <code>templates/README.md</code>. Workflow:{" "}
-            <code>templates/emu-workflows/uplink-submit.yml</code>.
+            <code>templates/ghec/.github/workflows/uplink-submit.yml</code>.
           </p>
         </Section>
 
@@ -205,7 +205,7 @@ export function PlaybookPage() {
             Workflow group <code>uplink-sync</code> keeps one inbound review at a time. Inspect and
             apply still take job-level <code>uplink-mutate</code> so the wait does not freeze
             imports. Setup: <code>templates/README.md</code>. Workflow:{" "}
-            <code>templates/emu-workflows/uplink-sync.yml</code>.
+            <code>templates/ghec/.github/workflows/uplink-sync.yml</code>.
           </p>
         </Section>
 
@@ -256,8 +256,8 @@ export function PlaybookPage() {
           <p>
             Failure blocks import, does not push the contribution fork, and does not open an
             upstream PR. The workflow comments the internal PR with suggested{" "}
-            <code>Uplink-Depends-On</code> lines. Copy{" "}
-            <code>templates/emu-workflows/uplink-preflight.yml</code> and make it a required check.
+            <code>Uplink-Depends-On</code> lines. Init with <code>--forge ghec</code> installs{" "}
+            <code>templates/ghec/.github/workflows/uplink-preflight.yml</code>; make it a required check.
             Set Actions variable <code>UPLINK_PREFLIGHT</code> to the command that must pass for a
             contribution (for example <code>npm test</code>).
           </p>
@@ -269,8 +269,9 @@ export function PlaybookPage() {
             <li>
               Write the public rationale in the PR title and above{" "}
               <code>----- Uplink: internal below this line -----</code> in the body. Tickets and{" "}
-              <code>Uplink-Export-Author</code> go below the cutoff. Copy{" "}
-              <code>templates/github/pull_request_template.md</code> to{" "}
+              <code>Uplink-Export-Author</code> go below the cutoff.{" "}
+              <code>git uplink init --forge ghec</code> installs{" "}
+              <code>templates/github/pull_request_template.md</code> as{" "}
               <code>.github/pull_request_template.md</code>. HTML comments are visible while
               writing the PR and are stripped on import. Git commit logs are not concatenated.
             </li>
@@ -410,8 +411,9 @@ export function PlaybookPage() {
               This crate: the <code>git-uplink</code> binary, the git engine, this operator dashboard (`git uplink web-ui`), and <code>way-of-working.md</code> (developer stories).
             </li>
             <li>
-              Copy <code>templates/emu-workflows/</code> into the company product repo.
-              Make prepare and export preflight required checks. Create Environment{" "}
+              Run <code>git uplink init --upstream … --contrib … --forge ghec</code> in the
+              company product repo (then <code>git uplink init --upgrade</code> when the binary
+              gains new workflows). Make prepare and export preflight required checks. Create Environment{" "}
               <code>to-upstream</code> with IP/legal as required reviewers and the contrib GitHub App
               secrets on that environment only. Store internal and upstream git secrets at repo
               level. Set <code>UPLINK_REDACT_KEYWORDS</code> and <code>UPLINK_EXPORT_AUTHOR</code>.
@@ -434,7 +436,8 @@ export function PlaybookPage() {
             <CardTitle>Commands</CardTitle>
           </CardHeader>
           <CardContent>
-            <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`git uplink init --upstream https://github.com/org/proj.git --contrib https://github.com/org/proj-company.git
+            <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`git uplink init --upstream https://github.com/org/proj.git --contrib https://github.com/org/proj-company.git --forge ghec
+git uplink init --upgrade
 git uplink init
 git uplink add --title "Use SHA-256 for tokens" --message-file msg.txt
 git uplink add --title "Vendor hook" --internal-only

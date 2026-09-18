@@ -1,10 +1,20 @@
-# Example copy of templates/emu-workflows/uplink-sync.yml.
-# Keep behavior in sync. This copy installs git-uplink and is
-# workflow_dispatch only (no hourly cron) so a walkthrough is not raced.
-# Empty UPLINK_*_AUTH defaults to pat.
+# ghec forge pack (`git uplink init --forge ghec`).
+# Requires `git-uplink` on PATH.
+# Empty UPLINK_*_AUTH defaults to app.
+#
+# Inspect fetches public upstream without moving uplink/upstream. Flowed-back
+# patches (trailer / patch-id) apply immediately. Foreign commits write
+# .uplink/reports/from-upstream/incoming.md and wait on Environment
+# `from-upstream`. After approval, accept-upstream promotes uplink/upstream
+# and rebuilds company main. Queue history lives on uplink/state (FF-only).
+# On apply failure it records the patch as conflict on uplink/state,
+# commits uplink/conflict/<id> (with markers), and opens an internal
+# issue. Do not open a PR for the conflict.
 name: Uplink sync
 
 on:
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -28,7 +38,7 @@ jobs:
     steps:
       - name: Mint internal GitHub App token
         id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
@@ -38,7 +48,7 @@ jobs:
 
       - name: Mint upstream GitHub App token
         id: upstream-app
-        if: ${{ vars.UPLINK_UPSTREAM_AUTH == 'app' }}
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
@@ -50,10 +60,6 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-      - uses: ./.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
 
       - name: Sync with upstream
         id: sync
@@ -128,7 +134,7 @@ jobs:
     steps:
       - name: Mint internal GitHub App token
         id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
@@ -138,7 +144,7 @@ jobs:
 
       - name: Mint upstream GitHub App token
         id: upstream-app
-        if: ${{ vars.UPLINK_UPSTREAM_AUTH == 'app' }}
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
@@ -151,10 +157,6 @@ jobs:
           fetch-depth: 0
           ref: main
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-      - uses: ./.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
 
       - name: Accept pending upstream
         env:

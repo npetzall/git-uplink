@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Initialize uplink-example-internal against already-bootstrapped upstream
-# and contrib clones. Runs git uplink init, imports the internal-only
-# workflows patch, pushes seed branches, and publishes orphan example-reset.
+# and contrib clones. Runs git uplink init --forge example-github (installs
+# the internal-only workflows patch), pushes seed branches, and publishes
+# orphan example-reset.
 #
 #   export UPSTREAM_DIR=$HOME/src/uplink-example-upstream
 #   export CONTRIB_DIR=$HOME/src/uplink-example-upstream-contrib
@@ -34,37 +35,12 @@ ensure_remote "$INTERNAL_DIR" upstream "$UPSTREAM_URL"
 ensure_remote "$INTERNAL_DIR" contrib "$CONTRIB_URL"
 git -C "$INTERNAL_DIR" fetch upstream
 git -C "$INTERNAL_DIR" checkout -B main upstream/main
-git -C "$INTERNAL_DIR" uplink init --upstream "$UPSTREAM_URL" --contrib "$CONTRIB_URL"
+git -C "$INTERNAL_DIR" uplink init --upstream "$UPSTREAM_URL" --contrib "$CONTRIB_URL" --forge example-github
 git -C "$INTERNAL_DIR" push -u origin main --force
 git -C "$INTERNAL_DIR" push origin uplink/state --force
 git -C "$INTERNAL_DIR" push origin uplink/upstream --force
 
-echo "Importing internal-only GitHub Actions patch"
-git -C "$INTERNAL_DIR" checkout -B feat/internal-github
-copy_overlay "$KIT_DIR/internal" "$INTERNAL_DIR"
-git -C "$INTERNAL_DIR" add -A
-git_bot -C "$INTERNAL_DIR" commit -m "Example GitHub workflows"
-FROM_SHA=$(git -C "$INTERNAL_DIR" rev-parse main)
-HEAD_SHA=$(git -C "$INTERNAL_DIR" rev-parse HEAD)
-git -C "$INTERNAL_DIR" checkout --quiet main
-git -C "$INTERNAL_DIR" merge --ff-only --quiet feat/internal-github
-git -C "$INTERNAL_DIR" push origin main --force
-WORKDIR=$(mktemp -d)
-trap 'rm -rf "$WORKDIR"' EXIT
-{
-  printf '%s\n\n' "Example GitHub workflows"
-  printf '%s\n' "Install Uplink Actions on company main. Not for upstream."
-  printf '%s\n' "----- Uplink: internal below this line -----"
-  printf '%s\n' "Ticket: PROJ-0000"
-} > "$WORKDIR/workflows.msg"
-git -C "$INTERNAL_DIR" uplink add \
-  --title "Example GitHub workflows" \
-  --message-file "$WORKDIR/workflows.msg" \
-  --internal-only \
-  --from "$FROM_SHA" \
-  --head "$HEAD_SHA" \
-  --push
-git -C "$INTERNAL_DIR" checkout --quiet main
+echo "Seeding reset refs"
 git -C "$INTERNAL_DIR" branch -f seed main
 git -C "$INTERNAL_DIR" branch -f seed-state uplink/state
 git -C "$INTERNAL_DIR" branch -f seed-upstream uplink/upstream

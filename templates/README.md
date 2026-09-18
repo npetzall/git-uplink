@@ -1,15 +1,19 @@
-# EMU workflow templates
+# Forge packs
 
-Copy these files into the **company product repository** on GitHub Enterprise Cloud.
+`git uplink init --upstream <url> --contrib <url> --forge <forge>` installs the selected pack as the first internal-only patch on company `main`. `--upgrade` amends that patch from the templates embedded in the binary.
 
-- `templates/emu-workflows/*.yml` → `.github/workflows/`
-- `templates/github/pull_request_template.md` → `.github/pull_request_template.md`
+| `--forge` | Workflows | Notes |
+| --- | --- | --- |
+| `ghec` | `templates/ghec/.github/workflows/` | GitHub Enterprise Cloud. `git-uplink` on `PATH`. Empty `UPLINK_*_AUTH` defaults to `app`. |
+| `example-github` | `templates/example-github/.github/` | Worked example. Includes `install-git-uplink`. Empty `UPLINK_*_AUTH` defaults to `pat`. |
+
+Both are GitHub-family forges. They share one pull request template: `templates/github/pull_request_template.md` → `.github/pull_request_template.md`. Do not copy YAML by hand.
 
 The PR template is the commit message. Title + body become one stored message (HTML comments stripped). Keep the cutoff line; company `main` includes it, contrib export does not.
 
-That repository also needs the `git-uplink` binary on `PATH`. Install this crate on the runner (`cargo install --path vendor/git-uplink` or a release binary).
+The `ghec` pack needs the `git-uplink` binary on `PATH`. Install this crate on the runner (`cargo install --path vendor/git-uplink` or a release binary). `example-github` builds it on the runner from `UPLINK_SRC` / `UPLINK_REV`.
 
-Each job’s first `git uplink` command is `git uplink init`, which fetches `origin` `uplink/state` and `uplink/upstream` and adds the `upstream` and `contrib` remotes from URLs stored in `.uplink/queue.json`. First-time setup is `git uplink init --upstream <url> --contrib <url>` in the product clone (then push `uplink/state`).
+Each job’s first `git uplink` command is `git uplink init`, which fetches `origin` `uplink/state` and `uplink/upstream` and adds the `upstream` and `contrib` remotes from URLs stored in `.uplink/queue.json`. That hydrate path does not rewrite workflows. First-time setup is `git uplink init --upstream <url> --contrib <url> --forge ghec` in the product clone (then push `main` and `uplink/state`). Pushing `.github/workflows` needs **workflows** write, not `GITHUB_TOKEN`.
 
 Sync and resolve mint `UPLINK_INTERNAL_TOKEN` first and pass it to `actions/checkout`, so shell `git fetch` / `git push` of **origin** can include `.github/workflows` (GitHub rejects `GITHUB_TOKEN` for those files). Other jobs still persist `GITHUB_TOKEN` on checkout. `git uplink` blanks the checkout extraheader and authenticates by remote (`UPLINK_INTERNAL_*` for origin, `UPLINK_UPSTREAM_*` for public upstream fetch, `UPLINK_CONTRIB_*` for contrib force-push). `GITHUB_TOKEN` is `GH_TOKEN` for `gh` on the company repo (issues, PR comments, dispatching submit). It cannot open the public pull request. Import/sync/resolve/submit mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write.
 

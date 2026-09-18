@@ -11,6 +11,7 @@ mod preflight;
 mod prepare;
 mod queue;
 mod repo;
+mod tooling;
 mod types;
 pub mod webui;
 
@@ -36,8 +37,9 @@ pub use prepare::{
 };
 pub use repo::{commit_queue, patch_state_commit};
 pub use types::{
-    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, MergeVia, Patch, PatchApproval, PatchIntent,
+    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Forge, MergeVia, Patch, PatchApproval, PatchIntent,
     PatchStatus, PendingUpstream, PrepareReport, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
+    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
 };
 
 #[cfg(test)]

@@ -39,7 +39,8 @@ export PATH="$PWD/target/release:$PATH"
 ## Commands
 
 ```text
-git uplink init [--upstream <url>] [--contrib <url>]
+git uplink init [--upstream <url>] [--contrib <url>] [--forge ghec|example-github]
+            [--upgrade]
             [--upstream-remote-name <name>] [--upstream-branch <branch>]
             [--contrib-remote-name <name>] [--internal-branch <branch>]
 git uplink add --title <text> [--message <text> | --message-file <path>]
@@ -67,7 +68,7 @@ git uplink resolve <id>
 git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 ```
 
-`init` writes `.uplink/queue.json` on the orphan branch `uplink/state`, including remote URLs and branch names. `--upstream` / `--contrib` record those URLs and add the remotes. A later `git uplink init` with no arguments fetches `origin` `uplink/state` and reconstitutes the remotes from the stored URLs. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Merge lands the change on `main`; import records the patch on `uplink/state`; sync rebuilds `main` only when upstream moved.
+`init` writes `.uplink/queue.json` on the orphan branch `uplink/state`, including remote URLs, branch names, and `forge`. `--upstream` / `--contrib` record those URLs and add the remotes. `--forge` is required when creating a queue (`ghec` for GitHub Enterprise Cloud, `example-github` for the worked example). First-time init also installs that forge's workflows plus the shared GitHub pull request template as the first internal-only patch and rebuilds company `main`. `--upgrade` amends that same patch from the templates embedded in the binary so tooling stays first in the queue. A later `git uplink init` with no arguments fetches `origin` `uplink/state` and reconstitutes the remotes from the stored URLs; it does not rewrite workflows. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Merge lands the change on `main`; import records the patch on `uplink/state`; sync rebuilds `main` only when upstream moved.
 
 `add --title` is the queue entry name. `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `Uplink-Depends-On: upl_…` lines in that message (after HTML comments are stripped) become `dependsOn`; `--depends-on` is an optional overlay. Incoming `preflight` reads the same trailers from `--message` / `--message-file`. `drop --reason` defaults to `dropped by operator`.
 
@@ -97,7 +98,7 @@ CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --re
 
 ## Product-repo workflows
 
-Copy `templates/emu-workflows/` into the company product repository. Those jobs assume `git-uplink` is on `PATH`.
+`git uplink init --upstream <url> --contrib <url> --forge ghec` writes the GHEC pack from `templates/ghec/` plus `templates/github/pull_request_template.md`. Those jobs assume `git-uplink` is on `PATH`. Re-run `git uplink init --upgrade` after upgrading the binary to refresh the same internal-only tooling patch. The example walkthrough uses `--forge example-github`.
 
 | Workflow | When |
 | --- | --- |
