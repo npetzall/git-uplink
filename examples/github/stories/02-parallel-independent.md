@@ -51,7 +51,7 @@ Both patches are `queued`. `src/tokens.js` has `sha256` and `ttl() == 7200`. Not
 
 ## Submit independently, merge Ben first
 
-**Actions → Uplink submit** for each id (either order). Approve `oss` each time.
+**Actions → Uplink submit** for each id (either order). Approve `to-upstream` each time.
 
 Each public PR is the patch on public `main`, not stacked on the other.
 

@@ -25,7 +25,7 @@ use git_uplink::{Patch, QueueState};
 add records a merged PR as a queued patch on uplink/state. prepare uses the PR\n\
 title and body as the single commit message, rewrites the export author, strips\n\
 the internal section before contrib export, and scans for company affiliation.\n\
-On GitHub Enterprise Cloud, contribution approval is the oss Environment;\n\
+On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment;\n\
 approve/submit run after that review. git uplink talks to git only; workflows\n\
 use gh for GitHub and follow-up commands (submitted, conflicted) to record results."
 )]

@@ -72,7 +72,7 @@ export INTERNAL_DIR=/path/to/uplink-example-internal
 ./examples/github/scripts/bootstrap_internal.sh
 ```
 
-The script needs all three clones. It sets remotes, runs **`git uplink init`**, overlays [`internal/`](internal/) (Uplink Actions only; reset lives on `example-reset`), **`git uplink add --internal-only`**, and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environment `oss`.
+The script needs all three clones. It sets remotes, runs **`git uplink init`**, overlays [`internal/`](internal/) (Uplink Actions only; reset lives on `example-reset`), **`git uplink add --internal-only`**, and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environment `to-upstream`.
 
 `git uplink status` in the internal clone should show one internal-only patch (`Example GitHub workflows`).
 
@@ -106,11 +106,11 @@ Each `UPLINK_*_AUTH` is `pat` or `app`. Empty defaults to `pat` in this example 
 
 **Actions:** workflow permissions **Read and write**.
 
-**Environment `oss`:** Settings → Environments → New environment → `oss`.
+**Environment `to-upstream`:** Settings → Environments → New environment → `to-upstream`.
 
 1. **Required reviewers** — add yourself. For a solo walkthrough leave **Prevent self-review** off.
 2. **Deployment branches** — restrict to `main` if the UI offers it.
-3. **Secrets** — contrib write credentials live on **oss**. Internal force-push and upstream fetch credentials are **repository** secrets (sync cannot wait on oss).
+3. **Secrets** — contrib write credentials live on **to-upstream**. Internal force-push and upstream fetch credentials are **repository** secrets (sync cannot wait on to-upstream).
 
 ### Internal (repo secrets; origin force-push)
 
@@ -136,7 +136,7 @@ Fine-grained PAT with contents **read** on `uplink-example-upstream`. Store as r
 
 Install an App on the public parent (contents: read). Repo secrets: `UPLINK_UPSTREAM_APP_ID`, `UPLINK_UPSTREAM_APP_PRIVATE_KEY`, plus `UPLINK_UPSTREAM_OWNER` and `UPLINK_UPSTREAM_REPO` (`uplink-example-upstream`).
 
-### Contrib (`oss` environment secrets; fork write + public PR)
+### Contrib (`to-upstream` environment secrets; fork write + public PR)
 
 #### PAT (default, `UPLINK_CONTRIB_AUTH=pat`)
 
@@ -147,11 +147,11 @@ Fine-grained or classic PAT with:
 - `uplink-example-upstream-contrib`: Contents read/write
 - `uplink-example-upstream`: Contents read, Pull requests read/write
 
-Store it on the **oss** environment as `UPLINK_CONTRIB_TOKEN`. `gh pr create` uses this token (`GH_TOKEN`).
+Store it on the **to-upstream** environment as `UPLINK_CONTRIB_TOKEN`. `gh pr create` uses this token (`GH_TOKEN`).
 
 #### GitHub App (`UPLINK_CONTRIB_AUTH=app`)
 
-Production-shaped; see [`templates/README.md`](../../templates/README.md). An installation token is one owner. On the **oss** environment:
+Production-shaped; see [`templates/README.md`](../../templates/README.md). An installation token is one owner. On the **to-upstream** environment:
 
 | Secret | Purpose |
 | --- | --- |

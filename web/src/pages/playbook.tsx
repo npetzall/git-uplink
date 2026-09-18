@@ -140,7 +140,7 @@ export function PlaybookPage() {
               <code>submitted</code>).</strong> Dispatch <code>Uplink submit</code>. IP reviews
               the packet on <code>GITHUB_STEP_SUMMARY</code> and in{" "}
               <code>.uplink/reports/&lt;id&gt;/prepare.md</code>, then approves the GitHub
-              Environment named <code>oss</code>. GitHub records that review (Deployments +
+              Environment named <code>to-upstream</code>. GitHub records that review (Deployments +
               enterprise audit log). The same run writes <code>approval.md</code>, then{" "}
               <code>git uplink approve</code> / <code>git uplink submit</code>. App credentials that can
               push the public fork exist only on that environment. Internal-only patches are
@@ -149,10 +149,10 @@ export function PlaybookPage() {
           </ol>
         </Section>
 
-        <Section title="OSS Environment as the IP gate">
+        <Section title="to-upstream Environment as the IP gate">
           <p>
             On GitHub Enterprise Cloud, contribution approval is a GitHub Environment named{" "}
-            <code>oss</code>, not a sidecar process. Required reviewers are IP/legal. The GitHub App
+            <code>to-upstream</code>, not a sidecar process. Required reviewers are IP/legal. The GitHub App
             that can push the upstream-owned private fork lives as <em>environment</em> secrets, so
             those credentials do not exist in a job until the deployment is approved.
           </p>
@@ -161,7 +161,7 @@ export function PlaybookPage() {
             <code>.uplink/reports/&lt;id&gt;/prepare.md</code>, appends{" "}
             <code>GITHUB_STEP_SUMMARY</code>, and fast-forwards that file onto{" "}
             <code>uplink/state</code>. Reports stay on the orphan branch, so a product rebuild does
-            not drop them. The submit job then waits on <code>environment: oss</code>. After review,
+            not drop them. The submit job then waits on <code>environment: to-upstream</code>. After review,
             it commits <code>approval.md</code> and runs <code>git uplink approve</code> then{" "}
             <code>git uplink submit</code> in the same workflow.
           </p>
@@ -188,7 +188,7 @@ export function PlaybookPage() {
           <ul>
             <li>
               GitHub Actions <code>concurrency: uplink-mutate</code> on import and sync (workflow
-              level) and on the submit packet/submit jobs (job level, so the <code>oss</code>{" "}
+              level) and on the submit packet/submit jobs (job level, so the <code>to-upstream</code>{" "}
               environment wait does not freeze imports). One mutation at a time; later jobs wait
               rather than cancel.
             </li>
@@ -260,7 +260,7 @@ export function PlaybookPage() {
             </li>
             <li>
               When legal signs off, an operator dispatches <code>Uplink submit</code>. IP approves
-              the <code>oss</code> Environment on the waiting run. The same workflow then{" "}
+              the <code>to-upstream</code> Environment on the waiting run. The same workflow then{" "}
               <code>git uplink approve</code> and <code>git uplink submit</code>. Submit is the first time
               bytes leave EMU.
             </li>
@@ -318,7 +318,7 @@ export function PlaybookPage() {
             publishes that conflict the same way sync does. If the patch was already submitted,
             resolve sets status <code>amended</code> and dispatches <code>Uplink submit</code>.
             IP reviews a delta-first packet (historical packets are already approved). After
-            oss approval the same public PR is force-pushed; no second PR is opened.
+            to-upstream approval the same public PR is force-pushed; no second PR is opened.
           </p>
         </Section>
 
@@ -336,7 +336,7 @@ export function PlaybookPage() {
           <p>
             Prefer a GitHub App registered on public github.com for contrib: install it on the
             private fork (contents: write) and the public parent (pull requests: write, contents:
-            read). Store the App ID and private key on the <code>oss</code> environment only. Mint
+            read). Store the App ID and private key on the <code>to-upstream</code> environment only. Mint
             a one-hour installation token in Actions with{" "}
             <code>actions/create-github-app-token</code> as <code>UPLINK_CONTRIB_TOKEN</code>. An
             EMU-created App may be enterprise-scoped and unable to talk to repositories outside the
@@ -376,7 +376,7 @@ export function PlaybookPage() {
             <li>
               Copy <code>templates/emu-workflows/</code> into the company product repo.
               Make prepare and export preflight required checks. Create Environment{" "}
-              <code>oss</code> with IP/legal as required reviewers and the contrib GitHub App
+              <code>to-upstream</code> with IP/legal as required reviewers and the contrib GitHub App
               secrets on that environment only. Store internal and upstream git secrets at repo
               level. Set <code>UPLINK_REDACT_KEYWORDS</code> and <code>UPLINK_EXPORT_AUTHOR</code>.
             </li>

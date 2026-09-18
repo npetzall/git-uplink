@@ -8,7 +8,7 @@ It is for a company on GitHub Enterprise Cloud with Enterprise Managed Users tha
 public upstream/main  +  every patch that is not merged or dropped
 ```
 
-`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. On GitHub Enterprise Cloud, dispatch the **oss** Environment workflow (resolve of a submitted patch does this for you); `git uplink report` writes `.uplink/reports/<id>/prepare.md` on `uplink/state` and `GITHUB_STEP_SUMMARY`.
+`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. On GitHub Enterprise Cloud, dispatch the **to-upstream** Environment workflow (resolve of a submitted patch does this for you); `git uplink report` writes `.uplink/reports/<id>/prepare.md` on `uplink/state` and `GITHUB_STEP_SUMMARY`.
 
 ```bash
 cargo install --path .
@@ -90,7 +90,7 @@ cargo deny check
 
 The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, OSS packets, plus a check that the UI was embedded.
 
-`build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, queued work staying off the fork until oss approval, and every lab step completing. You can run them alone with `npm test --prefix web`. Typecheck is `npm run typecheck --prefix web`.
+`build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, queued work staying off the fork until to-upstream approval, and every lab step completing. You can run them alone with `npm test --prefix web`. Typecheck is `npm run typecheck --prefix web`.
 
 CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a dedicated `web/` job (`npm ci`, typecheck, vitest), and `cargo deny` (RustSec advisories plus licenses, bans, and sources).
 
@@ -105,7 +105,7 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 | `uplink-import.yml` | Merge to `main` — product gate, records the patch as status `queued` |
 | `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches; rebuild `main` only if upstream moved. Queue commits go to `uplink/state`. Persist conflicts and open an internal issue |
 | `uplink-resolve.yml` | Human push to `uplink/conflict/*` — `git uplink resolve`, rebuild `main`; if already submitted, status `amended` and dispatch submit for a delta IP pass; publish a later conflict like sync |
-| `uplink-submit.yml` | Dispatch with a patch id — `oss` Environment IP gate (full packet or delta), then approve + submit. Skips opening a second PR when `pr_number` is already stored |
+| `uplink-submit.yml` | Dispatch with a patch id — `to-upstream` Environment IP gate (full packet or delta), then approve + submit. Skips opening a second PR when `pr_number` is already stored |
 
 Environment setup is in `templates/README.md`. Developer stories: [way-of-working.md](way-of-working.md).
 

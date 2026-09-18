@@ -249,8 +249,8 @@ export const LAB_STEPS: {
     id: "approve-submit",
     title: "IP review, then one export",
     summary:
-      "Legal approves the oss GitHub Environment on the waiting submit run — a second gate, after the patch was already on company main. The same run records the receipt, pushes a generated branch to the upstream-owned private fork, and opens a PR against public main. Asha still has only her original internal branch.",
-    why: "The IP gate is GitHub Environment oss (audit log + Deployments). The secrecy airlock is the private fork. The public PR is created only after that review. Maintainers merge a normal GitHub PR.",
+      "Legal approves the to-upstream GitHub Environment on the waiting submit run — a second gate, after the patch was already on company main. The same run records the receipt, pushes a generated branch to the upstream-owned private fork, and opens a PR against public main. Asha still has only her original internal branch.",
+    why: "The IP gate is GitHub Environment to-upstream (audit log + Deployments). The secrecy airlock is the private fork. The public PR is created only after that review. Maintainers merge a normal GitHub PR.",
     apply: (state) => {
       const patches = state.patches.map((patch) =>
         patch.id === "upl_hash"
@@ -271,7 +271,7 @@ export const LAB_STEPS: {
         ],
         log: [
           ...state.log,
-          "Approved oss environment for upl_hash. Pushed uplink/upl_hash to the private fork and opened public PR #412.",
+          "Approved to-upstream environment for upl_hash. Pushed uplink/upl_hash to the private fork and opened public PR #412.",
         ],
       };
     },
@@ -369,7 +369,7 @@ export const LAB_STEPS: {
     title: "Resolve the same patch id",
     summary:
       "git uplink resolve upl_logs rewrites only that patch file, then rebuilds. Remaining patches replay: vendor telemetry applies again. upl_logs returns to queued. Nothing is pushed to the upstream-owned fork.",
-    why: "One patch identity. Internal conflict resolution amends the same object. Resolve is not submit: queued work still needs the oss Environment before it can leave EMU.",
+    why: "One patch identity. Internal conflict resolution amends the same object. Resolve is not submit: queued work still needs the to-upstream Environment before it can leave EMU.",
     apply: (state) => {
       const patches = state.patches.map((patch) => {
         if (patch.id === "upl_logs") {
@@ -397,8 +397,8 @@ export const LAB_STEPS: {
     id: "submit-logs",
     title: "IP review, then export the amended patch",
     summary:
-      "Legal approves the oss GitHub Environment for upl_logs. The same run pushes uplink/upl_logs — the amended log line on current public main — and opens PR #418. vendorTelemetry is not in that tree.",
-    why: "Bytes leave EMU only after oss approval. The fork branch is generated from the patch, so the conflict resolution is what upstream reviews. Internal-only patches still never export.",
+      "Legal approves the to-upstream GitHub Environment for upl_logs. The same run pushes uplink/upl_logs — the amended log line on current public main — and opens PR #418. vendorTelemetry is not in that tree.",
+    why: "Bytes leave EMU only after to-upstream approval. The fork branch is generated from the patch, so the conflict resolution is what upstream reviews. Internal-only patches still never export.",
     apply: (state) => {
       const patches = state.patches.map((patch) =>
         patch.id === "upl_logs"
@@ -419,7 +419,7 @@ export const LAB_STEPS: {
         ],
         log: [
           ...state.log,
-          "Approved oss environment for upl_logs. Pushed uplink/upl_logs to the private fork and opened public PR #418.",
+          "Approved to-upstream environment for upl_logs. Pushed uplink/upl_logs to the private fork and opened public PR #418.",
         ],
       };
     },

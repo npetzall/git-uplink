@@ -11,16 +11,16 @@ const GATES = [
     body: "The change is on company main. The product builds it. Other developers who branch from main get it. Nothing has left EMU. IP has not run.",
   },
   {
-    when: "Legal / IP · oss Environment review",
+    when: "Legal / IP · to-upstream Environment review",
     status: "approved",
     name: "Approved to leave the enterprise",
-    body: "Dispatch Uplink submit. IP reads the committed packet and GITHUB_STEP_SUMMARY, then approves the oss Environment. GitHub records the reviewer. The same run then git uplink approve + submit. Internal-only patches never reach this gate.",
+    body: "Dispatch Uplink submit. IP reads the committed packet and GITHUB_STEP_SUMMARY, then approves the to-upstream Environment. GitHub records the reviewer. The same run then git uplink approve + submit. Internal-only patches never reach this gate.",
   },
   {
-    when: "Same run, after oss approval",
+    when: "Same run, after to-upstream approval",
     status: "submitted",
     name: "Visible to upstream",
-    body: "Bytes are pushed to the upstream-owned private fork and opened as a public PR. This is the first time the work can leave EMU. App credentials exist only on the oss environment.",
+    body: "Bytes are pushed to the upstream-owned private fork and opened as a public PR. This is the first time the work can leave EMU. App credentials exist only on the to-upstream environment.",
   },
   {
     when: "Submitted patch hits a sync conflict, then resolve",
@@ -116,7 +116,7 @@ export function CollaborationPage() {
           <p className="text-[15px] leading-7 text-muted-foreground">
             It is not IP approval. Legal can take as long as it needs. The company keeps shipping
             on the queued patch. Contribution approval is the GitHub Environment named{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">oss</code>. Dispatch{" "}
+            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">to-upstream</code>. Dispatch{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">Uplink submit</code>,
             review the packet, and approve the deployment. Only then may the same run{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">git uplink submit</code>{" "}
@@ -147,7 +147,7 @@ export function CollaborationPage() {
           <h2 className="text-xl font-semibold">Can IP approval be a GitHub Environment?</h2>
           <p className="text-[15px] leading-7 text-muted-foreground">
             Yes. On GitHub Enterprise Cloud, create Environment{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">oss</code> with
+            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">to-upstream</code> with
             IP/legal as required reviewers. Dispatch{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">Uplink submit</code>.
             The packet job commits{" "}

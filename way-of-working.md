@@ -12,18 +12,18 @@ Write every change **as if it were the upstream submission**. Company-only detai
 | Prepare | Opens with the internal PR. `git uplink prepare` | Scrubbed message, rewritten author, affiliation scan. Report on the PR and in `GITHUB_STEP_SUMMARY`. |
 | Export preflight | Same PR | Diff must stand on public `main` + declared deps; `UPLINK_PREFLIGHT` must pass. |
 | Internal product | Review + merge | Status `queued`. Product builds it. |
-| Contribution / IP | Dispatch **Uplink submit**. IP approves GitHub Environment **`oss`**. Same run submits. | Report + approval committed under `.uplink/reports/`. Public PR uses the prepared identity. GitHub audit log records the reviewer. |
+| Contribution / IP | Dispatch **Uplink submit**. IP approves GitHub Environment **`to-upstream`**. Same run submits. | Report + approval committed under `.uplink/reports/`. Public PR uses the prepared identity. GitHub audit log records the reviewer. |
 
 Default intent is upstream. `uplink:internal-only` is the escape hatch and never goes through the second gate.
 
-## Contribution approval via the oss GitHub Environment
+## Contribution approval via the to-upstream GitHub Environment
 
 On GitHub Enterprise Cloud this is an option, and it is the option to use. Do not invent a second spreadsheet for IP sign-off.
 
-Create a repository Environment named **`oss`**. Required reviewers are IP/legal. Put the GitHub App secrets that can push the upstream-owned private fork **on that environment only**. Dispatch `Uplink submit` with the patch id. The workflow:
+Create a repository Environment named **`to-upstream`**. Required reviewers are IP/legal. Put the GitHub App secrets that can push the upstream-owned private fork **on that environment only**. Dispatch `Uplink submit` with the patch id. The workflow:
 
 1. **Packet job** (no environment, no App secrets). Runs `git uplink report <id>`, which writes `.uplink/reports/<id>/prepare.md` and appends the same markdown to `GITHUB_STEP_SUMMARY`. Commits the report to `uplink/state` as a fast-forward (not a force-push). Reports stay on that orphan branch, so a later product rebuild does not drop them.
-2. **Submit job** (`environment: oss`). GitHub holds the job until a required reviewer approves the deployment. That click is the IP gate. GitHub records it on the Deployments tab and in the enterprise audit log. The dispatcher is not the approver; turn on **Prevent self-review**.
+2. **Submit job** (`environment: to-upstream`). GitHub holds the job until a required reviewer approves the deployment. That click is the IP gate. GitHub records it on the Deployments tab and in the enterprise audit log. The dispatcher is not the approver; turn on **Prevent self-review**.
 3. After approval, the job writes `.uplink/reports/<id>/approval.md` (receipt pointing at the run), then `git uplink approve` and `git uplink submit`. App credentials exist only now. Submit is still the first time contribution bytes leave EMU.
 
 Why this fits a workflow:
@@ -95,7 +95,7 @@ Asha needs to change token hashing. Nobody else is in her way.
 
 5. **Other developers now build her change** the next time they branch from `main`. IP has not run. Nothing has left the enterprise.
 
-6. **Contribution approval.** An operator dispatches **Uplink submit** with `upl_asha`. The packet job commits `.uplink/reports/upl_asha/prepare.md` and writes the Actions job summary. IP/legal approves the waiting **`oss`** Environment deployment (GitHub audit log + Deployments). The same run then records `approval.md`, `git uplink approve`, and `git uplink submit`.
+6. **Contribution approval.** An operator dispatches **Uplink submit** with `upl_asha`. The packet job commits `.uplink/reports/upl_asha/prepare.md` and writes the Actions job summary. IP/legal approves the waiting **`to-upstream`** Environment deployment (GitHub audit log + Deployments). The same run then records `approval.md`, `git uplink approve`, and `git uplink submit`.
 
    `approve` is refused if prepare failed or the patch is `internal-only`. `submit` is refused until the patch is `approved` and prepare is still clean. Submit is the first time bytes leave EMU. The public commit uses the prepared author (machine user or `Uplink-Export-Author`) and the scrubbed message, plus `Uplink-Patch-Id`. App credentials are not available until the environment review succeeds.
 
@@ -129,7 +129,7 @@ Neither records `dependsOn`. Insertion order is Asha then Ben. That order only m
 
 ### Export
 
-They can be approved and submitted independently, in either order. On GHEC, dispatch **Uplink submit** for each id and approve the `oss` environment each time. Locally:
+They can be approved and submitted independently, in either order. On GHEC, dispatch **Uplink submit** for each id and approve the `to-upstream` environment each time. Locally:
 
 ```bash
 git uplink approve upl_asha && git uplink submit upl_asha
@@ -250,7 +250,7 @@ git uplink resolve upl_asha
 
 `resolve` refreshes **only** `upl_asha`’s patch file (same id), then rebuilds. Remaining patches replay. If Ben still applies, he stays `queued` / `submitted` and company `main` becomes new upstream + amended Asha + Ben.
 
-If Asha was never submitted, she returns to `queued`. If she **was** already submitted (public PR still open), she becomes `amended`. Company `main` has the new bytes immediately. The contribution fork still has the last IP-approved bytes. On GHEC, **Uplink resolve** dispatches **Uplink submit** for that id. IP reviews a **delta-first** packet: the change since the last approval, then the historical packet marked already approved. After oss approval, submit force-pushes `uplink/upl_asha`. Same id, same PR, no second branch. `git uplink submit` refuses `amended` until that delta is approved.
+If Asha was never submitted, she returns to `queued`. If she **was** already submitted (public PR still open), she becomes `amended`. Company `main` has the new bytes immediately. The contribution fork still has the last IP-approved bytes. On GHEC, **Uplink resolve** dispatches **Uplink submit** for that id. IP reviews a **delta-first** packet: the change since the last approval, then the historical packet marked already approved. After to-upstream approval, submit force-pushes `uplink/upl_asha`. Same id, same PR, no second branch. `git uplink submit` refuses `amended` until that delta is approved.
 
 If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s conflict branch and issue, then closes Asha’s issue. If Asha is `amended`, it still dispatches submit for her delta. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
 
@@ -292,7 +292,7 @@ Do not merge Cam based on only one of them. A PR opened before the second of Ash
 
 ### Export — order is important
 
-Asha and Ben do **not** depend on each other. Their public PRs are independent and may be submitted in **either order** (separate `oss` environment reviews):
+Asha and Ben do **not** depend on each other. Their public PRs are independent and may be submitted in **either order** (separate `to-upstream` environment reviews):
 
 ```bash
 git uplink approve upl_asha && git uplink submit upl_asha

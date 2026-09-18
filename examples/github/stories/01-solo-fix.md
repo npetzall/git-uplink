@@ -1,6 +1,6 @@
 # Story 1 — Asha starts a new fix
 
-Asha changes token hashing. Nobody else is in the way. This is [way-of-working.md](../../../way-of-working.md) story 1: internal PR → import → oss submit → upstream merge → sync drops the patch.
+Asha changes token hashing. Nobody else is in the way. This is [way-of-working.md](../../../way-of-working.md) story 1: internal PR → import → to-upstream submit → upstream merge → sync drops the patch.
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github
@@ -55,7 +55,7 @@ Asha’s patch is `queued` (`upl_` + 10 hex digits). `src/tokens.js` on `main` c
 
 **Actions → Uplink submit → Run workflow** on internal `main`, input `patch_id` = that id.
 
-The packet job writes `.uplink/reports/<id>/prepare.md` on `uplink/state`. The submit job waits on Environment **oss**. Open the run → **Review deployments** → approve `oss`.
+The packet job writes `.uplink/reports/<id>/prepare.md` on `uplink/state`. The submit job waits on Environment **to-upstream**. Open the run → **Review deployments** → approve `to-upstream`.
 
 After it finishes, `git uplink status` shows `submitted`. GitHub has a PR from `uplink-example-upstream-contrib` (`uplink/<id>`) into `uplink-example-upstream`.
 

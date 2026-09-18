@@ -99,13 +99,13 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     -F enabled=true -f allowed_actions=all >/dev/null || true
   gh api --method PUT "repos/${INTERNAL}/actions/permissions/workflow" \
     -f default_workflow_permissions=write -F can_approve_pull_request_reviews=false >/dev/null || true
-  gh api --method PUT "repos/${INTERNAL}/environments/oss" \
+  gh api --method PUT "repos/${INTERNAL}/environments/to-upstream" \
     --input - >/dev/null <<'EOF'
 {"wait_timer":0,"prevent_self_review":false}
 EOF
 else
   echo
-  echo "gh is not available; set labels, variables, Actions write permission, and Environment oss in the GitHub UI (SETUP.md)."
+  echo "gh is not available; set labels, variables, Actions write permission, and Environment to-upstream in the GitHub UI (SETUP.md)."
 fi
 
 echo
@@ -114,4 +114,4 @@ echo "  $UPSTREAM  main + seed + example-reset"
 echo "  $CONTRIB   main (upstream fork) + example-reset"
 echo "  $INTERNAL  main + uplink/state + uplink/upstream + seed refs + example-reset"
 echo
-echo "Finish SETUP.md (oss reviewer, UPLINK_INTERNAL_TOKEN, UPLINK_UPSTREAM_TOKEN, UPLINK_CONTRIB_TOKEN), then walk examples/github/stories/."
+echo "Finish SETUP.md (to-upstream reviewer, UPLINK_INTERNAL_TOKEN, UPLINK_UPSTREAM_TOKEN, UPLINK_CONTRIB_TOKEN), then walk examples/github/stories/."

@@ -20,7 +20,7 @@ Sync and resolve mint `UPLINK_INTERNAL_TOKEN` first and pass it to `actions/chec
 - **Import** (`uplink-import.yml`) — internal product approval. Merge the PR after engineering review. The change is already on company `main`; import records it on `uplink/state` as status `queued` only if export preflight still passes.
 - **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream, drops merged patches, and rebuilds `main` only when upstream moved. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>`, and emits issue JSON. The workflow runs `gh issue create` then `git uplink conflicted`. Do not open a PR; resolve the patch on that branch instead.
 - **Resolve** (`uplink-resolve.yml`) — on human pushes to `uplink/conflict/<id>` (skips `Uplink Bot` authors and `github-actions[bot]`). Runs `git uplink resolve`, rebuilds `main`, emits `gh issue close` JSON (or a new issue create if rebuild stops later), and deletes the conflict branch. If the resolved patch was already submitted, status becomes `amended` and this workflow dispatches **Uplink submit** so IP can approve the delta. It does not itself push the contribution fork.
-- **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`oss` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits the report (full contribution, or a delta-first packet when status is `amended`); environment reviewers approve; the same run then `git uplink approve` + `git uplink submit` (contrib git push) + `gh pr create` + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR.
+- **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`to-upstream` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits the report (full contribution, or a delta-first packet when status is `amended`); environment reviewers approve; the same run then `git uplink approve` + `git uplink submit` (contrib git push) + `gh pr create` + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR.
 
 Repo variables:
 
@@ -38,17 +38,17 @@ Import and sync share the Actions concurrency group `uplink-mutate` at workflow 
 
 ---
 
-## OSS environment (contribution / IP gate)
+## to-upstream environment (contribution / IP gate)
 
-Yes: on GitHub Enterprise Cloud, contribution approval should be a **GitHub Environment**, not a second homegrown checkbox. Name it `oss`. Required reviewers are IP/legal. After they approve the waiting deployment, the same workflow records the receipt and submits to the upstream-owned private fork.
+Yes: on GitHub Enterprise Cloud, contribution approval should be a **GitHub Environment**, not a second homegrown checkbox. Name it `to-upstream`. Required reviewers are IP/legal. After they approve the waiting deployment, the same workflow records the receipt and submits to the upstream-owned private fork.
 
 This is the documented option. Use it instead of asking an operator to run `git uplink approve` by hand.
 
 ### What the reviewer sees
 
 1. **Job summary** — the packet job appends the contribution packet to `GITHUB_STEP_SUMMARY` (company and upstream commit messages, export author, leak checks, depends-on). For an `amended` patch the packet **leads with the delta** since the last approval and includes historical packets marked already approved. Open the workflow run; the summary is on the completed packet job.
-2. **Committed report** — `.uplink/reports/<id>/prepare.md` on `uplink/state`. The `oss` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
-3. **Environment review UI** — GitHub pauses the submit job until a required reviewer approves the `oss` deployment. That click is the IP gate.
+2. **Committed report** — `.uplink/reports/<id>/prepare.md` on `uplink/state`. The `to-upstream` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
+3. **Environment review UI** — GitHub pauses the submit job until a required reviewer approves the `to-upstream` deployment. That click is the IP gate.
 
 After approval, the submit job writes `.uplink/reports/<id>/approval.md` (in-repo receipt), runs `git uplink approve`, `git uplink submit` (contrib git push), `gh pr create`, then `git uplink submitted` (records the PR and pushes `uplink/state`). The public contrib App token is minted in this job only (`UPLINK_CONTRIB_AUTH=app`).
 
@@ -56,7 +56,7 @@ After approval, the submit job writes `.uplink/reports/<id>/approval.md` (in-rep
 
 The dispatcher (`workflow_dispatch` actor) is **not** the IP approver. GitHub records the environment reviewer on:
 
-- the repository **Deployments** tab for environment `oss`
+- the repository **Deployments** tab for environment `to-upstream`
 - the **GitHub Enterprise Cloud audit log** (deployment review events)
 
 `approval.md` is a human-readable receipt that points at the run URL. It does not replace the audit log. Enable **Prevent self-review** on the environment so the person who dispatched cannot approve their own export.
@@ -65,13 +65,13 @@ The dispatcher (`workflow_dispatch` actor) is **not** the IP approver. GitHub re
 
 In the company product repo (EMU):
 
-1. Settings → Environments → New environment → name **`oss`** (exact name; the workflow references `environment: oss`).
+1. Settings → Environments → New environment → name **`to-upstream`** (exact name; the workflow references `environment: to-upstream`).
 2. **Required reviewers** — add the IP/legal team (or named reviewers). Turn on **Prevent self-review**.
 3. **Deployment branches** — restrict to `main` so a dispatch from another ref cannot export.
 4. Optional wait timer if policy wants a cooling-off period.
 5. **Credentials** — three isolated roles. Workflows use a PAT (`UPLINK_*_TOKEN`) or mint an App installation token (`UPLINK_*_AUTH=app`). `gh pr create` uses the contrib TOKEN.
 
-**Repository secrets** (sync/import/resolve must not wait on `oss`):
+**Repository secrets** (sync/import/resolve must not wait on `to-upstream`):
 
 | Secret | Purpose |
 | --- | --- |
@@ -84,7 +84,7 @@ In the company product repo (EMU):
 
 Scope upstream as **read-only** on the public parent (contents: read). Do not give this role contrib write.
 
-**Environment `oss` secrets** (fork write + public PR). Do not also store these at repo or org level:
+**Environment `to-upstream` secrets** (fork write + public PR). Do not also store these at repo or org level:
 
 | Secret | Purpose |
 | --- | --- |
@@ -106,7 +106,7 @@ The packet job **fast-forwards** a commit of `.uplink/reports/<id>/prepare.md` o
 - Humans still require a pull request to `main`.
 - Actions may bypass to fast-forward `uplink/state`, and to force-push `main` when upstream (or drop/resolve) requires a replay.
 
-If the ruleset blocks those credentials from pushing `uplink/state`, the packet job fails before anyone is asked to approve `oss`.
+If the ruleset blocks those credentials from pushing `uplink/state`, the packet job fails before anyone is asked to approve `to-upstream`.
 
 ### Operator flow
 
@@ -120,7 +120,7 @@ workflow_dispatch Uplink submit (patch_id)
 packet job: git uplink report → STEP_SUMMARY + commit prepare.md
         │
         ▼
-submit job waits on environment oss   ← IP/legal reviews packet
+submit job waits on environment to-upstream   ← IP/legal reviews packet
         │  (Deployments + enterprise audit log)
         ▼
 approval.md committed; git uplink approve; git uplink submit

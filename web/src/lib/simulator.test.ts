@@ -32,7 +32,7 @@ describe("live lab scenario", () => {
     }
   });
 
-  it("does not export upl_logs until oss approval", () => {
+  it("does not export upl_logs until to-upstream approval", () => {
     const beforeSubmit = runThrough(stepCount("resolve"));
     expect(beforeSubmit.patches.find((patch) => patch.id === "upl_logs")?.status).toBe("queued");
     expect(beforeSubmit.contrib.some((branch) => branch.branch === "uplink/upl_logs")).toBe(false);

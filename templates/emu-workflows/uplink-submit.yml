@@ -1,6 +1,6 @@
 # CONTRIBUTION / IP gate. Dispatch from company main with a patch id.
 # Packet job commits the report on uplink/state. Submit job waits on
-# Environment `oss`. Resolve of an already-submitted patch dispatches
+# Environment `to-upstream`. Resolve of an already-submitted patch dispatches
 # this workflow so IP can approve the delta.
 #
 # Empty UPLINK_*_AUTH defaults to app.
@@ -50,12 +50,12 @@ jobs:
           git push origin uplink/state
 
   submit:
-    name: Approve oss environment and submit
+    name: Approve to-upstream environment and submit
     needs: packet
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
-      name: oss
+      name: to-upstream
       url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/${{ inputs.patch_id }}/prepare.md
     concurrency:
       group: uplink-mutate
@@ -91,7 +91,7 @@ jobs:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
-          UPLINK_OSS_ENVIRONMENT: oss
+          UPLINK_OSS_ENVIRONMENT: to-upstream
         run: |
           git uplink init
           git uplink approve ${{ inputs.patch_id }}

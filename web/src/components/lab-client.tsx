@@ -166,7 +166,7 @@ export function LabClient() {
             <CardContent>
               {state.contrib.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  Nothing exported yet. Internal work stays inside the enterprise until oss
+                  Nothing exported yet. Internal work stays inside the enterprise until to-upstream
                   Environment approval.
                 </p>
               ) : (

@@ -15,7 +15,7 @@ const GATES = [
   },
   {
     title: "IP control before publicity",
-    body: "Landing on company main is the internal product gate. Nothing leaves EMU until IP approves the oss GitHub Environment. That same run exports through a GitHub App on the upstream-owned private fork, then a normal public pull request.",
+    body: "Landing on company main is the internal product gate. Nothing leaves EMU until IP approves the to-upstream GitHub Environment. That same run exports through a GitHub App on the upstream-owned private fork, then a normal public pull request.",
   },
 ];
 
@@ -68,7 +68,7 @@ export function HomePage() {
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
           Multiple developers share company main through internal PRs. Importing a PR is{" "}
           <strong className="text-foreground">approved for the internal</strong> — the product builds
-          it. Legal review is a later <strong className="text-foreground">oss Environment</strong>{" "}
+          it. Legal review is a later <strong className="text-foreground">to-upstream Environment</strong>{" "}
           approval on the submit workflow, before anything is pushed to the upstream-owned fork.
           Concurrent imports retry with force-with-lease so two adds cannot drop a patch.
         </p>
@@ -89,7 +89,7 @@ export function HomePage() {
             points={[
               "Synthetic main = upstream + queue",
               "Developers merge PRs here; bot rebuilds main on sync",
-              "Merge = internal product; oss environment = IP",
+              "Merge = internal product; to-upstream environment = IP",
             ]}
           />
           <RepoCard

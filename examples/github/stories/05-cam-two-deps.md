@@ -71,7 +71,7 @@ Copy Cam’s `upl_…` id. Submit of Cam is refused until each upstream-bound de
 
 ## Export: merge the siblings first
 
-**Uplink submit** for Asha and for Ben; approve `oss` each time. Squash-merge **both** upstream PRs in the GitHub UI. **Uplink sync** on internal.
+**Uplink submit** for Asha and for Ben; approve `to-upstream` each time. Squash-merge **both** upstream PRs in the GitHub UI. **Uplink sync** on internal.
 
 After sync, Asha and Ben are `merged`. Cam is the leftover delta on public `main`.
 
@@ -81,4 +81,4 @@ git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
 git uplink status
 ```
 
-**Uplink submit** for Cam; approve `oss`. Cam’s public PR is `describeToken` only — not a replay of Asha or Ben.
+**Uplink submit** for Cam; approve `to-upstream`. Cam’s public PR is `describeToken` only — not a replay of Asha or Ben.

@@ -14,7 +14,7 @@ use crate::types::{
     QueueState,
 };
 
-pub const OSS_ENVIRONMENT: &str = "oss";
+pub const OSS_ENVIRONMENT: &str = "to-upstream";
 
 pub fn cutoff_marker(queue: &QueueState) -> String {
     queue
@@ -354,10 +354,10 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 ### Upstream contrib\n\n\
 {contrib}\n\n\
 {prepare}\n\
-## What happens when you approve the oss environment\n\n\
+## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
-3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the oss environment (git push to the contrib fork).\n\
+3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment (git push to the contrib fork).\n\
 4. The workflow runs `gh pr create` and `git uplink submitted`. No public PR is opened unless export preflight still passes.\n",
         id = patch.id,
         env = OSS_ENVIRONMENT,
@@ -429,13 +429,14 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 {company}\n\n\
 ### Upstream contrib\n\n\
 {contrib}\n\n\
-## What happens when you approve the oss environment\n\n\
+## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
-3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the oss environment (git push to the contrib fork).\n\
+3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment (git push to the contrib fork).\n\
 4. The workflow runs `gh pr create` (or reuses the recorded PR) and `git uplink submitted`. No second PR is opened.\n\n\
 {history}",
         id = patch.id,
+        env = OSS_ENVIRONMENT,
         title = patch.title,
         intent = patch.intent,
         status = patch.status,
@@ -688,7 +689,7 @@ pub struct ApprovalReceipt<'a> {
 pub fn format_approval_receipt(opts: ApprovalReceipt<'_>) -> String {
     let at = opts.at.unwrap_or_else(now_iso);
     format!(
-        "# OSS environment approval — {id}\n\n\
+        "# {env} environment approval — {id}\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
 | Environment | `{env}` |\n\

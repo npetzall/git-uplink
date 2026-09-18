@@ -79,4 +79,4 @@ Queue: Asha then Ben; Ben lists `dependsOn`. `src/tokens.js` logs then returns `
 
 **Uplink submit** for Ben **first**. The job should fail: `Submit upl_asha before upl_ben`.
 
-Then submit Asha (approve `oss`), then Ben (approve `oss`). Ben’s public PR is stacked on Asha’s contrib branch until Asha merges, or you wait until Asha is `merged` and submit Ben onto public `main`.
+Then submit Asha (approve `to-upstream`), then Ben (approve `to-upstream`). Ben’s public PR is stacked on Asha’s contrib branch until Asha merges, or you wait until Asha is `merged` and submit Ben onto public `main`.

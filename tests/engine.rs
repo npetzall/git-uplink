@@ -892,7 +892,7 @@ fn approve_receipt_records_the_state_branch_commit() {
     let sha = git_uplink::patch_state_commit(company, &patch.id).unwrap();
     let receipt = format_approval_receipt(ApprovalReceipt {
         patch_id: &patch.id,
-        environment: "oss",
+        environment: "to-upstream",
         actor: "dispatcher",
         run_url: "https://github.example/run/1",
         sha: &sha,
@@ -2571,7 +2571,7 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
 
     let packet = format_approver_packet(&patch);
     assert!(packet.contains(&format!("OSS contribution packet — {}", patch.id)));
-    assert!(packet.contains("**oss** GitHub Environment"));
+    assert!(packet.contains("**to-upstream** GitHub Environment"));
     assert!(packet.contains("#44"));
     assert!(packet.contains("GITHUB_STEP_SUMMARY"));
     assert!(packet.contains("Commit messages that will be used"));
@@ -2586,7 +2586,7 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
         &approval_path,
         &format_approval_receipt(ApprovalReceipt {
             patch_id: &patch.id,
-            environment: "oss",
+            environment: "to-upstream",
             actor: "dispatcher",
             run_url: "https://github.example/acme/product/actions/runs/9",
             sha: "abc123",
@@ -2600,7 +2600,7 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
     let receipt = fs::read_to_string(company.join(&approval_path)).unwrap();
     assert!(kept.contains(&patch.id));
     assert!(receipt.contains("authoritative approval event"));
-    assert!(receipt.contains("`oss`"));
+    assert!(receipt.contains("`to-upstream`"));
     assert!(receipt.contains("dispatcher"));
     let tracked = git_ok(company, &["show", &format!("uplink/state:{prepare_path}")]).unwrap();
     assert!(tracked.contains("Use SHA-256 for tokens"));

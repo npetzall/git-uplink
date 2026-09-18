@@ -10,7 +10,7 @@ export function LabPage() {
           Same lifecycle the git uplink engine tests against real git: carry patches, stack on
           unmerged work, keep an internal-only escape hatch, export after approval, drop on merge so
           a later upstream fix survives, then walk a sync conflict through checkout, resolve, and a
-          second oss approval before the amended patch reaches the fork.
+          second to-upstream approval before the amended patch reaches the fork.
         </p>
       </div>
       <LabClient />
