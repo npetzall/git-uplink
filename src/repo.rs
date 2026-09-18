@@ -623,6 +623,9 @@ pub fn refresh_company_branch(repo: &Path, remote: &str, branch: &str) -> Result
     Ok(sha)
 }
 
+/// Force-with-lease push of company main. Sync/resolve workflows push `main`
+/// themselves after rebuild; import no longer moves `main`.
+#[allow(dead_code)]
 pub fn push_company_branch(
     repo: &Path,
     remote: &str,

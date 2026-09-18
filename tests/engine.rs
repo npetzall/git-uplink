@@ -5,12 +5,12 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, GitOpts,
-    IncomingPreflight, InitOpts, MergeVia, QueueConfig, QueueState, STATE_BRANCH, add_patch,
-    approve_patch, configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, git, git_ok, init, init_repo, mark_merged, parse_depends_on,
-    preflight_incoming_change, rebuild, record_conflict_issue, record_pull_request, report_paths,
-    resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
-    write_queue,
+    IncomingPreflight, InitOpts, MergeVia, Patch, QueueConfig, QueueState, Result, STATE_BRANCH,
+    add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
+    format_approver_packet, format_contribution_packet, git, git_ok, init, init_repo, mark_merged,
+    parse_depends_on, preflight_incoming_change, rebuild, record_conflict_issue,
+    record_pull_request, report_paths, resolve_conflict, status_snapshot, strip_html_comments,
+    submit_patch, summarize_queue, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -40,7 +40,7 @@ fn commit_all(repo: &Path, message: &str) {
     git(repo, &["commit", "-m", message], GitOpts::default()).unwrap();
 }
 
-fn commit_oss_packet(repo: &Path, patch: &git_uplink::Patch) {
+fn commit_oss_packet(repo: &Path, patch: &Patch) {
     let packet = format_approver_packet(patch);
     let (_, prepare_path, _) = report_paths(&patch.id);
     write(repo, &prepare_path, &packet);
@@ -186,6 +186,46 @@ fn has_git_ref(repo: &Path, git_ref: &str) -> bool {
     )
     .unwrap();
     result.code == 0 && !result.stdout.is_empty()
+}
+
+fn land_on_main(repo: &Path, head_sha: &str) {
+    git(
+        repo,
+        &["checkout", "-f", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let ff = git(
+        repo,
+        &["merge", "--ff-only", "--quiet", head_sha],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .unwrap();
+    if ff.code != 0 {
+        git(
+            repo,
+            &["merge", "--no-edit", "--quiet", head_sha],
+            GitOpts::default(),
+        )
+        .unwrap();
+    }
+}
+
+fn add_landed_patch(repo: &Path, mut opts: AddPatchOpts) -> Result<Patch> {
+    let from = opts.from_ref.clone().unwrap_or_else(|| "main".into());
+    let from_sha = git_ok(repo, &["rev-parse", &from]).unwrap();
+    let head_sha = git_ok(
+        repo,
+        &["rev-parse", opts.head_ref.as_deref().unwrap_or("HEAD")],
+    )
+    .unwrap();
+    land_on_main(repo, &head_sha);
+    opts.from_ref = Some(from_sha);
+    opts.head_ref = Some(head_sha);
+    add_patch(repo, opts)
 }
 
 #[test]
@@ -430,10 +470,9 @@ fn queue_config_reads_legacy_company_branch_alias() {
 }
 
 #[test]
-fn add_applies_the_patch_on_main_and_records_it_on_state() {
+fn add_records_the_patch_on_state_without_moving_main() {
     let world = setup_world();
     let company = &world.company;
-    let main_before = git_ok(company, &["rev-parse", "main"]).unwrap();
     git(
         company,
         &["checkout", "-b", "feat/hash"],
@@ -446,19 +485,23 @@ fn add_applies_the_patch_on_main_and_records_it_on_state() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
+    let head_sha = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    land_on_main(company, &head_sha);
+    let main_before = git_ok(company, &["rev-parse", "main"]).unwrap();
     let patch = add_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
-            from_ref: Some("main".into()),
+            from_ref: Some("main^".into()),
+            head_ref: Some(head_sha),
             ..Default::default()
         },
     )
     .unwrap();
-    let main_after = git_ok(company, &["rev-parse", "main"]).unwrap();
-    assert_ne!(main_before, main_after);
-    let parent = git_ok(company, &["rev-parse", "main^"]).unwrap();
-    assert_eq!(parent, main_before);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "main"]).unwrap(),
+        main_before
+    );
     assert!(!tree_has_uplink(company, "main"));
     let stored = git_ok(
         company,
@@ -469,6 +512,35 @@ fn add_applies_the_patch_on_main_and_records_it_on_state() {
     )
     .unwrap();
     assert!(stored.contains("sha256"));
+}
+
+#[test]
+fn add_refuses_when_the_change_is_not_on_main() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let err = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("not on company main yet"), "{err}");
+    assert_eq!(status_snapshot(company).unwrap().queue.patches.len(), 0);
 }
 
 #[test]
@@ -568,7 +640,7 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
     assert!(!has_git_ref(&clone, "uplink/upstream"));
     assert!(!has_git_ref(&clone, "origin/uplink/upstream"));
 
-    let patch = add_patch(
+    let patch = add_landed_patch(
         &clone,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -600,7 +672,7 @@ fn sync_skips_rebuilding_main_when_upstream_is_unchanged() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    add_patch(
+    add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -639,7 +711,7 @@ fn approve_receipt_records_the_state_branch_commit() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let patch = add_patch(
+    let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -678,7 +750,7 @@ fn rebuilds_company_main_with_stacked_patches_including_internal_only() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let hash_patch = add_patch(
+    let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -704,7 +776,7 @@ fn rebuilds_company_main_with_stacked_patches_including_internal_only() {
         ),
     );
     commit_all(company, "add log");
-    let log_patch = add_patch(
+    let log_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Log token hashes".into(),
@@ -731,7 +803,7 @@ fn rebuilds_company_main_with_stacked_patches_including_internal_only() {
         ),
     );
     commit_all(company, "internal telemetry");
-    let internal = add_patch(
+    let internal = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Vendor telemetry".into(),
@@ -769,7 +841,7 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let hash_patch = add_patch(
+    let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -787,7 +859,7 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
         &hashed.replace("return 3600;", "return 7200;"),
     );
     commit_all(company, "longer ttl");
-    add_patch(
+    add_landed_patch(
         company,
         AddPatchOpts {
             title: "Extend TTL".into(),
@@ -857,7 +929,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
         &TOKENS.replace("return 3600;", "return 7200;"),
     );
     commit_all(company, "longer ttl");
-    let ttl_patch = add_patch(
+    let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Extend TTL".into(),
@@ -937,7 +1009,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         &TOKENS.replace("return 3600;", "return 7200;"),
     );
     commit_all(company, "longer ttl");
-    let ttl_patch = add_patch(
+    let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Extend TTL".into(),
@@ -1113,7 +1185,7 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
         &TOKENS.replace("return 3600;", "return 7200;"),
     );
     commit_all(company, "longer ttl");
-    let asha = add_patch(
+    let asha = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Extend TTL".into(),
@@ -1136,7 +1208,7 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
         &with_ttl.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let ben = add_patch(
+    let ben = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1266,7 +1338,7 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let hash_patch = add_patch(
+    let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1289,7 +1361,7 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
         &format!("{hashed}\nexport const vendor = true;\n"),
     );
     commit_all(company, "vendor flag");
-    let internal = add_patch(
+    let internal = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Vendor flag".into(),
@@ -1360,7 +1432,7 @@ fn can_drop_an_internal_only_patch_from_the_company_build() {
         &format!("{TOKENS}\nexport const vendor = true;\n"),
     );
     commit_all(company, "vendor flag");
-    let internal = add_patch(
+    let internal = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Vendor flag".into(),
@@ -1398,7 +1470,7 @@ fn imports_as_queued_not_contribution_approved() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let patch = add_patch(
+    let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1411,7 +1483,7 @@ fn imports_as_queued_not_contribution_approved() {
     assert_eq!(patch.status, "queued");
     let err = submit_patch(company, &patch.id).unwrap_err();
     assert!(err.to_string().contains("must be approved"));
-    let again = add_patch(
+    let again = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1451,7 +1523,7 @@ fn merge_then_import_stays_queued_and_approvable() {
     )
     .unwrap();
 
-    let patch = add_patch(
+    let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1506,7 +1578,7 @@ fn import_marks_merged_when_already_on_upstream() {
     .unwrap();
     let main_before = git_ok(company, &["rev-parse", "main"]).unwrap();
 
-    let patch = add_patch(
+    let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1548,6 +1620,9 @@ fn serializes_two_adds_in_one_checkout_so_both_patches_survive() {
     write(&company, "NOTES.md", "from-ben\n");
     commit_all(&company, "notes from ben");
     let sha_b = git_ok(&company, &["rev-parse", "HEAD"]).unwrap();
+
+    land_on_main(&company, &sha_a);
+    land_on_main(&company, &sha_b);
 
     let handle_a = {
         let company_a = company.clone();
@@ -1685,19 +1760,68 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
     .unwrap();
     write(&asha, "README.md", "from-asha\n");
     commit_all(&asha, "readme from asha");
+    let from_sha = git_ok(&asha, &["rev-parse", "main"]).unwrap();
+    let sha_a = git_ok(&asha, &["rev-parse", "HEAD"]).unwrap();
 
     git(&ben, &["checkout", "-b", "feat/notes"], GitOpts::default()).unwrap();
     write(&ben, "NOTES.md", "from-ben\n");
     commit_all(&ben, "notes from ben");
+    let sha_b = git_ok(&ben, &["rev-parse", "HEAD"]).unwrap();
+
+    land_on_main(&asha, &sha_a);
+    git(
+        &asha,
+        &["push", "--quiet", "origin", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &ben,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &ben,
+        &["checkout", "-f", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &ben,
+        &["reset", "--hard", "--quiet", "origin/main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &ben,
+        &["merge", "--no-edit", "--quiet", &sha_b],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &ben,
+        &["push", "--quiet", "origin", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
 
     let asha_t = asha.clone();
     let ben_t = ben.clone();
+    let from_a = from_sha.clone();
+    let from_b = from_sha;
     let h1 = thread::spawn(move || {
         add_patch(
             &asha_t,
             AddPatchOpts {
                 title: "Readme from Asha".into(),
-                from_ref: Some("main".into()),
+                from_ref: Some(from_a),
+                head_ref: Some(sha_a),
                 push_remote: Some("origin".into()),
                 internal_pr_number: Some(201),
                 ..Default::default()
@@ -1709,7 +1833,8 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
             &ben_t,
             AddPatchOpts {
                 title: "Notes from Ben".into(),
-                from_ref: Some("main".into()),
+                from_ref: Some(from_b),
+                head_ref: Some(sha_b),
                 push_remote: Some("origin".into()),
                 internal_pr_number: Some(202),
                 ..Default::default()
@@ -1762,7 +1887,7 @@ fn refuses_import_when_a_stacked_change_does_not_declare_depends_on() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let hash_patch = add_patch(
+    let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1824,7 +1949,7 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let hash_patch = add_patch(
+    let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1866,7 +1991,7 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
         other => panic!("expected preflight, got {other}"),
     }
 
-    let imported = add_patch(
+    let imported = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Add hash checker".into(),
@@ -1897,7 +2022,7 @@ fn records_depends_on_from_commit_message_trailers() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let hash_patch = add_patch(
+    let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -1917,7 +2042,7 @@ fn records_depends_on_from_commit_message_trailers() {
             .replace("return 3600;", "return 7200;"),
     );
     commit_all(company, "extend ttl");
-    let ttl_patch = add_patch(
+    let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Extend token TTL".into(),
@@ -1944,7 +2069,7 @@ fn records_depends_on_from_commit_message_trailers() {
     );
     commit_all(company, "add log");
 
-    let imported = add_patch(
+    let imported = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Log token hashes".into(),
@@ -1985,7 +2110,7 @@ fn incoming_preflight_reads_depends_on_from_the_message() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let hash_patch = add_patch(
+    let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -2047,7 +2172,7 @@ fn does_not_submit_or_push_when_export_tests_fail() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let hash_patch = add_patch(
+    let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -2094,7 +2219,7 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "wip: ignore this git log");
-    let patch = add_patch(
+    let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -2114,12 +2239,9 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     assert!(patch.commit_message.contains(DEFAULT_CUTOFF));
 
     let company_msg = git_ok(company, &["log", "-1", "--format=%B", "main"]).unwrap();
-    assert!(company_msg.contains("Replace SHA-1 in the default hasher."));
-    assert!(company_msg.contains("PROJ-9999"));
-    assert!(company_msg.contains(DEFAULT_CUTOFF));
-    assert!(company_msg.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
-    assert!(!company_msg.contains("Visible while writing"));
-    assert!(!company_msg.contains("wip: ignore this git log"));
+    assert!(company_msg.contains("wip: ignore this git log"));
+    assert!(!company_msg.contains("Replace SHA-1 in the default hasher."));
+    assert!(!company_msg.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
 
     let stored =
         fs::read_to_string(company.join(format!(".uplink/patches/{}.patch", patch.id))).unwrap();
@@ -2164,7 +2286,7 @@ fn does_not_squash_git_commit_messages_on_import() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);\n"),
     );
     commit_all(company, "WIP second");
-    let patch = add_patch(
+    let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -2174,9 +2296,8 @@ fn does_not_squash_git_commit_messages_on_import() {
     )
     .unwrap();
     let company_msg = git_ok(company, &["log", "-1", "--format=%B", "main"]).unwrap();
-    assert!(company_msg.contains("Use SHA-256 for tokens"));
-    assert!(!company_msg.contains("WIP first"));
-    assert!(!company_msg.contains("WIP second"));
+    assert!(company_msg.contains("WIP second"));
+    assert!(!company_msg.contains("Use SHA-256 for tokens"));
     assert_eq!(patch.commit_message, "Use SHA-256 for tokens");
 }
 
@@ -2268,7 +2389,7 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let patch = add_patch(
+    let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -2349,7 +2470,7 @@ fn submit_does_not_commit_queue_until_submitted() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let patch = add_patch(
+    let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
@@ -2412,7 +2533,7 @@ fn conflicted_records_the_issue_on_the_patch() {
         &TOKENS.replace("return 3600;", "return 7200;"),
     );
     commit_all(company, "longer ttl");
-    let ttl_patch = add_patch(
+    let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Extend TTL".into(),

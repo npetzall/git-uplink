@@ -31,7 +31,7 @@ git add -A && git commit -m "Use SHA-256 for tokens"
 git push -u origin feat/sha256
 ```
 
-Open the PR in the GitHub UI; paste [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md). Wait for checks. Label `uplink:import`.
+Open the PR in the GitHub UI; paste [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md). Wait for checks. Merge.
 
 ```bash
 git fetch origin && git reset --hard origin/main
@@ -53,7 +53,7 @@ git push -u origin feat/ben-log-nodep
 
 Open a PR. Body: [`ben-log.pr.md`](../patches/ben-log.pr.md) **without** the `Uplink-Depends-On` line.
 
-**Uplink export preflight** should fail and comment suggested `Uplink-Depends-On` lines. Do not import. Close the PR in the GitHub UI.
+**Uplink export preflight** should fail and comment suggested `Uplink-Depends-On` lines. Do not merge. Close the PR in the GitHub UI.
 
 ## Import Ben with the trailer
 
@@ -65,7 +65,7 @@ git add -A && git commit -m "Log token hashes"
 git push -u origin feat/ben-log
 ```
 
-Open a PR. Body: [`ben-log.pr.md`](../patches/ben-log.pr.md) with `REPLACE_WITH_ASHA_ID` changed to Asha’s id. Wait for checks. Label `uplink:import`.
+Open a PR. Body: [`ben-log.pr.md`](../patches/ben-log.pr.md) with `REPLACE_WITH_ASHA_ID` changed to Asha’s id. Wait for checks. Merge.
 
 ```bash
 git fetch origin && git reset --hard origin/main

@@ -174,7 +174,7 @@ export const LAB_STEPS: {
     id: "carry-hash",
     title: "Developer lands one internal change",
     summary:
-      "Asha branches from company main, switches SHA-1 to SHA-256, and opens one internal PR. Engineering review plus the uplink:import label is internal product approval: Uplink imports that PR as a queued patch. She never opens a second branch for upstream. IP has not run yet.",
+      "Asha branches from company main, switches SHA-1 to SHA-256, and opens one internal PR. Engineering review plus merge is internal product approval: Uplink imports that PR as a queued patch. She never opens a second branch for upstream. IP has not run yet.",
     why: "Developers keep a normal GitHub Enterprise workflow. The upstream fork branch is derived later from this patch object.",
     apply: (state) => {
       const patch: SimPatch = {
@@ -191,7 +191,7 @@ export const LAB_STEPS: {
         patches: [...state.patches, patch],
         log: [
           ...state.log,
-          "Imported internal PR #88 as upl_hash. Recorded on uplink/state and applied onto company main.",
+          "Imported internal PR #88 as upl_hash. Merged to company main and recorded on uplink/state.",
         ],
       });
     },

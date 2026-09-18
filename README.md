@@ -2,7 +2,7 @@
 
 Rust Git subcommand for the Uplink operating model. The binary is **`git-uplink`**, so Git treats it as `git uplink`.
 
-It is for a company on GitHub Enterprise Cloud with Enterprise Managed Users that must build on a public project, keep unreleased work private, pass IP review, and contribute through an **upstream-owned private fork**. Developers keep one internal branch per change. Company `main` is bot-owned and always:
+It is for a company on GitHub Enterprise Cloud with Enterprise Managed Users that must build on a public project, keep unreleased work private, pass IP review, and contribute through an **upstream-owned private fork**. Developers keep one internal branch per change. Merge is the product gate. Company `main` is always:
 
 ```text
 public upstream/main  +  every patch that is not merged or dropped
@@ -66,7 +66,7 @@ git uplink resolve <id>
 git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 ```
 
-`init` writes `.uplink/queue.json` on the orphan branch `uplink/state`, including remote URLs and branch names. `--upstream` / `--contrib` record those URLs and add the remotes. A later `git uplink init` with no arguments fetches `origin` `uplink/state` and reconstitutes the remotes from the stored URLs. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Import applies the new patch as a fast-forward; sync rebuilds `main` only when upstream moved.
+`init` writes `.uplink/queue.json` on the orphan branch `uplink/state`, including remote URLs and branch names. `--upstream` / `--contrib` record those URLs and add the remotes. A later `git uplink init` with no arguments fetches `origin` `uplink/state` and reconstitutes the remotes from the stored URLs. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Merge lands the change on `main`; import records the patch on `uplink/state`; sync rebuilds `main` only when upstream moved.
 
 `add --title` is the queue entry name. `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `Uplink-Depends-On: upl_…` lines in that message (after HTML comments are stripped) become `dependsOn`; `--depends-on` is an optional overlay. Incoming `preflight` reads the same trailers from `--message` / `--message-file`. `drop --reason` defaults to `dropped by operator`.
 
@@ -102,7 +102,7 @@ Copy `templates/emu-workflows/` into the company product repository. Those jobs 
 | --- | --- |
 | `uplink-prepare.yml` | Every PR to `main` — PR title/body as the commit message, cutoff, export author, affiliation scan |
 | `uplink-preflight.yml` | Every PR to `main` — apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT` |
-| `uplink-import.yml` | Label `uplink:import` or merge — product gate, status `queued` |
+| `uplink-import.yml` | Merge to `main` — product gate, records the patch as status `queued` |
 | `uplink-sync.yml` | Hourly / manual — fetch upstream, drop merged patches; rebuild `main` only if upstream moved. Queue commits go to `uplink/state`. Persist conflicts and open an internal issue |
 | `uplink-resolve.yml` | Human push to `uplink/conflict/*` — `git uplink resolve`, rebuild `main`; if already submitted, status `amended` and dispatch submit for a delta IP pass; publish a later conflict like sync |
 | `uplink-submit.yml` | Dispatch with a patch id — `oss` Environment IP gate (full packet or delta), then approve + submit. Skips opening a second PR when `pr_number` is already stored |

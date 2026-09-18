@@ -17,10 +17,10 @@ use crate::queue::{
 use crate::repo::{
     COMPANY_REMOTE, apply_patch_file, commit_queue, conflicted_files, copy_dir,
     ensure_configured_remotes, ensure_state_worktree, ensure_upstream_ref, fetch_origin_state,
-    fetch_upstream, has_ref, new_patch_id, patch_already_applied_on, push_company_branch,
-    push_state_branch, refresh_company_branch, refresh_state_branch, refresh_upstream_ref,
-    rev_parse, stable_patch_id, stable_patch_id_from_contents, stamp, state_branch, state_exists,
-    try_fetch_origin_state, write_product_patch,
+    fetch_upstream, has_ref, new_patch_id, patch_already_applied_on, push_state_branch,
+    refresh_company_branch, refresh_state_branch, refresh_upstream_ref, rev_parse, stable_patch_id,
+    stable_patch_id_from_contents, stamp, state_branch, state_exists, try_fetch_origin_state,
+    write_product_patch,
 };
 use crate::types::{
     LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
@@ -300,14 +300,6 @@ fn add_patch_attempt(
         refresh_upstream_ref(repo, remote)?;
     }
     let mut queue = read_queue_file(repo)?;
-    let expected_sha = if let Some(remote) = &opts.push_remote {
-        Some(rev_parse(
-            repo,
-            &format!("{remote}/{}", queue.config.internal_branch),
-        )?)
-    } else {
-        None
-    };
     if let Some(pr) = opts.internal_pr_number {
         if let Some(existing) = queue
             .patches
@@ -316,19 +308,17 @@ fn add_patch_attempt(
         {
             let id = existing.id.clone();
             apply_new_patch_on_company(repo, &id, false)?;
-            if let (Some(remote), Some(expected)) = (&opts.push_remote, expected_sha.as_ref()) {
+            if let Some(remote) = &opts.push_remote {
                 let latest = read_queue_file(repo)?;
                 push_state_branch(repo, remote, &latest.config.state_branch)?;
-                push_company_branch(repo, remote, &queue.config.internal_branch, expected)?;
             }
             return Ok(get_patch(&read_queue_file(repo)?, &id)?.clone());
         }
     }
     let patch = add_patch_once(repo, &mut queue, opts, from_sha, head_sha)?;
-    if let (Some(remote), Some(expected)) = (&opts.push_remote, expected_sha) {
+    if let Some(remote) = &opts.push_remote {
         let latest = read_queue_file(repo)?;
         push_state_branch(repo, remote, &latest.config.state_branch)?;
-        push_company_branch(repo, remote, &queue.config.internal_branch, &expected)?;
     }
     Ok(patch)
 }
@@ -442,11 +432,37 @@ fn add_patch_once(
         return Err(err);
     }
 
+    if let Err(err) = assert_change_already_on_company(repo, queue, &candidate_abs, &opts.title) {
+        let _ = fs::remove_file(&candidate_abs);
+        return Err(err);
+    }
+
     queue.patches.push(patch);
     write_queue_file(repo, queue)?;
     commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
     apply_new_patch_on_company(repo, &id, true)?;
     Ok(get_patch(&read_queue_file(repo)?, &id)?.clone())
+}
+
+fn assert_change_already_on_company(
+    repo: &Path,
+    queue: &QueueState,
+    patch_file: &Path,
+    title: &str,
+) -> Result<()> {
+    ensure_upstream_ref(repo)?;
+    if has_ref(repo, "uplink/upstream")?
+        && patch_already_applied_on(repo, "uplink/upstream", patch_file)?
+    {
+        return Ok(());
+    }
+    if patch_already_applied_on(repo, &queue.config.internal_branch, patch_file)? {
+        return Ok(());
+    }
+    Err(Error::msg(format!(
+        "\"{title}\" is not on company {} yet. Merge the internal PR first, then import.",
+        queue.config.internal_branch
+    )))
 }
 
 fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) -> Result<()> {
@@ -483,46 +499,18 @@ fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) ->
         return Ok(());
     }
 
-    let snapshot = snapshot_uplink(repo)?;
     git(
         repo,
         &["checkout", "-f", "--quiet", &company_branch],
         GitOpts::default(),
     )?;
-    let result = apply_patch_file(repo, &patch, &patch_file, false);
-    let result = match result {
-        Ok(value) => value,
-        Err(err) => {
-            let _ = fs::remove_dir_all(&snapshot);
-            return Err(err);
-        }
-    };
-    if result == "conflict" {
-        let files = conflicted_files(repo)?;
-        let upstream_ref = if has_ref(repo, "uplink/upstream")? {
-            "uplink/upstream"
-        } else {
-            company_branch.as_str()
-        };
-        let err = persist_apply_conflict(
-            repo,
-            &mut queue,
-            &snapshot,
-            &company_branch,
-            upstream_ref,
-            &patch.id,
-            &patch.title,
-            files,
-        )?;
-        let _ = fs::remove_dir_all(&snapshot);
-        return Err(Error::Conflict(err));
-    }
-    let _ = fs::remove_dir_all(&snapshot);
-    if result == "empty" {
+    if patch_already_applied_on(repo, &company_branch, &patch_file)? {
         return Ok(());
     }
-    commit_queue(repo, &format!("uplink: record applied patch {id}"))?;
-    Ok(())
+    Err(Error::msg(format!(
+        "\"{}\" is not on company {company_branch} yet. Merge the internal PR first, then import.",
+        patch.title
+    )))
 }
 
 pub fn approve_patch(repo: &Path, id: &str) -> Result<Patch> {

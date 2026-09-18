@@ -44,6 +44,11 @@ git -C "$INTERNAL_DIR" checkout -B feat/internal-github
 copy_overlay "$KIT_DIR/internal" "$INTERNAL_DIR"
 git -C "$INTERNAL_DIR" add -A
 git_bot -C "$INTERNAL_DIR" commit -m "Example GitHub workflows"
+FROM_SHA=$(git -C "$INTERNAL_DIR" rev-parse main)
+HEAD_SHA=$(git -C "$INTERNAL_DIR" rev-parse HEAD)
+git -C "$INTERNAL_DIR" checkout --quiet main
+git -C "$INTERNAL_DIR" merge --ff-only --quiet feat/internal-github
+git -C "$INTERNAL_DIR" push origin main --force
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 {
@@ -56,7 +61,8 @@ git -C "$INTERNAL_DIR" uplink add \
   --title "Example GitHub workflows" \
   --message-file "$WORKDIR/workflows.msg" \
   --internal-only \
-  --from main \
+  --from "$FROM_SHA" \
+  --head "$HEAD_SHA" \
   --push
 git -C "$INTERNAL_DIR" checkout --quiet main
 git -C "$INTERNAL_DIR" branch -f seed main
@@ -73,7 +79,6 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     gh label create "$name" --repo "$INTERNAL" --color "$color" --description "$description" 2>/dev/null \
       || gh label edit "$name" --repo "$INTERNAL" --color "$color" --description "$description"
   }
-  create_label "uplink:import" "0E8A16" "Product gate: import this PR as a queued patch"
   create_label "uplink:internal-only" "5319E7" "Never approve or submit this change upstream"
   create_label "uplink:conflict" "B60205" "Uplink sync conflict; checkout the conflict branch, do not open a PR"
 

@@ -1,6 +1,6 @@
 # Way of working
 
-This is how developers use Uplink day to day. Company `main` is bot-owned. You open one internal PR per change. You never maintain a second branch for upstream. Operators can walk the model with `git uplink web-ui`.
+This is how developers use Uplink day to day. You open one internal PR per change and merge it after review. You never maintain a second branch for upstream. Operators can walk the model with `git uplink web-ui`.
 
 Read this alongside `.uplink/queue.json` (on `uplink/state`) and `git uplink status`. The binary is `git-uplink` (a Git subcommand). Durable queue history lives on the orphan branch `uplink/state`. Company `main` is product-only: public upstream plus every patch that is not merged or dropped. Sync force-updates `main` only when upstream moved (or a drop/resolve requires a replay).
 
@@ -11,7 +11,7 @@ Write every change **as if it were the upstream submission**. Company-only detai
 | Write | Branch from company `main`. Public rationale in the PR title and above the cutoff in the body. | One internal branch. |
 | Prepare | Opens with the internal PR. `git uplink prepare` | Scrubbed message, rewritten author, affiliation scan. Report on the PR and in `GITHUB_STEP_SUMMARY`. |
 | Export preflight | Same PR | Diff must stand on public `main` + declared deps; `UPLINK_PREFLIGHT` must pass. |
-| Internal product | Review + `uplink:import` | Status `queued`. Product builds it. |
+| Internal product | Review + merge | Status `queued`. Product builds it. |
 | Contribution / IP | Dispatch **Uplink submit**. IP approves GitHub Environment **`oss`**. Same run submits. | Report + approval committed under `.uplink/reports/`. Public PR uses the prepared identity. GitHub audit log records the reviewer. |
 
 Default intent is upstream. `uplink:internal-only` is the escape hatch and never goes through the second gate.
@@ -80,9 +80,9 @@ Asha needs to change token hashing. Nobody else is in her way.
 
    Open an internal PR against company `main`. Two checks start: **prepare** (scrub, author rewrite, affiliation scan) and **export preflight**. Approvers read the prepare report on the PR, including both the company commit message (cutoff kept) and the upstream commit message (cutoff removed).
 
-3. **Engineering review.** Required reviewers / CODEOWNERS. This is not IP review. Import is blocked until prepare and preflight are green.
+3. **Engineering review.** Required reviewers / CODEOWNERS. This is not IP review. Merge is blocked until prepare and preflight are green.
 
-4. **Import — approved for the internal.** Label the PR `uplink:import` (or merge it; that also triggers import). Actions runs:
+4. **Import — approved for the internal.** Merge the PR after review. Actions runs:
 
    ```bash
    git uplink add --title "Use SHA-256 for tokens" \
@@ -91,7 +91,7 @@ Asha needs to change token hashing. Nobody else is in her way.
      --pr <number> --push
    ```
 
-   Uplink isolates Asha’s product diff (not `.uplink/`), appends patch `upl_asha` with status `queued` on `uplink/state`, and applies that patch onto company `main` as a fast-forward. If the internal PR was already merged, the apply is empty on `main` and the patch still stays `queued` — `uplink/upstream` does not have it yet. Asha still has only `feat/sha256`. She does not open a public branch.
+   Uplink isolates Asha’s product diff (not `.uplink/`) and appends patch `upl_asha` with status `queued` on `uplink/state`. The merge already put the change on company `main`; import does not rewrite `main`. The patch stays `queued` because `uplink/upstream` does not have it yet. Asha still has only `feat/sha256`. She does not open a public branch.
 
 5. **Other developers now build her change** the next time they branch from `main`. IP has not run. Nothing has left the enterprise.
 
@@ -105,7 +105,7 @@ Asha needs to change token hashing. Nobody else is in her way.
 
 9. **Rebuild.** Company `main` becomes upstream (now containing Asha’s change, including any maintainer follow-up on those lines) plus remaining patches. The internal copy is gone, so a later upstream salt-the-hash fix is not reverted by re-applying Asha’s old delta.
 
-Asha’s job during this: one internal branch, rebase it if `main` moved, talk to reviewers. The bot owns `main` and the public fork branch.
+Asha’s job during this: one internal branch, rebase it if `main` moved, talk to reviewers. The bot owns the public fork branch; humans merge product PRs.
 
 ---
 
@@ -116,14 +116,14 @@ Asha and Ben start from the same company `main`. Their changes are independent (
 ### While both are in flight
 
 1. Both branch from `origin/main`, open two internal PRs.
-2. Review can overlap. Import is serialized:
+2. Review can overlap. GitHub serializes the merges. Import is serialized:
    - Actions group `uplink-mutate` (import / sync / submit wait; they do not cancel each other).
    - `.git/uplink.lock` in one checkout.
-   - Each job isolates **that PR’s** `base.sha..head.sha`, then refreshes latest `main` and `uplink/state`, appends the patch on the state branch, applies it onto `main`, and fast-forward pushes both. If the other import landed first, the push fails and the job retries. The same internal PR number is imported at most once.
-3. Asha’s PR is imported first. Queue: `[upl_asha]`. Company `main` = upstream + Asha.
-4. Ben’s import runs second. His diff is still *his* unique delta against the base he branched from, not a replay of live `main`. It is appended on `uplink/state`. Queue: `[upl_asha, upl_ben]`. Company `main` fast-forwards by applying Ben on top of Asha. Both are `queued`. Neither has been IP-approved.
+   - Each job isolates **that PR’s** `base.sha..head.sha`, then refreshes latest `main` and `uplink/state`, appends the patch on the state branch, and fast-forward pushes `uplink/state`. If the other import landed first, the push fails and the job retries. The same internal PR number is imported at most once.
+3. Asha’s PR is merged and imported first. Queue: `[upl_asha]`. Company `main` already includes Asha.
+4. Ben’s PR is merged onto that `main`, then imported. His diff is still *his* unique delta against the base he branched from, not a replay of live `main`. It is appended on `uplink/state`. Queue: `[upl_asha, upl_ben]`. Both are `queued`. Neither has been IP-approved.
 
-Ben must rebase `feat/ben` onto the new `main` after Asha’s import if he still has an open PR; that is ordinary “integration branch moved.”
+Ben must rebase `feat/ben` onto the new `main` after Asha’s merge if he still has an open PR; that is ordinary “integration branch moved.”
 
 Neither records `dependsOn`. Insertion order is Asha then Ben. That order only matters for rebuild apply order on company `main`. It does **not** freeze upstream merge order.
 
@@ -170,7 +170,7 @@ git reset --hard origin/main   # this tree already contains upl_asha
 git checkout -b feat/ben-on-asha
 ```
 
-He writes code against Asha’s API, opens an internal PR **targeting company `main`**, gets review, labels `uplink:import`.
+He writes code against Asha’s API, opens an internal PR **targeting company `main`**, gets review, merges.
 
 Import isolates Ben’s unique delta against that `main` (Asha is already in the base). The queue becomes `[upl_asha, upl_ben]`. Rebuild applies Asha then Ben. Company `main` has both.
 
@@ -182,7 +182,7 @@ git uplink add --title "Log token hashes" \
   --depends-on upl_asha
 ```
 
-If Asha is not yet on `main` (her PR is still open): **do not import Ben first.** Either wait for `upl_asha` to be queued, or open Ben’s PR against Asha’s feature branch and only import Ben after Asha has been imported and Ben has been rebased onto the new `main`. Importing a stacked PR before its base is on `main` puts Ben’s delta on a tree that does not contain Asha; rebuild will miss her API.
+If Asha is not yet on `main` (her PR is still open): **do not merge Ben first.** Either wait for Asha’s merge, or open Ben’s PR against Asha’s feature branch and only merge Ben after Asha is on `main` and Ben has been rebased onto that `main`. Merging a stacked PR before its base is on `main` puts Ben’s delta on a tree that does not contain Asha; rebuild will miss her API.
 
 ### If Asha is never merged upstream
 
@@ -191,7 +191,7 @@ Company `main` keeps applying `upl_asha` forever (until someone `git uplink drop
 Export is the part that hurts:
 
 - `git uplink submit upl_ben` **refuses** while `upl_asha` is an unmerged, unsubmitted upstream-bound dependency (`Submit upl_asha before upl_ben`).
-- If Ben omits `dependsOn`, **import already refuses** when his diff does not apply on public `main` alone, or when `UPLINK_PREFLIGHT` fails on that export tree. He is not queued on company `main` until he records `Uplink-Depends-On: upl_asha` (or rewrites the change so it stands on public `main`). That is the guard: company `main` is not allowed to become the silent base of a later incomplete upstream PR.
+- If Ben omits `dependsOn`, **import already refuses** when his diff does not apply on public `main` alone, or when `UPLINK_PREFLIGHT` fails on that export tree. Required checks must stay red so he cannot merge until he records `Uplink-Depends-On: upl_asha` (or rewrites the change so it stands on public `main`). That is the guard: company `main` is not allowed to become the silent base of a later incomplete upstream PR.
 - Submit runs the same preflight again. If it fails, Ben stays `approved`, the contrib fork is not pushed, and no public PR is opened. The workflow comments the internal PR.
 - If Asha is reclassified `internal-only`, an upstream-bound Ben **cannot** depend on her. The engine rejects that at add time. Ben must be rewritten so it applies on public `main`, or Ben becomes internal-only too, or Asha must stay an upstream-bound patch that will eventually be submitted.
 
@@ -288,7 +288,7 @@ git uplink add --title "Wire hash logs into the dashboard" \
 
 `--depends-on` order is recorded as `[upl_asha, upl_ben]`. Rebuild order is still Asha, then Ben, then Cam (dependencies first, then Cam). Cam’s patch file is only Cam’s unique delta against a tree that already had Asha and Ben.
 
-Do not import Cam based on only one of them. A PR opened before the second of Asha/Ben is on `main` will isolate a diff that either contains the missing patch or does not compile.
+Do not merge Cam based on only one of them. A PR opened before the second of Asha/Ben is on `main` will isolate a diff that either contains the missing patch or does not compile.
 
 ### Export — order is important
 
@@ -341,11 +341,11 @@ You are choosing a **tree to write code against**, not a second long-lived branc
    That is public upstream plus every patch that is not `merged` or `dropped`. If the product should include it, it is already there. This is the correct base for a new independent fix (Story 1, Story 2).
 
 2. **Look at the queue, not `git log main`.**  
-   `git uplink status` and `.uplink/queue.json` on `uplink/state` list patch ids, titles, `queued` / `approved` / `submitted` / `amended` / `conflict`, and `dependsOn`. Import commits on `main` are ordinary product applies. Sync still may force-update `main` when upstream moved.
+   `git uplink status` and `.uplink/queue.json` on `uplink/state` list patch ids, titles, `queued` / `approved` / `submitted` / `amended` / `conflict`, and `dependsOn`. Merge commits on `main` are ordinary product history. Sync still may force-update `main` when upstream moved.
 
 3. **If you need someone else’s unmerged work:**  
    - Already `queued`? It is on `main`. Branch from `main` (Story 3, Story 5). Record `--depends-on` for every patch your source actually needs so submit cannot skip it.  
-   - Still only an open internal PR? Wait for `uplink:import`, or stack your PR on their feature branch and **rebased onto `main` before you import**. Never import your patch before theirs if you need theirs.
+   - Still only an open internal PR? Wait for their merge, or stack your PR on their feature branch and **rebase onto `main` before you merge**. Never merge your patch before theirs if you need theirs.
 
 4. **If you do not need their work:**  
    Still branch from latest `main` (it may already contain their patch; that is fine — your isolated diff will not include it). Do **not** record `dependsOn`. You stay an independent public PR. Their earlier queue position does not trap you into merging after them (Story 2).
@@ -356,8 +356,8 @@ You are choosing a **tree to write code against**, not a second long-lived branc
    - `uplink/<id>` on the contribution fork — generated, bot-owned, may be force-pushed.  
    - `uplink/conflict/<id>` — only to resolve that patch, then `git uplink resolve`.
 
-6. **After every import or sync that moved `main`, rebase in-flight branches onto new `main`.**  
-   Import is a fast-forward apply. Sync force-updates `main` only when upstream (or drop/resolve) requires a replay.
+6. **After every merge or sync that moved `main`, rebase in-flight branches onto new `main`.**
+   Merge lands product history. Sync force-updates `main` only when upstream (or drop/resolve) requires a replay.
 
 7. **If `git uplink status` shows `conflict`:**  
    You cannot treat `main` as current. The queue is blocked on that patch. The owner of that id resolves it before anyone else’s later patch (including independent ones) will rebuild (Story 4).
@@ -365,7 +365,7 @@ You are choosing a **tree to write code against**, not a second long-lived branc
 8. **If you are about to submit and apply fails on public `main`:**  
    You had a dependency you did not record, or a dependency that is not merged yet. Either submit/wait for those patches, or rewrite yours so it applies on upstream alone. Do not hand-edit the fork branch.
 
-8. **Run export preflight before you ask for import.**  
+8. **Run export preflight before you merge.**  
    `git uplink preflight --from origin/main --head HEAD` (CI does this on the PR). If it asks for `--depends-on`, you were about to land a change that only makes sense on company `main`. Record the ids, do not merge yet.
 
 The one-line version: **base product work on company `main` after the patches you need are `queued`; record `dependsOn` for submit; let merge-detection drop them when upstream takes them so you never re-apply an old delta. Export preflight is what makes a missing `dependsOn` a blocked PR, not a broken public contribution.**

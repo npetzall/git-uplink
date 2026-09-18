@@ -8,7 +8,7 @@ You need a **GitHub organization** plus your user account. GitHub will not let o
 | --- | --- | --- | --- |
 | `uplink-example-upstream` | org | public | Canonical tokenkit project |
 | `uplink-example-upstream-contrib` | your user (fork of upstream) | public on github.com | Contrib remote; `uplink/<id>` branches |
-| `uplink-example-internal` | org | private | Company product; bot-owned `main` and `uplink/state` |
+| `uplink-example-internal` | org | private | Company product; humans merge PRs to `main`; bot owns `uplink/state` |
 
 A true private fork of a public parent needs GitHub Enterprise. On github.com the fork is public; that is enough for this example.
 
@@ -86,7 +86,7 @@ export KIT=/path/to/git-uplink/examples/github
 
 If `bootstrap_internal.sh` did not run `gh`, do this in **uplink-example-internal**:
 
-**Labels:** `uplink:import`, `uplink:internal-only`, `uplink:conflict`
+**Labels:** `uplink:internal-only`, `uplink:conflict`
 
 **Variables** (Settings → Secrets and variables → Actions → Variables):
 

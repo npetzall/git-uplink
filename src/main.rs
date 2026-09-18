@@ -21,11 +21,11 @@ use git_uplink::{Patch, QueueState};
     name = "git-uplink",
     bin_name = "git uplink",
     about = "Carry internal patches on upstream, contribute once, drop when merged.",
-    long_about = "Company main is bot-owned. Developers open PRs; they never push main.\n\
-add is the internal product gate (status: queued). prepare uses the PR title\n\
-and body as the single commit message, rewrites the export author, strips the\n\
-internal section before contrib export, and scans for company affiliation. On\n\
-GitHub Enterprise Cloud, contribution approval is the oss Environment;\n\
+    long_about = "Developers open PRs and merge them; they never push main.\n\
+add records a merged PR as a queued patch on uplink/state. prepare uses the PR\n\
+title and body as the single commit message, rewrites the export author, strips\n\
+the internal section before contrib export, and scans for company affiliation.\n\
+On GitHub Enterprise Cloud, contribution approval is the oss Environment;\n\
 approve/submit run after that review. git uplink talks to git only; workflows\n\
 use gh for GitHub and follow-up commands (submitted, conflicted) to record results."
 )]

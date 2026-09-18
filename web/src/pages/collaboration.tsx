@@ -5,7 +5,7 @@ import { StatusBadge } from "../components/status-badge";
 
 const GATES = [
   {
-    when: "Engineering review + uplink:import",
+    when: "Engineering review + merge",
     status: "queued",
     name: "Approved for the internal",
     body: "The change is on company main. The product builds it. Other developers who branch from main get it. Nothing has left EMU. IP has not run.",
@@ -43,26 +43,28 @@ export function CollaborationPage() {
           </h1>
           <p className="text-lg leading-8 text-muted-foreground">
             Company <code className="rounded bg-muted px-1.5 py-0.5 text-[15px] text-foreground">main</code> is
-            shared. Humans never push it. Two reviewed PRs can land at the same time without
-            dropping a patch. Landing on main is not the same event as approving a contribution.
+            shared. Humans never push it; they merge PRs. Two reviewed PRs can land at the same time
+            without dropping a patch. Landing on main is not the same event as approving a
+            contribution.
           </p>
         </header>
 
         <section className="space-y-3">
           <h2 className="text-xl font-semibold">Will this support multiple developers on company main?</h2>
           <p className="text-[15px] leading-7 text-muted-foreground">
-            Yes. Treat company main like any protected integration branch, with one extra rule:{" "}
-            <strong className="text-foreground">only the Uplink bot writes it</strong>. Developers
-            branch from latest main, open one internal PR per change, and review as usual. Import
-            records the patch on <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink/state</code>{" "}
-            and fast-forwards company main. Sync force-updates main only when public upstream moved.
-            Rebase in-flight PRs onto that new main.
+            Yes. Treat company main like any protected integration branch: developers merge PRs
+            after review; they never push main. Developers branch from latest main, open one
+            internal PR per change, and review as usual. Import records the patch on{" "}
+            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink/state</code>.
+            Sync force-updates main only when public upstream moved. Rebase in-flight PRs onto that
+            new main.
           </p>
           <ul className="space-y-2 text-[15px] leading-7 text-muted-foreground [&_li]:ms-5 [&_li]:list-disc">
             <li>N developers, N feature branches, N internal PRs.</li>
             <li>Zero developers pushing main. Zero second branches for upstream.</li>
             <li>
-              Ruleset: require pull requests from humans; let the bot bypass and force-push.
+              Ruleset: require pull requests from humans (they merge); let the bot bypass and
+              force-push on sync rebuilds.
             </li>
           </ul>
         </section>
@@ -91,7 +93,7 @@ export function CollaborationPage() {
             </li>
             <li>
               The job then refreshes latest main and <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink/state</code>,
-              appends, applies the patch onto main, and fast-forward pushes both. If another import
+              appends, and fast-forward pushes the state branch. If another import
               landed first, the push fails, the job fetches, and it retries.
               The same internal PR number is imported at most once.
             </li>
@@ -106,11 +108,10 @@ export function CollaborationPage() {
         <section className="space-y-4">
           <h2 className="text-xl font-semibold">When is something approved for the internal?</h2>
           <p className="text-[15px] leading-7 text-muted-foreground">
-            When the internal PR is imported. That is engineering review plus the{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink:import</code> label
-            (or a GitHub merge, which also triggers import). The patch status becomes{" "}
-            <StatusBadge value="queued" /> and company main includes it. That is the internal
-            product gate.
+            When the internal PR is merged. That is engineering review plus GitHub merge. Import
+            then records the patch; status becomes{" "}
+            <StatusBadge value="queued" /> and company main already includes it. That is the
+            internal product gate.
           </p>
           <p className="text-[15px] leading-7 text-muted-foreground">
             It is not IP approval. Legal can take as long as it needs. The company keeps shipping

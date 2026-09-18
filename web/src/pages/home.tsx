@@ -11,7 +11,7 @@ const GATES = [
   },
   {
     title: "Stay current, keep your deltas",
-    body: "Company main is public upstream plus the active patch queue. Import applies a new patch as a fast-forward. Sync rebuilds main only when upstream moved. Merged work is dropped so later upstream fixes are not reverted.",
+    body: "Company main is public upstream plus the active patch queue. Merge lands a change on main; import records it on uplink/state. Sync rebuilds main only when upstream moved. Merged work is dropped so later upstream fixes are not reverted.",
   },
   {
     title: "IP control before publicity",
@@ -88,8 +88,8 @@ export function HomePage() {
             host="GHEC EMU · private/internal"
             points={[
               "Synthetic main = upstream + queue",
-              "Developers PR here only; bot owns main",
-              "Import = internal product; oss environment = IP",
+              "Developers merge PRs here; bot rebuilds main on sync",
+              "Merge = internal product; oss environment = IP",
             ]}
           />
           <RepoCard

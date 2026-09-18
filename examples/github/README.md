@@ -12,7 +12,7 @@ Rationale for each flow: [`way-of-working.md`](../../way-of-working.md). Setup, 
 | `uplink-example-upstream-contrib` | Fork used as the contrib remote |
 | `uplink-example-internal` | Company product (Actions live here) |
 
-Company `main` is bot-owned:
+Company `main` is always:
 
 ```text
 public upstream/main  +  every patch that is not merged or dropped
@@ -20,11 +20,13 @@ public upstream/main  +  every patch that is not merged or dropped
 
 After bootstrap, the queue already has one **internal-only** patch (the GitHub workflows). Product stories start from that baseline.
 
+After bootstrap, the queue already has one **internal-only** patch (the GitHub workflows). Product stories start from that baseline.
+
 ## How a story step works
 
 **Git (your clones):** branch, `git apply`, commit, `git push`. After import or reset: `git fetch` and `git reset --hard origin/main`. `git uplink status` for the queue.
 
-**GitHub UI (not the file editor):** Compare & pull request, paste the matching [`patches/*.pr.md`](patches/) into the body, add labels, Actions (**Reset example**, **Uplink submit**, **Uplink sync**), Review deployments for `oss`, merge the upstream PR.
+**GitHub UI (not the file editor):** Compare & pull request, paste the matching [`patches/*.pr.md`](patches/) into the body, add labels (`uplink:internal-only` when needed), merge after checks, Actions (**Reset example**, **Uplink submit**, **Uplink sync**), Review deployments for `oss`, merge the upstream PR.
 
 ## Stories
 

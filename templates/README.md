@@ -16,8 +16,8 @@ Sync and resolve mint `UPLINK_INTERNAL_TOKEN` first and pass it to `actions/chec
 ## Two gates
 
 - **Prepare** (`uplink-prepare.yml`) — on every PR to `main`. Uses the PR title and body as the single commit message, strips HTML comments, keeps the cutoff on company main, rewrites author, scans for company keywords / internal emails, writes `GITHUB_STEP_SUMMARY`, and the workflow posts the report with `gh pr comment`. Required check.
-- **Preflight** (`uplink-preflight.yml`) — required check on every PR to `main`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines from the body, then runs `UPLINK_PREFLIGHT`. Failure prints a comment body; the workflow posts it with `gh pr comment`. Do not import until it is green.
-- **Import** (`uplink-import.yml`) — internal product approval. Label `uplink:import` after engineering review (or merge the PR). The change is recorded on `uplink/state` and applied onto company `main` as status `queued` only if export preflight still passes.
+- **Preflight** (`uplink-preflight.yml`) — required check on every PR to `main`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines from the body, then runs `UPLINK_PREFLIGHT`. Failure prints a comment body; the workflow posts it with `gh pr comment`. Do not merge until it is green.
+- **Import** (`uplink-import.yml`) — internal product approval. Merge the PR after engineering review. The change is already on company `main`; import records it on `uplink/state` as status `queued` only if export preflight still passes.
 - **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream, drops merged patches, and rebuilds `main` only when upstream moved. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>`, and emits issue JSON. The workflow runs `gh issue create` then `git uplink conflicted`. Do not open a PR; resolve the patch on that branch instead.
 - **Resolve** (`uplink-resolve.yml`) — on human pushes to `uplink/conflict/<id>` (skips `Uplink Bot` authors and `github-actions[bot]`). Runs `git uplink resolve`, rebuilds `main`, emits `gh issue close` JSON (or a new issue create if rebuild stops later), and deletes the conflict branch. If the resolved patch was already submitted, status becomes `amended` and this workflow dispatches **Uplink submit** so IP can approve the delta. It does not itself push the contribution fork.
 - **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`oss` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits the report (full contribution, or a delta-first packet when status is `amended`); environment reviewers approve; the same run then `git uplink approve` + `git uplink submit` (contrib git push) + `gh pr create` + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR.
@@ -34,7 +34,7 @@ Repo variables:
 | `UPLINK_UPSTREAM_AUTH` | Same models for public upstream fetch. Empty defaults to `app`. |
 | `UPLINK_CONTRIB_AUTH` | Same models for contrib force-push. Empty defaults to `app`. |
 
-Import and sync share the Actions concurrency group `uplink-mutate` at workflow level. Resolve uses that group too. Submit uses it **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI retries a rejected fast-forward of `uplink/state` or `main` if another import landed first.
+Import and sync share the Actions concurrency group `uplink-mutate` at workflow level. Resolve uses that group too. Submit uses it **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI retries a rejected fast-forward of `uplink/state` if another import landed first.
 
 ---
 
@@ -101,7 +101,7 @@ EMU `GITHUB_TOKEN` is still used for `gh issue create` / `gh pr comment` on the 
 
 ### Ruleset so reports can be committed
 
-The packet job **fast-forwards** a commit of `.uplink/reports/<id>/prepare.md` on `uplink/state` (not a force-push). Import fast-forwards `main` when it applies a new patch. Sync force-updates `main` only for an upstream rebuild. Allow **GitHub Actions** (`GITHUB_TOKEN` on jobs that still check out with it) and the **internal** Uplink bot (`UPLINK_INTERNAL_*` for `git uplink` origin transport, and for sync/resolve shell origin push) to push:
+The packet job **fast-forwards** a commit of `.uplink/reports/<id>/prepare.md` on `uplink/state` (not a force-push). Import records the patch on `uplink/state` after the PR merge; it does not rewrite `main`. Sync force-updates `main` only for an upstream rebuild. Allow **GitHub Actions** (`GITHUB_TOKEN` on jobs that still check out with it) and the **internal** Uplink bot (`UPLINK_INTERNAL_*` for `git uplink` origin transport, and for sync/resolve shell origin push) to push:
 
 - Humans still require a pull request to `main`.
 - Actions may bypass to fast-forward `uplink/state`, and to force-push `main` when upstream (or drop/resolve) requires a replay.
@@ -111,7 +111,7 @@ If the ruleset blocks those credentials from pushing `uplink/state`, the packet 
 ### Operator flow
 
 ```text
-queued patch on uplink/state (and applied on company main)
+queued patch on uplink/state (PR already merged to company main)
         │
         ▼
 workflow_dispatch Uplink submit (patch_id)

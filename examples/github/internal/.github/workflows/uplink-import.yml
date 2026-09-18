@@ -5,7 +5,7 @@ name: Uplink import
 
 on:
   pull_request:
-    types: [labeled, closed]
+    types: [closed]
 
 concurrency:
   group: uplink-mutate
@@ -17,15 +17,13 @@ permissions:
 
 jobs:
   import:
-    if: |
-      (github.event.action == 'labeled' && github.event.label.name == 'uplink:import') ||
-      (github.event.action == 'closed' && github.event.pull_request.merged)
+    if: github.event.pull_request.merged
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
       - uses: ./.github/actions/install-git-uplink
         with:
           src: ${{ vars.UPLINK_SRC }}

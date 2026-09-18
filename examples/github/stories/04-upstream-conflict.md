@@ -35,7 +35,7 @@ git add -A && git commit -m "Extend TTL"
 git push -u origin feat/ttl
 ```
 
-Open the PR in the GitHub UI; paste [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md). Wait for checks. Label `uplink:import`.
+Open the PR in the GitHub UI; paste [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md). Wait for checks. Merge.
 
 ```bash
 git fetch origin && git reset --hard origin/main

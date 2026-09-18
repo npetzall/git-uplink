@@ -39,7 +39,7 @@ git add -A && git commit -m "Extend TTL"
 git push -u origin feat/ttl
 ```
 
-Open both PRs in the GitHub UI. Paste [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md) and [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md). Wait for checks. Label both `uplink:import`.
+Open both PRs in the GitHub UI. Paste [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md) and [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md). Wait for checks. Merge both.
 
 ```bash
 git fetch origin && git reset --hard origin/main
@@ -59,7 +59,7 @@ git add -A && git commit -m "Wire hash into a describe helper"
 git push -u origin feat/cam
 ```
 
-Open the PR. Body: [`cam-wire.pr.md`](../patches/cam-wire.pr.md) with both `REPLACE_WITH_*` ids filled in. Wait for checks. Label `uplink:import`.
+Open the PR. Body: [`cam-wire.pr.md`](../patches/cam-wire.pr.md) with both `REPLACE_WITH_*` ids filled in. Wait for checks. Merge.
 
 ```bash
 git fetch origin && git reset --hard origin/main

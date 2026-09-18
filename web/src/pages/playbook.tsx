@@ -73,9 +73,10 @@ export function PlaybookPage() {
           <p>
             <strong>Company product repo</strong> lives in the EMU enterprise. It is a mirror, not a
             GitHub fork network member — EMU cannot fork public repositories. Humans open PRs only
-            here. <code>main</code> is bot-owned product history. Import fast-forwards it; sync may
-            force-update it when upstream moved. Branch from latest <code>main</code>; rebase
-            in-flight work after a sync the same way you would after any integration branch update.
+            here. Humans merge PRs onto <code>main</code>. Import records the patch on{" "}
+            <code>uplink/state</code>; sync may force-update <code>main</code> when upstream moved.
+            Branch from latest <code>main</code>; rebase in-flight work after a merge or sync the
+            same way you would after any integration branch update.
           </p>
           <p>
             <strong>Contribution fork</strong> is a private fork of the public project, owned by the
@@ -96,18 +97,17 @@ export function PlaybookPage() {
           <p>
             Yes. Company <code>main</code> is a shared integration branch, but humans do not push
             it. Any number of developers branch from latest <code>main</code>, open ordinary
-            internal PRs, and review each other. The Uplink bot is the only writer of{" "}
-            <code>main</code> and of <code>uplink/state</code>. Import applies the new patch as a
-            fast-forward on both. Sync force-updates <code>main</code> only when upstream moved.
-            Packet commits of <code>.uplink/reports/</code> are fast-forwards on{" "}
+            internal PRs, review each other, and merge. Import records the patch on{" "}
+            <code>uplink/state</code>. Sync force-updates <code>main</code> only when upstream
+            moved. Packet commits of <code>.uplink/reports/</code> are fast-forwards on{" "}
             <code>uplink/state</code>. In-flight PRs rebase onto the new main the same way they
             would after any integration-branch update.
           </p>
           <p>
-            Ruleset: require a pull request from humans; allow the Uplink bot (and only that bot)
-            to bypass and force-push <code>main</code> on upstream rebuilds, and to fast-forward{" "}
-            <code>uplink/state</code>. Developers keep one feature branch per change. They never
-            maintain a second branch for upstream.
+            Ruleset: require a pull request from humans (they merge after review); allow the
+            Uplink bot to bypass and force-push <code>main</code> on upstream rebuilds, and to
+            fast-forward <code>uplink/state</code>. Developers keep one feature branch per change.
+            They never maintain a second branch for upstream.
           </p>
         </Section>
 
@@ -128,9 +128,9 @@ export function PlaybookPage() {
             </li>
             <li>
               <strong>Internal product (status <code>queued</code>).</strong> Engineering review on
-              the internal PR, then label <code>uplink:import</code> (or merge). Actions runs{" "}
-              <code>git uplink add</code>. The change is now on company <code>main</code>. That is
-              when it is approved for the internal — the product build includes it, and the next
+              the internal PR, then merge. Actions runs <code>git uplink add</code>. The merge
+              already put the change on company <code>main</code>. Import records it on{" "}
+              <code>uplink/state</code> as queued — the product build includes it, and the next
               developer who branches from main gets it. Default intent is upstream; label{" "}
               <code>uplink:internal-only</code> for the escape hatch. IP has not run yet. Nothing
               has left EMU.
@@ -199,16 +199,16 @@ export function PlaybookPage() {
             <li>
               Each import isolates the PR&apos;s unique diff from the PR&apos;s own{" "}
               <code>base.sha..head.sha</code> (not from live main), then fetches the latest{" "}
-              <code>uplink/state</code>, appends, applies the patch onto <code>main</code>, and
-              fast-forward pushes both. If another import landed first, the push fails, the job
-              refreshes, and it retries. Re-importing the same internal PR number is a no-op.
+              <code>uplink/state</code>, appends, and fast-forward pushes that branch. If another
+              import landed first, the push fails, the job refreshes, and it retries. Re-importing
+              the same internal PR number is a no-op.
             </li>
           </ul>
           <p>
-            If the two changes overlap and the second patch does not apply onto the first, the
-            queue stops in <code>conflict</code>. Rebase the still-open PR onto the new main and
-            import again — or resolve on <code>uplink/conflict/&lt;id&gt;</code>. Independent
-            files land without developer coordination beyond the usual rebase-after-main-moved.
+            If two still-open PRs overlap, rebase the later one onto the new main after the first
+            merge, then merge. Independent files land without developer coordination beyond the
+            usual rebase-after-main-moved. Sync conflicts are resolved on{" "}
+            <code>uplink/conflict/&lt;id&gt;</code>.
           </p>
         </Section>
 
@@ -254,10 +254,9 @@ export function PlaybookPage() {
               Engineering review (required reviewers / CODEOWNERS). This is code review, not IP.
             </li>
             <li>
-              Label <code>uplink:import</code>. That is internal product approval. Actions runs{" "}
+              Merge the PR. That is internal product approval. Actions runs{" "}
               <code>git uplink add</code>, extracts the product diff, excluding{" "}
-              <code>.uplink/</code>, records it on <code>uplink/state</code>, and applies it onto
-              main.
+              <code>.uplink/</code>, and records it on <code>uplink/state</code>.
             </li>
             <li>
               When legal signs off, an operator dispatches <code>Uplink submit</code>. IP approves
@@ -382,8 +381,8 @@ export function PlaybookPage() {
               level. Set <code>UPLINK_REDACT_KEYWORDS</code> and <code>UPLINK_EXPORT_AUTHOR</code>.
             </li>
             <li>
-              Protect company <code>main</code>: only the Uplink bot / GitHub Actions may push.
-              Require PRs from humans. Allow Actions to fast-forward <code>uplink/state</code> and
+              Protect company <code>main</code>: require PRs from humans; they merge after review.
+              Allow the Uplink bot / GitHub Actions to fast-forward <code>uplink/state</code> and
               to force-push rebuilds of <code>main</code> when upstream moved.
             </li>
             <li>

@@ -43,7 +43,7 @@ git add -A && git commit -m "Vendor telemetry"
 git push -u origin feat/telemetry
 ```
 
-Open a PR. On the **Open pull request** page, add label `uplink:internal-only` **before** you click Create (prepare only sees labels that exist when the check runs). Wait for checks. Then add `uplink:import`.
+Open a PR. On the **Open pull request** page, add label `uplink:internal-only` **before** you click Create (prepare only sees labels that exist when the check runs). Wait for checks. Merge.
 
 ```bash
 git fetch origin && git reset --hard origin/main
