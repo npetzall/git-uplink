@@ -35,11 +35,6 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      - name: Fetch the reviewed change
-        run: |
-          git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
-          git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
-
       - name: Import as a queued patch
         env:
           TITLE: ${{ github.event.pull_request.title }}

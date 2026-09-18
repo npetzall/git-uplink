@@ -16,11 +16,11 @@ use crate::queue::{
 };
 use crate::repo::{
     COMPANY_REMOTE, apply_patch_file, commit_queue, conflicted_files, copy_dir,
-    ensure_configured_remotes, ensure_state_worktree, ensure_upstream_ref, fetch_origin_state,
-    fetch_upstream, has_ref, new_patch_id, patch_already_applied_on, push_state_branch,
-    refresh_company_branch, refresh_state_branch, refresh_upstream_ref, rev_parse, stable_patch_id,
-    stable_patch_id_from_contents, stamp, state_branch, state_exists, try_fetch_origin_state,
-    write_product_patch,
+    ensure_configured_remotes, ensure_revs, ensure_state_worktree, ensure_upstream_ref,
+    fetch_origin_state, fetch_upstream, has_ref, new_patch_id, patch_already_applied_on,
+    push_state_branch, refresh_company_branch, refresh_state_branch, refresh_upstream_ref,
+    rev_parse, stable_patch_id, stable_patch_id_from_contents, stamp, state_branch, state_exists,
+    try_fetch_origin_state, write_product_patch,
 };
 use crate::types::{
     LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
@@ -248,13 +248,14 @@ pub struct AddPatchOpts {
 
 pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
     let queued = read_queue_file(repo)?;
-    let head_sha = rev_parse(repo, opts.head_ref.as_deref().unwrap_or("HEAD"))?;
-    let from_sha = rev_parse(
-        repo,
-        opts.from_ref
-            .as_deref()
-            .unwrap_or(&queued.config.internal_branch),
-    )?;
+    let head_ref = opts.head_ref.as_deref().unwrap_or("HEAD");
+    let from_ref = opts
+        .from_ref
+        .as_deref()
+        .unwrap_or(&queued.config.internal_branch);
+    let shas = ensure_revs(repo, &[from_ref, head_ref])?;
+    let from_sha = shas[0].clone();
+    let head_sha = shas[1].clone();
 
     with_queue_lock(repo, || {
         let attempts = if opts.push_remote.is_some() || opts.refresh_remote.is_some() {

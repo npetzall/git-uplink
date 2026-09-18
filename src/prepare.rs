@@ -8,7 +8,7 @@ use regex::Regex;
 use crate::error::{Error, PrepareError, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::queue::now_iso;
-use crate::repo::{has_ref, show_at, state_branch};
+use crate::repo::{ensure_revs, has_ref, show_at, state_branch};
 use crate::types::{
     DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR, Patch, PrepareCheck, PrepareReport,
     QueueState,
@@ -725,6 +725,9 @@ pub fn prepare_from_message(
     title: Option<&str>,
     intent: &str,
 ) -> Result<PrepareReport> {
+    let shas = ensure_revs(repo, &[from_ref, head_ref])?;
+    let from_ref = shas[0].as_str();
+    let head_ref = shas[1].as_str();
     let marker = cutoff_marker(queue);
     let fallback = title.unwrap_or("Contribution");
     let mut stored = strip_html_comments(message);

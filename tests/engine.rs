@@ -188,6 +188,20 @@ fn has_git_ref(repo: &Path, git_ref: &str) -> bool {
     result.code == 0 && !result.stdout.is_empty()
 }
 
+fn has_git_object(repo: &Path, git_ref: &str) -> bool {
+    git(
+        repo,
+        &["cat-file", "-e", git_ref],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .unwrap()
+    .code
+        == 0
+}
+
 fn land_on_main(repo: &Path, head_sha: &str) {
     git(
         repo,
@@ -653,6 +667,161 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
     assert!(
         has_git_ref(&clone, "uplink/upstream"),
         "add should fetch uplink/upstream from origin when the tracking ref is missing"
+    );
+}
+
+#[test]
+fn preflight_fetches_missing_from_and_head_from_origin() {
+    let world = setup_world();
+    let company = &world.company;
+    let origin = create_bare_from(company);
+    git(
+        &origin,
+        &["config", "uploadpack.allowAnySHA1InWant", "true"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let from = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    git(
+        company,
+        &["push", "--quiet", "origin", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let clone_keep = temp_dir();
+    let clone = clone_keep.path().to_path_buf();
+    let origin_url = format!("file://{}", origin.display());
+    git(
+        Path::new("/tmp"),
+        &[
+            "clone",
+            "--quiet",
+            "--single-branch",
+            "--branch",
+            "main",
+            &origin_url,
+            clone.to_str().unwrap(),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &clone,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            "+refs/heads/uplink/state:refs/heads/uplink/state",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    configure_repo(&clone).unwrap();
+    assert!(
+        !has_git_object(&clone, &head),
+        "single-branch clone of main should not have the PR head SHA"
+    );
+
+    preflight_incoming_change(
+        &clone,
+        IncomingPreflight {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: from,
+            head_ref: head.clone(),
+            depends_on: Vec::new(),
+            message: None,
+            preflight_command: None,
+        },
+    )
+    .expect("preflight should fetch missing --from/--head from origin");
+    assert!(
+        has_git_object(&clone, &head),
+        "preflight should fetch the missing head SHA from origin"
+    );
+}
+
+#[test]
+fn preflight_missing_revs_without_origin_fails_clearly() {
+    let world = setup_world();
+    let err = preflight_incoming_change(
+        &world.company,
+        IncomingPreflight {
+            title: "missing".into(),
+            from_ref: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into(),
+            head_ref: "cafebabecafebabecafebabecafebabecafebabe".into(),
+            depends_on: Vec::new(),
+            message: None,
+            preflight_command: None,
+        },
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("origin is not configured"),
+        "expected a missing-origin error, got {msg}"
+    );
+}
+
+#[test]
+fn preflight_missing_revs_not_on_origin_fails_clearly() {
+    let world = setup_world();
+    let company = &world.company;
+    let origin = create_bare_from(company);
+    git(
+        company,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let err = preflight_incoming_change(
+        company,
+        IncomingPreflight {
+            title: "missing".into(),
+            from_ref: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into(),
+            head_ref: "cafebabecafebabecafebabecafebabecafebabe".into(),
+            depends_on: Vec::new(),
+            message: None,
+            preflight_command: None,
+        },
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not in this clone"),
+        "expected a missing-revision error, got {msg}"
     );
 }
 

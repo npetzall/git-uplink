@@ -31,11 +31,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.base.ref }}
 
-      - name: Fetch the candidate change
-        run: |
-          git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
-          git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
-
       - name: Export preflight
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

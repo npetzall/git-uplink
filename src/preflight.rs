@@ -8,7 +8,7 @@ use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git};
 use crate::prepare::{depends_on_from_message, export_commit_message};
 use crate::queue::{active_patches, get_patch, patch_path, read_queue};
-use crate::repo::{ensure_upstream_ref, has_ref, rev_parse, write_product_patch};
+use crate::repo::{ensure_revs, ensure_upstream_ref, has_ref, rev_parse, write_product_patch};
 use crate::types::{Patch, QueueState};
 
 fn run_shell(command: &str, cwd: &Path) -> (i32, String) {
@@ -362,7 +362,8 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
         events: Vec::new(),
     };
     let message = export_commit_message(&patch);
-    write_product_patch(repo, &id, &opts.from_ref, &message, &opts.head_ref)?;
+    let shas = ensure_revs(repo, &[&opts.from_ref, &opts.head_ref])?;
+    write_product_patch(repo, &id, &shas[0], &message, &shas[1])?;
     let candidate_abs = repo.join(patch_path(&id));
     let result = assert_export_preflight(
         repo,

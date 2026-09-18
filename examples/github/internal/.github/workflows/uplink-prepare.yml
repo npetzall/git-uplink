@@ -27,11 +27,6 @@ jobs:
         with:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}
-      - name: Fetch the candidate change
-        run: |
-          git fetch --quiet origin ${{ github.event.pull_request.head.sha }}
-          git fetch --quiet origin ${{ github.event.pull_request.base.sha }}
-
       - name: Prepare contribution
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

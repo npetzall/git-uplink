@@ -33,6 +33,72 @@ pub fn has_ref(repo: &Path, git_ref: &str) -> Result<bool> {
     Ok(result.code == 0 && !result.stdout.is_empty())
 }
 
+fn has_object(repo: &Path, git_ref: &str) -> Result<bool> {
+    let result = git(
+        repo,
+        &["cat-file", "-e", git_ref],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    Ok(result.code == 0)
+}
+
+/// Resolve git refs to SHAs, fetching any missing objects from origin.
+pub fn ensure_revs(repo: &Path, refs: &[&str]) -> Result<Vec<String>> {
+    let mut missing = Vec::new();
+    for git_ref in refs {
+        if !has_object(repo, git_ref)? {
+            missing.push(*git_ref);
+        }
+    }
+    let fetch_err = if missing.is_empty() {
+        None
+    } else if !has_remote(repo, COMPANY_REMOTE) {
+        return Err(Error::msg(format!(
+            "revision '{}' is not in this clone and origin is not configured to fetch it",
+            missing.join("', '")
+        )));
+    } else {
+        let mut args = vec!["fetch", "--quiet", COMPANY_REMOTE];
+        args.extend(missing.iter().copied());
+        let fetched = git(
+            repo,
+            &args,
+            GitOpts {
+                allow_fail: true,
+                ..GitOpts::default()
+            },
+        )?;
+        if fetched.code != 0 {
+            Some(if fetched.stderr.is_empty() {
+                fetched.stdout
+            } else {
+                fetched.stderr
+            })
+        } else {
+            None
+        }
+    };
+
+    let mut shas = Vec::with_capacity(refs.len());
+    for git_ref in refs {
+        if !has_object(repo, git_ref)? {
+            let mut msg = format!("revision '{git_ref}' is not in this clone");
+            if let Some(detail) = &fetch_err {
+                msg.push_str("; git fetch origin failed: ");
+                msg.push_str(detail);
+            } else if !missing.is_empty() {
+                msg.push_str("; git fetch origin did not materialize it");
+            }
+            return Err(Error::msg(msg));
+        }
+        shas.push(rev_parse(repo, git_ref)?);
+    }
+    Ok(shas)
+}
+
 pub fn stable_patch_id_from_contents(repo: &Path, contents: &str) -> Result<String> {
     let result = git(
         repo,

@@ -57,9 +57,9 @@ enum Commands {
         message: Option<String>,
         #[arg(long = "message-file", conflicts_with = "message")]
         message_file: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Base revision (fetched from origin if missing)")]
         from: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Head revision (fetched from origin if missing)")]
         head: Option<String>,
         #[arg(long)]
         internal_only: bool,
@@ -78,9 +78,9 @@ enum Commands {
     },
     Preflight {
         id: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Base revision (fetched from origin if missing)")]
         from: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Head revision (fetched from origin if missing)")]
         head: Option<String>,
         #[arg(long)]
         title: Option<String>,
@@ -92,9 +92,9 @@ enum Commands {
         depends_on: Vec<String>,
     },
     Prepare {
-        #[arg(long)]
+        #[arg(long, help = "Base revision (fetched from origin if missing)")]
         from: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Head revision (fetched from origin if missing)")]
         head: Option<String>,
         #[arg(long)]
         title: Option<String>,
