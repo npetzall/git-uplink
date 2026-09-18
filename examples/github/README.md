@@ -22,13 +22,13 @@ After bootstrap, the queue already has one **internal-only** patch (Uplink tooli
 
 ## How a story step works
 
-**Git (your clones):** branch, `git apply`, commit, `git push`. After import or reset: `git fetch` and `git reset --hard origin/main`. `git uplink status` for the queue.
+**Git (your clones):** branch, `git apply`, commit, `git push`. After import or Actions reset: `git uplink reset`. `git uplink status` for the queue.
 
 **GitHub UI (not the file editor):** Compare & pull request, paste the matching [`patches/*.pr.md`](patches/) into the body, add labels (`uplink:internal-only` when needed), merge after checks, Actions (**Reset example**, **Uplink submit**, **Uplink sync**), Review deployments for `to-upstream` (export) and `from-upstream` (inbound foreign commits), merge the upstream PR.
 
 ## Stories
 
-Reset all three repos at the start of each story: **Actions → Reset example** (see [`SETUP.md`](SETUP.md)). Then fetch in your clones.
+Reset all three repos at the start of each story: **Actions → Reset example** (see [`SETUP.md`](SETUP.md)). Then `git uplink reset` in the internal clone.
 
 | Story | What you exercise |
 | --- | --- |

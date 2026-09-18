@@ -10,8 +10,9 @@ use git_uplink::{
     add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
     format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
     init, init_repo, mark_merged, parse_depends_on, preflight_incoming_change, push_queue, rebuild,
-    rebuild_with, record_conflict_issue, record_pull_request, report_paths, resolve_conflict,
-    status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
+    rebuild_with, record_conflict_issue, record_pull_request, report_paths, reset_from_origin,
+    resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
+    write_queue,
 };
 use tempfile::TempDir;
 
@@ -469,6 +470,141 @@ fn init_without_args_fails_when_state_is_missing() {
     )
     .unwrap();
     let missing_state = init(repo, InitOpts::default()).unwrap_err().to_string();
+    assert!(missing_state.contains("not initialized"), "{missing_state}");
+}
+
+#[test]
+fn reset_from_origin_matches_moved_refs_and_discards_local_work() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    configure_repo(&clone).unwrap();
+
+    git(
+        &world.company,
+        &["checkout", "--quiet", "--detach", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&world.company, "UPSTREAM.md", "moved upstream\n");
+    commit_all(&world.company, "move uplink/upstream");
+    git(
+        &world.company,
+        &["branch", "-f", "uplink/upstream", "HEAD"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &world.company,
+        &["checkout", "-f", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&world.company, "MAIN.md", "moved main\n");
+    commit_all(&world.company, "move main");
+    write(&world.company, ".uplink/reports/note.md", "moved state\n");
+    git_uplink::commit_queue(&world.company, "uplink: move state").unwrap();
+    git(
+        &world.company,
+        &[
+            "push",
+            "--quiet",
+            "origin",
+            "main",
+            "uplink/state",
+            "uplink/upstream",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let origin_main = git_ok(&world.company, &["rev-parse", "main"]).unwrap();
+    let origin_state = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let origin_upstream = git_ok(&world.company, &["rev-parse", "uplink/upstream"]).unwrap();
+    let origin_queue = git_ok(
+        &world.company,
+        &["show", &format!("{STATE_BRANCH}:.uplink/queue.json")],
+    )
+    .unwrap();
+
+    git(
+        &clone,
+        &["fetch", "--quiet", "origin", "uplink/state:uplink/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&clone, ".uplink/local-only.md", "stale state\n");
+    git_uplink::commit_queue(&clone, "uplink: local only").unwrap();
+    git(&clone, &["checkout", "-b", "feat/wip"], GitOpts::default()).unwrap();
+    write(&clone, "README.md", "dirty working tree\n");
+
+    let result = reset_from_origin(&clone).unwrap();
+    assert_eq!(result.internal_branch, "main");
+    assert_eq!(result.internal_sha, origin_main);
+    assert_eq!(result.state_sha, origin_state);
+    assert_eq!(result.upstream_sha, origin_upstream);
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    assert_eq!(git_ok(&clone, &["rev-parse", "main"]).unwrap(), origin_main);
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", STATE_BRANCH]).unwrap(),
+        origin_state
+    );
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "uplink/upstream"]).unwrap(),
+        origin_upstream
+    );
+    assert!(clone.join("MAIN.md").is_file());
+    assert_ne!(
+        fs::read_to_string(clone.join("README.md")).unwrap(),
+        "dirty working tree\n"
+    );
+    assert!(!clone.join(".uplink/local-only.md").is_file());
+    assert!(clone.join(".uplink/queue.json").is_file());
+    assert_eq!(
+        git_ok(
+            &clone,
+            &["show", &format!("{STATE_BRANCH}:.uplink/queue.json")]
+        )
+        .unwrap(),
+        origin_queue
+    );
+}
+
+#[test]
+fn reset_from_origin_fails_without_origin_or_state() {
+    let keep = temp_dir();
+    let repo = keep.path();
+    git(repo, &["init", "-b", "main"], GitOpts::default()).unwrap();
+    let missing_origin = reset_from_origin(repo).unwrap_err().to_string();
+    assert!(
+        missing_origin.contains("origin remote is missing"),
+        "{missing_origin}"
+    );
+
+    let origin = keep_dir();
+    git(
+        &origin,
+        &["init", "--bare", "-b", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let missing_state = reset_from_origin(repo).unwrap_err().to_string();
     assert!(missing_state.contains("not initialized"), "{missing_state}");
 }
 
@@ -3915,5 +4051,9 @@ fn git_uplink_help_includes_web_ui() {
     assert!(
         text.contains("conflicted"),
         "expected conflicted subcommand in help, got:\n{text}"
+    );
+    assert!(
+        text.contains("reset"),
+        "expected reset subcommand in help, got:\n{text}"
     );
 }

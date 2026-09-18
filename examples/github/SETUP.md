@@ -184,11 +184,7 @@ Then in the clones:
 
 ```bash
 # internal
-git fetch origin
-git checkout main
-git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
-git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
+git uplink reset
 
 # upstream (when the story touches it)
 git fetch origin

@@ -18,18 +18,19 @@ use crate::queue::{
     topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
-    COMPANY_REMOTE, apply_patch_file, commit_queue, conflicted_files, copy_dir,
-    ensure_configured_remotes, ensure_revs, ensure_state_worktree, ensure_upstream_ref,
-    fetch_origin_state, fetch_state_tracking, fetch_upstream, fetch_upstream_remote, has_ref,
-    is_ancestor, merge_base, new_patch_id, patch_already_applied_on, path_exists_at,
-    promote_upstream, push_branch_force_lease, push_state_branch, queue_at, refresh_upstream_ref,
-    restore_paths_from, rev_parse, set_state_branch, stable_patch_id,
+    COMPANY_REMOTE, UPSTREAM_REF, apply_patch_file, apply_state_sha, commit_queue,
+    conflicted_files, copy_dir, ensure_configured_remotes, ensure_revs, ensure_state_worktree,
+    ensure_upstream_ref, fetch_origin_state, fetch_state_tracking, fetch_tracking_sha,
+    fetch_upstream, fetch_upstream_remote, has_ref, is_ancestor, merge_base, new_patch_id,
+    patch_already_applied_on, path_exists_at, point_branch_at, promote_upstream,
+    push_branch_force_lease, push_state_branch, queue_at, refresh_company_branch,
+    refresh_upstream_ref, restore_paths_from, rev_parse, set_state_branch, stable_patch_id,
     stable_patch_id_from_contents, stamp, state_branch, state_exists, try_fetch_origin_state,
     write_product_patch,
 };
 use crate::types::{
     Forge, LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
-    PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig, QueueState,
+    PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
 };
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
@@ -127,6 +128,33 @@ fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
     ensure_configured_remotes(repo, &queue.config)?;
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
     Ok(queue)
+}
+
+#[derive(Debug, Clone)]
+pub struct ResetResult {
+    pub internal_branch: String,
+    pub internal_sha: String,
+    pub state_sha: String,
+    pub upstream_sha: String,
+}
+
+/// Fetch origin and hard-reset company main, `uplink/state`, and `uplink/upstream`.
+/// Leaves HEAD on the configured internal branch with `.uplink/` restored from origin.
+pub fn reset_from_origin(repo: &Path) -> Result<ResetResult> {
+    configure_repo(repo)?;
+    let state_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
+    let upstream_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, UPSTREAM_REF)?;
+    let queue = queue_at(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?;
+    let internal_branch = queue.config.internal_branch.clone();
+    let internal_sha = refresh_company_branch(repo, COMPANY_REMOTE, &internal_branch)?;
+    apply_state_sha(repo, STATE_BRANCH, &state_sha)?;
+    point_branch_at(repo, UPSTREAM_REF, &upstream_sha)?;
+    Ok(ResetResult {
+        internal_branch,
+        internal_sha,
+        state_sha,
+        upstream_sha,
+    })
 }
 
 fn missing_forge_error() -> Error {

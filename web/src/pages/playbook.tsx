@@ -460,6 +460,7 @@ git uplink init
 git uplink add --title "Use SHA-256 for tokens" --message-file msg.txt
 git uplink add --title "Vendor hook" --internal-only
 git uplink push
+git uplink reset
 git uplink report upl_ab12cd34ef
 git uplink approve upl_ab12cd34ef
 git uplink submit upl_ab12cd34ef

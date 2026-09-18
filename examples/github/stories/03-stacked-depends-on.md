@@ -13,11 +13,7 @@ Work in the **internal** clone.
 **Actions → Reset example** on all three repos, then:
 
 ```bash
-git fetch origin
-git checkout main
-git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
-git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
+git uplink reset
 ```
 
 ## Import Asha
@@ -34,8 +30,7 @@ git push -u origin feat/sha256
 Open the PR in the GitHub UI; paste [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md). Wait for checks. Merge.
 
 ```bash
-git fetch origin && git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 
@@ -44,7 +39,7 @@ Copy Asha’s `upl_…` id (the SHA-256 row, not the workflows patch).
 ## Preflight without depends-on (should fail)
 
 ```bash
-git checkout main && git reset --hard origin/main
+git uplink reset
 git checkout -b feat/ben-log-nodep
 git apply "$KIT/patches/ben-log.diff"
 git add -A && git commit -m "Log token hashes"
@@ -58,7 +53,7 @@ Open a PR. Body: [`ben-log.pr.md`](../patches/ben-log.pr.md) **without** the `Up
 ## Import Ben with the trailer
 
 ```bash
-git checkout main && git reset --hard origin/main
+git uplink reset
 git checkout -b feat/ben-log
 git apply "$KIT/patches/ben-log.diff"
 git add -A && git commit -m "Log token hashes"
@@ -68,8 +63,7 @@ git push -u origin feat/ben-log
 Open a PR. Body: [`ben-log.pr.md`](../patches/ben-log.pr.md) with `REPLACE_WITH_ASHA_ID` changed to Asha’s id. Wait for checks. Merge.
 
 ```bash
-git fetch origin && git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 

@@ -93,9 +93,7 @@ Asha needs to change token hashing. Nobody else is in her way.
 1. **Fetch latest company `main`.** That tree already includes every queued patch. It is what the product builds.
 
    ```bash
-   git fetch origin
-   git checkout main
-   git reset --hard origin/main
+   git uplink reset
    git checkout -b feat/sha256
    ```
 
@@ -199,9 +197,7 @@ Asha’s patch is `queued` on company `main`. It has not passed IP. It has not b
 Ben does **not** wait for IP. Internal product approval already happened at import.
 
 ```bash
-git fetch origin
-git checkout main
-git reset --hard origin/main   # this tree already contains upl_asha
+git uplink reset   # this tree already contains upl_asha
 git checkout -b feat/ben-on-asha
 ```
 
@@ -309,7 +305,7 @@ Cam needs **both** APIs.
 Order of Asha vs Ben on `main` does not matter to Cam as long as **both are imported** before Cam branches.
 
 ```bash
-git fetch origin && git checkout main && git reset --hard origin/main
+git uplink reset
 git checkout -b feat/cam
 # uses Asha's API and Ben's API
 ```
@@ -375,7 +371,7 @@ If you had made a **chain** (`Ben dependsOn Asha`, `Cam dependsOn Ben`) because 
 You are choosing a **tree to write code against**, not a second long-lived branch.
 
 1. **Default: latest company `main`.**  
-   `git fetch origin && git checkout main && git reset --hard origin/main`  
+   `git uplink reset`  
    That is public upstream plus every patch that is not `merged` or `dropped`. If the product should include it, it is already there. This is the correct base for a new independent fix (Story 1, Story 2).
 
 2. **Look at the queue, not `git log main`.**  

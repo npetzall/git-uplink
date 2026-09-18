@@ -13,11 +13,7 @@ Work in the **internal** clone.
 **Actions → Reset example** on all three repos, then:
 
 ```bash
-git fetch origin
-git checkout main
-git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
-git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
+git uplink reset
 ```
 
 ## Two branches from the same baseline
@@ -42,8 +38,7 @@ Open two PRs in the GitHub UI (Compare & pull request). Titles `Use SHA-256 for 
 Wait for prepare + preflight on both. Merge Asha first, then Ben (one after the other; import is serialized by `uplink-mutate`).
 
 ```bash
-git fetch origin && git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 
@@ -58,8 +53,7 @@ Each public PR is the patch on public `main`, not stacked on the other.
 On **upstream**, squash-merge **Ben’s** PR first. Then **Actions → Uplink sync** on internal. Ben’s trailer is the only new commit, so inspect applies immediately (no `from-upstream` wait).
 
 ```bash
-git fetch origin && git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 

@@ -13,11 +13,7 @@ Work in the **internal** clone.
 **Actions → Reset example** on all three repos, then:
 
 ```bash
-git fetch origin
-git checkout main
-git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
-git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
+git uplink reset
 ```
 
 ## Prepare fails without the label
@@ -36,7 +32,7 @@ Open a PR in the GitHub UI. Title `Vendor telemetry`. Body: [`internal-telemetry
 ## Import with uplink:internal-only
 
 ```bash
-git checkout main && git reset --hard origin/main
+git uplink reset
 git checkout -b feat/telemetry
 git apply "$KIT/patches/internal-telemetry.diff"
 git add -A && git commit -m "Vendor telemetry"
@@ -46,8 +42,7 @@ git push -u origin feat/telemetry
 Open a PR. On the **Open pull request** page, add label `uplink:internal-only` **before** you click Create (prepare only sees labels that exist when the check runs). Wait for checks. Merge.
 
 ```bash
-git fetch origin && git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 

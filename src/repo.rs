@@ -9,7 +9,7 @@ use crate::prepare::{company_commit_message, export_commit_message};
 use crate::queue::{now_iso, patch_path};
 use crate::types::{PATCH_DIR, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH};
 
-const UPSTREAM_REF: &str = "uplink/upstream";
+pub(crate) const UPSTREAM_REF: &str = "uplink/upstream";
 pub(crate) const COMPANY_REMOTE: &str = "origin";
 
 pub fn ensure_uplink_dirs(repo: &Path) -> Result<()> {
@@ -629,8 +629,14 @@ pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
     outcome
 }
 
-#[allow(dead_code)]
-pub fn refresh_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> {
+/// Fetch `branch` into a remote-tracking ref. Does not move a checked-out local branch.
+pub fn fetch_tracking_sha(repo: &Path, remote: &str, branch: &str) -> Result<String> {
+    if !has_remote(repo, remote) {
+        return Err(Error::msg(format!(
+            "{remote} remote is missing; cannot fetch {branch}. \
+Run `git uplink init --upstream <url> --contrib <url>` to create a queue."
+        )));
+    }
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
     let fetched = git(
         repo,
@@ -641,14 +647,29 @@ pub fn refresh_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<(
         },
     )?;
     if fetched.code != 0 {
-        return Ok(());
+        if branch == STATE_BRANCH {
+            return Err(not_initialized_error());
+        }
+        return Err(Error::msg(format!("Could not fetch {remote} {branch}.")));
     }
-    let sha = git_ok(repo, &["rev-parse", &format!("{remote}/{branch}")])?;
+    git_ok(repo, &["rev-parse", &format!("{remote}/{branch}")])
+}
+
+pub fn point_branch_at(repo: &Path, branch: &str, sha: &str) -> Result<()> {
     git(
         repo,
-        &["update-ref", &format!("refs/heads/{branch}"), &sha],
+        &["update-ref", &format!("refs/heads/{branch}"), sha],
         GitOpts::default(),
     )?;
+    Ok(())
+}
+
+pub fn apply_state_sha(repo: &Path, branch: &str, sha: &str) -> Result<()> {
+    point_branch_at(repo, branch, sha)?;
+    let dir = repo.join(".uplink");
+    if dir.exists() {
+        fs::remove_dir_all(&dir)?;
+    }
     ensure_uplink_excluded(repo)?;
     restore_state_worktree(repo, branch)
 }
@@ -756,23 +777,11 @@ pub fn patch_state_commit(repo: &Path, id: &str) -> Result<String> {
     rev_parse(repo, &branch)
 }
 
-#[allow(dead_code)]
 pub fn refresh_company_branch(repo: &Path, remote: &str, branch: &str) -> Result<String> {
-    let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    let sha = fetch_tracking_sha(repo, remote, branch)?;
     git(
         repo,
-        &["fetch", "--quiet", "--prune", remote, &spec],
-        GitOpts::default(),
-    )?;
-    let sha = git_ok(repo, &["rev-parse", &format!("{remote}/{branch}")])?;
-    git(
-        repo,
-        &["checkout", "-f", "--quiet", branch],
-        GitOpts::default(),
-    )?;
-    git(
-        repo,
-        &["reset", "--hard", "--quiet", &sha],
+        &["checkout", "--quiet", "-f", "-B", branch, &sha],
         GitOpts::default(),
     )?;
     Ok(sha)

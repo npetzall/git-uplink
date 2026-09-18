@@ -13,11 +13,7 @@ Work in your **internal** clone unless a step says otherwise.
 On GitHub, **Actions → Reset example → Run workflow** on all three repos (any branch; the job checks out `example-reset`). Then:
 
 ```bash
-git fetch origin
-git checkout main
-git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
-git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
+git uplink reset
 git uplink status
 ```
 
@@ -42,10 +38,7 @@ Wait until **Uplink prepare for upstream** and **Uplink export preflight** are g
 On the PR, merge after review. Watch **Uplink import**. Then:
 
 ```bash
-git fetch origin
-git checkout main
-git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 
@@ -66,9 +59,7 @@ On that **upstream** PR, squash-merge in the GitHub UI.
 **Actions → Uplink sync → Run workflow** on internal `main`. The squash-merge is Asha’s trailer, so inspect applies immediately (no `from-upstream` wait).
 
 ```bash
-git fetch origin
-git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 

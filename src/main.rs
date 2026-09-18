@@ -14,7 +14,7 @@ use git_uplink::{
     mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, prepare_from_message, push_queue,
     read_queue, rebuild_with, record_conflict_issue, record_pull_request, report_paths,
-    resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
+    reset_from_origin, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
 };
 use git_uplink::{Patch, QueueState, SyncResult};
 
@@ -90,6 +90,8 @@ enum Commands {
         #[arg(long = "push-remote")]
         push_remote: Option<String>,
     },
+    /// Fetch origin and hard-reset company main, uplink/state, and uplink/upstream.
+    Reset,
     Preflight {
         id: Option<String>,
         #[arg(long, help = "Base revision (fetched from origin if missing)")]
@@ -613,6 +615,12 @@ fn run() -> Result<(), Error> {
                 "{} {} to {} at {}",
                 result.action, result.branch, result.remote, result.sha
             );
+        }
+        Commands::Reset => {
+            let result = reset_from_origin(&repo)?;
+            println!("{} {}", result.internal_branch, result.internal_sha);
+            println!("{} {}", STATE_BRANCH, result.state_sha);
+            println!("uplink/upstream {}", result.upstream_sha);
         }
         Commands::Prepare {
             from,

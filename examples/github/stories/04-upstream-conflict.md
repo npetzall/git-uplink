@@ -11,11 +11,7 @@ export KIT=/path/to/git-uplink/examples/github
 **Actions → Reset example** on all three repos, then in **internal**:
 
 ```bash
-git fetch origin
-git checkout main
-git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
-git fetch origin '+refs/heads/uplink/upstream:refs/heads/uplink/upstream'
+git uplink reset
 ```
 
 In **upstream**:
@@ -38,8 +34,7 @@ git push -u origin feat/ttl
 Open the PR in the GitHub UI; paste [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md). Wait for checks. Merge.
 
 ```bash
-git fetch origin && git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 
@@ -64,8 +59,7 @@ git push origin main
 **Do not open a pull request for the conflict.** Company `main` stays at the last successful rebuild (still 7200, no markers).
 
 ```bash
-git fetch origin
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git fetch origin '+refs/heads/uplink/conflict/*:refs/heads/uplink/conflict/*'
 git uplink status
 ```
@@ -103,8 +97,7 @@ git push origin "uplink/conflict/${id}"
 **Uplink resolve** runs on that push. It refreshes the same patch id, rebuilds `main`, closes the issue, and deletes the conflict branch.
 
 ```bash
-git fetch origin && git checkout main && git reset --hard origin/main
-git fetch origin '+refs/heads/uplink/state:refs/heads/uplink/state'
+git uplink reset
 git uplink status
 ```
 
