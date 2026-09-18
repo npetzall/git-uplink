@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::thread;
@@ -19,9 +20,10 @@ use crate::queue::{
 use crate::repo::{
     COMPANY_REMOTE, apply_patch_file, commit_queue, conflicted_files, copy_dir,
     ensure_configured_remotes, ensure_revs, ensure_state_worktree, ensure_upstream_ref,
-    fetch_origin_state, fetch_upstream, fetch_upstream_remote, has_ref, new_patch_id,
-    patch_already_applied_on, promote_upstream, push_branch_force_lease, push_state_branch,
-    refresh_company_branch, refresh_state_branch, refresh_upstream_ref, rev_parse, stable_patch_id,
+    fetch_origin_state, fetch_state_tracking, fetch_upstream, fetch_upstream_remote, has_ref,
+    is_ancestor, merge_base, new_patch_id, patch_already_applied_on, path_exists_at,
+    promote_upstream, push_branch_force_lease, push_state_branch, queue_at, refresh_upstream_ref,
+    restore_paths_from, rev_parse, set_state_branch, stable_patch_id,
     stable_patch_id_from_contents, stamp, state_branch, state_exists, try_fetch_origin_state,
     write_product_patch,
 };
@@ -365,8 +367,6 @@ pub struct AddPatchOpts {
     pub internal_pr_number: Option<u64>,
     pub internal_pr_url: Option<String>,
     pub preflight_command: Option<String>,
-    pub refresh_remote: Option<String>,
-    pub push_remote: Option<String>,
 }
 
 pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
@@ -381,32 +381,7 @@ pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
     let head_sha = shas[1].clone();
 
     with_queue_lock(repo, || {
-        let attempts = if opts.push_remote.is_some() || opts.refresh_remote.is_some() {
-            8
-        } else {
-            1
-        };
-        let refresh_remote = opts
-            .refresh_remote
-            .clone()
-            .or_else(|| opts.push_remote.clone());
-        let mut last_error = None;
-        for attempt in 0..attempts {
-            match add_patch_attempt(repo, &opts, &from_sha, &head_sha, refresh_remote.as_deref()) {
-                Ok(patch) => return Ok(patch),
-                Err(err) => {
-                    let retry = opts.push_remote.is_some()
-                        && is_push_lease_rejected(&err)
-                        && attempt + 1 < attempts;
-                    if !retry {
-                        return Err(err);
-                    }
-                    last_error = Some(err);
-                    thread::sleep(Duration::from_millis(40 * 2u64.pow(attempt as u32)));
-                }
-            }
-        }
-        Err(last_error.unwrap_or_else(|| Error::msg("add failed")))
+        add_patch_attempt(repo, &opts, &from_sha, &head_sha)
     })
 }
 
@@ -415,14 +390,7 @@ fn add_patch_attempt(
     opts: &AddPatchOpts,
     from_sha: &str,
     head_sha: &str,
-    refresh_remote: Option<&str>,
 ) -> Result<Patch> {
-    if let Some(remote) = refresh_remote {
-        let queued = read_queue_file(repo)?;
-        refresh_company_branch(repo, remote, &queued.config.internal_branch)?;
-        refresh_state_branch(repo, remote, &queued.config.state_branch)?;
-        refresh_upstream_ref(repo, remote)?;
-    }
     let mut queue = read_queue_file(repo)?;
     if let Some(pr) = opts.internal_pr_number {
         if let Some(existing) = queue
@@ -432,19 +400,10 @@ fn add_patch_attempt(
         {
             let id = existing.id.clone();
             apply_new_patch_on_company(repo, &id, false)?;
-            if let Some(remote) = &opts.push_remote {
-                let latest = read_queue_file(repo)?;
-                push_state_branch(repo, remote, &latest.config.state_branch)?;
-            }
             return Ok(get_patch(&read_queue_file(repo)?, &id)?.clone());
         }
     }
-    let patch = add_patch_once(repo, &mut queue, opts, from_sha, head_sha)?;
-    if let Some(remote) = &opts.push_remote {
-        let latest = read_queue_file(repo)?;
-        push_state_branch(repo, remote, &latest.config.state_branch)?;
-    }
-    Ok(patch)
+    add_patch_once(repo, &mut queue, opts, from_sha, head_sha)
 }
 
 fn add_patch_once(
@@ -567,6 +526,171 @@ fn add_patch_once(
     commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
     apply_new_patch_on_company(repo, &id, true)?;
     Ok(get_patch(&read_queue_file(repo)?, &id)?.clone())
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PushOpts {
+    pub push_remote: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PushResult {
+    pub action: String,
+    pub remote: String,
+    pub branch: String,
+    pub sha: String,
+}
+
+pub fn push_queue(repo: &Path, opts: PushOpts) -> Result<PushResult> {
+    with_queue_lock(repo, || {
+        let remote = opts
+            .push_remote
+            .clone()
+            .unwrap_or_else(|| COMPANY_REMOTE.to_string());
+        let mut last_error = None;
+        for attempt in 0..8 {
+            match push_queue_once(repo, &remote) {
+                Ok(result) => return Ok(result),
+                Err(err) => {
+                    let retry = is_push_lease_rejected(&err) && attempt + 1 < 8;
+                    if !retry {
+                        return Err(err);
+                    }
+                    last_error = Some(err);
+                    thread::sleep(Duration::from_millis(40 * 2u64.pow(attempt as u32)));
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| Error::msg("push failed")))
+    })
+}
+
+fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
+    let queue = read_queue_file(repo)?;
+    let branch = queue.config.state_branch.clone();
+    if !has_ref(repo, &branch)? {
+        return Err(Error::msg(
+            "uplink/state is missing; run `git uplink init` before pushing",
+        ));
+    }
+    let local_sha = rev_parse(repo, &branch)?;
+    let Some(remote_sha) = fetch_state_tracking(repo, remote, &branch)? else {
+        push_state_branch(repo, remote, &branch)?;
+        return Ok(PushResult {
+            action: "pushed".into(),
+            remote: remote.into(),
+            branch,
+            sha: rev_parse(repo, &state_branch(repo))?,
+        });
+    };
+
+    if local_sha == remote_sha {
+        return Ok(PushResult {
+            action: "up-to-date".into(),
+            remote: remote.into(),
+            branch,
+            sha: local_sha,
+        });
+    }
+
+    if is_ancestor(repo, &remote_sha, &local_sha)? {
+        push_state_branch(repo, remote, &branch)?;
+        return Ok(PushResult {
+            action: "pushed".into(),
+            remote: remote.into(),
+            branch,
+            sha: local_sha,
+        });
+    }
+
+    if is_ancestor(repo, &local_sha, &remote_sha)? {
+        set_state_branch(repo, &branch, &remote_sha)?;
+        return Ok(PushResult {
+            action: "fast-forwarded".into(),
+            remote: remote.into(),
+            branch,
+            sha: remote_sha,
+        });
+    }
+
+    if merge_base(repo, &local_sha, &remote_sha)?.is_none() {
+        return Err(Error::msg(format!(
+            "{branch} has unrelated histories with {remote}; cannot restack"
+        )));
+    }
+
+    let action = restack_local_patches(repo, &branch, &local_sha, &remote_sha)?;
+    push_state_branch(repo, remote, &branch)?;
+    Ok(PushResult {
+        action,
+        remote: remote.into(),
+        branch,
+        sha: rev_parse(repo, &state_branch(repo))?,
+    })
+}
+
+fn restack_local_patches(
+    repo: &Path,
+    branch: &str,
+    local_sha: &str,
+    remote_sha: &str,
+) -> Result<String> {
+    let local_queue = queue_at(repo, local_sha)?;
+    let remote_queue = queue_at(repo, remote_sha)?;
+    let remote_ids: HashSet<&str> = remote_queue.patches.iter().map(|p| p.id.as_str()).collect();
+    let remote_prs: HashSet<u64> = remote_queue
+        .patches
+        .iter()
+        .filter_map(|p| p.source.internal_pr_number)
+        .collect();
+    let carry: Vec<Patch> = local_queue
+        .patches
+        .iter()
+        .filter(|patch| {
+            if remote_ids.contains(patch.id.as_str()) {
+                return false;
+            }
+            if let Some(pr) = patch.source.internal_pr_number {
+                if remote_prs.contains(&pr) {
+                    return false;
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect();
+
+    if carry.is_empty() {
+        set_state_branch(repo, branch, remote_sha)?;
+        return Ok("fast-forwarded".into());
+    }
+
+    let mut paths = Vec::new();
+    for patch in &carry {
+        let path = format!(".uplink/patches/{}.patch", patch.id);
+        if !path_exists_at(repo, local_sha, &path)? {
+            return Err(Error::msg(format!(
+                "local-only patch {} has no patch file on {branch}",
+                patch.id
+            )));
+        }
+        paths.push(path);
+    }
+
+    let outcome = (|| -> Result<()> {
+        set_state_branch(repo, branch, remote_sha)?;
+        restore_paths_from(repo, local_sha, &paths)?;
+        let mut queue = read_queue_file(repo)?;
+        queue.patches.extend(carry);
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, "uplink: restack onto origin")?;
+        Ok(())
+    })();
+    if let Err(err) = outcome {
+        let _ = set_state_branch(repo, branch, local_sha);
+        return Err(err);
+    }
+    Ok("restacked".into())
 }
 
 fn assert_change_already_on_company(

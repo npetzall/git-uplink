@@ -70,7 +70,7 @@ export function HomePage() {
           <strong className="text-foreground">approved for the internal</strong> — the product builds
           it. Legal review is a later <strong className="text-foreground">to-upstream Environment</strong>{" "}
           approval on the submit workflow, before anything is pushed to the upstream-owned fork.
-          Concurrent imports retry with force-with-lease so two adds cannot drop a patch.
+          Concurrent imports publish with <code className="rounded bg-muted px-1 py-0.5 text-foreground">git uplink push</code> so two adds cannot drop a patch.
         </p>
         <Button asChild variant="outline" size="sm">
           <Link to="/collaboration">

@@ -629,6 +629,7 @@ pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
     outcome
 }
 
+#[allow(dead_code)]
 pub fn refresh_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> {
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
     let fetched = git(
@@ -650,6 +651,82 @@ pub fn refresh_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<(
     )?;
     ensure_uplink_excluded(repo)?;
     restore_state_worktree(repo, branch)
+}
+
+/// Fetch `uplink/state` into a remote-tracking ref without moving the local branch.
+pub fn fetch_state_tracking(repo: &Path, remote: &str, branch: &str) -> Result<Option<String>> {
+    let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    let fetched = git(
+        repo,
+        &["fetch", "--quiet", "--prune", remote, &spec],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    if fetched.code != 0 {
+        return Ok(None);
+    }
+    Ok(Some(git_ok(
+        repo,
+        &["rev-parse", &format!("{remote}/{branch}")],
+    )?))
+}
+
+pub fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+    let result = git(
+        repo,
+        &["merge-base", "--is-ancestor", ancestor, descendant],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    Ok(result.code == 0)
+}
+
+pub fn merge_base(repo: &Path, a: &str, b: &str) -> Result<Option<String>> {
+    let result = git(
+        repo,
+        &["merge-base", a, b],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    if result.code != 0 || result.stdout.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(result.stdout))
+}
+
+pub fn queue_at(repo: &Path, sha: &str) -> Result<QueueState> {
+    let raw = show_at(repo, sha, QUEUE_PATH)?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+pub fn set_state_branch(repo: &Path, branch: &str, sha: &str) -> Result<()> {
+    git(
+        repo,
+        &["update-ref", &format!("refs/heads/{branch}"), sha],
+        GitOpts::default(),
+    )?;
+    ensure_uplink_excluded(repo)?;
+    restore_state_worktree(repo, branch)
+}
+
+pub fn restore_paths_from(repo: &Path, source: &str, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["restore", "--source", source, "--worktree", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    git(repo, &args, GitOpts::default())?;
+    Ok(())
+}
+
+pub fn path_exists_at(repo: &Path, sha: &str, path: &str) -> Result<bool> {
+    has_object(repo, &format!("{sha}:{path}"))
 }
 
 pub fn push_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> {
@@ -679,6 +756,7 @@ pub fn patch_state_commit(repo: &Path, id: &str) -> Result<String> {
     rev_parse(repo, &branch)
 }
 
+#[allow(dead_code)]
 pub fn refresh_company_branch(repo: &Path, remote: &str, branch: &str) -> Result<String> {
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
     git(

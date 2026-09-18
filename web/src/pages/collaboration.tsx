@@ -164,7 +164,7 @@ export function CollaborationPage() {
         </section>
 
         <p className="text-sm text-muted-foreground">
-          The git engine tests this with two clones racing <code>git uplink add --push</code> at the
+          The git engine tests this with two clones racing <code>git uplink push</code> at the
           same time. The{" "}
           <Link to="/playbook" className="text-primary underline-offset-4 hover:underline">
             system playbook

@@ -62,7 +62,7 @@ jobs:
           set +e
           git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" --head "$HEAD_SHA" \
-            --pr "$PR_NUMBER" --pr-url "$PR_URL" --push $extra > /tmp/uplink-add.out
+            --pr "$PR_NUMBER" --pr-url "$PR_URL" $extra > /tmp/uplink-add.out
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then
@@ -71,3 +71,4 @@ jobs:
             fi
             exit "$code"
           fi
+          git uplink push

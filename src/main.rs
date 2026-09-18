@@ -7,13 +7,14 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight,
-    InitOpts, MergeVia, PreflightError, RebuildOpts, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT,
-    accept_upstream, add_patch, adopted_next_steps, approve_patch_at, commit_queue, drop_patch,
-    format_approval_receipt, format_contribution_packet, format_prepare_markdown,
-    from_upstream_report_paths, git_ok, init, load_groups_file, mark_merged, parse_github_repo,
-    parse_issue_url, parse_pull_request_url, preflight_existing_patch, preflight_incoming_change,
-    prepare_from_message, read_queue, rebuild_with, record_conflict_issue, record_pull_request,
-    report_paths, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
+    InitOpts, MergeVia, PreflightError, PushOpts, RebuildOpts, STATE_BRANCH,
+    TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch, adopted_next_steps, approve_patch_at,
+    commit_queue, drop_patch, format_approval_receipt, format_contribution_packet,
+    format_prepare_markdown, from_upstream_report_paths, git_ok, init, load_groups_file,
+    mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
+    preflight_existing_patch, preflight_incoming_change, prepare_from_message, push_queue,
+    read_queue, rebuild_with, record_conflict_issue, record_pull_request, report_paths,
+    resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
 };
 use git_uplink::{Patch, QueueState, SyncResult};
 
@@ -79,10 +80,13 @@ enum Commands {
         pr_url: Option<String>,
         #[arg(long = "depends-on")]
         depends_on: Vec<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         push: bool,
-        #[arg(long)]
-        refresh: Option<String>,
+        #[arg(long = "push-remote", hide = true)]
+        push_remote: Option<String>,
+    },
+    /// Publish local uplink/state, restacking unique patches if origin moved.
+    Push {
         #[arg(long = "push-remote")]
         push_remote: Option<String>,
     },
@@ -558,7 +562,6 @@ fn run() -> Result<(), Error> {
             pr_url,
             depends_on,
             push,
-            refresh,
             push_remote,
         } => {
             let message = read_commit_message(message, message_file, &title)?;
@@ -572,12 +575,6 @@ fn run() -> Result<(), Error> {
                 author: env::var("GIT_AUTHOR_NAME").ok(),
                 internal_pr_number: pr,
                 internal_pr_url: pr_url,
-                refresh_remote: refresh.or_else(|| push.then(|| "origin".into())),
-                push_remote: if push {
-                    Some(push_remote.unwrap_or_else(|| "origin".into()))
-                } else {
-                    None
-                },
                 ..Default::default()
             };
             match add_patch(&repo, opts) {
@@ -586,12 +583,36 @@ fn run() -> Result<(), Error> {
                         "{}  {}  {}  {}",
                         patch.id, patch.intent, patch.status, patch.title
                     );
+                    if push {
+                        let result = push_queue(
+                            &repo,
+                            PushOpts {
+                                push_remote: Some(push_remote.unwrap_or_else(|| "origin".into())),
+                            },
+                        )?;
+                        println!(
+                            "{} {} to {} at {}",
+                            result.action, result.branch, result.remote, result.sha
+                        );
+                    }
                 }
                 Err(err) => {
                     print_failure_comment(&err);
                     return Err(err);
                 }
             }
+        }
+        Commands::Push { push_remote } => {
+            let result = push_queue(
+                &repo,
+                PushOpts {
+                    push_remote: Some(push_remote.unwrap_or_else(|| "origin".into())),
+                },
+            )?;
+            println!(
+                "{} {} to {} at {}",
+                result.action, result.branch, result.remote, result.sha
+            );
         }
         Commands::Prepare {
             from,

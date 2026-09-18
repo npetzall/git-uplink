@@ -248,10 +248,11 @@ export function PlaybookPage() {
             </li>
             <li>
               Each import isolates the PR&apos;s unique diff from the PR&apos;s own{" "}
-              <code>base.sha..head.sha</code> (not from live main), then fetches the latest{" "}
-              <code>uplink/state</code>, appends, and fast-forward pushes that branch. If another
-              import landed first, the push fails, the job refreshes, and it retries. Re-importing
-              the same internal PR number is a no-op.
+              <code>base.sha..head.sha</code> (not from live main), records it on local{" "}
+              <code>uplink/state</code>, then <code>git uplink push</code> publishes. If origin
+              moved, push appends local-only patches onto that tip and carries the patch files. If
+              another import landed first, the push restacks and retries. Re-importing the same
+              internal PR number is a no-op.
             </li>
           </ul>
           <p>
@@ -458,6 +459,7 @@ git uplink init --upgrade
 git uplink init
 git uplink add --title "Use SHA-256 for tokens" --message-file msg.txt
 git uplink add --title "Vendor hook" --internal-only
+git uplink push
 git uplink report upl_ab12cd34ef
 git uplink approve upl_ab12cd34ef
 git uplink submit upl_ab12cd34ef

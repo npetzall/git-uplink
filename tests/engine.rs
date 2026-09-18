@@ -5,13 +5,13 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
-    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, QueueConfig, QueueState, RebuildOpts,
-    Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, accept_upstream, add_patch,
-    approve_patch, configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, from_upstream_report_paths, git, git_ok, init, init_repo,
-    mark_merged, parse_depends_on, preflight_incoming_change, rebuild, rebuild_with,
-    record_conflict_issue, record_pull_request, report_paths, resolve_conflict, status_snapshot,
-    strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
+    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QueueConfig, QueueState,
+    RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, accept_upstream,
+    add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
+    format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
+    init, init_repo, mark_merged, parse_depends_on, preflight_incoming_change, push_queue, rebuild,
+    rebuild_with, record_conflict_issue, record_pull_request, report_paths, resolve_conflict,
+    status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -318,6 +318,47 @@ fn publish_origin(company: &Path) -> PathBuf {
     )
     .unwrap();
     origin
+}
+
+fn clone_company_from(origin: &Path, upstream: &Path) -> (TempDir, PathBuf) {
+    let dir_keep = temp_dir();
+    let dir = dir_keep.path().to_path_buf();
+    git(
+        Path::new("/tmp"),
+        &[
+            "clone",
+            "--quiet",
+            origin.to_str().unwrap(),
+            dir.to_str().unwrap(),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    configure_repo(&dir).unwrap();
+    git(
+        &dir,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            "uplink/upstream:uplink/upstream",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &dir,
+        &["fetch", "--quiet", "origin", "uplink/state:uplink/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &dir,
+        &["remote", "add", "upstream", upstream.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    (dir_keep, dir)
 }
 
 #[test]
@@ -2709,75 +2750,10 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
     let world = setup_world();
     let company = &world.company;
     let upstream = world.upstream.clone();
-    let origin = create_bare_from(company);
-    git(
-        company,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-        GitOpts::default(),
-    )
-    .unwrap();
-    git(
-        company,
-        &["push", "--quiet", "-u", "origin", "main"],
-        GitOpts::default(),
-    )
-    .unwrap();
-    git(
-        company,
-        &["push", "--quiet", "origin", "uplink/upstream"],
-        GitOpts::default(),
-    )
-    .unwrap();
-    git(
-        company,
-        &["push", "--quiet", "origin", "uplink/state"],
-        GitOpts::default(),
-    )
-    .unwrap();
+    let origin = publish_origin(company);
 
-    let clone_company = |origin: &Path, upstream: &Path| {
-        let dir_keep = temp_dir();
-        let dir = dir_keep.path().to_path_buf();
-        git(
-            Path::new("/tmp"),
-            &[
-                "clone",
-                "--quiet",
-                origin.to_str().unwrap(),
-                dir.to_str().unwrap(),
-            ],
-            GitOpts::default(),
-        )
-        .unwrap();
-        configure_repo(&dir).unwrap();
-        git(
-            &dir,
-            &[
-                "fetch",
-                "--quiet",
-                "origin",
-                "uplink/upstream:uplink/upstream",
-            ],
-            GitOpts::default(),
-        )
-        .unwrap();
-        git(
-            &dir,
-            &["fetch", "--quiet", "origin", "uplink/state:uplink/state"],
-            GitOpts::default(),
-        )
-        .unwrap();
-        git(
-            &dir,
-            &["remote", "add", "upstream", upstream.to_str().unwrap()],
-            GitOpts::default(),
-        )
-        .unwrap();
-        (dir_keep, dir)
-    };
-
-    let (asha_keep, asha) = clone_company(&origin, &upstream);
-    let (ben_keep, ben) = clone_company(&origin, &upstream);
+    let (asha_keep, asha) = clone_company_from(&origin, &upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &upstream);
 
     git(
         &asha,
@@ -2849,11 +2825,17 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
                 title: "Readme from Asha".into(),
                 from_ref: Some(from_a),
                 head_ref: Some(sha_a),
-                push_remote: Some("origin".into()),
                 internal_pr_number: Some(201),
                 ..Default::default()
             },
+        )?;
+        push_queue(
+            &asha_t,
+            PushOpts {
+                push_remote: Some("origin".into()),
+            },
         )
+        .map(|_| ())
     });
     let h2 = thread::spawn(move || {
         add_patch(
@@ -2862,16 +2844,22 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
                 title: "Notes from Ben".into(),
                 from_ref: Some(from_b),
                 head_ref: Some(sha_b),
-                push_remote: Some("origin".into()),
                 internal_pr_number: Some(202),
                 ..Default::default()
             },
+        )?;
+        push_queue(
+            &ben_t,
+            PushOpts {
+                push_remote: Some("origin".into()),
+            },
         )
+        .map(|_| ())
     });
     h1.join().unwrap().unwrap();
     h2.join().unwrap().unwrap();
 
-    let (_integrated_keep, integrated) = clone_company(&origin, &upstream);
+    let (_integrated_keep, integrated) = clone_company_from(&origin, &upstream);
     let snapshot = status_snapshot(&integrated).unwrap();
     let mut titles: Vec<_> = snapshot
         .queue
@@ -2896,6 +2884,288 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
             .contains("from-ben")
     );
     drop((asha_keep, ben_keep));
+}
+
+#[test]
+fn push_publishes_a_local_add() {
+    let world = setup_world();
+    let company = &world.company;
+    let origin = publish_origin(company);
+    git(
+        company,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "README.md", "from-local\n");
+    commit_all(company, "readme");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Readme".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let local = git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let remote_before = git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap();
+    assert_ne!(local, remote_before);
+    let result = push_queue(
+        company,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(result.action, "pushed");
+    assert_eq!(
+        git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap(),
+        local
+    );
+}
+
+#[test]
+fn push_appends_local_only_patches_when_origin_moved() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = world.upstream.clone();
+    let origin = publish_origin(company);
+    let (asha_keep, asha) = clone_company_from(&origin, &upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &upstream);
+
+    git(
+        &asha,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&asha, "README.md", "from-asha\n");
+    commit_all(&asha, "readme from asha");
+    add_landed_patch(
+        &asha,
+        AddPatchOpts {
+            title: "Readme from Asha".into(),
+            from_ref: Some("main".into()),
+            internal_pr_number: Some(201),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(&ben, &["checkout", "-b", "feat/notes"], GitOpts::default()).unwrap();
+    write(&ben, "NOTES.md", "from-ben\n");
+    commit_all(&ben, "notes from ben");
+    add_landed_patch(
+        &ben,
+        AddPatchOpts {
+            title: "Notes from Ben".into(),
+            from_ref: Some("main".into()),
+            internal_pr_number: Some(202),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    push_queue(
+        &ben,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+
+    let result = push_queue(
+        &asha,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(result.action, "restacked");
+
+    let (_integrated_keep, integrated) = clone_company_from(&origin, &upstream);
+    let patch_titles: Vec<_> = status_snapshot(&integrated)
+        .unwrap()
+        .queue
+        .patches
+        .iter()
+        .filter(|p| p.kind.is_none())
+        .map(|p| p.title.clone())
+        .collect();
+    assert_eq!(patch_titles, ["Notes from Ben", "Readme from Asha"]);
+    drop((asha_keep, ben_keep));
+}
+
+#[test]
+fn push_fast_forwards_when_local_is_behind() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = world.upstream.clone();
+    let origin = publish_origin(company);
+    let (_ahead_keep, ahead) = clone_company_from(&origin, &upstream);
+    let (_behind_keep, behind) = clone_company_from(&origin, &upstream);
+
+    git(
+        &ahead,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&ahead, "README.md", "from-ahead\n");
+    commit_all(&ahead, "readme");
+    add_landed_patch(
+        &ahead,
+        AddPatchOpts {
+            title: "Readme".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    push_queue(
+        &ahead,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+    let origin_sha = git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap();
+    let behind_before = git_ok(&behind, &["rev-parse", STATE_BRANCH]).unwrap();
+    assert_ne!(behind_before, origin_sha);
+
+    let result = push_queue(
+        &behind,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(result.action, "fast-forwarded");
+    assert_eq!(
+        git_ok(&behind, &["rev-parse", STATE_BRANCH]).unwrap(),
+        origin_sha
+    );
+    assert_eq!(
+        git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap(),
+        origin_sha
+    );
+}
+
+#[test]
+fn push_is_a_no_op_when_tips_match() {
+    let world = setup_world();
+    let company = &world.company;
+    publish_origin(company);
+    let sha = git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let result = push_queue(
+        company,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(result.action, "up-to-date");
+    assert_eq!(result.sha, sha);
+    assert_eq!(git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap(), sha);
+}
+
+#[test]
+fn push_skips_a_local_patch_whose_internal_pr_is_already_on_origin() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = world.upstream.clone();
+    let origin = publish_origin(company);
+    let (_a_keep, asha) = clone_company_from(&origin, &upstream);
+    let (_b_keep, ben) = clone_company_from(&origin, &upstream);
+
+    git(
+        &asha,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&asha, "README.md", "from-pr\n");
+    commit_all(&asha, "readme");
+    add_landed_patch(
+        &asha,
+        AddPatchOpts {
+            title: "Readme".into(),
+            from_ref: Some("main".into()),
+            internal_pr_number: Some(99),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        &asha,
+        &["push", "--quiet", "origin", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    push_queue(
+        &asha,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+
+    git(
+        &ben,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &ben,
+        &["checkout", "-f", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &ben,
+        &["reset", "--hard", "--quiet", "origin/main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    add_patch(
+        &ben,
+        AddPatchOpts {
+            title: "Readme again".into(),
+            from_ref: Some("main^".into()),
+            head_ref: Some("HEAD".into()),
+            internal_pr_number: Some(99),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let origin_before = git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap();
+    let result = push_queue(
+        &ben,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+    assert_eq!(result.action, "fast-forwarded");
+    assert_eq!(
+        git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap(),
+        origin_before
+    );
+    let titles: Vec<_> = status_snapshot(&ben)
+        .unwrap()
+        .queue
+        .patches
+        .iter()
+        .filter(|p| p.kind.is_none())
+        .map(|p| p.title.clone())
+        .collect();
+    assert_eq!(titles, vec!["Readme"]);
 }
 
 #[test]
@@ -3630,6 +3900,10 @@ fn git_uplink_help_includes_web_ui() {
     let bin = env!("CARGO_BIN_EXE_git-uplink");
     let output = Command::new(bin).arg("-h").output().unwrap();
     let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("push"),
+        "expected push subcommand in help, got:\n{text}"
+    );
     assert!(
         text.contains("web-ui"),
         "expected web-ui subcommand in help, got:\n{text}"

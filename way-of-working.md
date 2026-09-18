@@ -4,7 +4,7 @@ This is how developers use Uplink day to day. You open one internal PR per chang
 
 Read this alongside `.uplink/queue.json` (on `uplink/state`) and `git uplink status`. The binary is `git-uplink` (a Git subcommand). Durable queue history lives on the orphan branch `uplink/state`. Company `main` is product-only: public upstream plus every patch that is not merged or dropped. Sync force-updates `main` only when upstream moved (or a drop/resolve requires a replay).
 
-Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. `git uplink init --forge ghec` installs `templates/github/pull_request_template.md` as `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`add --push`, `sync`, `submit`) uses per-remote `UPLINK_INTERNAL_*`, `UPLINK_CONTRIB_*`, or `UPLINK_UPSTREAM_*` KEY or TOKEN (KEY wins; keys must be passwordless), not `GITHUB_TOKEN` or your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `conflicted` record the result.
+Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. `git uplink init --forge ghec` installs `templates/github/pull_request_template.md` as `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`push`, `sync`, `submit`) uses per-remote `UPLINK_INTERNAL_*`, `UPLINK_CONTRIB_*`, or `UPLINK_UPSTREAM_*` KEY or TOKEN (KEY wins; keys must be passwordless), not `GITHUB_TOKEN` or your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `conflicted` record the result.
 
 | Phase | What you do | Result |
 | --- | --- | --- |
@@ -122,7 +122,8 @@ Asha needs to change token hashing. Nobody else is in her way.
    git uplink add --title "Use SHA-256 for tokens" \
      --message-file <title-and-body> \
      --from <PR base sha> --head <PR head sha> \
-     --pr <number> --push
+     --pr <number>
+   git uplink push
    ```
 
    Uplink isolates Asha’s product diff (not `.uplink/`) and appends patch `upl_asha` with status `queued` on `uplink/state`. The merge already put the change on company `main`; import does not rewrite `main`. The patch stays `queued` because `uplink/upstream` does not have it yet. Asha still has only `feat/sha256`. She does not open a public branch.
@@ -212,8 +213,9 @@ Because Ben’s source **needs** Asha, record the dependency at import (repeatab
 
 ```bash
 git uplink add --title "Log token hashes" \
-  --from <base> --head <head> --pr <n> --push \
+  --from <base> --head <head> --pr <n> \
   --depends-on upl_asha
+git uplink push
 ```
 
 If Asha is not yet on `main` (her PR is still open): **do not merge Ben first.** Either wait for Asha’s merge, or open Ben’s PR against Asha’s feature branch and only merge Ben after Asha is on `main` and Ben has been rebased onto that `main`. Merging a stacked PR before its base is on `main` puts Ben’s delta on a tree that does not contain Asha; rebuild will miss her API.
@@ -316,9 +318,10 @@ Internal PR against `main`. Review. Import **after** both bases are queued, with
 
 ```bash
 git uplink add --title "Wire hash logs into the dashboard" \
-  --from <base> --head <head> --pr <n> --push \
+  --from <base> --head <head> --pr <n> \
   --depends-on upl_asha \
   --depends-on upl_ben
+git uplink push
 ```
 
 `--depends-on` order is recorded as `[upl_asha, upl_ben]`. Rebuild order is still Asha, then Ben, then Cam (dependencies first, then Cam). Cam’s patch file is only Cam’s unique delta against a tree that already had Asha and Ben.
