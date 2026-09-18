@@ -95,6 +95,23 @@ export function PlaybookPage() {
           </p>
         </Section>
 
+        <Section title="Onboarding a repo already ahead of upstream">
+          <p>
+            If company <code>main</code> already matches public upstream,{" "}
+            <code>git uplink init --forge ghec</code> installs the tooling pack as the first
+            internal-only patch and rebuilds <code>main</code>. If <code>main</code> is a
+            fast-forward of upstream (private commits on top), init does not rebuild and does not
+            push. It records those unique first-parent commits as patches after tooling. Merge
+            commits are one patch each; rebase-style runs are grouped in the terminal UI (or{" "}
+            <code>--adopt-groups</code>). Preview with{" "}
+            <code>git uplink rebuild --branch uplink/verify</code>, inspect{" "}
+            <code>git diff main uplink/verify</code>, then{" "}
+            <code>git uplink rebuild --push</code>. A preview branch does not move{" "}
+            <code>main</code> and does not mutate the queue. After that, developers work one
+            internal PR per change as usual.
+          </p>
+        </Section>
+
         <Section title="Multiple developers on company main">
           <p>
             Yes. Company <code>main</code> is a shared integration branch, but humans do not push

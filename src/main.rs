@@ -7,13 +7,13 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight,
-    InitOpts, MergeVia, PreflightError, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream,
-    add_patch, approve_patch_at, commit_queue, drop_patch, format_approval_receipt,
-    format_contribution_packet, format_prepare_markdown, from_upstream_report_paths, git_ok, init,
-    mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
-    preflight_existing_patch, preflight_incoming_change, prepare_from_message, read_queue, rebuild,
-    record_conflict_issue, record_pull_request, report_paths, resolve_conflict, status_snapshot,
-    submit_patch, summarize_queue, sync,
+    InitOpts, MergeVia, PreflightError, RebuildOpts, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT,
+    accept_upstream, add_patch, adopted_next_steps, approve_patch_at, commit_queue, drop_patch,
+    format_approval_receipt, format_contribution_packet, format_prepare_markdown,
+    from_upstream_report_paths, git_ok, init, load_groups_file, mark_merged, parse_github_repo,
+    parse_issue_url, parse_pull_request_url, preflight_existing_patch, preflight_incoming_change,
+    prepare_from_message, read_queue, rebuild_with, record_conflict_issue, record_pull_request,
+    report_paths, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
 };
 use git_uplink::{Patch, QueueState, SyncResult};
 
@@ -54,6 +54,11 @@ enum Commands {
         forge: Option<Forge>,
         #[arg(long)]
         upgrade: bool,
+        #[arg(
+            long = "adopt-groups",
+            help = "JSON file of commit groups when internal is ahead of upstream"
+        )]
+        adopt_groups: Option<PathBuf>,
     },
     Add {
         #[arg(long)]
@@ -158,7 +163,17 @@ enum Commands {
         #[arg(long)]
         reason: Option<String>,
     },
-    Rebuild,
+    Rebuild {
+        #[arg(
+            long,
+            help = "Rebuild onto this branch instead of company main (preview; does not mutate the queue)"
+        )]
+        branch: Option<String>,
+        #[arg(long, help = "Push uplink/state and the rebuilt branch after rebuild")]
+        push: bool,
+        #[arg(long = "push-remote")]
+        push_remote: Option<String>,
+    },
     Resolve {
         id: String,
     },
@@ -501,7 +516,12 @@ fn run() -> Result<(), Error> {
             internal_branch,
             forge,
             upgrade,
+            adopt_groups,
         } => {
+            let adopt_groups = match adopt_groups {
+                Some(path) => Some(load_groups_file(&path)?),
+                None => None,
+            };
             let queue = init(
                 &repo,
                 InitOpts {
@@ -513,8 +533,18 @@ fn run() -> Result<(), Error> {
                     internal_branch,
                     forge,
                     upgrade,
+                    adopt_groups,
+                    interactive: None,
                 },
             )?;
+            if queue.patches.iter().any(|p| {
+                p.source
+                    .note
+                    .as_deref()
+                    .is_some_and(|n| n.starts_with("adopted from "))
+            }) {
+                eprintln!("{}", adopted_next_steps());
+            }
             println!("{}", serde_json::to_string_pretty(&queue)?);
         }
         Commands::Add {
@@ -793,7 +823,7 @@ fn run() -> Result<(), Error> {
         Commands::Merged { id, via, sha } => {
             let via = MergeVia::parse(&via).ok_or_else(|| Error::msg("invalid --via"))?;
             mark_merged(&repo, &id, via.clone(), sha.as_deref())?;
-            rebuild(&repo)?;
+            rebuild_with(&repo, RebuildOpts::default())?;
             println!("{id} marked merged via {}", via.as_str());
         }
         Commands::Drop { id, reason } => {
@@ -804,9 +834,32 @@ fn run() -> Result<(), Error> {
             )?;
             println!("{id} dropped");
         }
-        Commands::Rebuild => {
-            rebuild(&repo)?;
-            println!("rebuild complete");
+        Commands::Rebuild {
+            branch,
+            push,
+            push_remote,
+        } => {
+            let result = rebuild_with(
+                &repo,
+                RebuildOpts {
+                    branch: branch.clone(),
+                    push,
+                    push_remote: if push {
+                        Some(push_remote.unwrap_or_else(|| "origin".into()))
+                    } else {
+                        push_remote
+                    },
+                },
+            )?;
+            if result.preview {
+                println!("rebuild preview at {}", result.branch);
+                eprintln!(
+                    "Inspect with: git diff {} {}",
+                    result.queue.config.internal_branch, result.branch
+                );
+            } else {
+                println!("rebuild complete");
+            }
         }
         Commands::Resolve { id } => {
             let prior = read_queue(&repo)?;

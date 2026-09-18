@@ -14,6 +14,7 @@ targets = [
 yanked = "deny"
 ignore = [
     { id = "RUSTSEC-2025-0023", reason = "tokio broadcast unsoundness; git-uplink and axum 0.7 only use runtime, net, and signal" },
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; ratatui 0.29 still depends on it and we are not taking the 0.30 crate split yet" },
 ]
 
 [licenses]
@@ -25,6 +26,7 @@ allow = [
     "MIT",
     "Unicode-3.0",
     "Unlicense",
+    "Zlib",
 ]
 
 [bans]

@@ -40,7 +40,7 @@ export PATH="$PWD/target/release:$PATH"
 
 ```text
 git uplink init [--upstream <url>] [--contrib <url>] [--forge ghec|example-github]
-            [--upgrade]
+            [--upgrade] [--adopt-groups <file>]
             [--upstream-remote-name <name>] [--upstream-branch <branch>]
             [--contrib-remote-name <name>] [--internal-branch <branch>]
 git uplink add --title <text> [--message <text> | --message-file <path>]
@@ -63,12 +63,12 @@ git uplink accept-upstream
 git uplink conflicted <id> --issue-url <url> [--issue <n>] [--push-remote origin]
 git uplink merged <id> [--via pr|trailer|patch-id|empty-rebase|manual] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
-git uplink rebuild
+git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
 git uplink resolve <id>
 git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 ```
 
-`init` writes `.uplink/queue.json` on the orphan branch `uplink/state`, including remote URLs, branch names, and `forge`. `--upstream` / `--contrib` record those URLs and add the remotes. `--forge` is required when creating a queue (`ghec` for GitHub Enterprise Cloud, `example-github` for the worked example). First-time init also installs that forge's workflows plus the shared GitHub pull request template as the first internal-only patch and rebuilds company `main`. `--upgrade` amends that same patch from the templates embedded in the binary so tooling stays first in the queue. A later `git uplink init` with no arguments fetches `origin` `uplink/state` and reconstitutes the remotes from the stored URLs; it does not rewrite workflows. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Merge lands the change on `main`; import records the patch on `uplink/state`; sync rebuilds `main` only when upstream moved.
+`init` writes `.uplink/queue.json` on the orphan branch `uplink/state`, including remote URLs, branch names, and `forge`. `--upstream` / `--contrib` record those URLs and add the remotes. `--forge` is required when creating a queue (`ghec` for GitHub Enterprise Cloud, `example-github` for the worked example). First-time init also installs that forge's workflows plus the shared GitHub pull request template as the first internal-only patch. If company `main` already matches public upstream, it rebuilds `main` with that tooling patch. If `main` is fast-forward ahead, init leaves `main` alone, records the unique first-parent commits as patches after tooling, and does not push. Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON (`[{ "commits": ["abc123", "def456"], "title": "…", "intent": "upstream" }]`). Merge commits are one row each (the merge SHA, not the hidden PR branch). Then preview with `git uplink rebuild --branch uplink/verify` and, after `git diff main uplink/verify`, publish with `git uplink rebuild --push`. `--upgrade` amends the tooling patch from the templates embedded in the binary so tooling stays first in the queue. A later `git uplink init` with no arguments fetches `origin` `uplink/state` and reconstitutes the remotes from the stored URLs; it does not rewrite workflows. Queue state lives on `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Company `main` is product-only. Merge lands the change on `main`; import records the patch on `uplink/state`; sync rebuilds `main` only when upstream moved.
 
 `add --title` is the queue entry name. `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `add --push` refreshes `main` from `origin` (or `--refresh`) and force-with-lease pushes the rebuilt branch (`--push-remote` defaults to `origin`). `Uplink-Depends-On: upl_…` lines in that message (after HTML comments are stripped) become `dependsOn`; `--depends-on` is an optional overlay. Incoming `preflight` reads the same trailers from `--message` / `--message-file`. `drop --reason` defaults to `dropped by operator`.
 

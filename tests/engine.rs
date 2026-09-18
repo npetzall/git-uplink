@@ -4,14 +4,14 @@ use std::process::Command;
 use std::thread;
 
 use git_uplink::{
-    AddPatchOpts, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge, GitOpts,
-    IncomingPreflight, InitOpts, MergeVia, Patch, QueueConfig, QueueState, Result, STATE_BRANCH,
-    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, accept_upstream, add_patch, approve_patch,
-    configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
+    AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
+    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, QueueConfig, QueueState, RebuildOpts,
+    Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, accept_upstream, add_patch,
+    approve_patch, configure_repo, drop_patch, format_approval_receipt, format_approver_packet,
     format_contribution_packet, from_upstream_report_paths, git, git_ok, init, init_repo,
-    mark_merged, parse_depends_on, preflight_incoming_change, rebuild, record_conflict_issue,
-    record_pull_request, report_paths, resolve_conflict, status_snapshot, strip_html_comments,
-    submit_patch, summarize_queue, sync, write_queue,
+    mark_merged, parse_depends_on, preflight_incoming_change, rebuild, rebuild_with,
+    record_conflict_issue, record_pull_request, report_paths, resolve_conflict, status_snapshot,
+    strip_html_comments, submit_patch, summarize_queue, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -686,6 +686,460 @@ fn init_upgrade_before_init_errors() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("not initialized"), "{err}");
+}
+
+fn rev(repo: &Path) -> String {
+    git_ok(repo, &["rev-parse", "HEAD"]).unwrap()
+}
+
+fn adopt_group(commits: &[&str], title: &str, intent: &str) -> AdoptGroup {
+    AdoptGroup {
+        commits: commits.iter().map(|s| s.to_string()).collect(),
+        title: title.into(),
+        intent: intent.into(),
+        message: None,
+    }
+}
+
+fn init_adopt(world: &World, groups: Vec<AdoptGroup>) -> QueueState {
+    init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            forge: Some(Forge::Ghec),
+            adopt_groups: Some(groups),
+            interactive: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn three_linear_ahead(company: &Path) -> [String; 3] {
+    write(company, "src/metrics.js", "export const n = 1;\n");
+    commit_all(company, "Add metrics collector");
+    let a = rev(company);
+    write(company, "src/metrics.js", "export const n = 2;\n");
+    commit_all(company, "Wire collector into server");
+    let b = rev(company);
+    write(company, "src/dash.js", "export const dash = true;\n");
+    commit_all(company, "Vendor grafana dashboards");
+    let c = rev(company);
+    [a, b, c]
+}
+
+#[test]
+fn init_adopts_linear_history_without_moving_main() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    let main_before = rev(&world.company);
+    let queue = init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&a, &b], "Metrics", "upstream"),
+            adopt_group(&[&c], "Dashboards", "internal-only"),
+        ],
+    );
+    assert_eq!(rev(&world.company), main_before);
+    assert_eq!(queue.patches.len(), 3);
+    assert_eq!(queue.patches[0].kind.as_deref(), Some(TOOLING_PATCH_KIND));
+    assert_eq!(queue.patches[1].title, "Metrics");
+    assert_eq!(queue.patches[1].intent, "upstream");
+    assert_eq!(queue.patches[2].title, "Dashboards");
+    assert_eq!(queue.patches[2].intent, "internal-only");
+    assert!(
+        queue.patches[1]
+            .source
+            .note
+            .as_deref()
+            .unwrap()
+            .starts_with("adopted from ")
+    );
+    assert!(queue.last_sync.is_none());
+    assert!(!has_git_ref(&world.company, "uplink/adopt-from"));
+    assert!(
+        !world
+            .company
+            .join(".github/workflows/uplink-prepare.yml")
+            .is_file()
+    );
+}
+
+#[test]
+fn rebuild_preview_branch_leaves_main_and_queue_alone() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    let original = rev(&world.company);
+    init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&a, &b], "Metrics", "upstream"),
+            adopt_group(&[&c], "Dashboards", "internal-only"),
+        ],
+    );
+    let queue_before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    rebuild_with(
+        &world.company,
+        RebuildOpts {
+            branch: Some("uplink/verify".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(rev(&world.company), original);
+    assert_eq!(
+        git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap(),
+        queue_before
+    );
+    assert!(has_git_ref(&world.company, "uplink/verify"));
+    let diff = git(
+        &world.company,
+        &[
+            "diff",
+            "--quiet",
+            original.as_str(),
+            "uplink/verify",
+            "--",
+            ".",
+            ":!.github",
+        ],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(diff.code, 0, "{}", diff.stderr);
+    git(
+        &world.company,
+        &[
+            "cat-file",
+            "-e",
+            "uplink/verify:.github/workflows/uplink-prepare.yml",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn rebuild_after_adopt_replays_onto_main() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    let original = rev(&world.company);
+    init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&a, &b], "Metrics", "upstream"),
+            adopt_group(&[&c], "Dashboards", "internal-only"),
+        ],
+    );
+    rebuild(&world.company).unwrap();
+    assert_ne!(rev(&world.company), original);
+    assert!(
+        world
+            .company
+            .join(".github/workflows/uplink-prepare.yml")
+            .is_file()
+    );
+    assert_eq!(
+        fs::read_to_string(world.company.join("src/metrics.js")).unwrap(),
+        "export const n = 2;\n"
+    );
+    assert_eq!(
+        fs::read_to_string(world.company.join("src/dash.js")).unwrap(),
+        "export const dash = true;\n"
+    );
+}
+
+#[test]
+fn init_adopts_each_merge_commit_as_a_patch() {
+    let world = setup_uninitialized();
+    git(
+        &world.company,
+        &["checkout", "-b", "feat/one"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&world.company, "src/one.js", "export const one = 1;\n");
+    commit_all(&world.company, "one feature");
+    git(&world.company, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        &world.company,
+        &[
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            "Merge pull request #12 from feat/one",
+            "feat/one",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let m1 = rev(&world.company);
+    git(
+        &world.company,
+        &["checkout", "-b", "feat/two"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&world.company, "src/two.js", "export const two = 2;\n");
+    commit_all(&world.company, "two feature");
+    git(&world.company, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        &world.company,
+        &[
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            "Merge pull request #14 from feat/two",
+            "feat/two",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let m2 = rev(&world.company);
+    let side = git_ok(&world.company, &["rev-parse", "feat/one"]).unwrap();
+    let side_err = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            forge: Some(Forge::Ghec),
+            adopt_groups: Some(vec![adopt_group(&[&side], "Side", "upstream")]),
+            interactive: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(side_err.contains("first-parent"), "{side_err}");
+    let queue = init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&m1], "One", "upstream"),
+            adopt_group(&[&m2], "Two", "upstream"),
+        ],
+    );
+    assert_eq!(queue.patches.len(), 3);
+    assert_eq!(queue.patches[1].title, "One");
+    assert_eq!(queue.patches[2].title, "Two");
+    assert_eq!(
+        queue.patches[2].depends_on,
+        vec![queue.patches[1].id.clone()]
+    );
+}
+
+#[test]
+fn init_adopts_mixed_merge_then_direct_commit() {
+    let world = setup_uninitialized();
+    git(
+        &world.company,
+        &["checkout", "-b", "feat/one"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&world.company, "src/one.js", "export const one = 1;\n");
+    commit_all(&world.company, "one feature");
+    git(&world.company, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        &world.company,
+        &[
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            "Merge pull request #12 from feat/one",
+            "feat/one",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let merge = rev(&world.company);
+    write(&world.company, "src/hot.js", "export const hot = true;\n");
+    commit_all(&world.company, "hotfix on main");
+    let direct = rev(&world.company);
+    let queue = init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&merge], "One", "upstream"),
+            adopt_group(&[&direct], "Hotfix", "upstream"),
+        ],
+    );
+    assert_eq!(queue.patches.len(), 3);
+    assert_eq!(queue.patches[1].title, "One");
+    assert_eq!(queue.patches[2].title, "Hotfix");
+}
+
+#[test]
+fn init_skips_empty_first_parent_merge_in() {
+    let world = setup_uninitialized();
+    git(
+        &world.company,
+        &["checkout", "-b", "empty-side"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &world.company,
+        &["commit", "--allow-empty", "-m", "empty side"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(&world.company, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        &world.company,
+        &[
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            "Merge empty side",
+            "empty-side",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&world.company, "src/real.js", "export const real = 1;\n");
+    commit_all(&world.company, "real product change");
+    let real = rev(&world.company);
+    let queue = init_adopt(&world, vec![adopt_group(&[&real], "Real", "upstream")]);
+    assert_eq!(queue.patches.len(), 2);
+    assert_eq!(queue.patches[1].title, "Real");
+}
+
+#[test]
+fn init_rejects_incomplete_and_noncontiguous_adopt_groups() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    let main_before = rev(&world.company);
+    let missing = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            forge: Some(Forge::Ghec),
+            adopt_groups: Some(vec![adopt_group(&[&a, &b], "Partial", "upstream")]),
+            interactive: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(missing.contains("not assigned"), "{missing}");
+    assert_eq!(rev(&world.company), main_before);
+
+    let split = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            forge: Some(Forge::Ghec),
+            adopt_groups: Some(vec![
+                adopt_group(&[&a, &c], "Split", "upstream"),
+                adopt_group(&[&b], "Mid", "upstream"),
+            ]),
+            interactive: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        split.contains("contiguous") || split.contains("interleave"),
+        "{split}"
+    );
+    assert_eq!(rev(&world.company), main_before);
+}
+
+#[test]
+fn init_rejects_history_that_is_ahead_and_behind() {
+    let world = setup_uninitialized();
+    write(&world.company, "src/private.js", "export const p = 1;\n");
+    commit_all(&world.company, "private work");
+    let main_before = rev(&world.company);
+    write(
+        &world.upstream,
+        "src/tokens.js",
+        "export function hash() {}\n",
+    );
+    commit_all(&world.upstream, "upstream moved");
+    let err = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            forge: Some(Forge::Ghec),
+            adopt_groups: Some(vec![adopt_group(&["HEAD"], "Nope", "upstream")]),
+            interactive: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("fast-forward"), "{err}");
+    assert_eq!(rev(&world.company), main_before);
+}
+
+#[test]
+fn init_ahead_without_groups_fails_closed() {
+    let world = setup_uninitialized();
+    three_linear_ahead(&world.company);
+    let err = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(&world.company, "contrib")),
+            forge: Some(Forge::Ghec),
+            interactive: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("--adopt-groups"), "{err}");
+}
+
+#[test]
+fn rebuild_push_publishes_state_and_main() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&a, &b], "Metrics", "upstream"),
+            adopt_group(&[&c], "Dashboards", "internal-only"),
+        ],
+    );
+    let origin = keep_dir();
+    git(
+        &origin,
+        &["init", "--bare", "-b", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &world.company,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    rebuild_with(
+        &world.company,
+        RebuildOpts {
+            push: true,
+            push_remote: Some("origin".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let remote_main = git_ok(&origin, &["rev-parse", "main"]).unwrap();
+    let local_main = rev(&world.company);
+    assert_eq!(remote_main, local_main);
+    git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap();
 }
 
 #[test]

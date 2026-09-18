@@ -64,6 +64,26 @@ public upstream/main  +  every patch that is not merged or dropped
 
 applied in queue order (insertion order when nobody recorded `dependsOn`; otherwise dependency order, then insertion).
 
+## Onboarding a repo that is already ahead of upstream
+
+Greenfield init (company `main` matches public upstream) still installs the tooling patch and rebuilds `main`. If internal `main` is a fast-forward of public upstream — typically 10–20 private commits — `git uplink init` does **not** rebuild and does **not** push. It snapshots `HEAD` as `uplink/adopt-from`, writes the tooling patch first on `uplink/state`, then turns unique **first-parent** commits into queued patches after it.
+
+- Merge-commit history: each merge on `main` is one patch (the PR as landed). Side-branch commits stay hidden.
+- Rebase / squash-linear history: assign group numbers in the terminal UI so related commits become one patch. `--adopt-groups` is the non-interactive form of that list.
+- `main` still has the original commits so you can compare.
+
+Preview, then publish:
+
+```bash
+git uplink rebuild --branch uplink/verify
+git diff main uplink/verify
+git uplink rebuild --push
+```
+
+`--branch` other than company `main` is read-only on the queue. After you are satisfied, a normal rebuild rewrites those original commits into synthetic apply commits (`public upstream` + tooling + adopted patches) and `--push` publishes `uplink/state` and `main`. If internal is also behind upstream, rebase or merge current upstream first; init refuses a diverged history.
+
+After that, work as in the stories below: one internal PR per change.
+
 ---
 
 ## Story 1 — Asha starts a new fix, through internal main, approval, submit, and flow back

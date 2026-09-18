@@ -700,18 +700,36 @@ pub fn refresh_company_branch(repo: &Path, remote: &str, branch: &str) -> Result
     Ok(sha)
 }
 
-/// Force-with-lease push of company main. Sync/resolve workflows push `main`
-/// themselves after rebuild; import no longer moves `main`.
-#[allow(dead_code)]
-pub fn push_company_branch(
-    repo: &Path,
-    remote: &str,
-    branch: &str,
-    expected_sha: &str,
-) -> Result<()> {
-    let lease = format!("--force-with-lease=refs/heads/{branch}:{expected_sha}");
-    let dest = format!("HEAD:refs/heads/{branch}");
-    git(repo, &["push", &lease, remote, &dest], GitOpts::default())?;
+/// Force-with-lease push of a local branch (preview or company main).
+pub fn push_branch_force_lease(repo: &Path, remote: &str, branch: &str) -> Result<()> {
+    let fetch_spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    let fetched = git(
+        repo,
+        &["fetch", "--quiet", remote, &fetch_spec],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    let dest = format!("refs/heads/{branch}:refs/heads/{branch}");
+    if fetched.code == 0 {
+        let expected = git_ok(
+            repo,
+            &["rev-parse", &format!("refs/remotes/{remote}/{branch}")],
+        )?;
+        let lease = format!("--force-with-lease=refs/heads/{branch}:{expected}");
+        git(
+            repo,
+            &["push", "--quiet", &lease, remote, &dest],
+            GitOpts::default(),
+        )?;
+    } else {
+        git(
+            repo,
+            &["push", "--quiet", remote, &dest],
+            GitOpts::default(),
+        )?;
+    }
     Ok(())
 }
 

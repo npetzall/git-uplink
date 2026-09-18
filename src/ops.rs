@@ -3,6 +3,7 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+use crate::adopt::{self, AdoptGroup};
 use crate::error::{ConflictError, Error, Result};
 use crate::git::{GitOpts, configure_repo, git, git_ok};
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
@@ -19,8 +20,8 @@ use crate::repo::{
     COMPANY_REMOTE, apply_patch_file, commit_queue, conflicted_files, copy_dir,
     ensure_configured_remotes, ensure_revs, ensure_state_worktree, ensure_upstream_ref,
     fetch_origin_state, fetch_upstream, fetch_upstream_remote, has_ref, new_patch_id,
-    patch_already_applied_on, promote_upstream, push_state_branch, refresh_company_branch,
-    refresh_state_branch, refresh_upstream_ref, rev_parse, stable_patch_id,
+    patch_already_applied_on, promote_upstream, push_branch_force_lease, push_state_branch,
+    refresh_company_branch, refresh_state_branch, refresh_upstream_ref, rev_parse, stable_patch_id,
     stable_patch_id_from_contents, stamp, state_branch, state_exists, try_fetch_origin_state,
     write_product_patch,
 };
@@ -53,6 +54,9 @@ pub struct InitOpts {
     pub internal_branch: Option<String>,
     pub forge: Option<Forge>,
     pub upgrade: bool,
+    pub adopt_groups: Option<Vec<AdoptGroup>>,
+    /// `None` detects a TTY. Tests set `Some(false)` so adopt never opens the TUI.
+    pub interactive: Option<bool>,
 }
 
 impl InitOpts {
@@ -63,6 +67,7 @@ impl InitOpts {
             || self.upstream_branch.is_some()
             || self.contrib_remote_name.is_some()
             || self.internal_branch.is_some()
+            || self.adopt_groups.is_some()
     }
 }
 
@@ -110,7 +115,7 @@ pub fn init(repo: &Path, opts: InitOpts) -> Result<QueueState> {
     let mut config = config_from_opts(&opts);
     config.forge = Some(forge);
     init_repo(repo, config)?;
-    ensure_tooling_patch(repo)
+    finish_first_init(repo, &opts)
 }
 
 fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
@@ -209,6 +214,9 @@ fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
     }
     ensure_configured_remotes(repo, &queue.config)?;
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
+    if adopt::has_adopt_from(repo)? {
+        return finish_adopt(repo, opts);
+    }
     read_queue_file(repo)
 }
 
@@ -236,13 +244,71 @@ fn init_upgrade(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
 }
 
 fn ensure_tooling_patch(repo: &Path) -> Result<QueueState> {
+    write_tooling_patch(repo, true)
+}
+
+fn write_tooling_patch(repo: &Path, rebuild_if_changed: bool) -> Result<QueueState> {
     crate::lock::with_queue_lock(repo, || {
         let refresh = crate::tooling::refresh_tooling_patch(repo)?;
-        if refresh.changed {
+        if rebuild_if_changed && refresh.changed {
             rebuild_once(repo)?;
         }
         read_queue_file(repo)
     })
+}
+
+fn finish_first_init(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
+    let analysis = adopt::analyze_ahead(repo)?;
+    if analysis.behind {
+        return Err(adopt::behind_error(&analysis));
+    }
+    if analysis.commits.is_empty() {
+        return ensure_tooling_patch(repo);
+    }
+    adopt::save_adopt_from(repo)?;
+    write_tooling_patch(repo, false)?;
+    finish_adopt(repo, opts)
+}
+
+fn finish_adopt(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
+    let analysis = adopt::analyze_ahead(repo)?;
+    if analysis.behind {
+        return Err(adopt::behind_error(&analysis));
+    }
+    if analysis.commits.is_empty() {
+        adopt::clear_adopt_from(repo)?;
+        return read_queue_file(repo);
+    }
+    let queue = read_queue_file(repo)?;
+    if adopt::has_product_patches(&queue) {
+        return Err(Error::msg(
+            "uplink/adopt-from is set but the queue already has product patches; \
+delete uplink/adopt-from or reset uplink/state before adopting again",
+        ));
+    }
+    let groups = groups_for_adopt(repo, opts, &queue, &analysis)?;
+    let queue = adopt::apply_groups(repo, &analysis, &groups)?;
+    adopt::clear_adopt_from(repo)?;
+    Ok(queue)
+}
+
+fn groups_for_adopt(
+    repo: &Path,
+    opts: &InitOpts,
+    queue: &QueueState,
+    analysis: &adopt::AheadAnalysis,
+) -> Result<Vec<AdoptGroup>> {
+    if let Some(groups) = &opts.adopt_groups {
+        return Ok(groups.clone());
+    }
+    let interactive = opts.interactive.unwrap_or_else(adopt::stdin_is_tty);
+    if interactive {
+        return crate::tui::run_adopt(repo, queue, analysis);
+    }
+    Err(Error::msg(
+        "internal is ahead of uplink/upstream; pass --adopt-groups <file> \
+or re-run git uplink init in a terminal to group commits",
+    ))
 }
 
 pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
@@ -1152,8 +1218,162 @@ fn persist_apply_conflict(
     Ok(ConflictError::new(message, patch_id, files))
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct RebuildOpts {
+    pub branch: Option<String>,
+    pub push: bool,
+    pub push_remote: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RebuildResult {
+    pub queue: QueueState,
+    pub branch: String,
+    pub preview: bool,
+}
+
 pub fn rebuild(repo: &Path) -> Result<QueueState> {
-    with_queue_lock(repo, || rebuild_once(repo))
+    Ok(rebuild_with(repo, RebuildOpts::default())?.queue)
+}
+
+pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
+    with_queue_lock(repo, || {
+        let queued = read_queue_file(repo)?;
+        let company_branch = queued.config.internal_branch.clone();
+        let state_branch = queued.config.state_branch.clone();
+        let target = opts
+            .branch
+            .as_deref()
+            .unwrap_or(company_branch.as_str())
+            .to_string();
+        if is_reserved_rebuild_branch(&target, &queued.config) {
+            return Err(Error::msg(format!(
+                "cannot rebuild onto reserved branch {target}"
+            )));
+        }
+        let preview = target != company_branch;
+        let queue = if preview {
+            rebuild_preview(repo, &target)?
+        } else {
+            rebuild_once(repo)?
+        };
+        if opts.push {
+            let remote = opts.push_remote.as_deref().unwrap_or("origin");
+            push_branch_force_lease(repo, remote, &target)?;
+            push_state_branch(repo, remote, &state_branch)?;
+        }
+        Ok(RebuildResult {
+            queue,
+            branch: target,
+            preview,
+        })
+    })
+}
+
+fn is_reserved_rebuild_branch(name: &str, config: &crate::types::QueueConfig) -> bool {
+    name == "uplink/state"
+        || name == config.state_branch
+        || name == "uplink/upstream"
+        || name == adopt::ADOPT_FROM_REF
+        || name.starts_with("uplink/conflict/")
+}
+
+fn checkout_identity(repo: &Path) -> Result<(String, String)> {
+    Ok((
+        git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
+        git_ok(repo, &["rev-parse", "HEAD"])?,
+    ))
+}
+
+fn restore_checkout(repo: &Path, name: &str, sha: &str) -> Result<()> {
+    if name != "HEAD" {
+        git(
+            repo,
+            &["checkout", "-f", "--quiet", name],
+            GitOpts::default(),
+        )?;
+    } else {
+        git(
+            repo,
+            &["checkout", "-f", "--quiet", sha],
+            GitOpts::default(),
+        )?;
+    }
+    Ok(())
+}
+
+fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
+    let queue = read_queue_file(repo)?;
+    let company_branch = queue.config.internal_branch.clone();
+    ensure_upstream_ref(repo)?;
+    let upstream_ref = if has_ref(repo, "uplink/upstream")? {
+        "uplink/upstream"
+    } else {
+        company_branch.as_str()
+    };
+    let (original, original_sha) = checkout_identity(repo)?;
+    let snapshot = snapshot_uplink(repo)?;
+    let outcome = (|| -> Result<QueueState> {
+        git(
+            repo,
+            &["checkout", "-f", "--quiet", "--detach", upstream_ref],
+            GitOpts::default(),
+        )?;
+        let mut last_good = git_ok(repo, &["rev-parse", "HEAD"])?;
+        git(
+            repo,
+            &["branch", "-f", branch, &last_good],
+            GitOpts::default(),
+        )?;
+        for patch in topological_active(&queue)? {
+            if patch.status == "conflict" {
+                return Err(Error::msg(format!(
+                    "Queue is blocked on conflict in {}",
+                    patch.id
+                )));
+            }
+            let patch_file = snapshot
+                .join(".uplink/patches")
+                .join(format!("{}.patch", patch.id));
+            let result = apply_patch_file(repo, &patch, &patch_file, false)?;
+            if result == "empty" {
+                continue;
+            }
+            if result == "conflict" {
+                let files = conflicted_files(repo)?;
+                git(
+                    repo,
+                    &["reset", "--hard", "--quiet", &last_good],
+                    GitOpts::default(),
+                )?;
+                git(
+                    repo,
+                    &["branch", "-f", branch, &last_good],
+                    GitOpts::default(),
+                )?;
+                let list = if files.is_empty() {
+                    "untracked conflict".into()
+                } else {
+                    files.join(", ")
+                };
+                return Err(Error::msg(format!(
+                    "Preview rebuild stopped on {} (\"{}\"): {list}",
+                    patch.id, patch.title
+                )));
+            }
+            last_good = git_ok(repo, &["rev-parse", "HEAD"])?;
+            git(
+                repo,
+                &["branch", "-f", branch, &last_good],
+                GitOpts::default(),
+            )?;
+        }
+        Ok(queue)
+    })();
+    let _ = fs::remove_dir_all(&snapshot);
+    restore_checkout(repo, &original, &original_sha)?;
+    crate::repo::ensure_state_worktree(repo)?;
+    outcome
 }
 
 fn rebuild_once(repo: &Path) -> Result<QueueState> {

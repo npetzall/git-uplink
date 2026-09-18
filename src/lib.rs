@@ -2,6 +2,7 @@
 //!
 //! Install the binary as `git-uplink` on `PATH` and invoke it as `git uplink`.
 
+mod adopt;
 mod error;
 mod git;
 mod github;
@@ -12,17 +13,20 @@ mod prepare;
 mod queue;
 mod repo;
 mod tooling;
+mod tui;
 mod types;
 pub mod webui;
 
+pub use adopt::{AdoptGroup, adopted_next_steps, load_groups_file};
 pub use error::{ConflictError, Error, PreflightError, PrepareError, Result};
 pub use git::{GitError, GitOpts, GitResult, configure_repo, git, git_ok};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use ops::{
-    AddPatchOpts, InitOpts, QueueCounts, StatusSnapshot, SubmitResult, SyncResult, accept_upstream,
-    add_patch, approve_patch, approve_patch_at, drop_patch, init, init_repo, mark_merged,
-    read_queue, rebuild, record_conflict_issue, record_pull_request, resolve_conflict,
-    status_snapshot, submit_patch, summarize_queue, sync, write_queue,
+    AddPatchOpts, InitOpts, QueueCounts, RebuildOpts, RebuildResult, StatusSnapshot, SubmitResult,
+    SyncResult, accept_upstream, add_patch, approve_patch, approve_patch_at, drop_patch, init,
+    init_repo, mark_merged, read_queue, rebuild, rebuild_with, record_conflict_issue,
+    record_pull_request, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
+    write_queue,
 };
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,
