@@ -366,7 +366,7 @@ You are choosing a **tree to write code against**, not a second long-lived branc
    Still branch from latest `main` (it may already contain their patch; that is fine — your isolated diff will not include it). Do **not** record `dependsOn`. You stay an independent public PR. Their earlier queue position does not trap you into merging after them (Story 2).
 
 5. **Never branch from these to start product work:**  
-   - `uplink/state` — queue, patches, and OSS reports. Do not commit product work here.  
+   - `uplink/state` — queue, patches, and uplink reports. Do not commit product work here.  
    - `uplink/upstream` — public `main` without company patches. You would reinvent the queue in your working tree.  
    - `uplink/<id>` on the contribution fork — generated, bot-owned, may be force-pushed.  
    - `uplink/conflict/<id>` — only to resolve that patch, then `git uplink resolve`.

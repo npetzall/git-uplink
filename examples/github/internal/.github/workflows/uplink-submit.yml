@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   packet:
-    name: Write OSS packet
+    name: Write contribution packet
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     concurrency:
@@ -96,7 +96,7 @@ jobs:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
-          UPLINK_OSS_ENVIRONMENT: to-upstream
+          UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream
         run: |
           git uplink init
           git uplink approve ${{ inputs.patch_id }}

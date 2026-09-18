@@ -40,11 +40,11 @@ fn commit_all(repo: &Path, message: &str) {
     git(repo, &["commit", "-m", message], GitOpts::default()).unwrap();
 }
 
-fn commit_oss_packet(repo: &Path, patch: &Patch) {
+fn commit_contribution_packet(repo: &Path, patch: &Patch) {
     let packet = format_approver_packet(patch);
     let (_, prepare_path, _) = report_paths(&patch.id);
     write(repo, &prepare_path, &packet);
-    git_uplink::commit_queue(repo, &format!("uplink: OSS packet {}", patch.id)).unwrap();
+    git_uplink::commit_queue(repo, &format!("uplink: contribution packet {}", patch.id)).unwrap();
 }
 
 fn sync_apply(repo: &Path) -> QueueState {
@@ -1371,7 +1371,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         },
     )
     .unwrap();
-    commit_oss_packet(company, &ttl_patch);
+    commit_contribution_packet(company, &ttl_patch);
     let first = approve_patch(company, &ttl_patch.id).unwrap();
     assert_eq!(first.approvals.len(), 1);
     assert_eq!(first.approvals[0].kind, "initial");
@@ -1441,7 +1441,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert!(err.to_string().contains("must be approved"), "{}", err);
 
     let packet = format_contribution_packet(company, amended).unwrap();
-    assert!(packet.contains(&format!("OSS delta packet — {}", ttl_patch.id)));
+    assert!(packet.contains(&format!("Delta packet — {}", ttl_patch.id)));
     assert!(packet.contains("already IP-approved"));
     assert!(packet.contains("Already approved (initial)"));
     assert!(packet.contains("### Upstream contrib"));
@@ -1450,7 +1450,11 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
 
     let (_, prepare_path, _) = report_paths(&ttl_patch.id);
     write(company, &prepare_path, &packet);
-    git_uplink::commit_queue(company, &format!("uplink: OSS packet {}", ttl_patch.id)).unwrap();
+    git_uplink::commit_queue(
+        company,
+        &format!("uplink: contribution packet {}", ttl_patch.id),
+    )
+    .unwrap();
 
     let second = approve_patch(company, &ttl_patch.id).unwrap();
     assert_eq!(second.status, "approved");
@@ -2727,7 +2731,7 @@ fn refuses_import_when_the_export_diff_names_the_company() {
 }
 
 #[test]
-fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
+fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
     let world = setup_world();
     let company = &world.company;
     git(
@@ -2754,7 +2758,7 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
     .unwrap();
 
     let packet = format_approver_packet(&patch);
-    assert!(packet.contains(&format!("OSS contribution packet — {}", patch.id)));
+    assert!(packet.contains(&format!("Contribution packet — {}", patch.id)));
     assert!(packet.contains("**to-upstream** GitHub Environment"));
     assert!(packet.contains("#44"));
     assert!(packet.contains("GITHUB_STEP_SUMMARY"));
@@ -2777,7 +2781,11 @@ fn formats_an_oss_environment_packet_and_keeps_reports_across_rebuild() {
             at: Some("2026-09-14T00:00:00.000Z".into()),
         }),
     );
-    git_uplink::commit_queue(company, &format!("uplink: OSS packet {}", patch.id)).unwrap();
+    git_uplink::commit_queue(
+        company,
+        &format!("uplink: contribution packet {}", patch.id),
+    )
+    .unwrap();
 
     rebuild(company).unwrap();
     let kept = fs::read_to_string(company.join(&prepare_path)).unwrap();

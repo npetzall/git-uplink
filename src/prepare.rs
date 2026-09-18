@@ -14,7 +14,7 @@ use crate::types::{
     QueueState,
 };
 
-pub const OSS_ENVIRONMENT: &str = "to-upstream";
+pub const TO_UPSTREAM_ENVIRONMENT: &str = "to-upstream";
 pub const FROM_UPSTREAM_ENVIRONMENT: &str = "from-upstream";
 
 pub fn cutoff_marker(queue: &QueueState) -> String {
@@ -338,7 +338,7 @@ pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
             .join(", ")
     };
     format!(
-        "# OSS contribution packet — {id}\n\n\
+        "# Contribution packet — {id}\n\n\
 Review this packet (the same markdown is on the Actions job summary / `GITHUB_STEP_SUMMARY`), then approve the **{env}** GitHub Environment on the waiting Actions run. That approval is the IP gate. GitHub records it in the environment deployment history and the enterprise audit log. After you approve, the same run submits to the upstream-owned private fork.\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
@@ -361,7 +361,7 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment (git push to the contrib fork).\n\
 4. The workflow runs `gh pr create` and `git uplink submitted`. No public PR is opened unless export preflight still passes.\n",
         id = patch.id,
-        env = OSS_ENVIRONMENT,
+        env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
         intent = patch.intent,
         status = patch.status,
@@ -409,7 +409,7 @@ pub fn format_delta_approver_packet(repo: &Path, patch: &Patch) -> Result<String
     let history = format_historical_approvals(repo, patch)?;
 
     Ok(format!(
-        "# OSS delta packet — {id}\n\n\
+        "# Delta packet — {id}\n\n\
 This contribution was **already IP-approved** and submitted. Review **only the delta** since the last approval. Historical packets below were already approved; do not re-litigate them unless the delta depends on that context.\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
@@ -437,7 +437,7 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 4. The workflow runs `gh pr create` (or reuses the recorded PR) and `git uplink submitted`. No second PR is opened.\n\n\
 {history}",
         id = patch.id,
-        env = OSS_ENVIRONMENT,
+        env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
         intent = patch.intent,
         status = patch.status,

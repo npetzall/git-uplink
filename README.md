@@ -89,7 +89,7 @@ npm test --prefix web
 cargo deny check
 ```
 
-The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, OSS packets, plus a check that the UI was embedded.
+The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, contribution packets, plus a check that the UI was embedded.
 
 `build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, queued work staying off the fork until to-upstream approval, and every lab step completing. You can run them alone with `npm test --prefix web`. Typecheck is `npm run typecheck --prefix web`.
 

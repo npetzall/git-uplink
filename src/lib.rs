@@ -27,7 +27,7 @@ pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,
 };
 pub use prepare::{
-    ApprovalReceipt, FROM_UPSTREAM_ENVIRONMENT, IncomingFlowedBack, OSS_ENVIRONMENT,
+    ApprovalReceipt, FROM_UPSTREAM_ENVIRONMENT, IncomingFlowedBack, TO_UPSTREAM_ENVIRONMENT,
     assert_prepare_ok, company_commit_message, depends_on_from_message, export_commit_message,
     format_approval_receipt, format_approver_packet, format_contribution_packet,
     format_delta_approver_packet, format_incoming_packet, format_prepare_markdown,

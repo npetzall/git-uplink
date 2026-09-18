@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, IncomingPreflight, InitOpts,
-    MergeVia, OSS_ENVIRONMENT, PreflightError, STATE_BRANCH, accept_upstream, add_patch,
+    MergeVia, PreflightError, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch,
     approve_patch_at, commit_queue, drop_patch, format_approval_receipt,
     format_contribution_packet, format_prepare_markdown, from_upstream_report_paths, git_ok, init,
     mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
@@ -598,7 +598,7 @@ fn run() -> Result<(), Error> {
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &packet);
             append_step_summary(&packet);
-            commit_queue(&repo, &format!("uplink: OSS packet {id}"))?;
+            commit_queue(&repo, &format!("uplink: contribution packet {id}"))?;
             println!("{packet}");
             eprintln!("Wrote {}", dest.display());
         }
@@ -673,10 +673,10 @@ fn run() -> Result<(), Error> {
             let run_url = github_run_url();
             let receipt = format_approval_receipt(ApprovalReceipt {
                 patch_id: &id,
-                environment: env::var("UPLINK_OSS_ENVIRONMENT")
+                environment: env::var("UPLINK_TO_UPSTREAM_ENVIRONMENT")
                     .ok()
                     .as_deref()
-                    .unwrap_or(OSS_ENVIRONMENT),
+                    .unwrap_or(TO_UPSTREAM_ENVIRONMENT),
                 actor: env::var("GITHUB_ACTOR")
                     .ok()
                     .as_deref()
@@ -690,7 +690,7 @@ fn run() -> Result<(), Error> {
             write_markdown_file(&repo, &dest, &receipt);
             append_step_summary(&receipt);
             let patch = approve_patch_at(&repo, &id, Some(&sha), Some(&run_url))?;
-            commit_queue(&repo, &format!("uplink: OSS approval receipt {id}"))?;
+            commit_queue(&repo, &format!("uplink: to-upstream approval receipt {id}"))?;
             println!("{} approved", patch.id);
             eprintln!("Wrote {}", dest.display());
         }
