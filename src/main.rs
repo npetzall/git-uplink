@@ -10,11 +10,11 @@ use git_uplink::{
     InitOpts, MergeVia, PreflightError, PushOpts, RebuildOpts, STATE_BRANCH,
     TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch, adopted_next_steps, approve_patch_at,
     commit_queue, drop_patch, format_approval_receipt, format_contribution_packet,
-    format_prepare_markdown, from_upstream_report_paths, git_ok, init, load_groups_file,
-    mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
+    format_prepare_markdown, format_status_table, from_upstream_report_paths, git_ok, init,
+    load_groups_file, mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, prepare_from_message, push_queue,
     read_queue, rebuild_with, record_conflict_issue, record_pull_request, report_paths,
-    reset_from_origin, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
+    reset_from_origin, resolve_conflict, status_report, status_snapshot, submit_patch, sync,
 };
 use git_uplink::{Patch, QueueState, SyncResult};
 
@@ -126,7 +126,10 @@ enum Commands {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     Approve {
         id: String,
         #[arg(long)]
@@ -704,28 +707,15 @@ fn run() -> Result<(), Error> {
                 }
             }
         }
-        Commands::Status => {
+        Commands::Status { json } => {
             let snapshot = status_snapshot(&repo)?;
-            println!(
-                "{}",
-                serde_json::to_string(&summarize_queue(&snapshot.queue))?
-            );
-            for patch in &snapshot.queue.patches {
-                let link = patch
-                    .upstream
-                    .as_ref()
-                    .and_then(|u| u.pr_url.clone())
-                    .unwrap_or_else(|| patch.intent.clone());
+            if json {
                 println!(
-                    "{}  {:<10}  {:<14}  {}  {link}",
-                    patch.id, patch.status, patch.intent, patch.title
+                    "{}",
+                    serde_json::to_string_pretty(&status_report(&snapshot))?
                 );
-            }
-            if let Some(sync) = &snapshot.queue.last_sync {
-                println!("last sync: {} @ {}", sync.result, sync.at);
-                if let Some(msg) = &sync.message {
-                    println!("{msg}");
-                }
+            } else {
+                print!("{}", format_status_table(&snapshot));
             }
         }
         Commands::Approve { id, out } => {

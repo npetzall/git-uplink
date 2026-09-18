@@ -55,7 +55,7 @@ git uplink prepare [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
             [--internal-only]
 git uplink report <id> [--out <file>]
-git uplink status
+git uplink status [--json]
 git uplink approve <id> [--out <file>]
 git uplink submit <id>
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote origin]

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 use std::thread;
@@ -18,15 +19,15 @@ use crate::queue::{
     topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
-    COMPANY_REMOTE, UPSTREAM_REF, apply_patch_file, apply_state_sha, commit_queue,
+    COMPANY_REMOTE, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha, commit_queue,
     conflicted_files, copy_dir, ensure_configured_remotes, ensure_revs, ensure_state_worktree,
-    ensure_upstream_ref, fetch_origin_state, fetch_state_tracking, fetch_tracking_sha,
-    fetch_upstream, fetch_upstream_remote, has_ref, is_ancestor, merge_base, new_patch_id,
+    ensure_upstream_ref, fetch_state_tracking, fetch_tracking_sha, fetch_upstream,
+    fetch_upstream_remote, has_ref, is_ancestor, merge_base, new_patch_id,
     patch_already_applied_on, path_exists_at, point_branch_at, promote_upstream,
     push_branch_force_lease, push_state_branch, queue_at, refresh_company_branch,
-    refresh_upstream_ref, restore_paths_from, rev_parse, set_state_branch, stable_patch_id,
-    stable_patch_id_from_contents, stamp, state_branch, state_exists, try_fetch_origin_state,
-    write_product_patch,
+    refresh_upstream_ref, replace_state_from_origin, restore_paths_from, rev_parse,
+    set_state_branch, stable_patch_id, stable_patch_id_from_contents, stamp, state_branch,
+    state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
 use crate::types::{
     Forge, LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
@@ -110,7 +111,7 @@ pub fn init(repo: &Path, opts: InitOpts) -> Result<QueueState> {
     if !opts.has_args() && opts.forge.is_none() {
         return hydrate_from_origin(repo);
     }
-    try_fetch_origin_state(repo)?;
+    try_replace_state_from_origin(repo)?;
     if state_exists(repo)? {
         return init_existing(repo, &opts);
     }
@@ -122,7 +123,7 @@ pub fn init(repo: &Path, opts: InitOpts) -> Result<QueueState> {
 }
 
 fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
-    fetch_origin_state(repo)?;
+    replace_state_from_origin(repo)?;
     let queue = read_queue_file(repo)?;
     require_stored_urls(&queue.config)?;
     ensure_configured_remotes(repo, &queue.config)?;
@@ -251,7 +252,7 @@ fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
 }
 
 fn init_upgrade(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
-    try_fetch_origin_state(repo)?;
+    try_replace_state_from_origin(repo)?;
     if !state_exists(repo)? {
         return Err(Error::msg(
             "not initialized; run `git uplink init --upstream <url> --contrib <url> --forge <forge>` first",
@@ -2035,6 +2036,34 @@ pub struct StatusSnapshot {
     pub company_head: String,
     pub upstream_head: Option<String>,
     pub product_files: std::collections::BTreeMap<String, String>,
+    pub state: StateStatus,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateStatus {
+    pub branch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behind: Option<u32>,
+    pub uncommitted: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusReport {
+    pub counts: QueueCounts,
+    pub patches: Vec<Patch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_sync: Option<LastSync>,
+    pub state: StateStatus,
 }
 
 pub fn status_snapshot(repo: &Path) -> Result<StatusSnapshot> {
@@ -2056,12 +2085,109 @@ pub fn status_snapshot(repo: &Path) -> Result<StatusSnapshot> {
             git_ok(repo, &["show", &format!("HEAD:{file}")])?,
         );
     }
+    let state = state_status(repo)?;
     Ok(StatusSnapshot {
         queue,
         company_head,
         upstream_head,
         product_files,
+        state,
     })
+}
+
+fn state_status(repo: &Path) -> Result<StateStatus> {
+    let branch = state_branch(repo);
+    let local = if has_ref(repo, &branch)? {
+        Some(rev_parse(repo, &branch)?)
+    } else {
+        None
+    };
+    let uncommitted = uplink_uncommitted_paths(repo, &branch)?;
+    let remote = fetch_state_tracking(repo, COMPANY_REMOTE, &branch)?;
+    let (remote_ref, ahead, behind) = if let Some(remote_sha) = remote.as_deref() {
+        let remote_ref = format!("{COMPANY_REMOTE}/{branch}");
+        let (ahead, behind) = match local.as_deref() {
+            Some(local_sha) => ahead_behind(repo, local_sha, remote_sha)?,
+            None => (
+                0,
+                git_ok(repo, &["rev-list", "--count", remote_sha])?
+                    .trim()
+                    .parse()
+                    .unwrap_or(0),
+            ),
+        };
+        (Some(remote_ref), Some(ahead), Some(behind))
+    } else {
+        (None, None, None)
+    };
+    Ok(StateStatus {
+        branch,
+        local,
+        remote,
+        remote_ref,
+        ahead,
+        behind,
+        uncommitted,
+    })
+}
+
+pub fn status_report(snapshot: &StatusSnapshot) -> StatusReport {
+    StatusReport {
+        counts: summarize_queue(&snapshot.queue),
+        patches: snapshot.queue.patches.clone(),
+        last_sync: snapshot.queue.last_sync.clone(),
+        state: snapshot.state.clone(),
+    }
+}
+
+pub fn format_status_table(snapshot: &StatusSnapshot) -> String {
+    let mut out = String::new();
+    let state = &snapshot.state;
+    let local_short = state.local.as_deref().map(short_sha).unwrap_or("(none)");
+    let sync = match (state.ahead, state.behind) {
+        (Some(0), Some(0)) => "up to date".to_string(),
+        (Some(ahead), Some(behind)) => format!("ahead {ahead}  behind {behind}"),
+        _ => "no origin tracking".to_string(),
+    };
+    let _ = writeln!(out, "{}  {local_short}  {sync}", state.branch);
+    if !state.uncommitted.is_empty() {
+        let _ = writeln!(out, "uncommitted:");
+        for path in &state.uncommitted {
+            let _ = writeln!(out, "  {path}");
+        }
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{:<12}  {:<10}  {:<14}  {}  {}",
+        "id", "status", "intent", "title", "link"
+    );
+    for patch in &snapshot.queue.patches {
+        let link = patch
+            .upstream
+            .as_ref()
+            .and_then(|u| u.pr_url.clone())
+            .unwrap_or_else(|| patch.intent.clone());
+        let _ = writeln!(
+            out,
+            "{:<12}  {:<10}  {:<14}  {}  {link}",
+            patch.id, patch.status, patch.intent, patch.title
+        );
+    }
+    if let Some(sync) = &snapshot.queue.last_sync {
+        let _ = writeln!(out, "last sync: {} @ {}", sync.result, sync.at);
+        if let Some(msg) = &sync.message {
+            let _ = writeln!(out, "{msg}");
+        }
+    }
+    out
+}
+
+fn short_sha(sha: &str) -> &str {
+    match sha.char_indices().nth(7) {
+        Some((i, _)) => &sha[..i],
+        None => sha,
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

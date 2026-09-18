@@ -417,55 +417,27 @@ Run `git uplink init --upstream <url> --contrib <url>` to create a queue.",
     )
 }
 
-/// Fetch `uplink/state` from origin into the local branch and restore `.uplink/`.
-pub fn fetch_origin_state(repo: &Path) -> Result<()> {
-    if !has_remote(repo, COMPANY_REMOTE) {
-        return Err(Error::msg(
-            "origin remote is missing; cannot fetch uplink/state. \
-Run `git uplink init --upstream <url> --contrib <url>` to create a queue.",
-        ));
-    }
-    let spec = format!("+refs/heads/{STATE_BRANCH}:refs/heads/{STATE_BRANCH}");
-    let fetched = git(
-        repo,
-        &["fetch", "--quiet", COMPANY_REMOTE, &spec],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if fetched.code != 0 {
-        return Err(not_initialized_error());
-    }
-    ensure_uplink_excluded(repo)?;
-    restore_state_worktree(repo, STATE_BRANCH)?;
+/// Replace local `uplink/state` with origin and restore `.uplink/`.
+pub fn replace_state_from_origin(repo: &Path) -> Result<()> {
+    let sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
+    apply_state_sha(repo, STATE_BRANCH, &sha)?;
     if !repo.join(QUEUE_PATH).is_file() {
         return Err(not_initialized_error());
     }
     Ok(())
 }
 
-/// Fetch `uplink/state` from origin when that remote exists. Missing origin or
-/// a missing state branch is not an error (first-time create still needs to run).
-pub fn try_fetch_origin_state(repo: &Path) -> Result<()> {
+/// Replace local `uplink/state` from origin when that remote exists. Missing
+/// origin or a missing state branch is not an error (first-time create still
+/// needs to run).
+pub fn try_replace_state_from_origin(repo: &Path) -> Result<()> {
     if !has_remote(repo, COMPANY_REMOTE) {
         return Ok(());
     }
-    let spec = format!("+refs/heads/{STATE_BRANCH}:refs/heads/{STATE_BRANCH}");
-    let fetched = git(
-        repo,
-        &["fetch", "--quiet", COMPANY_REMOTE, &spec],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if fetched.code != 0 {
+    let Ok(sha) = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH) else {
         return Ok(());
-    }
-    ensure_uplink_excluded(repo)?;
-    restore_state_worktree(repo, STATE_BRANCH)?;
-    Ok(())
+    };
+    apply_state_sha(repo, STATE_BRANCH, &sha)
 }
 
 pub fn state_exists(repo: &Path) -> Result<bool> {
@@ -584,49 +556,88 @@ pub fn ensure_state_worktree(repo: &Path) -> Result<()> {
     restore_state_worktree(repo, &branch)
 }
 
-pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
+fn uplink_worktree_tree(repo: &Path, branch: &str) -> Result<String> {
     ensure_uplink_excluded(repo)?;
     ensure_uplink_dirs(repo)?;
-    let branch = state_branch(repo);
     let index = repo.join(format!(".git/uplink-index-{}", Uuid::new_v4()));
     let index_s = index.to_string_lossy().into_owned();
     let index_opts = GitOpts {
         extra_env: vec![("GIT_INDEX_FILE".into(), index_s)],
         ..GitOpts::default()
     };
-    let outcome = (|| -> Result<()> {
-        if has_ref(repo, &branch)? {
-            git(repo, &["read-tree", &branch], index_opts.clone())?;
+    let outcome = (|| -> Result<String> {
+        if has_ref(repo, branch)? {
+            git(repo, &["read-tree", branch], index_opts.clone())?;
         } else {
             git(repo, &["read-tree", "--empty"], index_opts.clone())?;
         }
         git(repo, &["add", "-f", "--", ".uplink"], index_opts.clone())?;
-        let tree = git(repo, &["write-tree"], index_opts.clone())?.stdout;
-        if has_ref(repo, &branch)? {
-            let old_tree = git_ok(repo, &["rev-parse", &format!("{branch}^{{tree}}")])?;
-            if old_tree == tree {
-                return Ok(());
-            }
-        }
-        let parent = if has_ref(repo, &branch)? {
-            Some(rev_parse(repo, &branch)?)
-        } else {
-            None
-        };
-        let mut args = vec!["commit-tree", tree.as_str(), "-m", message];
-        if let Some(parent) = parent.as_deref() {
-            args.extend_from_slice(&["-p", parent]);
-        }
-        let commit = git(repo, &args, GitOpts::default())?.stdout;
-        git(
-            repo,
-            &["update-ref", &format!("refs/heads/{branch}"), &commit],
-            GitOpts::default(),
-        )?;
-        Ok(())
+        Ok(git(repo, &["write-tree"], index_opts.clone())?.stdout)
     })();
     let _ = fs::remove_file(&index);
     outcome
+}
+
+pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
+    let branch = state_branch(repo);
+    let tree = uplink_worktree_tree(repo, &branch)?;
+    if has_ref(repo, &branch)? {
+        let old_tree = git_ok(repo, &["rev-parse", &format!("{branch}^{{tree}}")])?;
+        if old_tree == tree {
+            return Ok(());
+        }
+    }
+    let parent = if has_ref(repo, &branch)? {
+        Some(rev_parse(repo, &branch)?)
+    } else {
+        None
+    };
+    let mut args = vec!["commit-tree", tree.as_str(), "-m", message];
+    if let Some(parent) = parent.as_deref() {
+        args.extend_from_slice(&["-p", parent]);
+    }
+    let commit = git(repo, &args, GitOpts::default())?.stdout;
+    git(
+        repo,
+        &["update-ref", &format!("refs/heads/{branch}"), &commit],
+        GitOpts::default(),
+    )?;
+    Ok(())
+}
+
+/// Paths under `.uplink/` that differ from the committed `{branch}` tree.
+pub fn uplink_uncommitted_paths(repo: &Path, branch: &str) -> Result<Vec<String>> {
+    let worktree = uplink_worktree_tree(repo, branch)?;
+    let listing = if has_ref(repo, branch)? {
+        let committed = git_ok(repo, &["rev-parse", &format!("{branch}^{{tree}}")])?;
+        if committed == worktree {
+            return Ok(Vec::new());
+        }
+        git_ok(repo, &["diff", "--name-only", &committed, &worktree])?
+    } else {
+        git_ok(repo, &["ls-tree", "-r", "--name-only", &worktree])?
+    };
+    Ok(listing
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+pub fn ahead_behind(repo: &Path, local: &str, remote: &str) -> Result<(u32, u32)> {
+    let ahead = git_ok(
+        repo,
+        &["rev-list", "--count", &format!("{remote}..{local}")],
+    )?;
+    let behind = git_ok(
+        repo,
+        &["rev-list", "--count", &format!("{local}..{remote}")],
+    )?;
+    Ok((parse_count(&ahead), parse_count(&behind)))
+}
+
+fn parse_count(raw: &str) -> u32 {
+    raw.trim().parse().unwrap_or(0)
 }
 
 /// Fetch `branch` into a remote-tracking ref. Does not move a checked-out local branch.

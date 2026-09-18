@@ -23,11 +23,11 @@ pub use git::{GitError, GitOpts, GitResult, configure_repo, git, git_ok};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use ops::{
     AddPatchOpts, InitOpts, PushOpts, PushResult, QueueCounts, RebuildOpts, RebuildResult,
-    ResetResult, StatusSnapshot, SubmitResult, SyncResult, accept_upstream, add_patch,
-    approve_patch, approve_patch_at, drop_patch, init, init_repo, mark_merged, push_queue,
-    read_queue, rebuild, rebuild_with, record_conflict_issue, record_pull_request,
-    reset_from_origin, resolve_conflict, status_snapshot, submit_patch, summarize_queue, sync,
-    write_queue,
+    ResetResult, StateStatus, StatusReport, StatusSnapshot, SubmitResult, SyncResult,
+    accept_upstream, add_patch, approve_patch, approve_patch_at, drop_patch, format_status_table,
+    init, init_repo, mark_merged, push_queue, read_queue, rebuild, rebuild_with,
+    record_conflict_issue, record_pull_request, reset_from_origin, resolve_conflict, status_report,
+    status_snapshot, submit_patch, summarize_queue, sync, write_queue,
 };
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,

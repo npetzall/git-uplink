@@ -3062,6 +3062,143 @@ fn push_publishes_a_local_add() {
 }
 
 #[test]
+fn status_reports_ahead_after_local_add() {
+    let world = setup_world();
+    let company = &world.company;
+    let _origin = publish_origin(company);
+    git(
+        company,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "README.md", "from-local\n");
+    commit_all(company, "readme");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Readme".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let snapshot = status_snapshot(company).unwrap();
+    assert_eq!(snapshot.state.ahead, Some(1));
+    assert_eq!(snapshot.state.behind, Some(0));
+    assert!(
+        snapshot.state.uncommitted.is_empty(),
+        "{:?}",
+        snapshot.state.uncommitted
+    );
+    assert!(snapshot.state.remote.is_some());
+}
+
+#[test]
+fn status_reports_behind_when_origin_moved() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = world.upstream.clone();
+    let origin = publish_origin(company);
+    let (_ahead_keep, ahead) = clone_company_from(&origin, &upstream);
+    let (_behind_keep, behind) = clone_company_from(&origin, &upstream);
+
+    git(
+        &ahead,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&ahead, "README.md", "from-ahead\n");
+    commit_all(&ahead, "readme");
+    add_landed_patch(
+        &ahead,
+        AddPatchOpts {
+            title: "Readme".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    push_queue(
+        &ahead,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+
+    let local_before = git_ok(&behind, &["rev-parse", STATE_BRANCH]).unwrap();
+    let snapshot = status_snapshot(&behind).unwrap();
+    assert_eq!(
+        git_ok(&behind, &["rev-parse", STATE_BRANCH]).unwrap(),
+        local_before
+    );
+    assert_eq!(snapshot.state.ahead, Some(0));
+    assert_eq!(snapshot.state.behind, Some(1));
+    assert!(
+        snapshot.state.uncommitted.is_empty(),
+        "{:?}",
+        snapshot.state.uncommitted
+    );
+}
+
+#[test]
+fn status_reports_uncommitted_queue() {
+    let world = setup_world();
+    let company = &world.company;
+    let _origin = publish_origin(company);
+    let path = company.join(".uplink/queue.json");
+    let raw = fs::read_to_string(&path).unwrap();
+    fs::write(&path, raw.replace("\"version\": 1", "\"version\": 1 ")).unwrap();
+    let snapshot = status_snapshot(company).unwrap();
+    assert!(
+        snapshot
+            .state
+            .uncommitted
+            .iter()
+            .any(|path| path == ".uplink/queue.json"),
+        "{:?}",
+        snapshot.state.uncommitted
+    );
+    assert_eq!(snapshot.state.ahead, Some(0));
+    assert_eq!(snapshot.state.behind, Some(0));
+}
+
+#[test]
+fn status_cli_table_or_json() {
+    let world = setup_world();
+    let company = &world.company;
+    let _origin = publish_origin(company);
+    let bin = env!("CARGO_BIN_EXE_git-uplink");
+    let table = Command::new(bin)
+        .arg("status")
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert!(table.status.success(), "{:?}", table);
+    let text = String::from_utf8_lossy(&table.stdout);
+    assert!(!text.trim_start().starts_with('{'), "{text}");
+    assert!(text.contains("uplink/state"), "{text}");
+    assert!(text.contains("up to date"), "{text}");
+    assert!(text.contains("id"), "{text}");
+
+    let json = Command::new(bin)
+        .args(["status", "--json"])
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert!(json.status.success(), "{:?}", json);
+    let text = String::from_utf8_lossy(&json.stdout);
+    let value: serde_json::Value = serde_json::from_str(text.trim()).expect(&text);
+    assert!(value.get("state").is_some(), "{text}");
+    assert!(value.get("patches").is_some(), "{text}");
+    assert!(value.get("counts").is_some(), "{text}");
+    assert_eq!(value["state"]["ahead"], 0);
+    assert_eq!(value["state"]["behind"], 0);
+}
+
+#[test]
 fn push_appends_local_only_patches_when_origin_moved() {
     let world = setup_world();
     let company = &world.company;
