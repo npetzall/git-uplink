@@ -26,3 +26,16 @@ updates:
       rust-crates:
         patterns:
           - "*"
+
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/templates/example-github/.github/workflows"
+      - "/templates/example-github/.github/actions/install-git-uplink"
+      - "/templates/ghec/.github/workflows"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
