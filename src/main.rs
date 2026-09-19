@@ -13,8 +13,9 @@ use git_uplink::{
     format_prepare_markdown, format_status_table, from_upstream_report_paths, git_ok, init,
     load_groups_file, mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, prepare_from_message, push_queue,
-    read_queue, rebuild_with, record_conflict_issue, record_pull_request, report_paths,
-    reset_from_origin, resolve_conflict, status_report, status_snapshot, submit_patch, sync,
+    read_queue, rebuild_with, record_conflict_issue, record_pull_request, refresh_from_origin,
+    report_paths, reset_from_origin, resolve_conflict, status_report, status_snapshot,
+    submit_patch, sync,
 };
 use git_uplink::{Patch, QueueState, SyncResult};
 
@@ -86,6 +87,8 @@ enum Commands {
         #[arg(long = "push-remote")]
         push_remote: Option<String>,
     },
+    /// Fetch origin tracking refs without moving local branches.
+    Refresh,
     /// Fetch origin and hard-reset company main, uplink/state, and uplink/upstream.
     Reset,
     Preflight {
@@ -608,6 +611,12 @@ fn run() -> Result<(), Error> {
                 "{} {} to {} at {}",
                 result.action, result.branch, result.remote, result.sha
             );
+        }
+        Commands::Refresh => {
+            let result = refresh_from_origin(&repo)?;
+            println!("origin/{} {}", result.internal_branch, result.internal_sha);
+            println!("origin/{} {}", STATE_BRANCH, result.state_sha);
+            println!("origin/uplink/upstream {}", result.upstream_sha);
         }
         Commands::Reset => {
             let result = reset_from_origin(&repo)?;

@@ -23,11 +23,12 @@ pub use git::{GitError, GitOpts, GitResult, configure_repo, git, git_ok};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use ops::{
     AddPatchOpts, InitOpts, PushOpts, PushResult, QueueCounts, RebuildOpts, RebuildResult,
-    ResetResult, StateStatus, StatusReport, StatusSnapshot, SubmitResult, SyncResult,
-    accept_upstream, add_patch, approve_patch, approve_patch_at, drop_patch, format_status_table,
-    init, init_repo, mark_merged, push_queue, read_queue, rebuild, rebuild_with,
-    record_conflict_issue, record_pull_request, reset_from_origin, resolve_conflict, status_report,
-    status_snapshot, submit_patch, summarize_queue, sync, write_queue,
+    RefreshResult, ResetResult, StateStatus, StatusReport, StatusSnapshot, SubmitResult,
+    SyncResult, accept_upstream, add_patch, approve_patch, approve_patch_at, drop_patch,
+    format_status_table, init, init_repo, mark_merged, push_queue, read_queue, rebuild,
+    rebuild_with, record_conflict_issue, record_pull_request, refresh_from_origin,
+    reset_from_origin, resolve_conflict, state_status_at, status_report, status_snapshot,
+    submit_patch, summarize_queue, sync, write_queue,
 };
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,
@@ -40,7 +41,7 @@ pub use prepare::{
     from_upstream_report_paths, parse_depends_on, prepare_from_message, report_paths,
     split_internal_message, strip_html_comments,
 };
-pub use repo::{commit_queue, patch_state_commit};
+pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};
 pub use types::{
     DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Forge, MergeVia, Patch, PatchApproval, PatchLayer,
     PatchStatus, PendingUpstream, PrepareReport, QUEUE_PATH, QUEUE_VERSION, QueueConfig,

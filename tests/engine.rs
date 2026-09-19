@@ -5,14 +5,14 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
-    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QueueConfig,
-    QueueState, RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
-    accept_upstream, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
+    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QueueConfig, QueueState,
+    RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, accept_upstream,
+    add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
     format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
     init, init_repo, mark_merged, parse_depends_on, preflight_incoming_change, push_queue, rebuild,
-    rebuild_with, record_conflict_issue, record_pull_request, report_paths, reset_from_origin,
-    resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
-    write_queue,
+    rebuild_with, record_conflict_issue, record_pull_request, refresh_from_origin, report_paths,
+    reset_from_origin, resolve_conflict, status_snapshot, strip_html_comments, submit_patch,
+    summarize_queue, sync, write_queue,
 };
 use tempfile::TempDir;
 
@@ -609,6 +609,235 @@ fn reset_from_origin_fails_without_origin_or_state() {
     .unwrap();
     let missing_state = reset_from_origin(repo).unwrap_err().to_string();
     assert!(missing_state.contains("not initialized"), "{missing_state}");
+}
+
+#[test]
+fn refresh_from_origin_updates_tracking_without_moving_local() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    configure_repo(&clone).unwrap();
+    git(
+        &clone,
+        &["fetch", "--quiet", "origin", "uplink/state:uplink/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &clone,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            "uplink/upstream:uplink/upstream",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &clone,
+        &[
+            "restore",
+            "--source",
+            STATE_BRANCH,
+            "--worktree",
+            "--",
+            ".uplink",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&clone, ".uplink/local-only.md", "stale state\n");
+    git_uplink::commit_queue(&clone, "uplink: local only").unwrap();
+    git(&clone, &["checkout", "-b", "feat/wip"], GitOpts::default()).unwrap();
+    write(&clone, "README.md", "dirty working tree\n");
+
+    let local_main = git_ok(&clone, &["rev-parse", "main"]).unwrap();
+    let local_state = git_ok(&clone, &["rev-parse", STATE_BRANCH]).unwrap();
+    let local_upstream = git_ok(&clone, &["rev-parse", "uplink/upstream"]).unwrap();
+
+    git(
+        &world.company,
+        &["checkout", "--quiet", "--detach", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&world.company, "UPSTREAM.md", "moved upstream\n");
+    commit_all(&world.company, "move uplink/upstream");
+    git(
+        &world.company,
+        &["branch", "-f", "uplink/upstream", "HEAD"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &world.company,
+        &["checkout", "-f", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&world.company, "MAIN.md", "moved main\n");
+    commit_all(&world.company, "move main");
+    write(&world.company, ".uplink/reports/note.md", "moved state\n");
+    git_uplink::commit_queue(&world.company, "uplink: move state").unwrap();
+    git(
+        &world.company,
+        &[
+            "push",
+            "--quiet",
+            "origin",
+            "main",
+            "uplink/state",
+            "uplink/upstream",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let origin_main = git_ok(&world.company, &["rev-parse", "main"]).unwrap();
+    let origin_state = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let origin_upstream = git_ok(&world.company, &["rev-parse", "uplink/upstream"]).unwrap();
+    assert_ne!(local_state, origin_state);
+    assert_ne!(local_main, origin_main);
+    assert_ne!(local_upstream, origin_upstream);
+
+    let result = refresh_from_origin(&clone).unwrap();
+    assert_eq!(result.internal_branch, "main");
+    assert_eq!(result.internal_sha, origin_main);
+    assert_eq!(result.state_sha, origin_state);
+    assert_eq!(result.upstream_sha, origin_upstream);
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "origin/main"]).unwrap(),
+        origin_main
+    );
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "origin/uplink/state"]).unwrap(),
+        origin_state
+    );
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "origin/uplink/upstream"]).unwrap(),
+        origin_upstream
+    );
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "feat/wip"
+    );
+    assert_eq!(git_ok(&clone, &["rev-parse", "main"]).unwrap(), local_main);
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", STATE_BRANCH]).unwrap(),
+        local_state
+    );
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "uplink/upstream"]).unwrap(),
+        local_upstream
+    );
+    assert_eq!(
+        fs::read_to_string(clone.join("README.md")).unwrap(),
+        "dirty working tree\n"
+    );
+    assert!(clone.join(".uplink/local-only.md").is_file());
+    assert!(!clone.join("MAIN.md").is_file());
+}
+
+#[test]
+fn refresh_from_origin_fails_without_origin_or_state() {
+    let keep = temp_dir();
+    let repo = keep.path();
+    git(repo, &["init", "-b", "main"], GitOpts::default()).unwrap();
+    let missing_origin = refresh_from_origin(repo).unwrap_err().to_string();
+    assert!(
+        missing_origin.contains("origin remote is missing"),
+        "{missing_origin}"
+    );
+
+    let origin = keep_dir();
+    git(
+        &origin,
+        &["init", "--bare", "-b", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let missing_state = refresh_from_origin(repo).unwrap_err().to_string();
+    assert!(missing_state.contains("not initialized"), "{missing_state}");
+}
+
+#[test]
+fn queue_at_remote_differs_from_local_after_add() {
+    let world = setup_world();
+    let company = &world.company;
+    let origin = publish_origin(company);
+    let (_keep, clone) = clone_company_from(&origin, &world.upstream);
+
+    git(
+        &clone,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&clone, "README.md", "local only\n");
+    commit_all(&clone, "readme");
+    let patch = add_landed_patch(
+        &clone,
+        AddPatchOpts {
+            title: "Readme".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let local = git_uplink::queue_at(&clone, STATE_BRANCH).unwrap();
+    let remote = git_uplink::queue_at(&clone, "origin/uplink/state").unwrap();
+    assert!(local.all_patches().any(|p| p.id == patch.id));
+    assert!(!remote.all_patches().any(|p| p.id == patch.id));
+}
+
+#[test]
+fn file_history_lists_patch_revisions() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "README.md", "first\n");
+    commit_all(company, "readme");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Readme".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let path = format!(".uplink/patches/{}.patch", patch.id);
+    let first = git_uplink::file_history(company, STATE_BRANCH, &path).unwrap();
+    assert!(!first.is_empty(), "{first:?}");
+
+    let mut body = fs::read_to_string(company.join(&path)).unwrap();
+    body.push_str("+extra\n");
+    write(company, &path, &body);
+    git_uplink::commit_queue(company, "uplink: revise patch").unwrap();
+    let history = git_uplink::file_history(company, STATE_BRANCH, &path).unwrap();
+    assert_eq!(history.len(), first.len() + 1, "{history:?}");
+    assert_eq!(history[0].subject, "uplink: revise patch");
+    assert_ne!(history[0].sha, first[0].sha);
 }
 
 #[test]
@@ -4572,5 +4801,9 @@ fn git_uplink_help_includes_web_ui() {
     assert!(
         text.contains("reset"),
         "expected reset subcommand in help, got:\n{text}"
+    );
+    assert!(
+        text.contains("refresh"),
+        "expected refresh subcommand in help, got:\n{text}"
     );
 }

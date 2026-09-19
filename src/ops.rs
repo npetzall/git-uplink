@@ -131,7 +131,8 @@ fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
     Ok(queue)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResetResult {
     pub internal_branch: String,
     pub internal_sha: String,
@@ -139,23 +140,33 @@ pub struct ResetResult {
     pub upstream_sha: String,
 }
 
-/// Fetch origin and hard-reset company main, `uplink/state`, and `uplink/upstream`.
-/// Leaves HEAD on the configured internal branch with `.uplink/` restored from origin.
-pub fn reset_from_origin(repo: &Path) -> Result<ResetResult> {
+pub type RefreshResult = ResetResult;
+
+/// Fetch origin tracking refs for company main, `uplink/state`, and `uplink/upstream`.
+/// Does not move local branches or restore `.uplink/`.
+pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
     configure_repo(repo)?;
     let state_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
     let upstream_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, UPSTREAM_REF)?;
     let queue = queue_at(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?;
     let internal_branch = queue.config.internal_branch.clone();
-    let internal_sha = refresh_company_branch(repo, COMPANY_REMOTE, &internal_branch)?;
-    apply_state_sha(repo, STATE_BRANCH, &state_sha)?;
-    point_branch_at(repo, UPSTREAM_REF, &upstream_sha)?;
-    Ok(ResetResult {
+    let internal_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, &internal_branch)?;
+    Ok(RefreshResult {
         internal_branch,
         internal_sha,
         state_sha,
         upstream_sha,
     })
+}
+
+/// Fetch origin and hard-reset company main, `uplink/state`, and `uplink/upstream`.
+/// Leaves HEAD on the configured internal branch with `.uplink/` restored from origin.
+pub fn reset_from_origin(repo: &Path) -> Result<ResetResult> {
+    let fetched = refresh_from_origin(repo)?;
+    refresh_company_branch(repo, COMPANY_REMOTE, &fetched.internal_branch)?;
+    apply_state_sha(repo, STATE_BRANCH, &fetched.state_sha)?;
+    point_branch_at(repo, UPSTREAM_REF, &fetched.upstream_sha)?;
+    Ok(fetched)
 }
 
 fn missing_forge_error() -> Error {
@@ -2190,6 +2201,10 @@ pub fn status_snapshot(repo: &Path) -> Result<StatusSnapshot> {
 }
 
 fn state_status(repo: &Path) -> Result<StateStatus> {
+    state_status_at(repo, true)
+}
+
+pub fn state_status_at(repo: &Path, fetch: bool) -> Result<StateStatus> {
     let branch = state_branch(repo);
     let local = if has_ref(repo, &branch)? {
         Some(rev_parse(repo, &branch)?)
@@ -2197,7 +2212,16 @@ fn state_status(repo: &Path) -> Result<StateStatus> {
         None
     };
     let uncommitted = uplink_uncommitted_paths(repo, &branch)?;
-    let remote = fetch_state_tracking(repo, COMPANY_REMOTE, &branch)?;
+    let remote = if fetch {
+        fetch_state_tracking(repo, COMPANY_REMOTE, &branch)?
+    } else {
+        let tracking = format!("{COMPANY_REMOTE}/{branch}");
+        if has_ref(repo, &tracking)? {
+            Some(rev_parse(repo, &tracking)?)
+        } else {
+            None
+        }
+    };
     let (remote_ref, ahead, behind) = if let Some(remote_sha) = remote.as_deref() {
         let remote_ref = format!("{COMPANY_REMOTE}/{branch}");
         let (ahead, behind) = match local.as_deref() {

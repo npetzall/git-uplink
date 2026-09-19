@@ -771,6 +771,41 @@ pub fn show_at(repo: &Path, sha: &str, path: &str) -> Result<String> {
     git_ok(repo, &["show", &format!("{sha}:{path}")])
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRevision {
+    pub sha: String,
+    pub at: String,
+    pub subject: String,
+}
+
+/// Commits on `git_ref` that touched `path`, newest first.
+pub fn file_history(repo: &Path, git_ref: &str, path: &str) -> Result<Vec<FileRevision>> {
+    let result = git(
+        repo,
+        &["log", "--format=%H%x09%cI%x09%s", git_ref, "--", path],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )?;
+    if result.code != 0 {
+        return Ok(Vec::new());
+    }
+    Ok(result
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '\t');
+            Some(FileRevision {
+                sha: parts.next()?.to_string(),
+                at: parts.next()?.to_string(),
+                subject: parts.next().unwrap_or("").to_string(),
+            })
+        })
+        .collect())
+}
+
 pub fn patch_state_commit(repo: &Path, id: &str) -> Result<String> {
     let branch = state_branch(repo);
     let path = format!(".uplink/patches/{id}.patch");
