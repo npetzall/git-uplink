@@ -5,7 +5,26 @@ on:
   pull_request:
 
 jobs:
+  vuln-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm audit --package-lock-only
+        working-directory: web
+      - run: npm audit --package-lock-only
+        working-directory: site
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check bans licenses sources
+
   test:
+    needs: vuln-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,6 +38,7 @@ jobs:
       - run: cargo build --release
 
   web:
+    needs: vuln-check
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -34,6 +54,7 @@ jobs:
       - run: npm run typecheck
 
   site:
+    needs: vuln-check
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,17 +70,3 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-
-  cargo-deny:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        checks:
-          - advisories
-          - bans licenses sources
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check ${{ matrix.checks }}
