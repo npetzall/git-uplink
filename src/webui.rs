@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderValue, StatusCode, Uri, header};
+use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -53,8 +53,6 @@ pub async fn serve(repo: PathBuf, addr: SocketAddr, open_browser: bool) -> std::
     let state = Arc::new(AppState { repo: repo.clone() });
     let app = Router::new()
         .route("/api/status", get(status))
-        .route("/docs/way-of-working.md", get(way_of_working))
-        .route("/docs/templates.md", get(templates_readme))
         .fallback(static_file)
         .with_state(state);
 
@@ -87,24 +85,6 @@ fn launch_browser(url: &str) {
             return;
         }
     }
-}
-
-async fn way_of_working() -> impl IntoResponse {
-    markdown(include_str!("../way-of-working.md"))
-}
-
-async fn templates_readme() -> impl IntoResponse {
-    markdown(include_str!("../templates/README.md"))
-}
-
-fn markdown(body: &'static str) -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/markdown; charset=utf-8"),
-        )],
-        body,
-    )
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {

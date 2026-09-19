@@ -1,5 +1,5 @@
 import { fileURLToPath, URL } from "node:url";
-import { defineConfig } from "vitest/config";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -15,9 +15,4 @@ export default defineConfig({
     emptyOutDir: true,
     assetsDir: "assets",
   },
-  test: {
-    environment: "node",
-    include: ["src/**/*.test.ts"],
-  },
 });
-

@@ -96,7 +96,7 @@ export function LabClient() {
             </CardTitle>
             <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
               {current?.summary ??
-                "Walk a company change from an EMU-only PR, through IP approval, onto an upstream-owned private fork, into a public pull request, and back down again after merge — without a second developer branch."}
+                "Walk a company change from a private-forge PR, through IP approval, onto the public contribution fork, into an upstream pull request, and back down again after merge — without a second developer branch."}
             </p>
             {current ? (
               <p className="max-w-3xl rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-100/90">
@@ -150,7 +150,7 @@ export function LabClient() {
               <p className="text-xs text-muted-foreground">
                 {state.conflict
                   ? "Rebuild blocked · last successful main"
-                  : "GHEC EMU · upstream + active patches"}
+                  : "Private forge · upstream + active patches"}
               </p>
             </CardHeader>
             <CardContent>
@@ -159,15 +159,15 @@ export function LabClient() {
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Upstream-owned fork</CardTitle>
+              <CardTitle className="text-base">Contribution fork</CardTitle>
               <p className="text-xs text-muted-foreground">
-                Private staging branches for public PRs
+                Public, upstream-owned. First place a change becomes public.
               </p>
             </CardHeader>
             <CardContent>
               {state.contrib.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  Nothing exported yet. Internal work stays inside the enterprise until to-upstream
+                  Nothing exported yet. Internal work stays on the private forge until to-upstream
                   Environment approval.
                 </p>
               ) : (

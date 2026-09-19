@@ -12,15 +12,12 @@ fn main() {
     println!("cargo:rerun-if-changed=web/index.html");
     println!("cargo:rerun-if-changed=web/vite.config.ts");
     println!("cargo:rerun-if-changed=web/src");
-    println!("cargo:rerun-if-changed=way-of-working.md");
-    println!("cargo:rerun-if-changed=templates/README.md");
     println!("cargo:rerun-if-changed=templates/github");
     println!("cargo:rerun-if-changed=templates/ghec");
     println!("cargo:rerun-if-changed=templates/example-github");
 
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     run(npm, &["ci", "--no-fund", "--no-audit"], &web);
-    run(npm, &["test"], &web);
     run(npm, &["run", "build"], &web);
     if !dist.join("index.html").is_file() {
         panic!("vite did not write web/dist/index.html");

@@ -2,7 +2,7 @@
 
 Rust Git subcommand for the Uplink operating model. The binary is **`git-uplink`**, so Git treats it as `git uplink`.
 
-It is for a company on GitHub Enterprise Cloud with Enterprise Managed Users that must build on a public project, keep unreleased work private, pass IP review, and contribute through an **upstream-owned private fork**. Developers keep one internal branch per change. Merge is the product gate. Company `main` is always:
+It is for a company on a private forge that must build on a public project, keep unreleased work private, pass IP review, and contribute through an **upstream-owned public contribution fork**. GitHub Enterprise Cloud with Enterprise Managed Users is one such forge. Developers keep one internal branch per change. Merge is the product gate. Company `main` is always:
 
 ```text
 public upstream/main  +  tooling  +  active upstream[]  +  active internal[]
@@ -16,7 +16,7 @@ git uplink status
 git uplink web-ui
 ```
 
-`git uplink web-ui` serves the operator dashboard from files **embedded in the binary**. `build.rs` runs `npm ci`, `npm test`, and `npm run build` in `web/`; the dist is compiled in with `rust-embed`. The command opens a browser (pass `--no-open` to skip).
+`git uplink web-ui` serves the local queue UI from files **embedded in the binary**. `build.rs` runs `npm ci` and `npm run build` in `web/`; the dist is compiled in with `rust-embed`. The command opens a browser (pass `--no-open` to skip).
 
 Use `git-uplink -h` or `git uplink -h`. Plain `git uplink --help` goes through Git’s man-page path, not clap.
 
@@ -77,25 +77,25 @@ git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]
 
 git-uplink shells out to `git`, but it does **not** use the operator’s commit signer, default SSH key, or `GITHUB_TOKEN`. Bot identity and `commit.gpgsign=false` are process-scoped (`git -c`), so `git uplink init` does not rewrite `user.name` / `commit.gpgsign` in the clone. Your own `git commit` in that repo still follows global signing. Network git picks credentials by remote: `origin` uses `UPLINK_INTERNAL_KEY` or `UPLINK_INTERNAL_TOKEN`, `contrib` uses `UPLINK_CONTRIB_KEY` or `UPLINK_CONTRIB_TOKEN`, and `upstream` uses `UPLINK_UPSTREAM_KEY` or `UPLINK_UPSTREAM_TOKEN`. If both KEY and TOKEN are set, KEY wins. A KEY is a path to a **passwordless** private key (`BatchMode=yes`); a passphrase-protected key fails closed. TOKEN rewrites SSH remotes to HTTPS for that invocation. Local `file://` remotes need neither. Without the matching role’s creds, network git fails instead of opening ssh-agent / Touch ID.
 
-## Dashboard
+## Website and operator UI
 
-`git uplink web-ui` is the operator UI: control room, live lab, collaboration notes, system playbook, [way-of-working.md](way-of-working.md), and a **This repo** page that reads `.uplink/queue.json` from `uplink/state` in the directory you started in.
+The public site (playbook, collaboration notes, [way-of-working.md](way-of-working.md), install, forge setup, GitHub example, and the live lab) is GitHub Pages: [https://npetzall.github.io/git-uplink/](https://npetzall.github.io/git-uplink/). Sources live in `site/` (Vite + React + Tailwind). Do not commit `site/dist`. Enable **Settings → Pages → Source: GitHub Actions**. `.github/workflows/pages.yml` builds `site/`, uploads the Pages artifact, and deploys on push to `main`.
 
-Frontend sources live in `web/` (Vite + React + Tailwind). Do not commit `web/dist`; cargo rebuilds it.
+`git uplink web-ui` is the local operator UI for **this checkout**: it reads `.uplink/queue.json` from `uplink/state` in the directory you started in. Frontend sources live in `web/` (Vite + React + Tailwind). Do not commit `web/dist`; cargo rebuilds it.
 
 ## Tests
 
 ```bash
 cargo test
-npm test --prefix web
+npm test --prefix site
 cargo deny check
 ```
 
 The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, contribution packets, plus a check that the UI was embedded.
 
-`build.rs` runs the Live lab scenario tests in `web/` (`npm test`) before embedding the dashboard. Those cases are the executable spec for drop-on-merge, internal-only staying off the fork, queued work staying off the fork until to-upstream approval, and every lab step completing. You can run them alone with `npm test --prefix web`. Typecheck is `npm run typecheck --prefix web`.
+Live lab scenario tests live in `site/` (`npm test --prefix site`): drop-on-merge, internal-only staying off the fork, queued work staying off the fork until to-upstream approval, and every lab step completing. Typecheck is `npm run typecheck --prefix site` and `npm run typecheck --prefix web`.
 
-CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a dedicated `web/` job (`npm ci`, typecheck, vitest), and `cargo deny` (RustSec advisories plus licenses, bans, and sources).
+CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a `web/` job (`npm ci`, typecheck), a `site/` job (`npm ci`, typecheck, vitest, build), and `cargo deny` (RustSec advisories plus licenses, bans, and sources).
 
 ## Product-repo workflows
 

@@ -4,39 +4,7 @@ import { GitFork, Menu, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
-const LINKS = [
-  { href: "/", label: "Control room" },
-  { href: "/queue", label: "This repo" },
-  { href: "/collaboration", label: "Collaboration" },
-  { href: "/lab", label: "Live lab" },
-  { href: "/working", label: "Way of working" },
-  { href: "/playbook", label: "System playbook" },
-];
-
-function NavLinks({ onClick }: { onClick?: () => void }) {
-  return (
-    <>
-      {LINKS.map((link) => (
-        <NavLink
-          key={link.href}
-          to={link.href}
-          end={link.href === "/"}
-          onClick={onClick}
-          className={({ isActive }) =>
-            cn(
-              "rounded-md px-3 py-2 text-sm transition-colors",
-              isActive
-                ? "bg-primary/15 text-primary"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )
-          }
-        >
-          {link.label}
-        </NavLink>
-      ))}
-    </>
-  );
-}
+const DOCS = "https://npetzall.github.io/git-uplink/";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -51,7 +19,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             git uplink
           </NavLink>
           <nav className="hidden items-center gap-1 md:flex">
-            <NavLinks />
+            <NavLink
+              to="/"
+              end
+              className={({ isActive }) =>
+                cn(
+                  "rounded-md px-3 py-2 text-sm transition-colors",
+                  isActive
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )
+              }
+            >
+              This checkout
+            </NavLink>
+            <a
+              href={`${DOCS}lab`}
+              className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Live lab
+            </a>
+            <a
+              href={DOCS}
+              className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Docs
+            </a>
           </nav>
           <Button
             variant="ghost"
@@ -65,7 +58,33 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
         {open ? (
           <nav className="flex flex-col gap-1 border-t border-border px-4 py-3 md:hidden">
-            <NavLinks onClick={() => setOpen(false)} />
+            <NavLink
+              to="/"
+              end
+              onClick={() => setOpen(false)}
+              className={({ isActive }) =>
+                cn(
+                  "rounded-md px-3 py-2 text-sm transition-colors",
+                  isActive
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )
+              }
+            >
+              This checkout
+            </NavLink>
+            <a
+              href={`${DOCS}lab`}
+              className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Live lab
+            </a>
+            <a
+              href={DOCS}
+              className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Docs
+            </a>
           </nav>
         ) : null}
       </header>

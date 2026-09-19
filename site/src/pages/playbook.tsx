@@ -1,5 +1,7 @@
+import { Link } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { GITHUB_BLOB } from "../lib/links";
 
 export function PlaybookPage() {
   return (
@@ -7,14 +9,14 @@ export function PlaybookPage() {
       <article className="mx-auto max-w-3xl space-y-10">
         <header className="space-y-3">
           <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">
-            System playbook
+            Playbook
           </p>
           <h1 className="text-4xl font-semibold tracking-tight">
-            Uplink: contributing to public GitHub from an EMU enterprise
+            Uplink: contributing to public upstream from a private forge
           </h1>
           <p className="text-lg leading-8 text-muted-foreground">
             A patch-queue operating model plus a small bot. Third-party tools fill the airlock and
-            the GitHub API; they do not replace the queue. Developers keep one branch per change.
+            the forge API; they do not replace the queue. Developers keep one branch per change.
             Company builds stay current. Merged contributions fall out of the internal build so they
             cannot revert a later upstream fix.
           </p>
@@ -22,22 +24,29 @@ export function PlaybookPage() {
 
         <Section title="Why this shape">
           <p>
-            Enterprise Managed Users can read public GitHub.com and cannot write to it: no forks, no
-            pull requests, no comments, including via the API. That is a hard platform constraint,
-            not a policy choice. The company already decided the public project will host a private
-            fork in the upstream organisation and hand over either a fine-grained token for a
-            machine user or a GitHub App that can push branches and open pull requests. That
-            decision is correct for secrecy. It is not, by itself, a product-build strategy.
+            A private forge can consume public upstream without publishing unreleased work.
+            Developers merge internally; IP review happens later; only then does{" "}
+            <code>submit</code> land the change on a public contribution fork. GitHub Enterprise
+            Cloud with Enterprise Managed Users is one such forge: EMU accounts can read public
+            GitHub.com and cannot write to it — no forks, no pull requests, no comments, including
+            via the API. Other private forges may have the same shape for policy rather than
+            platform limits.
+          </p>
+          <p>
+            The company hosts the product on the private forge and contributes through an
+            upstream-owned <strong>public</strong> fork (App or machine user). That is not, by
+            itself, a product-build strategy. The change stays private until it lands on that
+            contribution fork.
           </p>
           <p>
             GitHub&apos;s Private Mirrors App solves the airlock if the company also has a public
-            github.com organisation and is willing to show a public fork. It does not rebuild a
-            company mainline from upstream plus unmerged work, does not drop patches after merge,
-            and does not amend a pending contribution when a sync conflict is resolved. Google
+            github.com organisation and is willing to show a company-owned public fork. It does not
+            rebuild a company mainline from upstream plus unmerged work, does not drop patches after
+            merge, and does not amend a pending contribution when a sync conflict is resolved. Google
             Copybara is excellent at 1:1 repo transforms and weaker at an ordered, drop-on-merge
             queue. StGit implements the queue semantics; developers should not have to run it.
-            Uplink takes StGit&apos;s model and binds it to GitHub Enterprise review, the
-            upstream-owned fork, and merge detection.
+            Uplink takes StGit&apos;s model and binds it to forge review, the upstream-owned
+            contribution fork, and merge detection.
           </p>
         </Section>
 
@@ -68,12 +77,20 @@ export function PlaybookPage() {
             <code>amended</code> until IP approves the delta; then the bot force-pushes the fork
             branch and the open PR updates.
           </p>
+          <p>
+            Branch map, rebuild apply order, and how concurrent{" "}
+            <code>add</code> restacks:{" "}
+            <Link to="/internals" className="text-primary underline-offset-4 hover:underline">
+              Internals
+            </Link>
+            .
+          </p>
         </Section>
 
         <Section title="Repository topology">
           <p>
-            <strong>Company product repo</strong> lives in the EMU enterprise. It is a mirror, not a
-            GitHub fork network member — EMU cannot fork public repositories. Humans open PRs only
+            <strong>Company product repo</strong> lives on the private forge. It is a mirror of
+            public upstream, not a member of the public fork network. Humans open PRs only
             here. Humans merge PRs onto <code>main</code>. Import records the patch on{" "}
             <code>uplink/state</code>; sync may force-update <code>main</code> when upstream moved
             (immediately for flowed-back patches, or after <code>from-upstream</code> approval for
@@ -82,11 +99,10 @@ export function PlaybookPage() {
             same way you would after any integration branch update.
           </p>
           <p>
-            <strong>Contribution fork</strong> is a private fork of the public project, owned by the
-            upstream organisation. Until a pull request is opened, the public cannot see the work.
-            Upstream maintainers can, which is the intended private review channel. Do not put this
-            fork in a company-owned public org if the goal is to hide that the company is preparing
-            a contribution.
+            <strong>Contribution fork</strong> is a <strong>public</strong> fork of the public
+            project, owned by the upstream organisation. Submit is the first time the change is
+            public: the bot pushes <code>uplink/&lt;id&gt;</code> there. Keep unreleased work on the
+            private forge until IP approves that push.
           </p>
           <p>
             <strong>Canonical upstream</strong> remains the public repository. Maintainers merge
@@ -131,7 +147,7 @@ export function PlaybookPage() {
           </p>
         </Section>
 
-        <Section title="Two approval gates">
+        <Section title="Approval gates">
           <p>
             Internal product approval and contribution approval are different events. Mixing them
             would block the company build on legal review.
@@ -154,7 +170,7 @@ export function PlaybookPage() {
               developer who branches from main gets it. Default destination is the upstream queue;
               label <code>uplink:internal-only</code> for the escape hatch (no stored intent field).
               Upstream import then rebuilds so the new patch sits under internal. Internal import is
-              add-only. IP has not run yet. Nothing has left EMU.
+              add-only. IP has not run yet. Nothing has left the private forge.
             </li>
             <li>
               <strong>Contribution / IP (status <code>approved</code>, then{" "}
@@ -164,7 +180,7 @@ export function PlaybookPage() {
               Environment named <code>to-upstream</code>. GitHub records that review (Deployments +
               enterprise audit log). The same run writes <code>approval.md</code>, then{" "}
               <code>git uplink approve</code> / <code>git uplink submit</code>. App credentials that can
-              push the public fork exist only on that environment. Internal-only patches are
+              push the contribution fork exist only on that environment. Internal-only patches are
               refused here.
             </li>
           </ol>
@@ -174,7 +190,7 @@ export function PlaybookPage() {
           <p>
             On GitHub Enterprise Cloud, contribution approval is a GitHub Environment named{" "}
             <code>to-upstream</code>, not a sidecar process. Required reviewers are IP/legal. The GitHub App
-            that can push the upstream-owned private fork lives as <em>environment</em> secrets, so
+            that can push the public contribution fork lives as <em>environment</em> secrets, so
             those credentials do not exist in a job until the deployment is approved.
           </p>
           <p>
@@ -190,12 +206,22 @@ export function PlaybookPage() {
             The dispatcher is not the IP approver. GitHub records the environment reviewer on the
             Deployments tab and in the enterprise audit log. Turn on Prevent self-review. Do not put
             the write App secrets at repo or org level, or a job without the environment can still
-            mint a token.             Packet and submit use job-level <code>uplink-mutate</code> concurrency so
+            mint a token. Packet and submit use job-level <code>uplink-mutate</code> concurrency so
             the environment wait does not freeze imports.
           </p>
           <p>
-            Setup: <code>templates/README.md</code>. Workflow:{" "}
-            <code>templates/ghec/.github/workflows/uplink-submit.yml</code>.
+            Setup:{" "}
+            <Link to="/setup" className="text-primary underline-offset-4 hover:underline">
+              forge packs
+            </Link>
+            . Workflow:{" "}
+            <a
+              href={`${GITHUB_BLOB}/templates/ghec/.github/workflows/uplink-submit.yml`}
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              uplink-submit.yml
+            </a>
+            .
           </p>
         </Section>
 
@@ -223,8 +249,18 @@ export function PlaybookPage() {
           <p>
             Workflow group <code>uplink-sync</code> keeps one inbound review at a time. Inspect and
             apply still take job-level <code>uplink-mutate</code> so the wait does not freeze
-            imports. Setup: <code>templates/README.md</code>. Workflow:{" "}
-            <code>templates/ghec/.github/workflows/uplink-sync.yml</code>.
+            imports. Setup:{" "}
+            <Link to="/setup" className="text-primary underline-offset-4 hover:underline">
+              forge packs
+            </Link>
+            . Workflow:{" "}
+            <a
+              href={`${GITHUB_BLOB}/templates/ghec/.github/workflows/uplink-sync.yml`}
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              uplink-sync.yml
+            </a>
+            .
           </p>
         </Section>
 
@@ -277,7 +313,13 @@ export function PlaybookPage() {
             Failure blocks import, does not push the contribution fork, and does not open an
             upstream PR. The workflow comments the internal PR with suggested{" "}
             <code>Uplink-Depends-On</code> lines. Init with <code>--forge ghec</code> installs{" "}
-            <code>templates/ghec/.github/workflows/uplink-preflight.yml</code>; make it a required check.
+            <a
+              href={`${GITHUB_BLOB}/templates/ghec/.github/workflows/uplink-preflight.yml`}
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              uplink-preflight.yml
+            </a>
+            ; make it a required check.
             Set Actions variable <code>UPLINK_PREFLIGHT</code> to the command that must pass for a
             contribution (for example <code>npm test</code>).
           </p>
@@ -291,8 +333,13 @@ export function PlaybookPage() {
               <code>----- Uplink: internal below this line -----</code> in the body. Tickets and{" "}
               <code>Uplink-Export-Author</code> go below the cutoff.{" "}
               <code>git uplink init --forge ghec</code> installs{" "}
-              <code>templates/github/pull_request_template.md</code> as{" "}
-              <code>.github/pull_request_template.md</code>. HTML comments are visible while
+              <a
+                href={`${GITHUB_BLOB}/templates/github/pull_request_template.md`}
+                className="text-primary underline-offset-4 hover:underline"
+              >
+                pull_request_template.md
+              </a>{" "}
+              as <code>.github/pull_request_template.md</code>. HTML comments are visible while
               writing the PR and are stripped on import. Git commit logs are not concatenated.
             </li>
             <li>
@@ -319,7 +366,7 @@ export function PlaybookPage() {
               When legal signs off, an operator dispatches <code>Uplink submit</code>. IP approves
               the <code>to-upstream</code> Environment on the waiting run. The same workflow then{" "}
               <code>git uplink approve</code> and <code>git uplink submit</code>. Submit is the first time
-              bytes leave EMU.
+              bytes leave the private forge.
             </li>
           </ol>
           <p>
@@ -386,7 +433,7 @@ export function PlaybookPage() {
           </p>
         </Section>
 
-        <Section title="Credentials on GHEC EMU">
+        <Section title="Credentials on the GitHub-family pack">
           <p>
             Use three isolated roles. On Actions, <code>origin</code> uses{" "}
             <code>UPLINK_INTERNAL_TOKEN</code> (PAT or a minted App token). Public{" "}
@@ -399,21 +446,21 @@ export function PlaybookPage() {
           </p>
           <p>
             Prefer a GitHub App registered on public github.com for contrib: install it on the
-            private fork (contents: write) and the public parent (pull requests: write, contents:
+            contribution fork (contents: write) and the public parent (pull requests: write, contents:
             read). Store the App ID and private key on the <code>to-upstream</code> environment only. Mint
             a one-hour installation token in Actions with{" "}
-            <code>actions/create-github-app-token</code> as <code>UPLINK_CONTRIB_TOKEN</code>. An
-            EMU-created App may be enterprise-scoped and unable to talk to repositories outside the
-            enterprise, so do not assume the company can register this App from an EMU admin
-            account. Upstream, or a non-EMU admin, should own it. A separate internal App (or PAT)
-            lives as repo secrets (contents and workflows write) so sync can force-push
-            company <code>main</code>{" "}
+            <code>actions/create-github-app-token</code> as <code>UPLINK_CONTRIB_TOKEN</code>. On
+            GHEC with EMU, an EMU-created App may be enterprise-scoped and unable to talk to
+            repositories outside the enterprise, so do not assume the company can register this App
+            from an EMU admin account. Upstream, or a non-EMU admin, should own it. A separate
+            internal App (or PAT) lives as repo secrets (contents and workflows write) so sync can
+            force-push company <code>main</code>{" "}
             without holding fork-write creds. A third read-only upstream App or PAT is a repo
             secret so hourly sync can fetch github.com without the contrib write App.
           </p>
           <p>
             A machine-user fine-grained PAT also works per role. It is worse to rotate and is tied
-            to a person. Use it only if the matching App cannot be installed. EMU{" "}
+            to a person. Use it only if the matching App cannot be installed. The company-repo{" "}
             <code>GITHUB_TOKEN</code> stays for <code>gh</code> on the company repo (issues,
             comments). Sync and resolve check out with the internal token so shell origin
             git can push workflow files. <code>git uplink</code> does not use{" "}
@@ -435,7 +482,9 @@ export function PlaybookPage() {
         <Section title="What to install">
           <ul>
             <li>
-              This crate: the <code>git-uplink</code> binary, the git engine, this operator dashboard (`git uplink web-ui`), and <code>way-of-working.md</code> (developer stories).
+              This crate: the <code>git-uplink</code> binary, the git engine,{" "}
+              <code>git uplink web-ui</code> (local queue for this checkout), and{" "}
+              <code>way-of-working.md</code> (developer stories on this site).
             </li>
             <li>
               Run <code>git uplink init --upstream … --contrib … --forge ghec</code> in the
@@ -452,8 +501,8 @@ export function PlaybookPage() {
             </li>
             <li>
               Optional: Private Mirrors App if you later want a company-owned public fork as well.
-              It is complementary, not a substitute, and weaker for secrecy than the
-              upstream-owned fork you already chose.
+              It is complementary, not a substitute, and weaker for secrecy than keeping work on
+              the private forge until submit.
             </li>
           </ul>
         </Section>

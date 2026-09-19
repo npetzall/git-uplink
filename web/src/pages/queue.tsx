@@ -75,9 +75,11 @@ export function QueuePage() {
       <div className="mb-6 max-w-3xl space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">This checkout</h1>
         <p className="text-muted-foreground">
-          Live queue from the directory where you ran <code className="rounded bg-muted px-1.5">git uplink web-ui</code>.
-          The lab on this dashboard is a walkthrough; this page is the real <code className="rounded bg-muted px-1.5">.uplink/queue.json</code> from <code className="rounded bg-muted px-1.5">uplink/state</code>.
-          Apply order is tooling, then upstream, then internal last.
+          Live queue from the directory where you ran{" "}
+          <code className="rounded bg-muted px-1.5">git uplink web-ui</code>. This is{" "}
+          <code className="rounded bg-muted px-1.5">.uplink/queue.json</code> from{" "}
+          <code className="rounded bg-muted px-1.5">uplink/state</code>. Apply order is tooling, then
+          upstream, then internal last. The public lab and playbook live on the project site.
         </p>
       </div>
 

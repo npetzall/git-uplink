@@ -17,7 +17,7 @@ Each job’s first `git uplink` command is `git uplink init`, which fetches `ori
 
 Sync and resolve mint `UPLINK_INTERNAL_TOKEN` first and pass it to `actions/checkout`, so shell `git fetch` / `git push` of **origin** can include `.github/workflows` (GitHub rejects `GITHUB_TOKEN` for those files). Other jobs still persist `GITHUB_TOKEN` on checkout. `git uplink` blanks the checkout extraheader and authenticates by remote (`UPLINK_INTERNAL_*` for origin, `UPLINK_UPSTREAM_*` for public upstream fetch, `UPLINK_CONTRIB_*` for contrib force-push). `GITHUB_TOKEN` is `GH_TOKEN` for `gh` on the company repo (issues, PR comments, dispatching submit). It cannot open the public pull request. Import/sync/resolve/submit mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write.
 
-## Two gates
+## Workflows
 
 - **Prepare** (`uplink-prepare.yml`) — on every PR to `main`. Uses the PR title and body as the single commit message, strips HTML comments, keeps the cutoff on company main, rewrites author, scans for company keywords / internal emails, writes `GITHUB_STEP_SUMMARY`, and the workflow posts the report with `gh pr comment`. Required check.
 - **Preflight** (`uplink-preflight.yml`) — required check on PRs to `main` except `uplink:internal-only`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines, then onto tooling + queued upstream (internal omitted), then runs `UPLINK_PREFLIGHT`. Failure prints a comment body; the workflow posts it with `gh pr comment`. Do not merge until it is green.
@@ -44,7 +44,7 @@ Import and resolve share the Actions concurrency group `uplink-mutate` at workfl
 
 ## to-upstream environment (contribution / IP gate)
 
-Yes: on GitHub Enterprise Cloud, contribution approval should be a **GitHub Environment**, not a second homegrown checkbox. Name it `to-upstream`. Required reviewers are IP/legal. After they approve the waiting deployment, the same workflow records the receipt and submits to the upstream-owned private fork.
+Yes: on GitHub Enterprise Cloud, contribution approval should be a **GitHub Environment**, not a second homegrown checkbox. Name it `to-upstream`. Required reviewers are IP/legal. After they approve the waiting deployment, the same workflow records the receipt and submits to the public contribution fork.
 
 This is the documented option. Use it instead of asking an operator to run `git uplink approve` by hand.
 
@@ -67,7 +67,7 @@ The dispatcher (`workflow_dispatch` actor) is **not** the IP approver. GitHub re
 
 ### Create the environment
 
-In the company product repo (EMU):
+In the company product repo (private forge; GHEC EMU is one implementation):
 
 1. Settings → Environments → New environment → name **`to-upstream`** (exact name; the workflow references `environment: to-upstream`).
 2. **Required reviewers** — add the IP/legal team (or named reviewers). Turn on **Prevent self-review**.
@@ -83,7 +83,7 @@ In the company product repo (EMU):
 | `UPLINK_INTERNAL_APP_ID` / `UPLINK_INTERNAL_APP_PRIVATE_KEY` | When `UPLINK_INTERNAL_AUTH=app`. Install with contents + workflows write |
 | `UPLINK_UPSTREAM_TOKEN` | Authenticated `git fetch` of public upstream (rate limits) when `UPLINK_UPSTREAM_AUTH=pat` |
 | `UPLINK_UPSTREAM_APP_ID` / `UPLINK_UPSTREAM_APP_PRIVATE_KEY` | When `UPLINK_UPSTREAM_AUTH=app` |
-| `UPLINK_UPSTREAM_OWNER` | Public GitHub org that owns the parent (and usually the private fork) |
+| `UPLINK_UPSTREAM_OWNER` | Public GitHub org that owns the parent (and usually the contribution fork) |
 | `UPLINK_UPSTREAM_REPO` | Public parent repository name (required for upstream `app` mint) |
 
 Scope upstream as **read-only** on the public parent (contents: read). Do not give this role contrib write.
@@ -95,17 +95,17 @@ Scope upstream as **read-only** on the public parent (contents: read). Do not gi
 | `UPLINK_CONTRIB_TOKEN` | Contrib force-push and `GH_TOKEN` for `gh pr create` when `UPLINK_CONTRIB_AUTH=pat` |
 | `UPLINK_CONTRIB_APP_ID` | GitHub App id (registered on public github.com) |
 | `UPLINK_CONTRIB_APP_PRIVATE_KEY` | App private key |
-| `UPLINK_CONTRIB_REPO` | Repository name of the private fork |
+| `UPLINK_CONTRIB_REPO` | Repository name of the public contribution fork |
 
-The contrib App must be installed on the private fork (contents: write) and on the public parent (pull requests: write, contents: read). Do not register that App from an EMU account if the App would then be enterprise-scoped and unable to see public github.com repositories.
+The contrib App must be installed on the contribution fork (contents: write) and on the public parent (pull requests: write, contents: read). Do not register that App from an EMU account if the App would then be enterprise-scoped and unable to see public github.com repositories.
 
 `uplink-sync.yml` fetches public `upstream` over git with `UPLINK_UPSTREAM_*` and classifies new commits against the queue (trailer / patch-id). Flow-back of our patches updates `uplink/upstream` immediately. Foreign commits wait on Environment **`from-upstream`** (review gate only; do not put `UPLINK_INTERNAL_*` there). It does **not** mint the contrib write App. If hourly sync later treats the GitHub PR as merged via the API, that call uses `UPLINK_UPSTREAM_TOKEN` (read on the public parent; same token as authenticated `git fetch`).
 
-EMU `GITHUB_TOKEN` is still used for `gh issue create` / `gh pr comment` on the company repo. Sync and resolve shell origin git uses the persisted internal token; other jobs still use checkout’s `GITHUB_TOKEN`. It cannot open the public pull request. `git uplink` does not use it as git transport.
+The company-repo `GITHUB_TOKEN` (on GHEC EMU, the enterprise token) is still used for `gh issue create` / `gh pr comment` on the company repo. Sync and resolve shell origin git uses the persisted internal token; other jobs still use checkout’s `GITHUB_TOKEN`. It cannot open the public pull request. `git uplink` does not use it as git transport.
 
 ### Ruleset so reports can be committed
 
-The packet job **fast-forwards** a commit of `.uplink/reports/<id>/prepare.md` on `uplink/state` (not a force-push). Import records the patch on `uplink/state` after the PR merge; it does not rewrite `main`. Sync force-updates `main` only for an upstream rebuild. Allow **GitHub Actions** (`GITHUB_TOKEN` on jobs that still check out with it) and the **internal** Uplink bot (`UPLINK_INTERNAL_*` for `git uplink` origin transport, and for sync/resolve shell origin push) to push:
+The packet job **fast-forwards** a commit of `.uplink/reports/<id>/prepare.md` on `uplink/state` (not a force-push). Import records the patch on `uplink/state` after the PR merge. Internal-only import leaves `main` at the merge tree. Upstream import rebuilds `tooling → upstream[] → internal[]` and publishes rewritten `main`. Sync force-updates `main` when an upstream rebuild is required. Allow **GitHub Actions** (`GITHUB_TOKEN` on jobs that still check out with it) and the **internal** Uplink bot (`UPLINK_INTERNAL_*` for `git uplink` origin transport, and for sync/resolve shell origin push) to push:
 
 - Humans still require a pull request to `main`.
 - Actions may bypass to fast-forward `uplink/state`, and to force-push `main` when upstream (or drop/resolve) requires a replay.
@@ -133,7 +133,7 @@ approval.md committed; git uplink approve; git uplink submit
 gh pr create (or reuse existing URL); git uplink submitted
         │
         ▼
-fork branch + public PR (first bytes leaving EMU)
+fork branch + public PR (first bytes leaving the private forge)
 
 If a submitted patch later conflicts, resolve sets amended and
 dispatches this workflow again. The packet leads with the delta;
