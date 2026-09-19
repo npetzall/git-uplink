@@ -5,31 +5,37 @@ import { GITHUB_BLOB } from "../lib/links";
 
 const STORIES = [
   {
+    scenario: "solo-fix",
     href: `${GITHUB_BLOB}/examples/github/stories/01-solo-fix.md`,
     title: "01 — Solo fix",
     body: "Asha SHA-256: PR, import, to-upstream submit, upstream merge, drop-on-merge.",
   },
   {
+    scenario: "parallel-independent",
     href: `${GITHUB_BLOB}/examples/github/stories/02-parallel-independent.md`,
     title: "02 — Parallel independent",
     body: "Asha hash + Ben TTL; merge Ben first; Asha stays queued.",
   },
   {
+    scenario: "stacked-depends-on",
     href: `${GITHUB_BLOB}/examples/github/stories/03-stacked-depends-on.md`,
     title: "03 — Stacked depends-on",
     body: "Ben log needs Asha; preflight without the trailer; submit order.",
   },
   {
+    scenario: "upstream-conflict",
     href: `${GITHUB_BLOB}/examples/github/stories/04-upstream-conflict.md`,
     title: "04 — Upstream conflict",
     body: "Sync conflict issue, resolve branch, rebuild.",
   },
   {
+    scenario: "cam-two-deps",
     href: `${GITHUB_BLOB}/examples/github/stories/05-cam-two-deps.md`,
     title: "05 — Cam on two siblings",
     body: "Cam depends on Asha and Ben; wait until both merge before submitting Cam.",
   },
   {
+    scenario: "internal-only",
     href: `${GITHUB_BLOB}/examples/github/stories/06-internal-only.md`,
     title: "06 — Internal-only",
     body: "Telemetry patch never goes through to-upstream / submit.",
@@ -46,11 +52,11 @@ export function ExamplesPage() {
           <p className="text-lg leading-8 text-muted-foreground">
             <code className="rounded bg-muted px-1.5 py-0.5 text-[15px] text-foreground">examples/github/</code> is a
             walkthrough on three repositories. You apply patches, open PRs, and let Actions import, submit, and
-            sync. The{" "}
+            sync.             The{" "}
             <Link to="/lab" className="text-primary underline-offset-4 hover:underline">
               live lab
             </Link>{" "}
-            is the same lifecycle in the browser, without those remotes.
+            hosts the same stories in the browser, with a Manual vs CI toggle for the commands.
           </p>
         </header>
 
@@ -84,12 +90,22 @@ export function ExamplesPage() {
               <Card key={story.title}>
                 <CardHeader>
                   <CardTitle className="text-base">
-                    <a href={story.href} className="hover:text-primary">
+                    <Link
+                      to={`/lab?scenario=${story.scenario}`}
+                      className="hover:text-primary"
+                    >
                       {story.title}
-                    </a>
+                    </Link>
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="text-sm leading-6 text-muted-foreground">{story.body}</CardContent>
+                <CardContent className="space-y-2 text-sm leading-6 text-muted-foreground">
+                  <p>{story.body}</p>
+                  <p>
+                    <a href={story.href} className="text-primary underline-offset-4 hover:underline">
+                      Story on GitHub
+                    </a>
+                  </p>
+                </CardContent>
               </Card>
             ))}
           </div>

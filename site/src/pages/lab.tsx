@@ -8,10 +8,9 @@ export function LabPage() {
         <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">Lab</p>
         <h1 className="text-4xl font-semibold tracking-tight">Live lab</h1>
         <p className="text-lg leading-8 text-muted-foreground">
-          Same lifecycle the git uplink engine tests against real git: carry patches, stack on
-          unmerged work, keep an internal-only escape hatch, export after approval, drop on merge so
-          a later upstream fix survives, then walk a sync conflict through checkout, resolve, and a
-          second to-upstream approval before the amended patch reaches the fork.
+          Pick a scenario and step through the same lifecycle the git uplink engine tests against
+          real git. Toggle Manual to see every CLI command you would type, or CI for only the git
+          uplink (and gh) lines the GHEC workflows run.
         </p>
       </div>
       <LabClient />
