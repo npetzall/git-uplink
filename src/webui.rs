@@ -129,15 +129,18 @@ pub fn has_embedded_index() -> bool {
     Assets::get("index.html").is_some()
 }
 
-pub async fn serve(repo: PathBuf, addr: SocketAddr, open_browser: bool) -> std::io::Result<()> {
-    let state = Arc::new(AppState { repo: repo.clone() });
-    let app = Router::new()
+fn router(state: Arc<AppState>) -> Router {
+    Router::new()
         .route("/api/status", get(status))
         .route("/api/refresh", post(refresh))
-        .route("/api/patches/:id", get(patch_detail))
+        .route("/api/patches/{id}", get(patch_detail))
         .route("/api/file", get(file_at))
         .fallback(static_file)
-        .with_state(state);
+        .with_state(state)
+}
+
+pub async fn serve(repo: PathBuf, addr: SocketAddr, open_browser: bool) -> std::io::Result<()> {
+    let app = router(Arc::new(AppState { repo: repo.clone() }));
 
     let listener = TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
@@ -515,4 +518,41 @@ fn file_response(path: &str, bytes: &[u8]) -> Response {
         .header(header::CONTENT_TYPE, mime.as_ref())
         .body(Body::from(bytes.to_vec()))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use axum::http::Request;
+    use tower::util::ServiceExt;
+
+    #[tokio::test]
+    async fn patch_detail_route_captures_id() {
+        let app = router(Arc::new(AppState {
+            repo: PathBuf::from("/tmp"),
+        }));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/patches/not-a-real-patch")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert!(
+            content_type.starts_with("application/json"),
+            "expected JSON from the patch handler, got {content_type:?}"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["present"], false);
+    }
 }

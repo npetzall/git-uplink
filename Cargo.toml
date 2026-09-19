@@ -17,20 +17,21 @@ name = "git_uplink"
 path = "src/lib.rs"
 
 [dependencies]
-chrono = { version = "=0.4.39", default-features = false, features = ["clock", "std"] }
-clap = { version = "=4.5.23", features = ["derive", "env"] }
-regex = "=1.11.1"
-rust-embed = "=8.9.0"
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+clap = { version = "=4.6.7", features = ["derive", "env"] }
+regex = "=1.13.1"
+rust-embed = "=8.11.0"
 rust-embed-impl = "=8.9.0"
-rust-embed-utils = "=8.9.0"
-serde = { version = "=1.0.217", features = ["derive"] }
-serde_json = "=1.0.135"
-thiserror = "=2.0.11"
-tokio = { version = "=1.40.0", features = ["macros", "net", "rt-multi-thread", "signal"] }
-uuid = { version = "=1.11.0", features = ["v4"] }
-mime_guess = "=2.0.4"
-axum = { version = "=0.7.7", features = ["json"] }
-ratatui = { version = "=0.29.0", default-features = false, features = ["crossterm"] }
+rust-embed-utils = "=8.12.0"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+thiserror = "=2.0.20"
+tokio = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+uuid = { version = "=1.26.1", features = ["v4"] }
+mime_guess = "=2.0.5"
+axum = { version = "=0.8.9", features = ["json"] }
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 
 [dev-dependencies]
-tempfile = "=3.14.0"
+tempfile = "=3.27.0"
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }
