@@ -5,7 +5,7 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
-    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QUEUE_VERSION, QueueConfig,
+    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QueueConfig,
     QueueState, RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
     accept_upstream, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
     format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
@@ -275,7 +275,7 @@ fn init_puts_uplink_on_the_orphan_state_branch_not_main() {
         &["show", &format!("{STATE_BRANCH}:.uplink/queue.json")],
     )
     .unwrap();
-    assert!(stored.contains("\"version\": 2"));
+    assert!(stored.contains("\"version\": 1"));
 }
 
 fn init_with_recorded_urls(world: &World) -> QueueState {
@@ -1326,26 +1326,6 @@ fn rebuild_push_publishes_state_and_main() {
     let local_main = rev(&world.company);
     assert_eq!(remote_main, local_main);
     git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap();
-}
-
-#[test]
-fn queue_config_reads_legacy_company_branch_alias() {
-    let raw = r#"{
-      "version": 1,
-      "config": {
-        "upstreamRemote": "upstream",
-        "upstreamBranch": "main",
-        "contribRemote": "contrib",
-        "companyBranch": "release",
-        "trailerKey": "Uplink-Patch-Id"
-      },
-      "patches": []
-    }"#;
-    let queue: QueueState = serde_json::from_str(raw).unwrap();
-    assert_eq!(queue.config.internal_branch, "release");
-    let out = serde_json::to_string(&queue).unwrap();
-    assert!(out.contains("internalBranch"));
-    assert!(!out.contains("companyBranch"));
 }
 
 #[test]
@@ -3188,7 +3168,7 @@ fn status_reports_uncommitted_queue() {
     let _origin = publish_origin(company);
     let path = company.join(".uplink/queue.json");
     let raw = fs::read_to_string(&path).unwrap();
-    fs::write(&path, raw.replace("\"version\": 2", "\"version\": 2 ")).unwrap();
+    fs::write(&path, raw.replace("\"version\": 1", "\"version\": 1 ")).unwrap();
     let snapshot = status_snapshot(company).unwrap();
     assert!(
         snapshot
@@ -4203,81 +4183,6 @@ fn conflicted_records_the_issue_on_the_patch() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("will not retarget"), "{err}");
-}
-
-#[test]
-fn v1_queue_json_migrates_mixed_intents_into_layers() {
-    let raw = r#"{
-      "version": 1,
-      "config": {
-        "upstreamRemote": "upstream",
-        "upstreamBranch": "main",
-        "contribRemote": "contrib",
-        "internalBranch": "main",
-        "trailerKey": "Uplink-Patch-Id"
-      },
-      "patches": [
-        {
-          "id": "upl_internal_first",
-          "title": "Vendor telemetry",
-          "intent": "internal-only",
-          "status": "queued",
-          "dependsOn": [],
-          "createdAt": "t",
-          "updatedAt": "t",
-          "source": {},
-          "events": []
-        },
-        {
-          "id": "upl_tool",
-          "title": "Uplink tooling",
-          "intent": "internal-only",
-          "kind": "uplink-tooling",
-          "status": "queued",
-          "dependsOn": [],
-          "createdAt": "t",
-          "updatedAt": "t",
-          "source": {},
-          "events": []
-        },
-        {
-          "id": "upl_upstream",
-          "title": "Use SHA-256",
-          "intent": "upstream",
-          "status": "queued",
-          "dependsOn": [],
-          "createdAt": "t",
-          "updatedAt": "t",
-          "source": {},
-          "events": []
-        }
-      ]
-    }"#;
-    let queue: QueueState = serde_json::from_str(raw).unwrap();
-    assert_eq!(queue.version, QUEUE_VERSION);
-    assert_eq!(queue.tooling.as_ref().unwrap().id, "upl_tool");
-    assert_eq!(
-        queue
-            .upstream
-            .iter()
-            .map(|p| p.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["upl_upstream"]
-    );
-    assert_eq!(
-        queue
-            .internal
-            .iter()
-            .map(|p| p.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["upl_internal_first"]
-    );
-    let stored = serde_json::to_string(&queue).unwrap();
-    assert!(
-        stored.contains("\"version\":2") || stored.contains("\"version\": 2"),
-        "{stored}"
-    );
-    assert!(!stored.contains("intent"));
 }
 
 #[test]

@@ -2,10 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::types::{
-    PATCH_DIR, Patch, PatchEvent, PatchLayer, QUEUE_PATH, QueueConfig, QueueState,
-    TOOLING_PATCH_KIND,
-};
+use crate::types::{PATCH_DIR, Patch, PatchEvent, PatchLayer, QUEUE_PATH, QueueConfig, QueueState};
 
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -28,8 +25,7 @@ pub fn read_queue(repo: &Path) -> Result<QueueState> {
         crate::repo::ensure_state_worktree(repo)?;
     }
     let raw = fs::read_to_string(repo.join(QUEUE_PATH))?;
-    let mut queue: QueueState = serde_json::from_str(&raw)?;
-    lift_legacy_tooling(&mut queue, repo)?;
+    let queue: QueueState = serde_json::from_str(&raw)?;
     Ok(queue)
 }
 
@@ -38,42 +34,6 @@ pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
     let body = format!("{}\n", serde_json::to_string_pretty(queue)?);
     fs::write(repo.join(QUEUE_PATH), body)?;
     Ok(())
-}
-
-fn lift_legacy_tooling(queue: &mut QueueState, repo: &Path) -> Result<()> {
-    if queue.tooling.is_some() {
-        return Ok(());
-    }
-    let id = match find_legacy_tooling_id(queue, repo)? {
-        Some(id) => id,
-        None => return Ok(()),
-    };
-    if let Some(idx) = queue.internal.iter().position(|p| p.id == id) {
-        queue.tooling = Some(queue.internal.remove(idx));
-    } else if let Some(idx) = queue.upstream.iter().position(|p| p.id == id) {
-        queue.tooling = Some(queue.upstream.remove(idx));
-    }
-    Ok(())
-}
-
-fn find_legacy_tooling_id(queue: &QueueState, repo: &Path) -> Result<Option<String>> {
-    if let Some(patch) = queue
-        .all_patches()
-        .find(|p| p.kind.as_deref() == Some(TOOLING_PATCH_KIND))
-    {
-        return Ok(Some(patch.id.clone()));
-    }
-    for patch in queue.all_patches() {
-        let path = repo.join(format!("{PATCH_DIR}/{}.patch", patch.id));
-        if !path.is_file() {
-            continue;
-        }
-        let contents = fs::read_to_string(&path)?;
-        if contents.contains(".github/workflows/uplink-") {
-            return Ok(Some(patch.id.clone()));
-        }
-    }
-    Ok(None)
 }
 
 pub fn active_upstream(queue: &QueueState) -> Vec<&Patch> {

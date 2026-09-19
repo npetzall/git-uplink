@@ -80,10 +80,6 @@ enum Commands {
         pr_url: Option<String>,
         #[arg(long = "depends-on")]
         depends_on: Vec<String>,
-        #[arg(long, hide = true)]
-        push: bool,
-        #[arg(long = "push-remote", hide = true)]
-        push_remote: Option<String>,
     },
     /// Publish local uplink/state, restacking unique patches if origin moved.
     Push {
@@ -567,8 +563,6 @@ fn run() -> Result<(), Error> {
             pr,
             pr_url,
             depends_on,
-            push,
-            push_remote,
         } => {
             let message = read_commit_message(message, message_file, &title)?;
             let opts = AddPatchOpts {
@@ -596,18 +590,6 @@ fn run() -> Result<(), Error> {
                         patch.status,
                         patch.title
                     );
-                    if push {
-                        let result = push_queue(
-                            &repo,
-                            PushOpts {
-                                push_remote: Some(push_remote.unwrap_or_else(|| "origin".into())),
-                            },
-                        )?;
-                        println!(
-                            "{} {} to {} at {}",
-                            result.action, result.branch, result.remote, result.sha
-                        );
-                    }
                 }
                 Err(err) => {
                     print_failure_comment(&err);

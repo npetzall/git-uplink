@@ -6,7 +6,7 @@ pub const STATE_BRANCH: &str = "uplink/state";
 pub const DEFAULT_CUTOFF: &str = "----- Uplink: internal below this line -----";
 pub const TOOLING_PATCH_KIND: &str = "uplink-tooling";
 pub const TOOLING_PATCH_TITLE: &str = "Uplink tooling";
-pub const QUEUE_VERSION: u32 = 2;
+pub const QUEUE_VERSION: u32 = 1;
 
 fn default_state_branch() -> String {
     STATE_BRANCH.to_string()
@@ -244,7 +244,6 @@ pub struct QueueConfig {
     pub upstream_remote: String,
     pub upstream_branch: String,
     pub contrib_remote: String,
-    #[serde(alias = "companyBranch")]
     pub internal_branch: String,
     #[serde(default, skip_serializing_if = "skip_empty_option")]
     pub upstream_url: Option<String>,
@@ -411,112 +410,23 @@ struct QueueStateWire {
     #[serde(rename = "pendingUpstream", default)]
     pending_upstream: Option<PendingUpstream>,
     #[serde(default)]
-    patches: Vec<PatchWire>,
+    tooling: Option<Patch>,
     #[serde(default)]
-    tooling: Option<PatchWire>,
+    upstream: Vec<Patch>,
     #[serde(default)]
-    upstream: Vec<PatchWire>,
-    #[serde(default)]
-    internal: Vec<PatchWire>,
+    internal: Vec<Patch>,
 }
 
 impl QueueStateWire {
     fn into_queue(self) -> QueueState {
-        let layered =
-            self.tooling.is_some() || !self.upstream.is_empty() || !self.internal.is_empty();
-        let (tooling, upstream, internal) = if layered {
-            (
-                self.tooling.map(Patch::from),
-                self.upstream.into_iter().map(Patch::from).collect(),
-                self.internal.into_iter().map(Patch::from).collect(),
-            )
-        } else {
-            migrate_v1_patches(self.patches)
-        };
         QueueState {
             version: QUEUE_VERSION,
             config: self.config,
             last_sync: self.last_sync,
             pending_upstream: self.pending_upstream,
-            tooling,
-            upstream,
-            internal,
-        }
-    }
-}
-
-fn migrate_v1_patches(patches: Vec<PatchWire>) -> (Option<Patch>, Vec<Patch>, Vec<Patch>) {
-    let mut tooling = None;
-    let mut upstream = Vec::new();
-    let mut internal = Vec::new();
-    for raw in patches {
-        let is_tooling = raw.kind.as_deref() == Some(TOOLING_PATCH_KIND);
-        let is_internal = raw.intent.as_deref() == Some("internal-only");
-        let patch = Patch::from(raw);
-        if is_tooling && tooling.is_none() {
-            tooling = Some(patch);
-        } else if is_internal {
-            internal.push(patch);
-        } else {
-            upstream.push(patch);
-        }
-    }
-    (tooling, upstream, internal)
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PatchWire {
-    id: String,
-    title: String,
-    #[serde(default)]
-    commit_message: String,
-    #[serde(default)]
-    intent: Option<String>,
-    status: String,
-    #[serde(default)]
-    depends_on: Vec<String>,
-    created_at: String,
-    updated_at: String,
-    #[serde(default)]
-    patch_id_stable: Option<String>,
-    #[serde(default)]
-    source: PatchSource,
-    #[serde(default)]
-    prepare: Option<PrepareReport>,
-    #[serde(default)]
-    upstream: Option<PatchUpstream>,
-    #[serde(default)]
-    merged: Option<PatchMerged>,
-    #[serde(default)]
-    conflict: Option<PatchConflict>,
-    #[serde(default)]
-    approvals: Vec<PatchApproval>,
-    #[serde(default)]
-    events: Vec<PatchEvent>,
-    #[serde(default)]
-    kind: Option<String>,
-}
-
-impl From<PatchWire> for Patch {
-    fn from(raw: PatchWire) -> Self {
-        Self {
-            id: raw.id,
-            title: raw.title,
-            commit_message: raw.commit_message,
-            status: raw.status,
-            depends_on: raw.depends_on,
-            created_at: raw.created_at,
-            updated_at: raw.updated_at,
-            patch_id_stable: raw.patch_id_stable,
-            source: raw.source,
-            prepare: raw.prepare,
-            upstream: raw.upstream,
-            merged: raw.merged,
-            conflict: raw.conflict,
-            approvals: raw.approvals,
-            events: raw.events,
-            kind: raw.kind,
+            tooling: self.tooling,
+            upstream: self.upstream,
+            internal: self.internal,
         }
     }
 }
