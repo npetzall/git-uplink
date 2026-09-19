@@ -46,7 +46,7 @@ git uplink reset
 git uplink status
 ```
 
-The telemetry patch is `queued` with intent `internal-only`. Company `main` calls `companyTelemetry()`.
+The telemetry patch is `queued` on the **internal** queue (label `uplink:internal-only`). Company `main` calls `companyTelemetry()`.
 
 ## Submit is refused
 

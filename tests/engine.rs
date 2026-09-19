@@ -5,9 +5,9 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
-    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QueueConfig, QueueState,
-    RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, accept_upstream,
-    add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
+    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QUEUE_VERSION, QueueConfig,
+    QueueState, RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    accept_upstream, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
     format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
     init, init_repo, mark_merged, parse_depends_on, preflight_incoming_change, push_queue, rebuild,
     rebuild_with, record_conflict_issue, record_pull_request, report_paths, reset_from_origin,
@@ -275,7 +275,7 @@ fn init_puts_uplink_on_the_orphan_state_branch_not_main() {
         &["show", &format!("{STATE_BRANCH}:.uplink/queue.json")],
     )
     .unwrap();
-    assert!(stored.contains("\"version\": 1"));
+    assert!(stored.contains("\"version\": 2"));
 }
 
 fn init_with_recorded_urls(world: &World) -> QueueState {
@@ -390,10 +390,13 @@ fn init_records_remote_urls_and_internal_branch() {
     assert!(stored.contains("\"forge\": \"ghec\""));
     assert!(!stored.contains("companyBranch"));
     assert_eq!(queue.config.forge, Some(Forge::Ghec));
-    assert_eq!(queue.patches.len(), 1);
-    assert_eq!(queue.patches[0].kind.as_deref(), Some(TOOLING_PATCH_KIND));
-    assert_eq!(queue.patches[0].intent, "internal-only");
-    assert_eq!(queue.patches[0].title, TOOLING_PATCH_TITLE);
+    assert_eq!(queue.all_patches().count(), 1);
+    assert_eq!(
+        queue.patch_refs()[0].kind.as_deref(),
+        Some(TOOLING_PATCH_KIND)
+    );
+    assert!(queue.is_tooling(&queue.patch_refs()[0].id));
+    assert_eq!(queue.patch_refs()[0].title, TOOLING_PATCH_TITLE);
     assert!(
         world
             .company
@@ -759,8 +762,11 @@ fn init_rejects_forge_renames_on_an_existing_queue() {
 fn init_upgrade_refreshes_the_same_tooling_patch() {
     let world = setup_uninitialized();
     let queue = init_with_recorded_urls(&world);
-    let id = queue.patches[0].id.clone();
-    assert_eq!(queue.patches[0].kind.as_deref(), Some(TOOLING_PATCH_KIND));
+    let id = queue.patch_refs()[0].id.clone();
+    assert_eq!(
+        queue.patch_refs()[0].kind.as_deref(),
+        Some(TOOLING_PATCH_KIND)
+    );
 
     let original = git_ok(&world.company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
     git(
@@ -798,7 +804,7 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
     )
     .unwrap();
     let mut queue = git_uplink::read_queue(&world.company).unwrap();
-    queue.patches[0].patch_id_stable = Some("stale".into());
+    queue.tooling.as_mut().unwrap().patch_id_stable = Some("stale".into());
     git_uplink::write_queue(&world.company, &queue).unwrap();
     git_uplink::commit_queue(&world.company, "uplink: stale tooling patch").unwrap();
 
@@ -810,14 +816,14 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
         },
     )
     .unwrap();
-    assert_eq!(upgraded.patches.len(), 1);
-    assert_eq!(upgraded.patches[0].id, id);
+    assert_eq!(upgraded.all_patches().count(), 1);
+    assert_eq!(upgraded.patch_refs()[0].id, id);
     assert_eq!(
-        upgraded.patches[0].kind.as_deref(),
+        upgraded.patch_refs()[0].kind.as_deref(),
         Some(TOOLING_PATCH_KIND)
     );
     assert_ne!(
-        upgraded.patches[0].patch_id_stable.as_deref(),
+        upgraded.patch_refs()[0].patch_id_stable.as_deref(),
         Some("stale")
     );
     let prepare =
@@ -833,8 +839,8 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
 fn init_upgrade_is_a_noop_when_the_pack_matches() {
     let world = setup_uninitialized();
     let queue = init_with_recorded_urls(&world);
-    let id = queue.patches[0].id.clone();
-    let stable = queue.patches[0].patch_id_stable.clone();
+    let id = queue.patch_refs()[0].id.clone();
+    let stable = queue.patch_refs()[0].patch_id_stable.clone();
     let before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
     let upgraded = init(
         &world.company,
@@ -846,8 +852,8 @@ fn init_upgrade_is_a_noop_when_the_pack_matches() {
     .unwrap();
     let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
     assert_eq!(before, after);
-    assert_eq!(upgraded.patches[0].id, id);
-    assert_eq!(upgraded.patches[0].patch_id_stable, stable);
+    assert_eq!(upgraded.patch_refs()[0].id, id);
+    assert_eq!(upgraded.patch_refs()[0].patch_id_stable, stable);
 }
 
 #[test]
@@ -919,14 +925,17 @@ fn init_adopts_linear_history_without_moving_main() {
         ],
     );
     assert_eq!(rev(&world.company), main_before);
-    assert_eq!(queue.patches.len(), 3);
-    assert_eq!(queue.patches[0].kind.as_deref(), Some(TOOLING_PATCH_KIND));
-    assert_eq!(queue.patches[1].title, "Metrics");
-    assert_eq!(queue.patches[1].intent, "upstream");
-    assert_eq!(queue.patches[2].title, "Dashboards");
-    assert_eq!(queue.patches[2].intent, "internal-only");
+    assert_eq!(queue.all_patches().count(), 3);
+    assert_eq!(
+        queue.patch_refs()[0].kind.as_deref(),
+        Some(TOOLING_PATCH_KIND)
+    );
+    assert_eq!(queue.patch_refs()[1].title, "Metrics");
+    assert!(queue.is_upstream(&queue.patch_refs()[1].id));
+    assert_eq!(queue.patch_refs()[2].title, "Dashboards");
+    assert!(queue.is_internal(&queue.patch_refs()[2].id));
     assert!(
-        queue.patches[1]
+        queue.patch_refs()[1]
             .source
             .note
             .as_deref()
@@ -1101,12 +1110,12 @@ fn init_adopts_each_merge_commit_as_a_patch() {
             adopt_group(&[&m2], "Two", "upstream"),
         ],
     );
-    assert_eq!(queue.patches.len(), 3);
-    assert_eq!(queue.patches[1].title, "One");
-    assert_eq!(queue.patches[2].title, "Two");
+    assert_eq!(queue.all_patches().count(), 3);
+    assert_eq!(queue.patch_refs()[1].title, "One");
+    assert_eq!(queue.patch_refs()[2].title, "Two");
     assert_eq!(
-        queue.patches[2].depends_on,
-        vec![queue.patches[1].id.clone()]
+        queue.patch_refs()[2].depends_on,
+        vec![queue.patch_refs()[1].id.clone()]
     );
 }
 
@@ -1146,9 +1155,9 @@ fn init_adopts_mixed_merge_then_direct_commit() {
             adopt_group(&[&direct], "Hotfix", "upstream"),
         ],
     );
-    assert_eq!(queue.patches.len(), 3);
-    assert_eq!(queue.patches[1].title, "One");
-    assert_eq!(queue.patches[2].title, "Hotfix");
+    assert_eq!(queue.all_patches().count(), 3);
+    assert_eq!(queue.patch_refs()[1].title, "One");
+    assert_eq!(queue.patch_refs()[2].title, "Hotfix");
 }
 
 #[test]
@@ -1184,8 +1193,8 @@ fn init_skips_empty_first_parent_merge_in() {
     commit_all(&world.company, "real product change");
     let real = rev(&world.company);
     let queue = init_adopt(&world, vec![adopt_group(&[&real], "Real", "upstream")]);
-    assert_eq!(queue.patches.len(), 2);
-    assert_eq!(queue.patches[1].title, "Real");
+    assert_eq!(queue.all_patches().count(), 2);
+    assert_eq!(queue.patch_refs()[1].title, "Real");
 }
 
 #[test]
@@ -1340,9 +1349,28 @@ fn queue_config_reads_legacy_company_branch_alias() {
 }
 
 #[test]
-fn add_records_the_patch_on_state_without_moving_main() {
+fn add_records_the_patch_and_rebuilds_upstream_under_internal() {
     let world = setup_world();
     let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_all(company, "internal notes");
+    let internal = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let main_after_internal = git_ok(company, &["rev-parse", "main"]).unwrap();
     git(
         company,
         &["checkout", "-b", "feat/hash"],
@@ -1357,7 +1385,7 @@ fn add_records_the_patch_on_state_without_moving_main() {
     commit_all(company, "use sha256");
     let head_sha = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
     land_on_main(company, &head_sha);
-    let main_before = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let main_before_upstream = git_ok(company, &["rev-parse", "main"]).unwrap();
     let patch = add_patch(
         company,
         AddPatchOpts {
@@ -1368,11 +1396,27 @@ fn add_records_the_patch_on_state_without_moving_main() {
         },
     )
     .unwrap();
-    assert_eq!(
-        git_ok(company, &["rev-parse", "main"]).unwrap(),
-        main_before
-    );
+    let main_after = git_ok(company, &["rev-parse", "main"]).unwrap();
+    assert_ne!(main_after, main_before_upstream);
+    assert_ne!(main_after, main_after_internal);
     assert!(!tree_has_uplink(company, "main"));
+    let snapshot = status_snapshot(company).unwrap();
+    assert!(snapshot.queue.is_internal(&internal.id));
+    assert!(snapshot.queue.is_upstream(&patch.id));
+    assert!(
+        snapshot
+            .product_files
+            .get("NOTES.md")
+            .unwrap()
+            .contains("internal-notes")
+    );
+    assert!(
+        snapshot
+            .product_files
+            .get("src/tokens.js")
+            .unwrap()
+            .contains("sha256")
+    );
     let stored = git_ok(
         company,
         &[
@@ -1410,7 +1454,7 @@ fn add_refuses_when_the_change_is_not_on_main() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("not on company main yet"), "{err}");
-    assert_eq!(status_snapshot(company).unwrap().queue.patches.len(), 0);
+    assert!(status_snapshot(company).unwrap().queue.upstream.is_empty());
 }
 
 #[test]
@@ -1487,6 +1531,7 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
             depends_on: Vec::new(),
             message: None,
             preflight_command: None,
+            internal_only: false,
         },
     )
     .unwrap();
@@ -1620,6 +1665,7 @@ fn preflight_fetches_missing_from_and_head_from_origin() {
             depends_on: Vec::new(),
             message: None,
             preflight_command: None,
+            internal_only: false,
         },
     )
     .expect("preflight should fetch missing --from/--head from origin");
@@ -1641,6 +1687,7 @@ fn preflight_missing_revs_without_origin_fails_clearly() {
             depends_on: Vec::new(),
             message: None,
             preflight_command: None,
+            internal_only: false,
         },
     )
     .unwrap_err();
@@ -1671,6 +1718,7 @@ fn preflight_missing_revs_not_on_origin_fails_clearly() {
             depends_on: Vec::new(),
             message: None,
             preflight_command: None,
+            internal_only: false,
         },
     )
     .unwrap_err();
@@ -1844,9 +1892,9 @@ fn rebuilds_company_main_with_stacked_patches_including_internal_only() {
     assert!(tokens.contains("sha256"));
     assert!(tokens.contains("console.log(\"hash\")"));
     assert!(tokens.contains("companyTelemetry()"));
-    assert_eq!(internal.intent, "internal-only");
+    assert!(snapshot.queue.is_internal(&internal.id));
     assert_eq!(log_patch.depends_on, vec![hash_patch.id]);
-    assert_eq!(snapshot.queue.patches.len(), 3);
+    assert_eq!(snapshot.queue.all_patches().count(), 3);
 }
 
 #[test]
@@ -1933,8 +1981,7 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
     let snapshot = status_snapshot(company).unwrap();
     let merged = snapshot
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .find(|p| p.id == hash_patch.id)
         .unwrap();
     assert_eq!(merged.status, "merged");
@@ -2003,8 +2050,7 @@ fn sync_applies_flowed_back_commits_without_approval() {
     assert!(result.queue.pending_upstream.is_none());
     let merged = result
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .find(|p| p.id == hash_patch.id)
         .unwrap();
     assert_eq!(merged.status, "merged");
@@ -2109,10 +2155,10 @@ fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
     let result = sync(company).unwrap();
     assert!(result.needs_approval);
     assert!(result.flowed_back.iter().any(|id| id == &hash_patch.id));
-    assert_eq!(result.queue.patches[0].status, "queued");
+    assert_eq!(result.queue.patch_refs()[0].status, "queued");
     accept_upstream(company).unwrap();
     let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.queue.patches[0].status, "merged");
+    assert_eq!(snapshot.queue.patch_refs()[0].status, "merged");
     let changelog = snapshot.product_files.get("CHANGELOG.md").unwrap();
     assert!(changelog.contains("release note"));
 }
@@ -2152,11 +2198,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
     )
     .unwrap();
     let queued = sync_apply(company);
-    let conflicted = queued
-        .patches
-        .iter()
-        .find(|p| p.id == ttl_patch.id)
-        .unwrap();
+    let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(conflicted.status, "conflict");
     let conflict_branch = conflicted
         .conflict
@@ -2191,7 +2233,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
     resolve_conflict(company, &ttl_patch.id).unwrap();
 
     let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.queue.patches[0].status, "queued");
+    assert_eq!(snapshot.queue.patch_refs()[0].status, "queued");
     let tokens = snapshot.product_files.get("src/tokens.js").unwrap();
     assert!(tokens.contains("return 7200;"));
     assert!(!tokens.contains("return 1800;"));
@@ -2251,11 +2293,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     )
     .unwrap();
     let queued = sync_apply(company);
-    let conflicted = queued
-        .patches
-        .iter()
-        .find(|p| p.id == ttl_patch.id)
-        .unwrap();
+    let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(conflicted.status, "conflict");
     let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
     git(
@@ -2275,8 +2313,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     let after_resolve = status_snapshot(company).unwrap();
     let amended = after_resolve
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .find(|p| p.id == ttl_patch.id)
         .unwrap();
     assert_eq!(amended.status, "amended");
@@ -2346,7 +2383,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     )
     .unwrap();
     let again = sync_apply(company);
-    let conflicted = again.patches.iter().find(|p| p.id == ttl_patch.id).unwrap();
+    let conflicted = again.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(conflicted.status, "conflict");
     let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
     git(
@@ -2365,8 +2402,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     let third = status_snapshot(company).unwrap();
     let amended = third
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .find(|p| p.id == ttl_patch.id)
         .unwrap();
     assert_eq!(amended.status, "amended");
@@ -2439,12 +2475,11 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
     sync_apply(company);
 
     let queued = git_uplink::read_queue(company).unwrap();
-    let asha_conflicted = queued.patches.iter().find(|p| p.id == asha.id).unwrap();
+    let asha_conflicted = queued.all_patches().find(|p| p.id == asha.id).unwrap();
     assert_eq!(asha_conflicted.status, "conflict");
     assert_eq!(
         queued
-            .patches
-            .iter()
+            .all_patches()
             .find(|p| p.id == ben.id)
             .unwrap()
             .status,
@@ -2492,14 +2527,12 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
     let snapshot = status_snapshot(company).unwrap();
     let asha_after = snapshot
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .find(|p| p.id == asha.id)
         .unwrap();
     let ben_after = snapshot
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .find(|p| p.id == ben.id)
         .unwrap();
     assert_ne!(asha_after.status, "conflict");
@@ -2604,8 +2637,7 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
     assert_eq!(
         after
             .queue
-            .patches
-            .iter()
+            .all_patches()
             .find(|p| p.id == hash_patch.id)
             .unwrap()
             .status,
@@ -2655,7 +2687,7 @@ fn can_drop_an_internal_only_patch_from_the_company_build() {
             .unwrap()
             .contains("vendor")
     );
-    assert_eq!(snapshot.queue.patches[0].status, "dropped");
+    assert_eq!(snapshot.queue.patch_refs()[0].status, "dropped");
 }
 
 #[test]
@@ -2698,7 +2730,14 @@ fn imports_as_queued_not_contribution_approved() {
     )
     .unwrap();
     assert_eq!(again.id, patch.id);
-    assert_eq!(status_snapshot(company).unwrap().queue.patches.len(), 1);
+    assert_eq!(
+        status_snapshot(company)
+            .unwrap()
+            .queue
+            .all_patches()
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -2744,7 +2783,7 @@ fn merge_then_import_stays_queued_and_approvable() {
     assert!(!upstream_tokens.contains("return sha256(value);"));
     approve_patch(company, &patch.id).unwrap();
     assert_eq!(
-        status_snapshot(company).unwrap().queue.patches[0].status,
+        status_snapshot(company).unwrap().queue.patch_refs()[0].status,
         "approved"
     );
 }
@@ -2864,7 +2903,7 @@ fn serializes_two_adds_in_one_checkout_so_both_patches_survive() {
     handle_b.join().unwrap().unwrap();
 
     let snapshot = status_snapshot(&company).unwrap();
-    assert_eq!(snapshot.queue.patches.len(), 2);
+    assert_eq!(snapshot.queue.all_patches().count(), 2);
     assert!(
         snapshot
             .product_files
@@ -2999,8 +3038,7 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
     let snapshot = status_snapshot(&integrated).unwrap();
     let mut titles: Vec<_> = snapshot
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .map(|p| p.title.clone())
         .collect();
     titles.sort();
@@ -3084,7 +3122,7 @@ fn status_reports_ahead_after_local_add() {
     )
     .unwrap();
     let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.state.ahead, Some(1));
+    assert_eq!(snapshot.state.ahead, Some(2));
     assert_eq!(snapshot.state.behind, Some(0));
     assert!(
         snapshot.state.uncommitted.is_empty(),
@@ -3135,7 +3173,7 @@ fn status_reports_behind_when_origin_moved() {
         local_before
     );
     assert_eq!(snapshot.state.ahead, Some(0));
-    assert_eq!(snapshot.state.behind, Some(1));
+    assert_eq!(snapshot.state.behind, Some(2));
     assert!(
         snapshot.state.uncommitted.is_empty(),
         "{:?}",
@@ -3150,7 +3188,7 @@ fn status_reports_uncommitted_queue() {
     let _origin = publish_origin(company);
     let path = company.join(".uplink/queue.json");
     let raw = fs::read_to_string(&path).unwrap();
-    fs::write(&path, raw.replace("\"version\": 1", "\"version\": 1 ")).unwrap();
+    fs::write(&path, raw.replace("\"version\": 2", "\"version\": 2 ")).unwrap();
     let snapshot = status_snapshot(company).unwrap();
     assert!(
         snapshot
@@ -3192,7 +3230,8 @@ fn status_cli_table_or_json() {
     let text = String::from_utf8_lossy(&json.stdout);
     let value: serde_json::Value = serde_json::from_str(text.trim()).expect(&text);
     assert!(value.get("state").is_some(), "{text}");
-    assert!(value.get("patches").is_some(), "{text}");
+    assert!(value.get("upstream").is_some(), "{text}");
+    assert!(value.get("internal").is_some(), "{text}");
     assert!(value.get("counts").is_some(), "{text}");
     assert_eq!(value["state"]["ahead"], 0);
     assert_eq!(value["state"]["behind"], 0);
@@ -3260,8 +3299,7 @@ fn push_appends_local_only_patches_when_origin_moved() {
     let patch_titles: Vec<_> = status_snapshot(&integrated)
         .unwrap()
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .filter(|p| p.kind.is_none())
         .map(|p| p.title.clone())
         .collect();
@@ -3433,8 +3471,7 @@ fn push_skips_a_local_patch_whose_internal_pr_is_already_on_origin() {
     let titles: Vec<_> = status_snapshot(&ben)
         .unwrap()
         .queue
-        .patches
-        .iter()
+        .all_patches()
         .filter(|p| p.kind.is_none())
         .map(|p| p.title.clone())
         .collect();
@@ -3500,7 +3537,14 @@ fn refuses_import_when_a_stacked_change_does_not_declare_depends_on() {
         }
         other => panic!("expected preflight, got {other}"),
     }
-    assert_eq!(status_snapshot(company).unwrap().queue.patches.len(), 1);
+    assert_eq!(
+        status_snapshot(company)
+            .unwrap()
+            .queue
+            .all_patches()
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -3721,6 +3765,7 @@ fn incoming_preflight_reads_depends_on_from_the_message() {
                 hash_patch.id
             )),
             preflight_command: None,
+            internal_only: false,
         },
     )
     .unwrap();
@@ -3763,9 +3808,9 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     assert!(matches!(err, Err(Error::Preflight(_))));
 
     let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.queue.patches[0].status, "approved");
+    assert_eq!(snapshot.queue.patch_refs()[0].status, "approved");
     assert!(
-        snapshot.queue.patches[0]
+        snapshot.queue.patch_refs()[0]
             .upstream
             .as_ref()
             .and_then(|u| u.pr_number)
@@ -3809,9 +3854,9 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     assert!(patch.commit_message.contains(DEFAULT_CUTOFF));
 
     let company_msg = git_ok(company, &["log", "-1", "--format=%B", "main"]).unwrap();
-    assert!(company_msg.contains("wip: ignore this git log"));
-    assert!(!company_msg.contains("Replace SHA-1 in the default hasher."));
-    assert!(!company_msg.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
+    assert!(company_msg.contains("Use SHA-256 for tokens"));
+    assert!(company_msg.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
+    assert!(!company_msg.contains("wip: ignore this git log"));
 
     let stored =
         fs::read_to_string(company.join(format!(".uplink/patches/{}.patch", patch.id))).unwrap();
@@ -3866,8 +3911,8 @@ fn does_not_squash_git_commit_messages_on_import() {
     )
     .unwrap();
     let company_msg = git_ok(company, &["log", "-1", "--format=%B", "main"]).unwrap();
-    assert!(company_msg.contains("WIP second"));
-    assert!(!company_msg.contains("Use SHA-256 for tokens"));
+    assert!(company_msg.contains("Use SHA-256 for tokens"));
+    assert!(!company_msg.contains("WIP second"));
     assert_eq!(patch.commit_message, "Use SHA-256 for tokens");
 }
 
@@ -3940,7 +3985,14 @@ fn refuses_import_when_the_export_diff_names_the_company() {
     )
     .unwrap_err();
     assert!(matches!(err, Error::Prepare(_)));
-    assert_eq!(status_snapshot(company).unwrap().queue.patches.len(), 0);
+    assert_eq!(
+        status_snapshot(company)
+            .unwrap()
+            .queue
+            .all_patches()
+            .count(),
+        0
+    );
 }
 
 #[test]
@@ -4056,9 +4108,9 @@ fn submit_does_not_commit_queue_until_submitted() {
     approve_patch(company, &patch.id).unwrap();
     let exported = submit_patch(company, &patch.id).unwrap();
     let after_submit = status_snapshot(company).unwrap();
-    assert_eq!(after_submit.queue.patches[0].status, "approved");
+    assert_eq!(after_submit.queue.patch_refs()[0].status, "approved");
     assert!(
-        after_submit.queue.patches[0]
+        after_submit.queue.patch_refs()[0]
             .upstream
             .as_ref()
             .and_then(|u| u.pr_number)
@@ -4130,11 +4182,7 @@ fn conflicted_records_the_issue_on_the_patch() {
     )
     .unwrap();
     let queued = sync_apply(company);
-    let conflicted = queued
-        .patches
-        .iter()
-        .find(|p| p.id == ttl_patch.id)
-        .unwrap();
+    let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(conflicted.status, "conflict");
 
     let url = "https://github.com/acme/product/issues/12";
@@ -4155,6 +4203,433 @@ fn conflicted_records_the_issue_on_the_patch() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("will not retarget"), "{err}");
+}
+
+#[test]
+fn v1_queue_json_migrates_mixed_intents_into_layers() {
+    let raw = r#"{
+      "version": 1,
+      "config": {
+        "upstreamRemote": "upstream",
+        "upstreamBranch": "main",
+        "contribRemote": "contrib",
+        "internalBranch": "main",
+        "trailerKey": "Uplink-Patch-Id"
+      },
+      "patches": [
+        {
+          "id": "upl_internal_first",
+          "title": "Vendor telemetry",
+          "intent": "internal-only",
+          "status": "queued",
+          "dependsOn": [],
+          "createdAt": "t",
+          "updatedAt": "t",
+          "source": {},
+          "events": []
+        },
+        {
+          "id": "upl_tool",
+          "title": "Uplink tooling",
+          "intent": "internal-only",
+          "kind": "uplink-tooling",
+          "status": "queued",
+          "dependsOn": [],
+          "createdAt": "t",
+          "updatedAt": "t",
+          "source": {},
+          "events": []
+        },
+        {
+          "id": "upl_upstream",
+          "title": "Use SHA-256",
+          "intent": "upstream",
+          "status": "queued",
+          "dependsOn": [],
+          "createdAt": "t",
+          "updatedAt": "t",
+          "source": {},
+          "events": []
+        }
+      ]
+    }"#;
+    let queue: QueueState = serde_json::from_str(raw).unwrap();
+    assert_eq!(queue.version, QUEUE_VERSION);
+    assert_eq!(queue.tooling.as_ref().unwrap().id, "upl_tool");
+    assert_eq!(
+        queue
+            .upstream
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["upl_upstream"]
+    );
+    assert_eq!(
+        queue
+            .internal
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["upl_internal_first"]
+    );
+    let stored = serde_json::to_string(&queue).unwrap();
+    assert!(
+        stored.contains("\"version\":2") || stored.contains("\"version\": 2"),
+        "{stored}"
+    );
+    assert!(!stored.contains("intent"));
+}
+
+#[test]
+fn add_internal_only_does_not_rebuild_main() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_all(company, "internal notes");
+    let head_sha = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    land_on_main(company, &head_sha);
+    let main_after_land = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main^".into()),
+            head_ref: Some(head_sha),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        git_ok(company, &["rev-parse", "main"]).unwrap(),
+        main_after_land
+    );
+    assert!(
+        status_snapshot(company)
+            .unwrap()
+            .queue
+            .is_internal(&patch.id)
+    );
+}
+
+#[test]
+fn rebuild_applies_earlier_internal_after_later_upstream() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-first\n");
+    commit_all(company, "internal notes");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let snapshot = status_snapshot(company).unwrap();
+    assert_eq!(snapshot.queue.upstream.len(), 1);
+    assert_eq!(snapshot.queue.internal.len(), 1);
+    assert!(
+        snapshot
+            .product_files
+            .get("NOTES.md")
+            .unwrap()
+            .contains("internal-first")
+    );
+    assert!(
+        snapshot
+            .product_files
+            .get("src/tokens.js")
+            .unwrap()
+            .contains("sha256")
+    );
+}
+
+#[test]
+fn upstream_add_refuses_depends_on_internal_and_internal_may_depend_on_upstream() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_all(company, "internal notes");
+    let internal = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let from_sha = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let head_sha = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    land_on_main(company, &head_sha);
+    let err = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some(from_sha.clone()),
+            head_ref: Some(head_sha.clone()),
+            depends_on: vec![internal.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("cannot depend on internal-only"),
+        "{err}"
+    );
+
+    let upstream = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some(from_sha),
+            head_ref: Some(head_sha),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/flag"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "FLAG.md", "stacked-on-upstream\n");
+    commit_all(company, "internal flag");
+    let stacked = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal flag".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            depends_on: vec![upstream.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(stacked.depends_on, vec![upstream.id]);
+}
+
+#[test]
+fn rebuild_empty_apply_merges_upstream_only() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let head_sha = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    git(
+        company,
+        &["branch", "-f", "uplink/upstream", &head_sha],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(company, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["merge", "--ff-only", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let upstream = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main^".into()),
+            head_ref: Some(head_sha.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(upstream.status, "merged");
+
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_all(company, "internal notes");
+    let notes_sha = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    git(
+        company,
+        &["branch", "-f", "uplink/upstream", &notes_sha],
+        GitOpts::default(),
+    )
+    .unwrap();
+    land_on_main(company, &notes_sha);
+    let internal = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main^".into()),
+            head_ref: Some(notes_sha),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(internal.status, "queued");
+    rebuild(company).unwrap();
+    let after = status_snapshot(company).unwrap();
+    assert_eq!(
+        after
+            .queue
+            .all_patches()
+            .find(|p| p.id == internal.id)
+            .unwrap()
+            .status,
+        "queued"
+    );
+    assert_eq!(
+        after
+            .queue
+            .all_patches()
+            .find(|p| p.id == upstream.id)
+            .unwrap()
+            .status,
+        "merged"
+    );
+}
+
+#[test]
+fn incoming_preflight_skips_internal_only() {
+    let world = setup_world();
+    preflight_incoming_change(
+        &world.company,
+        IncomingPreflight {
+            title: "Vendor telemetry".into(),
+            from_ref: "does-not-exist".into(),
+            head_ref: "also-missing".into(),
+            depends_on: Vec::new(),
+            message: None,
+            preflight_command: None,
+            internal_only: true,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn incoming_preflight_fails_when_candidate_needs_internal() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/internal-hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return companySha(value);"),
+    );
+    commit_all(company, "company hasher");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Company hasher".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(company, &["checkout", "-b", "feat/log"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return companySha(value); // logged"),
+    );
+    commit_all(company, "log company hasher");
+    let from = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    let err = preflight_incoming_change(
+        company,
+        IncomingPreflight {
+            title: "Log company hasher".into(),
+            from_ref: from,
+            head_ref: head,
+            depends_on: Vec::new(),
+            message: None,
+            preflight_command: None,
+            internal_only: false,
+        },
+    )
+    .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("internal omitted") || text.contains("does not apply"),
+        "{text}"
+    );
 }
 
 #[test]

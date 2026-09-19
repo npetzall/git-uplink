@@ -2,9 +2,10 @@
 #
 # Runs on every internal PR against company main, BEFORE import.
 # Applies the PR's unique diff onto public upstream (+ declared
-# Uplink-Depends-On patches) and runs UPLINK_PREFLIGHT (build/test).
-# Fail the check instead of opening a contribution later that is missing
-# queued work the author used from company main.
+# Uplink-Depends-On patches) and onto tooling + queued upstream (internal
+# omitted), then runs UPLINK_PREFLIGHT (build/test). Skipped for
+# uplink:internal-only. Fail the check instead of opening a contribution
+# later that is missing queued work the author used from company main.
 #
 # Put this check in the required status checks for the PR.
 name: Uplink export preflight
@@ -23,7 +24,7 @@ permissions:
 
 jobs:
   preflight:
-    if: github.event.pull_request.base.ref == 'main'
+    if: github.event.pull_request.base.ref == 'main' && !contains(join(github.event.pull_request.labels.*.name, ','), 'uplink:internal-only')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,8 +41,11 @@ jobs:
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          INTERNAL_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'uplink:internal-only') }}
         run: |
           git uplink init
+          extra=""
+          if [ "$INTERNAL_ONLY" = "true" ]; then extra="--internal-only"; fi
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
@@ -51,7 +55,8 @@ jobs:
             --title "$TITLE" \
             --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" \
-            --head "$HEAD_SHA" > /tmp/uplink-preflight.md
+            --head "$HEAD_SHA" \
+            $extra > /tmp/uplink-preflight.md
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then

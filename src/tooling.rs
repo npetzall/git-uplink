@@ -7,8 +7,7 @@ use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::prepare::prepare_from_message;
 use crate::queue::{
-    add_event, get_patch, get_patch_mut, read_queue as read_queue_file,
-    write_queue as write_queue_file,
+    add_event, get_patch, read_queue as read_queue_file, write_queue as write_queue_file,
 };
 use crate::repo::{
     commit_queue, ensure_uplink_dirs, ensure_upstream_ref, has_ref, new_patch_id,
@@ -99,7 +98,6 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
             id: id.clone(),
             title: TOOLING_PATCH_TITLE.into(),
             commit_message: String::new(),
-            intent: "internal-only".into(),
             status: "queued".into(),
             depends_on: Vec::new(),
             created_at: created_at.clone(),
@@ -123,15 +121,19 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
             "created",
             format!("Installed {forge} forge pack as internal-only tooling"),
         );
-        queue.patches.insert(0, patch);
+        queue.tooling = Some(patch);
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: add {id} {TOOLING_PATCH_TITLE}"))?;
     } else {
-        move_patch_to_front(&mut queue, &id);
-        {
-            let patch = get_patch_mut(&mut queue, &id)?;
+        if queue.tooling.as_ref().map(|p| p.id.as_str()) != Some(id.as_str()) {
+            if let Some(idx) = queue.internal.iter().position(|p| p.id == id) {
+                queue.tooling = Some(queue.internal.remove(idx));
+            } else if let Some(idx) = queue.upstream.iter().position(|p| p.id == id) {
+                queue.tooling = Some(queue.upstream.remove(idx));
+            }
+        }
+        if let Some(patch) = queue.tooling.as_mut() {
             patch.kind = Some(TOOLING_PATCH_KIND.into());
-            patch.intent = "internal-only".into();
             patch.status = "queued".into();
             patch.conflict = None;
             patch.patch_id_stable = Some(new_stable);
@@ -192,17 +194,16 @@ internal-only; not submitted upstream.\n"
 }
 
 fn find_tooling_patch(queue: &QueueState, repo: &Path) -> Result<Option<String>> {
+    if let Some(patch) = &queue.tooling {
+        return Ok(Some(patch.id.clone()));
+    }
     if let Some(patch) = queue
-        .patches
-        .iter()
+        .all_patches()
         .find(|p| p.kind.as_deref() == Some(TOOLING_PATCH_KIND))
     {
         return Ok(Some(patch.id.clone()));
     }
-    for patch in &queue.patches {
-        if patch.intent != "internal-only" {
-            continue;
-        }
+    for patch in queue.internal.iter().chain(queue.upstream.iter()) {
         let path = repo.join(format!("{PATCH_DIR}/{}.patch", patch.id));
         if !path.is_file() {
             continue;
@@ -213,15 +214,6 @@ fn find_tooling_patch(queue: &QueueState, repo: &Path) -> Result<Option<String>>
         }
     }
     Ok(None)
-}
-
-fn move_patch_to_front(queue: &mut QueueState, id: &str) {
-    if let Some(idx) = queue.patches.iter().position(|p| p.id == id) {
-        if idx != 0 {
-            let patch = queue.patches.remove(idx);
-            queue.patches.insert(0, patch);
-        }
-    }
 }
 
 struct SynthesizedPatch {

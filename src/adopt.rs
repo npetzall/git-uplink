@@ -9,12 +9,13 @@ use crate::git::{GitOpts, git, git_ok};
 use crate::lock::with_queue_lock;
 use crate::prepare::{assert_prepare_ok, company_commit_message, prepare_from_message};
 use crate::queue::{
-    add_event, get_patch, read_queue as read_queue_file, write_queue as write_queue_file,
+    add_event, cannot_depend_on, get_patch, read_queue as read_queue_file,
+    write_queue as write_queue_file,
 };
 use crate::repo::{
     commit_queue, has_ref, new_patch_id, rev_parse, stable_patch_id, stamp, write_product_patch,
 };
-use crate::types::{Patch, PatchSource, QueueState, TOOLING_PATCH_KIND};
+use crate::types::{Patch, PatchSource, QueueState};
 
 pub const ADOPT_FROM_REF: &str = "uplink/adopt-from";
 const ADOPT_NOTE_PREFIX: &str = "adopted from ";
@@ -149,10 +150,7 @@ pub fn has_adopt_from(repo: &Path) -> Result<bool> {
 }
 
 pub fn has_product_patches(queue: &QueueState) -> bool {
-    queue
-        .patches
-        .iter()
-        .any(|p| p.kind.as_deref() != Some(TOOLING_PATCH_KIND))
+    !queue.upstream.is_empty() || !queue.internal.is_empty()
 }
 
 pub fn load_groups_file(path: &Path) -> Result<Vec<AdoptGroup>> {
@@ -390,11 +388,7 @@ fn resolve_group_runs(
 
 fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueState> {
     let mut queue = read_queue_file(repo)?;
-    if !queue
-        .patches
-        .iter()
-        .any(|p| p.kind.as_deref() == Some(TOOLING_PATCH_KIND))
-    {
+    if queue.tooling.is_none() {
         return Err(Error::msg(
             "Uplink tooling patch is missing; cannot adopt history until init installs it.",
         ));
@@ -420,8 +414,8 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
                 Vec::new()
             };
             if let Some(dep_id) = depends_on.first() {
-                let dep = get_patch(&queue, dep_id)?;
-                if dep.intent == "internal-only" {
+                get_patch(&queue, dep_id)?;
+                if cannot_depend_on(&queue, intent == "internal-only", dep_id) {
                     return Err(Error::msg(format!(
                         "Upstream-bound patch \"{}\" cannot depend on internal-only patch {dep_id}.",
                         group.title
@@ -432,7 +426,6 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
                 id: id.clone(),
                 title: group.title.clone(),
                 commit_message: String::new(),
-                intent: intent.into(),
                 status: "queued".into(),
                 depends_on,
                 created_at: created_at.clone(),
@@ -488,7 +481,7 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
             if intent == "upstream" {
                 last_upstream_id = Some(id.clone());
             }
-            queue.patches.push(patch);
+            queue.push_patch(patch, intent == "internal-only");
         }
         write_queue_file(repo, &queue)?;
         let n = written.len();

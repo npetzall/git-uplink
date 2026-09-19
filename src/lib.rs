@@ -42,9 +42,9 @@ pub use prepare::{
 };
 pub use repo::{commit_queue, patch_state_commit};
 pub use types::{
-    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Forge, MergeVia, Patch, PatchApproval, PatchIntent,
-    PatchStatus, PendingUpstream, PrepareReport, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
-    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Forge, MergeVia, Patch, PatchApproval, PatchLayer,
+    PatchStatus, PendingUpstream, PrepareReport, QUEUE_PATH, QUEUE_VERSION, QueueConfig,
+    QueueState, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
 };
 
 #[cfg(test)]

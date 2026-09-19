@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -15,8 +15,8 @@ use crate::prepare::{
     format_incoming_packet, from_upstream_report_paths, prepare_from_message,
 };
 use crate::queue::{
-    add_event, empty_queue, get_patch, get_patch_mut, read_queue as read_queue_file,
-    topological_active, write_queue as write_queue_file,
+    add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut,
+    read_queue as read_queue_file, topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
     COMPANY_REMOTE, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha, commit_queue,
@@ -423,8 +423,7 @@ fn add_patch_attempt(
     let mut queue = read_queue_file(repo)?;
     if let Some(pr) = opts.internal_pr_number {
         if let Some(existing) = queue
-            .patches
-            .iter()
+            .all_patches()
             .find(|p| p.source.internal_pr_number == Some(pr))
         {
             let id = existing.id.clone();
@@ -442,8 +441,8 @@ fn add_patch_once(
     from_sha: &str,
     head_sha: &str,
 ) -> Result<Patch> {
-    let intent = if opts.internal_only {
-        "internal-only"
+    let destination = if opts.internal_only {
+        "internal"
     } else {
         "upstream"
     };
@@ -460,7 +459,6 @@ fn add_patch_once(
         id: id.clone(),
         title: opts.title.clone(),
         commit_message: String::new(),
-        intent: intent.into(),
         status: "queued".into(),
         depends_on,
         created_at: created_at.clone(),
@@ -482,8 +480,8 @@ fn add_patch_once(
     };
 
     for dep_id in &patch.depends_on {
-        let dep = get_patch(queue, dep_id)?;
-        if intent == "upstream" && dep.intent == "internal-only" {
+        get_patch(queue, dep_id)?;
+        if cannot_depend_on(queue, opts.internal_only, dep_id) {
             return Err(Error::msg(format!(
                 "Upstream-bound patch \"{}\" cannot depend on internal-only patch {dep_id}.",
                 opts.title
@@ -495,10 +493,10 @@ fn add_patch_once(
         &mut patch,
         "created",
         if let Some(pr) = opts.internal_pr_number {
-            format!("Internally approved via PR #{pr}; imported as {intent}")
+            format!("Internally approved via PR #{pr}; imported as {destination}")
         } else {
             format!(
-                "Imported from {}..{} as {intent}",
+                "Imported from {}..{} as {destination}",
                 &from_sha[..from_sha.len().min(8)],
                 &head_sha[..head_sha.len().min(8)]
             )
@@ -511,11 +509,15 @@ fn add_patch_once(
         head_sha,
         raw_message,
         Some(&opts.title),
-        intent,
+        if opts.internal_only {
+            "internal-only"
+        } else {
+            "upstream"
+        },
     )?);
     if let Some(report) = &patch.prepare {
         patch.commit_message = report.commit_message.clone();
-        if intent == "upstream" {
+        if !opts.internal_only {
             assert_prepare_ok(report, &opts.title)?;
         }
     }
@@ -526,34 +528,42 @@ fn add_patch_once(
         repo,
         &format!(".uplink/patches/{id}.patch"),
     )?);
-    if let Some(duplicate) = queue.patches.iter().find(|item| {
+    if let Some(duplicate) = queue.all_patches().find(|item| {
         item.patch_id_stable.is_some() && item.patch_id_stable == patch.patch_id_stable
     }) {
         return Ok(duplicate.clone());
     }
 
     let candidate_abs = repo.join(format!(".uplink/patches/{id}.patch"));
-    let preflight = assert_export_preflight(
-        repo,
-        queue,
-        &patch,
-        &candidate_abs,
-        opts.preflight_command.clone().map(Some),
-    );
-    if let Err(err) = preflight {
+    if !opts.internal_only {
+        let preflight = assert_export_preflight(
+            repo,
+            queue,
+            &patch,
+            &candidate_abs,
+            opts.preflight_command.clone().map(Some),
+        );
+        if let Err(err) = preflight {
+            let _ = fs::remove_file(&candidate_abs);
+            return Err(err);
+        }
+    }
+
+    if let Err(err) =
+        assert_change_already_on_company(repo, queue, &candidate_abs, &opts.title, head_sha)
+    {
         let _ = fs::remove_file(&candidate_abs);
         return Err(err);
     }
 
-    if let Err(err) = assert_change_already_on_company(repo, queue, &candidate_abs, &opts.title) {
-        let _ = fs::remove_file(&candidate_abs);
-        return Err(err);
-    }
-
-    queue.patches.push(patch);
+    queue.push_patch(patch, opts.internal_only);
     write_queue_file(repo, queue)?;
     commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
-    apply_new_patch_on_company(repo, &id, true)?;
+    if opts.internal_only {
+        apply_new_patch_on_company(repo, &id, true)?;
+    } else {
+        rebuild_once(repo)?;
+    }
     Ok(get_patch(&read_queue_file(repo)?, &id)?.clone())
 }
 
@@ -666,27 +676,42 @@ fn restack_local_patches(
 ) -> Result<String> {
     let local_queue = queue_at(repo, local_sha)?;
     let remote_queue = queue_at(repo, remote_sha)?;
-    let remote_ids: HashSet<&str> = remote_queue.patches.iter().map(|p| p.id.as_str()).collect();
+    let remote_ids: HashSet<&str> = remote_queue.all_patches().map(|p| p.id.as_str()).collect();
     let remote_prs: HashSet<u64> = remote_queue
-        .patches
-        .iter()
+        .all_patches()
         .filter_map(|p| p.source.internal_pr_number)
         .collect();
-    let carry: Vec<Patch> = local_queue
-        .patches
-        .iter()
-        .filter(|patch| {
-            if remote_ids.contains(patch.id.as_str()) {
+    let should_carry = |patch: &Patch| {
+        if remote_ids.contains(patch.id.as_str()) {
+            return false;
+        }
+        if let Some(pr) = patch.source.internal_pr_number {
+            if remote_prs.contains(&pr) {
                 return false;
             }
-            if let Some(pr) = patch.source.internal_pr_number {
-                if remote_prs.contains(&pr) {
-                    return false;
-                }
-            }
-            true
-        })
+        }
+        true
+    };
+    let carry_tooling = local_queue
+        .tooling
+        .filter(|p| remote_queue.tooling.is_none() && should_carry(p));
+    let carry_upstream: Vec<Patch> = local_queue
+        .upstream
+        .iter()
+        .filter(|p| should_carry(p))
         .cloned()
+        .collect();
+    let carry_internal: Vec<Patch> = local_queue
+        .internal
+        .iter()
+        .filter(|p| should_carry(p))
+        .cloned()
+        .collect();
+    let carry: Vec<Patch> = carry_tooling
+        .iter()
+        .cloned()
+        .chain(carry_upstream.iter().cloned())
+        .chain(carry_internal.iter().cloned())
         .collect();
 
     if carry.is_empty() {
@@ -710,7 +735,11 @@ fn restack_local_patches(
         set_state_branch(repo, branch, remote_sha)?;
         restore_paths_from(repo, local_sha, &paths)?;
         let mut queue = read_queue_file(repo)?;
-        queue.patches.extend(carry);
+        if queue.tooling.is_none() {
+            queue.tooling = carry_tooling.clone();
+        }
+        queue.upstream.extend(carry_upstream);
+        queue.internal.extend(carry_internal);
         write_queue_file(repo, &queue)?;
         commit_queue(repo, "uplink: restack onto origin")?;
         Ok(())
@@ -727,6 +756,7 @@ fn assert_change_already_on_company(
     queue: &QueueState,
     patch_file: &Path,
     title: &str,
+    head_sha: &str,
 ) -> Result<()> {
     ensure_upstream_ref(repo)?;
     if has_ref(repo, "uplink/upstream")?
@@ -734,13 +764,69 @@ fn assert_change_already_on_company(
     {
         return Ok(());
     }
-    if patch_already_applied_on(repo, &queue.config.internal_branch, patch_file)? {
+    let branch = queue.config.internal_branch.as_str();
+    if patch_already_applied_on(repo, branch, patch_file)? {
         return Ok(());
     }
+    if is_ancestor(repo, head_sha, branch)? {
+        return Ok(());
+    }
+    for sha in branch_history_shas(repo, branch)? {
+        if sha == head_sha
+            || is_ancestor(repo, head_sha, &sha).unwrap_or(false)
+            || patch_already_applied_on(repo, &sha, patch_file).unwrap_or(false)
+        {
+            return Ok(());
+        }
+    }
     Err(Error::msg(format!(
-        "\"{title}\" is not on company {} yet. Merge the internal PR first, then import.",
-        queue.config.internal_branch
+        "\"{title}\" is not on company {branch} yet. Merge the internal PR first, then import.",
     )))
+}
+
+fn git_path(repo: &Path, spec: &str) -> Result<PathBuf> {
+    let rel = git_ok(repo, &["rev-parse", "--git-path", spec])?;
+    let path = PathBuf::from(&rel);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(repo.join(path))
+    }
+}
+
+fn branch_history_shas(repo: &Path, branch: &str) -> Result<Vec<String>> {
+    let mut shas = Vec::new();
+    let mut seen = HashSet::new();
+    let path = git_path(repo, &format!("logs/refs/heads/{branch}"))?;
+    let body = match fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(_) => return Ok(shas),
+    };
+    for line in body.lines().rev() {
+        let mut parts = line.split_whitespace();
+        let old = parts.next().unwrap_or("");
+        let new = parts.next().unwrap_or("");
+        for candidate in [new, old] {
+            if !looks_like_sha(candidate) {
+                continue;
+            }
+            if seen.insert(candidate.to_string()) {
+                shas.push(candidate.to_string());
+            }
+        }
+        for token in line.split_whitespace() {
+            if looks_like_sha(token) && seen.insert(token.to_string()) {
+                shas.push(token.to_string());
+            }
+        }
+    }
+    Ok(shas)
+}
+
+fn looks_like_sha(value: &str) -> bool {
+    value.len() == 40
+        && value.chars().all(|c| c.is_ascii_hexdigit())
+        && !value.chars().all(|c| c == '0')
 }
 
 fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) -> Result<()> {
@@ -751,7 +837,7 @@ fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) ->
     let patch_file = repo.join(format!(".uplink/patches/{id}.patch"));
 
     if mark_empty_merged
-        && patch.intent == "upstream"
+        && queue.is_upstream(id)
         && has_ref(repo, "uplink/upstream")?
         && patch_already_applied_on(repo, "uplink/upstream", &patch_file)?
     {
@@ -804,12 +890,12 @@ pub fn approve_patch_at(
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
         {
-            let patch = get_patch_mut(&mut queue, id)?;
-            if patch.intent == "internal-only" {
+            if queue.is_internal(id) || queue.is_tooling(id) {
                 return Err(Error::msg(format!(
                     "{id} is internal-only and cannot be approved for upstream."
                 )));
             }
+            let patch = get_patch_mut(&mut queue, id)?;
             if patch.prepare.as_ref().is_some_and(|p| !p.ok) {
                 return Err(Error::msg(format!(
                     "{id} is not ready for contribution. Fix prepare-for-upstream findings first."
@@ -1078,8 +1164,8 @@ impl IncomingClassification {
     }
 }
 
-fn eligible_for_flow_back(patch: &Patch) -> bool {
-    patch.status != "merged" && patch.status != "dropped" && patch.intent != "internal-only"
+fn eligible_for_flow_back(queue: &QueueState, patch: &Patch) -> bool {
+    patch.status != "merged" && patch.status != "dropped" && queue.is_upstream(&patch.id)
 }
 
 fn commit_stable_patch_id(repo: &Path, sha: &str) -> Result<Option<String>> {
@@ -1116,14 +1202,20 @@ fn match_commit_to_patch(
     sha: &str,
 ) -> Result<Option<(String, MergeVia)>> {
     let message = git_ok(repo, &["log", "-1", "--format=%B", sha]).unwrap_or_default();
-    for patch in queue.patches.iter().filter(|p| eligible_for_flow_back(p)) {
+    for patch in queue
+        .all_patches()
+        .filter(|p| eligible_for_flow_back(queue, p))
+    {
         let trailer = format!("{}: {}", queue.config.trailer_key, patch.id);
         if message.lines().any(|line| line.trim() == trailer) {
             return Ok(Some((patch.id.clone(), MergeVia::Trailer)));
         }
     }
     if let Some(stable) = commit_stable_patch_id(repo, sha)? {
-        for patch in queue.patches.iter().filter(|p| eligible_for_flow_back(p)) {
+        for patch in queue
+            .all_patches()
+            .filter(|p| eligible_for_flow_back(queue, p))
+        {
             if patch.patch_id_stable.as_deref() == Some(stable.as_str()) {
                 return Ok(Some((patch.id.clone(), MergeVia::PatchId)));
             }
@@ -1181,8 +1273,7 @@ fn write_incoming_packet(
         .iter()
         .map(|item| {
             let title = queue
-                .patches
-                .iter()
+                .all_patches()
                 .find(|p| p.id == item.patch_id)
                 .map(|p| p.title.as_str())
                 .unwrap_or("");
@@ -1208,15 +1299,14 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
     if !has_ref(repo, "uplink/upstream")? {
         return Ok(merged_ids);
     }
-    let ids: Vec<String> = queue.patches.iter().map(|p| p.id.clone()).collect();
+    let ids: Vec<String> = queue.all_patches().map(|p| p.id.clone()).collect();
     for id in ids {
         let live = read_queue_file(repo)?;
-        let patch = match live.patches.iter().find(|p| p.id == id) {
+        let patch = match live.all_patches().find(|p| p.id == id) {
             Some(p) => p.clone(),
             None => continue,
         };
-        if patch.status == "merged" || patch.status == "dropped" || patch.intent == "internal-only"
-        {
+        if patch.status == "merged" || patch.status == "dropped" || !live.is_upstream(&id) {
             continue;
         }
         let grep = format!("Uplink-Patch-Id: {}", patch.id);
@@ -1559,8 +1649,9 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
                 .join(format!("{}.patch", patch.id));
             let result = apply_patch_file(repo, &patch, &patch_file, false)?;
             if result == "empty" {
+                let is_upstream = queue.is_upstream(&patch.id);
                 let current = get_patch_mut(&mut queue, &patch.id)?;
-                if current.intent == "upstream" {
+                if is_upstream {
                     current.status = "merged".into();
                     current.merged = Some(PatchMerged {
                         via: MergeVia::EmptyRebase,
@@ -1903,7 +1994,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
         ensure_upstream_ref(repo)?;
         let queue = read_queue_file(repo)?;
         let patch = get_patch(&queue, id)?.clone();
-        if patch.intent != "upstream" {
+        if !queue.is_upstream(id) {
             return Err(Error::msg(format!("{id} is internal-only")));
         }
         if patch.status != "approved" && patch.status != "submitted" {
@@ -1914,7 +2005,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
         }
         for dep_id in &patch.depends_on {
             let dep = get_patch(&queue, dep_id)?;
-            if dep.intent == "upstream" && dep.status != "merged" && dep.status != "submitted" {
+            if queue.is_upstream(dep_id) && dep.status != "merged" && dep.status != "submitted" {
                 return Err(Error::msg(format!("Submit {dep_id} before {id}")));
             }
         }
@@ -2017,8 +2108,8 @@ fn submit_base(repo: &Path, queue: &QueueState, patch: &Patch) -> Result<String>
     let submitted_deps: Vec<&Patch> = patch
         .depends_on
         .iter()
-        .filter_map(|id| queue.patches.iter().find(|p| p.id == *id))
-        .filter(|dep| dep.intent == "upstream" && dep.status == "submitted")
+        .filter_map(|id| queue.all_patches().find(|p| p.id == *id))
+        .filter(|dep| queue.is_upstream(&dep.id) && dep.status == "submitted")
         .collect();
     if let Some(last) = submitted_deps.last() {
         if let Some(branch) = last.upstream.as_ref().map(|u| u.contrib_branch.as_str()) {
@@ -2060,7 +2151,10 @@ pub struct StateStatus {
 #[serde(rename_all = "camelCase")]
 pub struct StatusReport {
     pub counts: QueueCounts,
-    pub patches: Vec<Patch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooling: Option<Patch>,
+    pub upstream: Vec<Patch>,
+    pub internal: Vec<Patch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<LastSync>,
     pub state: StateStatus,
@@ -2134,7 +2228,9 @@ fn state_status(repo: &Path) -> Result<StateStatus> {
 pub fn status_report(snapshot: &StatusSnapshot) -> StatusReport {
     StatusReport {
         counts: summarize_queue(&snapshot.queue),
-        patches: snapshot.queue.patches.clone(),
+        tooling: snapshot.queue.tooling.clone(),
+        upstream: snapshot.queue.upstream.clone(),
+        internal: snapshot.queue.internal.clone(),
         last_sync: snapshot.queue.last_sync.clone(),
         state: snapshot.state.clone(),
     }
@@ -2160,18 +2256,19 @@ pub fn format_status_table(snapshot: &StatusSnapshot) -> String {
     let _ = writeln!(
         out,
         "{:<12}  {:<10}  {:<14}  {}  {}",
-        "id", "status", "intent", "title", "link"
+        "id", "status", "queue", "title", "link"
     );
-    for patch in &snapshot.queue.patches {
+    for patch in snapshot.queue.all_patches() {
+        let layer = crate::queue::layer_label(&snapshot.queue, &patch.id);
         let link = patch
             .upstream
             .as_ref()
             .and_then(|u| u.pr_url.clone())
-            .unwrap_or_else(|| patch.intent.clone());
+            .unwrap_or_else(|| layer.to_string());
         let _ = writeln!(
             out,
             "{:<12}  {:<10}  {:<14}  {}  {link}",
-            patch.id, patch.status, patch.intent, patch.title
+            patch.id, patch.status, layer, patch.title
         );
     }
     if let Some(sync) = &snapshot.queue.last_sync {
@@ -2200,6 +2297,8 @@ pub struct QueueCounts {
     pub merged: u32,
     pub dropped: u32,
     pub conflict: u32,
+    pub tooling: u32,
+    pub internal: u32,
     pub internal_only: u32,
 }
 
@@ -2212,9 +2311,11 @@ pub fn summarize_queue(queue: &QueueState) -> QueueCounts {
         merged: 0,
         dropped: 0,
         conflict: 0,
+        tooling: 0,
+        internal: 0,
         internal_only: 0,
     };
-    for patch in &queue.patches {
+    for patch in queue.all_patches() {
         match patch.status.as_str() {
             "queued" => counts.queued += 1,
             "approved" => counts.approved += 1,
@@ -2225,7 +2326,11 @@ pub fn summarize_queue(queue: &QueueState) -> QueueCounts {
             "conflict" => counts.conflict += 1,
             _ => {}
         }
-        if patch.intent == "internal-only" && patch.status != "dropped" {
+        if queue.is_tooling(&patch.id) && patch.status != "dropped" {
+            counts.tooling += 1;
+        }
+        if queue.is_internal(&patch.id) && patch.status != "dropped" {
+            counts.internal += 1;
             counts.internal_only += 1;
         }
     }

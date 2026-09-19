@@ -67,4 +67,8 @@ jobs:
             fi
             exit "$code"
           fi
-          git uplink push
+          if [ "$INTERNAL_ONLY" = "true" ]; then
+            git uplink push
+          else
+            git uplink rebuild --push
+          fi

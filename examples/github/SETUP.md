@@ -74,7 +74,7 @@ export INTERNAL_DIR=/path/to/uplink-example-internal
 
 The script needs all three clones. It sets remotes, runs **`git uplink init --forge example-github`** (installs the internal-only Uplink Actions pack), and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environments `to-upstream` and `from-upstream`.
 
-`git uplink status` in the internal clone should show one internal-only patch (`Uplink tooling`).
+`git uplink status` in the internal clone should show the tooling patch (`Uplink tooling`) in the tooling slot.
 
 Keep the internal and upstream clones for the stories:
 

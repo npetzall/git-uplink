@@ -1,4 +1,4 @@
-export type Intent = "upstream" | "internal-only";
+export type QueueLayer = "upstream" | "internal";
 export type Status =
   | "queued"
   | "approved"
@@ -13,7 +13,7 @@ export type SimFileMap = Record<string, string>;
 export type SimPatch = {
   id: string;
   title: string;
-  intent: Intent;
+  queue: QueueLayer;
   status: Status;
   dependsOn: string[];
   files: SimFileMap;
@@ -151,8 +151,12 @@ export function initialState(): SimState {
 
 function applyPatches(upstream: SimFileMap, patches: SimPatch[]): SimFileMap {
   const next = clone(upstream);
-  for (const patch of patches) {
-    if (patch.status === "merged" || patch.status === "dropped") continue;
+  const active = (patch: SimPatch) => patch.status !== "merged" && patch.status !== "dropped";
+  const ordered = [
+    ...patches.filter((patch) => patch.queue === "upstream" && active(patch)),
+    ...patches.filter((patch) => patch.queue === "internal" && active(patch)),
+  ];
+  for (const patch of ordered) {
     if (patch.status === "conflict") break;
     Object.assign(next, patch.files);
   }
@@ -180,7 +184,7 @@ export const LAB_STEPS: {
       const patch: SimPatch = {
         id: "upl_hash",
         title: "Use SHA-256 for tokens",
-        intent: "upstream",
+        queue: "upstream",
         status: "queued",
         dependsOn: [],
         files: tree(TOKENS_SHA256),
@@ -206,7 +210,7 @@ export const LAB_STEPS: {
       const patch: SimPatch = {
         id: "upl_logs",
         title: "Log token hashes",
-        intent: "upstream",
+        queue: "upstream",
         status: "queued",
         dependsOn: ["upl_hash"],
         files: tree(TOKENS_SHA256_LOGS),
@@ -229,7 +233,7 @@ export const LAB_STEPS: {
       const patch: SimPatch = {
         id: "upl_vendor",
         title: "Vendor telemetry hook",
-        intent: "internal-only",
+        queue: "internal",
         status: "queued",
         dependsOn: [],
         files: withVendor(TOKENS_SHA256_LOGS),

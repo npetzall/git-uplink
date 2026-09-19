@@ -38,7 +38,11 @@ struct StatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     counts: Option<crate::ops::QueueCounts>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    patches: Option<Vec<crate::types::Patch>>,
+    tooling: Option<crate::types::Patch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream: Option<Vec<crate::types::Patch>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    internal: Option<Vec<crate::types::Patch>>,
 }
 
 pub fn has_embedded_index() -> bool {
@@ -114,7 +118,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
             company_head: None,
             upstream_head: None,
             counts: None,
-            patches: None,
+            tooling: None,
+            upstream: None,
+            internal: None,
         });
     }
     match read_queue(&state.repo).and_then(|_| status_snapshot(&state.repo)) {
@@ -127,7 +133,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
                 company_head: Some(snapshot.company_head),
                 upstream_head: snapshot.upstream_head,
                 counts: Some(counts),
-                patches: Some(snapshot.queue.patches),
+                tooling: snapshot.queue.tooling,
+                upstream: Some(snapshot.queue.upstream),
+                internal: Some(snapshot.queue.internal),
             })
         }
         Err(err) => Json(StatusResponse {
@@ -137,7 +145,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
             company_head: None,
             upstream_head: None,
             counts: None,
-            patches: None,
+            tooling: None,
+            upstream: None,
+            internal: None,
         }),
     }
 }

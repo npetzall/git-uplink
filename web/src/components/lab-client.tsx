@@ -39,7 +39,8 @@ function patchLink(patch: SimPatch, blockedBy?: string) {
   if (patch.status === "conflict") return `uplink/conflict/${patch.id}`;
   if (blockedBy) return `waiting on ${blockedBy}`;
   if (patch.dependsOn.length) return `depends ${patch.dependsOn.join(", ")}`;
-  return "internal only";
+  if (patch.queue === "internal") return "internal queue";
+  return "queued";
 }
 
 export function LabClient() {
@@ -218,7 +219,7 @@ export function LabClient() {
                   <tr className="border-b">
                     <th className="py-2 pr-3 font-medium">ID</th>
                     <th className="py-2 pr-3 font-medium">Change</th>
-                    <th className="py-2 pr-3 font-medium">Intent</th>
+                    <th className="py-2 pr-3 font-medium">Queue</th>
                     <th className="py-2 pr-3 font-medium">Status</th>
                     <th className="py-2 font-medium">Link</th>
                   </tr>
@@ -231,7 +232,7 @@ export function LabClient() {
                         <td className="py-2 pr-3 font-mono text-xs">{patch.id}</td>
                         <td className="py-2 pr-3">{patch.title}</td>
                         <td className="py-2 pr-3">
-                          <StatusBadge value={patch.intent} />
+                          <StatusBadge value={patch.queue} />
                         </td>
                         <td className="py-2 pr-3">
                           <div className="flex flex-wrap items-center gap-2">

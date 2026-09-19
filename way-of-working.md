@@ -15,7 +15,7 @@ Write every change **as if it were the upstream submission**. Company-only detai
 | Contribution / IP | Dispatch **Uplink submit**. IP approves GitHub Environment **`to-upstream`**. Same run submits. | Report + approval committed under `.uplink/reports/`. Public PR uses the prepared identity. GitHub audit log records the reviewer. |
 | Inbound upstream | Hourly **Uplink sync**. Foreign public commits wait on GitHub Environment **`from-upstream`**. Flow-back of our patches skips that wait. | `uplink/upstream` updates; company `main` rebuilds. |
 
-Default intent is upstream. `uplink:internal-only` is the escape hatch and never goes through the second gate.
+Default destination is the upstream queue. `uplink:internal-only` is the escape hatch: it records the patch in `internal[]` and never goes through the second gate.
 
 ## Contribution approval via the to-upstream GitHub Environment
 
@@ -50,19 +50,27 @@ Workflow group `uplink-sync` serializes inbound reviews (hourly cron will not st
 
 Local engine tests call `git uplink accept-upstream` directly after a sync that set `needsApproval`.
 
-**Export preflight** is the guard against “I branched from company `main` so I thought Asha came with me.” Before import, and again before an upstream PR is opened, Uplink applies the candidate onto **public `main` plus declared `dependsOn` only** — not onto company `main`. Then it runs `UPLINK_PREFLIGHT` (the product’s build and test) on that export tree.
-
-- If apply or tests fail, **the change is not imported** and **no upstream PR is created**. The internal PR gets a comment with suggested `--depends-on` / `Uplink-Depends-On:` lines.
-- Put `Uplink-Depends-On: upl_…` in the PR body (one per line) and re-run. Required check: `uplink-preflight.yml` on every PR to `main`.
-- Set the repo variable `UPLINK_PREFLIGHT` to the command that must pass on a contribution (for example `npm test` or `make test`). Without it, only the apply check runs; tests are what catch “the patch applies but the code calls Asha’s new API.”
-
 Company `main` is always:
 
 ```
-public upstream/main  +  every patch that is not merged or dropped
+public upstream/main  +  tooling  +  active upstream[]  +  active internal[]
 ```
 
-applied in queue order (insertion order when nobody recorded `dependsOn`; otherwise dependency order, then insertion).
+Tooling is installed by `init` / `--upgrade`. Product patches default to the **upstream** queue (bound for contribution). Label `uplink:internal-only` (or `add --internal-only`) appends to **internal**, which always applies last and is never exported. Membership in a queue is the intent; patches do not store an intent field.
+
+Within `upstream` and within `internal`, insertion order is used if nobody recorded `dependsOn`; otherwise topological order, then insertion. Internal may depend on upstream. Upstream must not depend on internal or tooling.
+
+If an upstream-bound change only applies on internal work, pick one:
+
+1. Rewrite it so it does not need the internal code, or
+2. Promote that internal patch into `upstream` and record `dependsOn`, or
+3. Put the new change in `internal` (`uplink:internal-only` / `--internal-only`).
+
+**Export preflight** is the guard against “I branched from company `main` so I thought Asha came with me.” Before import, Uplink applies the candidate onto **public `main` plus declared `dependsOn`**, then onto **tooling + queued upstream** (internal omitted). Then it runs `UPLINK_PREFLIGHT` (the product’s build and test) on that export tree. Internal-only PRs skip both checks.
+
+- If apply or tests fail, **the change is not imported** and **no upstream PR is created**. The internal PR gets a comment with suggested `--depends-on` / `Uplink-Depends-On:` lines, or the three remediations above.
+- Put `Uplink-Depends-On: upl_…` in the PR body (one per line) and re-run. Required check: `uplink-preflight.yml` on every upstream-bound PR to `main`.
+- Set the repo variable `UPLINK_PREFLIGHT` to the command that must pass on a contribution (for example `npm test` or `make test`). Without it, only the apply check runs; tests are what catch “the patch applies but the code calls Asha’s new API.”
 
 ## Onboarding a repo that is already ahead of upstream
 

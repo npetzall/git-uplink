@@ -92,7 +92,7 @@ jobs:
           status=$(jq -r '.status // empty' <<<"$resolve_json")
           if [ -z "$status" ]; then
             queue_json=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json)
-            status=$(printf '%s\n' "$queue_json" | jq -r --arg id "$id" '.patches[] | select(.id==$id) | .status')
+            status=$(printf '%s\n' "$queue_json" | jq -r --arg id "$id" '(.tooling, .upstream[], .internal[]) | select(. != null and .id==$id) | .status')
           fi
           if [ "$status" = "amended" ]; then
             waiting=$(gh run list --workflow="Uplink submit" --status=waiting --json databaseId,displayTitle,name 2>/dev/null || echo '[]')

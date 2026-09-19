@@ -344,7 +344,7 @@ Review this packet (the same markdown is on the Actions job summary / `GITHUB_ST
 | --- | --- |\n\
 | Patch | `{id}` |\n\
 | Title | {title} |\n\
-| Intent | {intent} |\n\
+| Queue | {queue} |\n\
 | Queue status | {status} |\n\
 | Depends on | {depends} |\n\
 | Internal PR | {pr} |\n\n\
@@ -363,7 +363,7 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
-        intent = patch.intent,
+        queue = "upstream",
         status = patch.status,
         company = format_fenced(&company_commit_message(patch)),
         contrib = format_fenced(&export_commit_message(patch)),
@@ -415,7 +415,7 @@ This contribution was **already IP-approved** and submitted. Review **only the d
 | --- | --- |\n\
 | Patch | `{id}` |\n\
 | Title | {title} |\n\
-| Intent | {intent} |\n\
+| Queue | {queue} |\n\
 | Queue status | {status} |\n\
 | Amendment | {amendment} |\n\
 | Public PR | {pr} |\n\
@@ -439,7 +439,7 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
-        intent = patch.intent,
+        queue = "upstream",
         status = patch.status,
         company = format_fenced(&company_commit_message(patch)),
         contrib = format_fenced(&export_commit_message(patch)),

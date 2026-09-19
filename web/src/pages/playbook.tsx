@@ -50,8 +50,9 @@ export function PlaybookPage() {
           <ul>
             <li>Internal PR → creates or amends that patch.</li>
             <li>
-              Company <code>main</code> → replay of <code>upstream/main</code> plus every patch that
-              is not merged or dropped.
+            Company <code>main</code> → replay of <code>upstream/main</code> plus tooling, then
+              every active <code>upstream[]</code> patch, then every active <code>internal[]</code>{" "}
+              patch.
             </li>
             <li>
               Contribution fork branch <code>uplink/&lt;id&gt;</code> → the same patch applied onto
@@ -98,8 +99,8 @@ export function PlaybookPage() {
         <Section title="Onboarding a repo already ahead of upstream">
           <p>
             If company <code>main</code> already matches public upstream,{" "}
-            <code>git uplink init --forge ghec</code> installs the tooling pack as the first
-            internal-only patch and rebuilds <code>main</code>. If <code>main</code> is a
+            <code>git uplink init --forge ghec</code> installs the tooling pack in the dedicated
+            tooling slot and rebuilds <code>main</code>. If <code>main</code> is a
             fast-forward of upstream (private commits on top), init does not rebuild and does not
             push. It records those unique first-parent commits as patches after tooling. Merge
             commits are one patch each; rebase-style runs are grouped in the terminal UI (or{" "}
@@ -150,9 +151,10 @@ export function PlaybookPage() {
               the internal PR, then merge. Actions runs <code>git uplink add</code>. The merge
               already put the change on company <code>main</code>. Import records it on{" "}
               <code>uplink/state</code> as queued — the product build includes it, and the next
-              developer who branches from main gets it. Default intent is upstream; label{" "}
-              <code>uplink:internal-only</code> for the escape hatch. IP has not run yet. Nothing
-              has left EMU.
+              developer who branches from main gets it. Default destination is the upstream queue;
+              label <code>uplink:internal-only</code> for the escape hatch (no stored intent field).
+              Upstream import then rebuilds so the new patch sits under internal. Internal import is
+              add-only. IP has not run yet. Nothing has left EMU.
             </li>
             <li>
               <strong>Contribution / IP (status <code>approved</code>, then{" "}
@@ -294,13 +296,15 @@ export function PlaybookPage() {
               writing the PR and are stripped on import. Git commit logs are not concatenated.
             </li>
             <li>
-              Open an internal PR. CI runs prepare (scrub, author, affiliation), export preflight,
-              and company-tree tests. If prepare fails, remove company names from the diff (including
-              tests) or move internal notes below the cutoff.
+              Open an internal PR. CI runs prepare (scrub, author, affiliation), export preflight
+              (skipped for <code>uplink:internal-only</code>), and company-tree tests. If prepare
+              fails, remove company names from the diff (including tests) or move internal notes
+              below the cutoff.
             </li>
             <li>
-              Labels: default intent is upstream. Escape hatch:{" "}
-              <code>uplink:internal-only</code>.
+              Labels: default destination is the upstream queue. Escape hatch:{" "}
+              <code>uplink:internal-only</code> (appends to <code>internal[]</code>; skips export
+              preflight).
             </li>
             <li>
               Engineering review (required reviewers / CODEOWNERS). This is code review, not IP.
@@ -308,7 +312,8 @@ export function PlaybookPage() {
             <li>
               Merge the PR. That is internal product approval. Actions runs{" "}
               <code>git uplink add</code>, extracts the product diff, excluding{" "}
-              <code>.uplink/</code>, and records it on <code>uplink/state</code>.
+              <code>.uplink/</code>, and records it on <code>uplink/state</code>. Upstream adds
+              rebuild and publish rewritten <code>main</code>. Internal adds do not rebuild.
             </li>
             <li>
               When legal signs off, an operator dispatches <code>Uplink submit</code>. IP approves
@@ -319,8 +324,12 @@ export function PlaybookPage() {
           </ol>
           <p>
             Stacking is implicit: a PR opened on a main that already carries patch A becomes patch B
-            depending on A. An upstream-bound patch may not depend on an internal-only patch; the
-            engine rejects that so you cannot export something that only applies on secret code.
+            depending on A. An upstream-bound patch may not depend on an internal patch; the engine
+            rejects that so you cannot export something that only applies on secret code. Internal
+            may depend on upstream. If an upstream-bound change only applies on internal work:
+            rewrite it so it does not need that code, promote the internal patch into{" "}
+            <code>upstream</code> and record <code>dependsOn</code>, or put the new change in{" "}
+            <code>internal</code>.
           </p>
         </Section>
 

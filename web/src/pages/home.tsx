@@ -11,7 +11,7 @@ const GATES = [
   },
   {
     title: "Stay current, keep your deltas",
-    body: "Company main is public upstream plus the active patch queue. Merge lands a change on main; import records it on uplink/state. Sync rebuilds main only when upstream moved. Merged work is dropped so later upstream fixes are not reverted.",
+    body: "Company main is public upstream plus tooling, then queued upstream patches, then internal patches last. Merge lands a change on main; import records it on uplink/state. Upstream import rebuilds so the new patch sits under internal. Sync rebuilds main only when upstream moved. Merged work is dropped so later upstream fixes are not reverted.",
   },
   {
     title: "IP control before publicity",

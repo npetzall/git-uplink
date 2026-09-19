@@ -7,7 +7,9 @@ use uuid::Uuid;
 use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git};
 use crate::prepare::{depends_on_from_message, export_commit_message};
-use crate::queue::{active_patches, get_patch, patch_path, read_queue};
+use crate::queue::{
+    active_upstream, apply_order_upstream_layer, get_patch, patch_path, read_queue,
+};
 use crate::repo::{ensure_revs, ensure_upstream_ref, has_ref, rev_parse, write_product_patch};
 use crate::types::{Patch, QueueState};
 
@@ -160,9 +162,8 @@ pub fn suggest_depends_on(
     candidate_abs: &Path,
     candidate_message: &str,
 ) -> Result<Vec<String>> {
-    let candidates: Vec<String> = active_patches(queue)
+    let candidates: Vec<String> = active_upstream(queue)
         .into_iter()
-        .filter(|p| p.intent == "upstream" && p.status != "conflict")
         .map(|p| p.id.clone())
         .collect();
     with_upstream_worktree(repo, |dir| {
@@ -201,7 +202,7 @@ pub fn assert_export_preflight(
     candidate_abs: &Path,
     command_override: Option<Option<String>>,
 ) -> Result<()> {
-    if patch.intent == "internal-only" {
+    if queue.is_internal(&patch.id) || queue.is_tooling(&patch.id) {
         return Ok(());
     }
     let command = match command_override {
@@ -293,14 +294,9 @@ fn suggest_command_deps(
     command: &str,
     dir: &Path,
 ) -> Result<Vec<String>> {
-    let candidates: Vec<String> = active_patches(queue)
+    let candidates: Vec<String> = active_upstream(queue)
         .into_iter()
-        .filter(|item| {
-            item.intent == "upstream"
-                && item.status != "conflict"
-                && item.id != patch.id
-                && !patch.depends_on.contains(&item.id)
-        })
+        .filter(|item| item.id != patch.id && !patch.depends_on.contains(&item.id))
         .map(|item| item.id.clone())
         .collect();
     let mut prefix = patch.depends_on.clone();
@@ -333,9 +329,57 @@ pub struct IncomingPreflight {
     pub depends_on: Vec<String>,
     pub message: Option<String>,
     pub preflight_command: Option<String>,
+    pub internal_only: bool,
+}
+
+pub fn assert_upstream_layer_preflight(
+    repo: &Path,
+    queue: &QueueState,
+    candidate_abs: &Path,
+    title: &str,
+) -> Result<()> {
+    with_upstream_worktree(repo, |dir| {
+        for patch in apply_order_upstream_layer(queue)? {
+            if patch.status == "conflict" {
+                return Err(Error::msg(format!(
+                    "Queue is blocked on conflict in {}; cannot preflight the upstream layer.",
+                    patch.id
+                )));
+            }
+            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id), &patch.title)?;
+            if result == "conflict" {
+                return Err(Error::Preflight(PreflightError::new(
+                    format!(
+                        "Queued patch \"{}\" does not apply onto tooling + upstream before \"{title}\".",
+                        patch.title
+                    ),
+                    Vec::new(),
+                    "apply",
+                    None,
+                )));
+            }
+        }
+        let applied = apply_abs(dir, candidate_abs, title)?;
+        if applied == "conflict" {
+            return Err(Error::Preflight(PreflightError::new(
+                format!(
+                    "Patch \"{title}\" does not apply onto tooling + queued upstream (internal omitted). \
+Rewrite it so it does not need internal changes, promote the internal patch upstream with depends-on, \
+or label the PR uplink:internal-only."
+                ),
+                Vec::new(),
+                "apply",
+                None,
+            )));
+        }
+        Ok(())
+    })
 }
 
 pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result<()> {
+    if opts.internal_only {
+        return Ok(());
+    }
     let queue = read_queue(repo)?;
     let id = format!(
         "upl_preflight_{}",
@@ -346,7 +390,6 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
     let patch = Patch {
         id: id.clone(),
         title: opts.title.clone(),
-        intent: "upstream".into(),
         status: "queued".into(),
         depends_on,
         created_at: String::new(),
@@ -366,13 +409,16 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
     let shas = ensure_revs(repo, &[&opts.from_ref, &opts.head_ref])?;
     write_product_patch(repo, &id, &shas[0], &message, &shas[1])?;
     let candidate_abs = repo.join(patch_path(&id));
-    let result = assert_export_preflight(
-        repo,
-        &queue,
-        &patch,
-        &candidate_abs,
-        opts.preflight_command.map(Some),
-    );
+    let result = (|| {
+        assert_export_preflight(
+            repo,
+            &queue,
+            &patch,
+            &candidate_abs,
+            opts.preflight_command.map(Some),
+        )?;
+        assert_upstream_layer_preflight(repo, &queue, &candidate_abs, &opts.title)
+    })();
     let _ = fs::remove_file(&candidate_abs);
     result
 }

@@ -106,6 +106,8 @@ enum Commands {
         message_file: Option<PathBuf>,
         #[arg(long = "depends-on")]
         depends_on: Vec<String>,
+        #[arg(long)]
+        internal_only: bool,
     },
     Prepare {
         #[arg(long, help = "Base revision (fetched from origin if missing)")]
@@ -370,7 +372,7 @@ fn issue_close_artifact(patch: &Patch) -> Option<serde_json::Value> {
 
 fn print_sync_artifact(repo: &Path, result: &SyncResult) {
     let queue = &result.queue;
-    let conflict = queue.patches.iter().find(|p| p.status == "conflict");
+    let conflict = queue.all_patches().find(|p| p.status == "conflict");
     let mut value = serde_json::json!({
         "lastSync": queue.last_sync,
         "needsApproval": result.needs_approval,
@@ -397,8 +399,8 @@ fn finish_sync(repo: &Path, result: SyncResult) -> Result<(), Error> {
         append_step_summary(report);
     }
     print_sync_artifact(repo, &result);
-    if result.queue.patches.iter().any(|p| p.status == "conflict") {
-        if let Some(conflict) = result.queue.patches.iter().find(|p| p.status == "conflict") {
+    if result.queue.all_patches().any(|p| p.status == "conflict") {
+        if let Some(conflict) = result.queue.all_patches().find(|p| p.status == "conflict") {
             eprintln!(
                 "CONFLICT {} on {}",
                 conflict.id,
@@ -425,7 +427,7 @@ fn print_resolve_artifact(
     if let Some(close) = issue_close_artifact(prior) {
         gh.insert("issueClose".into(), close);
     }
-    let conflict = queue.patches.iter().find(|p| p.status == "conflict");
+    let conflict = queue.all_patches().find(|p| p.status == "conflict");
     if follow_on_conflict {
         if let Some(patch) = conflict {
             gh.insert(
@@ -435,8 +437,7 @@ fn print_resolve_artifact(
         }
     }
     let status = queue
-        .patches
-        .iter()
+        .all_patches()
         .find(|p| p.id == resolved_id)
         .map(|p| p.status.as_str())
         .unwrap_or("");
@@ -546,7 +547,7 @@ fn run() -> Result<(), Error> {
                     interactive: None,
                 },
             )?;
-            if queue.patches.iter().any(|p| {
+            if queue.all_patches().any(|p| {
                 p.source
                     .note
                     .as_deref()
@@ -586,7 +587,14 @@ fn run() -> Result<(), Error> {
                 Ok(patch) => {
                     println!(
                         "{}  {}  {}  {}",
-                        patch.id, patch.intent, patch.status, patch.title
+                        patch.id,
+                        if internal_only {
+                            "internal"
+                        } else {
+                            "upstream"
+                        },
+                        patch.status,
+                        patch.title
                     );
                     if push {
                         let result = push_queue(
@@ -659,8 +667,7 @@ fn run() -> Result<(), Error> {
         Commands::Report { id, out } => {
             let queue = read_queue(&repo)?;
             let patch = queue
-                .patches
-                .iter()
+                .all_patches()
                 .find(|p| p.id == id)
                 .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
             let packet = format_contribution_packet(&repo, patch)?;
@@ -680,6 +687,7 @@ fn run() -> Result<(), Error> {
             message,
             message_file,
             depends_on,
+            internal_only,
         } => {
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
@@ -696,6 +704,7 @@ fn run() -> Result<(), Error> {
                         depends_on,
                         message: Some(message),
                         preflight_command: None,
+                        internal_only,
                     },
                 )
             };
@@ -720,7 +729,7 @@ fn run() -> Result<(), Error> {
         }
         Commands::Approve { id, out } => {
             let queue = read_queue(&repo)?;
-            if !queue.patches.iter().any(|p| p.id == id) {
+            if !queue.all_patches().any(|p| p.id == id) {
                 return Err(Error::msg(format!("unknown patch {id}")));
             }
             let sha = git_ok(&repo, &["rev-parse", STATE_BRANCH]).unwrap_or_else(|_| {
@@ -754,8 +763,7 @@ fn run() -> Result<(), Error> {
         Commands::Submit { id } => {
             let queue = read_queue(&repo)?;
             let patch = queue
-                .patches
-                .iter()
+                .all_patches()
                 .find(|p| p.id == id)
                 .cloned()
                 .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
@@ -883,8 +891,7 @@ fn run() -> Result<(), Error> {
         Commands::Resolve { id } => {
             let prior = read_queue(&repo)?;
             let prior_patch = prior
-                .patches
-                .iter()
+                .all_patches()
                 .find(|p| p.id == id)
                 .cloned()
                 .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
@@ -895,7 +902,7 @@ fn run() -> Result<(), Error> {
                 Err(Error::Conflict(err)) => {
                     let queue = read_queue(&repo)?;
                     print_resolve_artifact(&repo, &id, &prior_patch, &queue, true);
-                    if let Some(conflict) = queue.patches.iter().find(|p| p.status == "conflict") {
+                    if let Some(conflict) = queue.all_patches().find(|p| p.status == "conflict") {
                         eprintln!(
                             "CONFLICT {} on {}",
                             conflict.id,
