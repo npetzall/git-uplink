@@ -430,9 +430,7 @@ fn print_resolve_artifact(
         gh.insert("issueClose".into(), close);
     }
     let conflict = queue.all_patches().find(|p| p.status == "conflict");
-    if follow_on_conflict
-        && let Some(patch) = conflict
-    {
+    if follow_on_conflict && let Some(patch) = conflict {
         gh.insert(
             "issueCreate".into(),
             issue_create_artifact(repo, patch, Some(resolved_id)),

@@ -4,7 +4,7 @@ diff --git a/src/tokens.js b/src/tokens.js
 @@ -8,8 +8,12 @@
    return createHash("sha256").update(String(value)).digest("hex");
  }
- 
+
 +function saltedSha256(value) {
 +  return createHash("sha256").update("salt:" + String(value)).digest("hex");
 +}
@@ -13,5 +13,5 @@ diff --git a/src/tokens.js b/src/tokens.js
 -  return sha256(value);
 +  return saltedSha256(value);
  }
- 
+
  export function ttl() {

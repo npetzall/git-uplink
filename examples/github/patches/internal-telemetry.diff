@@ -3,9 +3,8 @@ diff --git a/src/tokens.js b/src/tokens.js
 +++ b/src/tokens.js
 @@ -9,6 +9,7 @@
  }
- 
+
  export function hash(value) {
 +  companyTelemetry();
    return sha1(value);
  }
- 
