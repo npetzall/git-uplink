@@ -21,15 +21,15 @@ concurrency:
   group: uplink-sync
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  issues: write
-  deployments: write
+permissions: {}
 
 jobs:
   inspect:
     name: Inspect upstream
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
     concurrency:
       group: uplink-mutate
       cancel-in-progress: false
@@ -45,6 +45,8 @@ jobs:
           private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
 
       - name: Mint upstream GitHub App token
         id: upstream-app
@@ -55,10 +57,12 @@ jobs:
           private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
           owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
           repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          permission-contents: read
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: true
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Sync with upstream
@@ -125,6 +129,10 @@ jobs:
     needs: inspect
     if: needs.inspect.outputs.needs_approval == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      deployments: write
     environment:
       name: from-upstream
       url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/from-upstream/incoming.md
@@ -141,6 +149,8 @@ jobs:
           private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
 
       - name: Mint upstream GitHub App token
         id: upstream-app
@@ -151,10 +161,12 @@ jobs:
           private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
           owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
           repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          permission-contents: read
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: true
           ref: main
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
