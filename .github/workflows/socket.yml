@@ -7,7 +7,7 @@ run-name: Socket Security Github Action
 
 on:
   push:
-    branches: ['**']  # Run on all branches, all commits
+    branches: [main]
   pull_request:
     types: [opened, synchronize, reopened]
   issue_comment:
