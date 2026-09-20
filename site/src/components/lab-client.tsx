@@ -273,7 +273,7 @@ export function LabClient() {
                 </p>
               </CardHeader>
               <CardContent>
-                <FileView files={state.company} />
+                <FileView files={state.company} highlight={scenario.highlight} />
               </CardContent>
             </Card>
             <Card>

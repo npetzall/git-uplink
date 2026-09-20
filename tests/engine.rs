@@ -8,11 +8,12 @@ use git_uplink::{
     GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QueueConfig, QueueState,
     RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
     accept_upstream, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
-    format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
-    init, init_repo, mark_merged, parse_depends_on, preflight_incoming_change, push_queue, rebuild,
-    rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
-    reset_from_origin, resolve_conflict, status_snapshot, strip_html_comments, submit_patch,
-    summarize_queue, sync, transfer_patch, write_queue,
+    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
+    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
+    parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
+    resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
+    transfer_patch, write_queue,
 };
 use tempfile::TempDir;
 
@@ -408,7 +409,7 @@ fn init_records_remote_urls_and_internal_branch() {
     assert!(
         world
             .company
-            .join(".github/workflows/uplink-prepare.yml")
+            .join(".github/workflows/uplink-assess.yml")
             .is_file()
     );
     assert!(
@@ -972,9 +973,9 @@ fn init_without_args_does_not_rewrite_workflows() {
     .unwrap();
     let clone = clone_parent.join("product");
     fs::remove_dir_all(clone.join(".github")).unwrap();
-    assert!(!clone.join(".github/workflows/uplink-prepare.yml").is_file());
+    assert!(!clone.join(".github/workflows/uplink-assess.yml").is_file());
     init(&clone, InitOpts::default()).unwrap();
-    assert!(!clone.join(".github/workflows/uplink-prepare.yml").is_file());
+    assert!(!clone.join(".github/workflows/uplink-assess.yml").is_file());
 }
 
 #[test]
@@ -1014,7 +1015,7 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
     .unwrap();
     write(
         &world.company,
-        ".github/workflows/uplink-prepare.yml",
+        ".github/workflows/uplink-assess.yml",
         "stale\n",
     );
     git(&world.company, &["add", "-A"], GitOpts::default()).unwrap();
@@ -1064,9 +1065,9 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
         Some("stale")
     );
     let prepare =
-        fs::read_to_string(world.company.join(".github/workflows/uplink-prepare.yml")).unwrap();
+        fs::read_to_string(world.company.join(".github/workflows/uplink-assess.yml")).unwrap();
     assert!(
-        prepare.contains("name: Uplink prepare for upstream"),
+        prepare.contains("name: Uplink assess for upstream"),
         "{prepare}"
     );
     assert!(!prepare.trim().eq("stale"));
@@ -1184,7 +1185,7 @@ fn init_adopts_linear_history_without_moving_main() {
     assert!(
         !world
             .company
-            .join(".github/workflows/uplink-prepare.yml")
+            .join(".github/workflows/uplink-assess.yml")
             .is_file()
     );
 }
@@ -1239,7 +1240,7 @@ fn rebuild_preview_branch_leaves_main_and_queue_alone() {
         &[
             "cat-file",
             "-e",
-            "uplink/verify:.github/workflows/uplink-prepare.yml",
+            "uplink/verify:.github/workflows/uplink-assess.yml",
         ],
         GitOpts::default(),
     )
@@ -1263,7 +1264,7 @@ fn rebuild_after_adopt_replays_onto_main() {
     assert!(
         world
             .company
-            .join(".github/workflows/uplink-prepare.yml")
+            .join(".github/workflows/uplink-assess.yml")
             .is_file()
     );
     assert_eq!(
@@ -4066,7 +4067,7 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
         },
     )
     .unwrap();
-    let prepare = patch.prepare.as_ref().unwrap();
+    let prepare = patch.assess.as_ref().unwrap();
     assert!(prepare.ok);
     assert!(prepare.cutoff_found);
     assert_eq!(prepare.author_email, "jane@users.noreply.github.com");
@@ -4206,7 +4207,7 @@ fn refuses_import_when_the_export_diff_names_the_company() {
         },
     )
     .unwrap_err();
-    assert!(matches!(err, Error::Prepare(_)));
+    assert!(matches!(err, Error::Assess(_)));
     assert_eq!(
         status_snapshot(company)
             .unwrap()
@@ -4293,6 +4294,102 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
     )
     .unwrap();
     assert_ne!(on_main.code, 0, ".uplink must not live on main");
+}
+
+#[test]
+fn report_extra_dir_prepends_markdown_and_rejects_dotdot_names() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let extras = temp_dir();
+    write(
+        extras.path(),
+        "10-legal.md",
+        "## Legal\n\nCleared for export.\n",
+    );
+    write(
+        extras.path(),
+        "20-license.md",
+        "## License\n\nScan is clean.\n",
+    );
+    write(extras.path(), ".hidden.md", "must not appear");
+    write(extras.path(), "notes.txt", "ignored");
+
+    let packet =
+        format_contribution_packet_with_extras(company, &patch, Some(extras.path())).unwrap();
+    assert!(
+        packet.starts_with("## Legal"),
+        "extras must lead the packet:\n{packet}"
+    );
+    let legal = packet.find("## Legal").unwrap();
+    let license = packet.find("## License").unwrap();
+    let heading = packet.find("# Contribution packet").unwrap();
+    assert!(legal < license);
+    assert!(license < heading);
+    assert!(!packet.contains("must not appear"));
+    assert!(!packet.contains("ignored"));
+
+    let without = format_contribution_packet(company, &patch).unwrap();
+    assert!(without.starts_with("# Contribution packet"));
+
+    let (_, assessment_path, _) = report_paths(&patch.id).unwrap();
+    assert!(assessment_path.ends_with("assessment.md"));
+
+    let bad = temp_dir();
+    write(bad.path(), "foo..md", "nope");
+    let err = load_extra_markdown(bad.path()).unwrap_err();
+    assert!(err.to_string().contains("invalid path component"), "{err}");
+}
+
+#[test]
+fn rust_sources_have_no_prepare_identifiers() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let needles = [
+        "PrepareReport",
+        "PrepareCheck",
+        "PrepareError",
+        "Commands::Prepare",
+        "Error::Prepare",
+        "git uplink prepare",
+        "uplink-prepare",
+        "prepare.md",
+        "mod prepare",
+    ];
+    for entry in fs::read_dir(&src).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        for needle in needles {
+            assert!(
+                !text.contains(needle),
+                "{} still contains {needle}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[test]

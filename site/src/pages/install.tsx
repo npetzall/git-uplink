@@ -69,10 +69,10 @@ git uplink reset
 git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
             [--depends-on <id>]...
-git uplink prepare [--from <ref>] [--head <ref>] [--title <text>]
+git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
             [--internal-only]
-git uplink report <id> [--out <file>]
+git uplink report <id> [--out <file>] [--extra-dir <path>]
 git uplink status [--json]
 git uplink approve <id> [--out <file>]
 git uplink submit <id>

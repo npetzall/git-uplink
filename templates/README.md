@@ -15,18 +15,18 @@ The `ghec` pack needs the `git-uplink` binary on `PATH`. Install this crate on t
 
 Each job’s first `git uplink` command is `git uplink init`, which fetches `origin` `uplink/state` and `uplink/upstream` and adds the `upstream` and `contrib` remotes from URLs stored in `.uplink/queue.json`. That hydrate path does not rewrite workflows. First-time setup is `git uplink init --upstream <url> --contrib <url> --forge ghec` in the product clone (then push `main` and `uplink/state`). Pushing `.github/workflows` needs **workflows** write, not `GITHUB_TOKEN`.
 
-Sync, resolve, and transfer mint `UPLINK_INTERNAL_TOKEN` first and pass it to `actions/checkout` with `persist-credentials: true`, so shell `git fetch` / `git push` of **origin** can include `.github/workflows` (GitHub rejects `GITHUB_TOKEN` for those files). The submit packet job also persists credentials (`GITHUB_TOKEN`) for its shell `git push` of `uplink/state`. Prepare, preflight, import, and the submit job set `persist-credentials: false`; `git uplink` blanks the checkout extraheader and authenticates by remote (`UPLINK_INTERNAL_*` for origin, `UPLINK_UPSTREAM_*` for public upstream fetch, `UPLINK_CONTRIB_*` for contrib force-push). `GITHUB_TOKEN` is `GH_TOKEN` for `gh` on the company repo (gated PRs, PR comments, dispatching submit). It cannot open the public pull request. Import/sync/resolve/submit/transfer mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write.
+Sync, resolve, and transfer mint `UPLINK_INTERNAL_TOKEN` first and pass it to `actions/checkout` with `persist-credentials: true`, so shell `git fetch` / `git push` of **origin** can include `.github/workflows` (GitHub rejects `GITHUB_TOKEN` for those files). The submit packet and finalize jobs also persist credentials (`GITHUB_TOKEN`) for their shell `git push` of `uplink/state`. Assess, preflight, import, and the submit job set `persist-credentials: false`; `git uplink` blanks the checkout extraheader and authenticates by remote (`UPLINK_INTERNAL_*` for origin, `UPLINK_UPSTREAM_*` for public upstream fetch, `UPLINK_CONTRIB_*` for contrib force-push). `GITHUB_TOKEN` is `GH_TOKEN` for `gh` on the company repo (gated PRs, PR comments, dispatching submit and the optional assessment hook). It cannot open the public pull request. Import/sync/resolve/submit/transfer mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write.
 
 ## Workflows
 
-- **Prepare** (`uplink-prepare.yml`) — on every PR to `main`. Uses the PR title and body as the single commit message, strips HTML comments, keeps the cutoff on company main, rewrites author, scans for company keywords / internal emails, writes `GITHUB_STEP_SUMMARY`, and the workflow posts the report with `gh pr comment`. Required check.
+- **Assess** (`uplink-assess.yml`) — on every PR to `main`. Uses the PR title and body as the single commit message, strips HTML comments, keeps the cutoff on company main, rewrites author, scans for company keywords / internal emails, writes `GITHUB_STEP_SUMMARY`, and the workflow posts the report with `gh pr comment`. Required check.
 - **Preflight** (`uplink-preflight.yml`) — required check on PRs to `main` except `uplink:internal-only`. Applies the PR onto public upstream plus `Uplink-Depends-On` lines, then onto tooling + queued upstream (internal omitted), then runs `UPLINK_PREFLIGHT`. Failure prints a comment body; the workflow posts it with `gh pr comment`. Do not merge until it is green.
 - **Import** (`uplink-import.yml`) — internal product approval. Merge the PR after engineering review. Internal-only import records the patch on `uplink/state` and leaves `main` at the merge tree. Upstream import records the patch, rebuilds `tooling → upstream[] → internal[]`, and publishes rewritten `main` plus `uplink/state`. Export preflight must still pass for upstream-bound PRs.
 - **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream without moving `uplink/upstream` until inbound review. Commits that match a company patch (trailer / `patch-id`) apply immediately. Any unmatched commit writes `.uplink/reports/from-upstream/incoming.md` and waits on Environment **`from-upstream`**; after approval, `git uplink accept-upstream` promotes `uplink/upstream` and rebuilds `main`. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>` (protected base) and `<id>-work`, and emits `gh.prCreate` JSON. The workflow opens the gated PR then `git uplink gated`.
 - **Resolve** (`uplink-resolve.yml`) — when the gated conflict PR is **merged** into `uplink/conflict/<id>`. Runs `git uplink resolve`, rebuilds `main`, deletes the base and `-work` branches, and if rebuild stops later publishes the next conflict PR. If the resolved patch was already submitted, status becomes `amended` and this workflow dispatches **Uplink submit**.
 - **Transfer** (`uplink-transfer.yml`) — dispatch with a patch id and `to-upstream` / `to-internal`. `git uplink transfer` moves the patch immediately when apply and preflight pass. If bytes must change, it pushes `uplink/transfer-to-*/<id>` plus `-work` and the workflow opens a PR (queue unchanged). Merging runs `--complete`. Closing the PR without merging deletes both branches.
 - **Gate** (`uplink-gate.yml`) — required check on PRs into the three protected bases. Fails if conflict markers remain. Transfer-to-upstream PRs also run export preflight / `UPLINK_PREFLIGHT`. These PRs are not imports to `main`.
-- **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`to-upstream` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits the report (full contribution, or a delta-first packet when status is `amended`); environment reviewers approve; the same run then `git uplink approve` + `git uplink submit` (contrib git push) + `gh pr create` + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR.
+- **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`to-upstream` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits `assessment.md` (full contribution, or a delta-first packet when status is `amended`). Finalize optionally dispatches company `.github/workflows/uplink-assessment-hook.yml`, downloads artifact `uplink-packet-extra` from that run, and prepends those markdown files onto the packet. Environment reviewers then approve; the same run `git uplink approve` + `git uplink submit` (contrib git push) + `gh pr create` + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR. Do not edit this workflow to add company scans — add the assessment hook instead.
 
 Repo variables:
 
@@ -40,7 +40,7 @@ Repo variables:
 | `UPLINK_UPSTREAM_AUTH` | Same models for public upstream fetch. Empty defaults to `app`. |
 | `UPLINK_CONTRIB_AUTH` | Same models for contrib force-push. Empty defaults to `app`. |
 
-Import, resolve, and transfer share the Actions concurrency group `uplink-mutate` at workflow or job level. Sync uses workflow group **`uplink-sync`** so a waiting `from-upstream` review does not stack hourly runs, and job-level `uplink-mutate` on inspect/apply so that wait does not freeze imports. Submit uses `uplink-mutate` **per job** (packet, then submit) so IP’s environment wait does not freeze imports. The CLI retries a rejected fast-forward of `uplink/state` if another import landed first.
+Import, resolve, and transfer share the Actions concurrency group `uplink-mutate` at workflow or job level. Sync uses workflow group **`uplink-sync`** so a waiting `from-upstream` review does not stack hourly runs, and job-level `uplink-mutate` on inspect/apply so that wait does not freeze imports. Submit uses `uplink-mutate` **per job** (packet, finalize, then submit) so IP’s environment wait does not freeze imports. The CLI retries a rejected fast-forward of `uplink/state` if another import landed first.
 
 ---
 
@@ -53,7 +53,7 @@ This is the documented option. Use it instead of asking an operator to run `git 
 ### What the reviewer sees
 
 1. **Job summary** — the packet job appends the contribution packet to `GITHUB_STEP_SUMMARY` (company and upstream commit messages, export author, leak checks, depends-on). For an `amended` patch the packet **leads with the delta** since the last approval and includes historical packets marked already approved. Open the workflow run; the summary is on the completed packet job.
-2. **Committed report** — `.uplink/reports/<id>/prepare.md` on `uplink/state`. The `to-upstream` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
+2. **Committed report** — `.uplink/reports/<id>/assessment.md` on `uplink/state`. The `to-upstream` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
 3. **Environment review UI** — GitHub pauses the submit job until a required reviewer approves the `to-upstream` deployment. That click is the IP gate.
 
 After approval, the submit job writes `.uplink/reports/<id>/approval.md` (in-repo receipt), runs `git uplink approve`, `git uplink submit` (contrib git push), `gh pr create`, then `git uplink submitted` (records the PR and pushes `uplink/state`). The public contrib App token is minted in this job only (`UPLINK_CONTRIB_AUTH=app`).
@@ -107,7 +107,7 @@ The company-repo `GITHUB_TOKEN` (on GHEC EMU, the enterprise token) is still use
 
 ### Ruleset so reports can be committed
 
-The packet job **fast-forwards** a commit of `.uplink/reports/<id>/prepare.md` on `uplink/state` (not a force-push). Import records the patch on `uplink/state` after the PR merge. Internal-only import leaves `main` at the merge tree. Upstream import rebuilds `tooling → upstream[] → internal[]` and publishes rewritten `main`. Sync force-updates `main` when an upstream rebuild is required. Allow **GitHub Actions** (`GITHUB_TOKEN` on the submit packet job) and the **internal** Uplink bot (`UPLINK_INTERNAL_*` for `git uplink` origin transport, and for sync/resolve shell origin push) to push:
+The packet job **fast-forwards** a commit of `.uplink/reports/<id>/assessment.md` on `uplink/state` (not a force-push). Import records the patch on `uplink/state` after the PR merge. Internal-only import leaves `main` at the merge tree. Upstream import rebuilds `tooling → upstream[] → internal[]` and publishes rewritten `main`. Sync force-updates `main` when an upstream rebuild is required. Allow **GitHub Actions** (`GITHUB_TOKEN` on the submit packet job) and the **internal** Uplink bot (`UPLINK_INTERNAL_*` for `git uplink` origin transport, and for sync/resolve shell origin push) to push:
 
 - Humans still require a pull request to `main`.
 - Actions may bypass to fast-forward `uplink/state`, and to force-push `main` when upstream (or drop/resolve/transfer) requires a replay.
@@ -124,8 +124,11 @@ queued patch on uplink/state (PR already merged to company main)
 workflow_dispatch Uplink submit (patch_id)
         │
         ▼
-packet job: git uplink report → STEP_SUMMARY + commit prepare.md
+packet job: git uplink report → STEP_SUMMARY + commit assessment.md
         │
+        ▼
+finalize: optional uplink-assessment-hook.yml → artifact uplink-packet-extra
+        │  extras prepended; skip if the company file is absent
         ▼
 submit job waits on environment to-upstream   ← IP/legal reviews packet
         │  (Deployments + enterprise audit log)
@@ -140,7 +143,7 @@ fork branch + public PR (first bytes leaving the private forge)
 
 If a submitted patch later conflicts, resolve sets amended and
 dispatches this workflow again. The packet leads with the delta;
-historical prepare.md is read from the prior approval SHA on
+historical assessment.md is read from the prior approval SHA on
 uplink/state. The workflow skips creating a PR when pr_number is stored.
 ```
 
@@ -158,7 +161,36 @@ That still writes the same markdown under `.uplink/reports/`. It does **not** cr
 
 ---
 
+## Assessment hook
+
+Company scans that must enter the IP packet run **after** the packet job and **before** `to-upstream`. Do not edit `uplink-submit.yml`. Add `.github/workflows/uplink-assessment-hook.yml` as an internal-only product patch (`uplink:internal-only` so it never goes upstream). `--upgrade` never touches a file that is not in the forge pack.
+
+Copy-paste starter: [`examples/github/patches/uplink-assessment-hook.yml`](../examples/github/patches/uplink-assessment-hook.yml). Walkthrough: [`examples/github/stories/07-assessment-hook.md`](../examples/github/stories/07-assessment-hook.md). Do not put that file in `.github/workflows/` of the pack — GitHub treats every workflow YAML there as live.
+
+**Contract**
+
+1. Inputs: `patch_id`, `caller_run_id` (submit’s `github.run_id`). Include both in `run-name` so submit can find this run (`workflow_dispatch` does not return a run id).
+2. Produce one or more `*.md` files. Upload them as artifact **`uplink-packet-extra`**.
+3. Do **not** push `uplink/state`. Submit is the only writer of the committed packet.
+4. Failure fails the assessment-hook run. Submit treats that as a failed gate (`gh run watch --exit-status`), so IP is never asked.
+
+Submit’s **finalize** job:
+
+- Skips if `HEAD:.github/workflows/uplink-assessment-hook.yml` is missing.
+- Otherwise `gh workflow run uplink-assessment-hook.yml` with those inputs, waits until `displayTitle` contains both ids, then downloads the artifact from **that run id** (`actions/download-artifact` + `GITHUB_TOKEN`; `actions:read` is enough on the same repo). A missing artifact is ignored (the hook ran but uploaded nothing).
+- If markdown files exist, `git uplink report <id> --extra-dir <download>` prepends them (name order, skip hidden) **before** `# Contribution packet` / `# Delta packet`, then pushes `uplink/state`.
+- Appends the assembled packet to finalize’s `GITHUB_STEP_SUMMARY` (what IP should read). The `to-upstream` deployment URL still points at `assessment.md`.
+
+Assess on the internal PR has no patch id yet. Extra required scans belong in sibling `pull_request` workflows. The assessment hook copies those findings into the artifact (look up the internal PR via `source.internalPrNumber` on the queued patch).
+
+**Why not job outputs.** Outputs exist only inside one run (`needs.*.outputs`), cap at 1 MB per job, and do not survive `workflow_dispatch`. Artifacts do, and they are downloadable from another run by `run-id`.
+
+**Why not `on: workflow_run` for Uplink submit.** That event fires when the *whole* submit run completes — after IP already approved. Too late to inject extras. Resolve’s cancel + re-dispatch is for an *amended* patch, not for assessment-hook extras.
+
+---
+
 ## from-upstream environment (inbound public main)
+
 
 Hourly sync must not silently take unrelated upstream commits onto company `main`. Create a second repository Environment named **`from-upstream`**. Required reviewers are whoever should review inbound public changes (security / engineering). Do **not** put `UPLINK_INTERNAL_*` or contrib secrets on this environment: inspect and import must not wait, and this gate is review-only. The contrib write App stays on **`to-upstream`**.
 

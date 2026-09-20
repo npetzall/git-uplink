@@ -1,0 +1,56 @@
+# Copy this file to `.github/workflows/uplink-assessment-hook.yml` as an
+# internal-only product patch. Do not add it to the forge pack.
+# `git uplink init --upgrade` will not overwrite a company-owned file
+# that is not in the pack.
+#
+# Uplink submit dispatches this workflow after it writes assessment.md and
+# before the to-upstream environment wait. Upload markdown as artifact
+# `uplink-packet-extra`. Do not push `uplink/state`.
+name: Uplink assessment hook
+run-name: Uplink assessment hook ${{ inputs.patch_id }} ${{ inputs.caller_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_id:
+        description: Patch id (upl_…)
+        required: true
+        type: string
+      caller_run_id:
+        description: Uplink submit run id (used to match this hook run)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  extra:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - name: Write company extras
+        env:
+          PATCH_ID: ${{ inputs.patch_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p extras
+          cat > extras/10-company.md <<EOF
+          ## Company review notes
+
+          Extra details for patch \`${PATCH_ID}\`. Replace this step with Jira,
+          license, or classification output. Uplink prepends every \`*.md\` file
+          in this artifact to \`.uplink/reports/<id>/assessment.md\`.
+          EOF
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: uplink-packet-extra
+          path: extras/*.md
+          if-no-files-found: error

@@ -3,9 +3,9 @@ use std::path::Path;
 
 use rust_embed::RustEmbed;
 
+use crate::assess::assess_from_message;
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok};
-use crate::prepare::prepare_from_message;
 use crate::queue::{
     add_event, get_patch, patch_path, read_queue as read_queue_file,
     write_queue as write_queue_file,
@@ -83,7 +83,7 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
     fs::write(repo.join(&patch_rel), &formatted)?;
 
     let message = tooling_commit_message();
-    let prepare = prepare_from_message(
+    let assess = assess_from_message(
         repo,
         &queue,
         &from_sha,
@@ -108,7 +108,7 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
                 note: Some(format!("forge {forge}")),
                 ..Default::default()
             },
-            prepare: Some(prepare.clone()),
+            assess: Some(assess.clone()),
             upstream: None,
             merged: None,
             conflict: None,
@@ -116,7 +116,7 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
             events: Vec::new(),
             kind: Some(TOOLING_PATCH_KIND.into()),
         };
-        patch.commit_message = prepare.commit_message.clone();
+        patch.commit_message = assess.commit_message.clone();
         add_event(
             &mut patch,
             "created",
@@ -138,8 +138,8 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
             patch.status = "queued".into();
             patch.conflict = None;
             patch.patch_id_stable = Some(new_stable);
-            patch.prepare = Some(prepare.clone());
-            patch.commit_message = prepare.commit_message.clone();
+            patch.assess = Some(assess.clone());
+            patch.commit_message = assess.commit_message.clone();
             add_event(
                 patch,
                 "upgraded",
@@ -301,7 +301,7 @@ mod embed_tests {
         let files = composed_files(Forge::Ghec).unwrap();
         let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
         assert!(
-            paths.contains(&".github/workflows/uplink-prepare.yml"),
+            paths.contains(&".github/workflows/uplink-assess.yml"),
             "{paths:?}"
         );
         assert!(
@@ -338,5 +338,37 @@ mod embed_tests {
             .unwrap()
             .1;
         assert_eq!(ghec_pr, example_pr);
+    }
+
+    #[test]
+    fn submit_workflows_run_optional_hooks_before_to_upstream() {
+        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+            let files = composed_files(forge).unwrap();
+            let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+            assert!(
+                !paths
+                    .iter()
+                    .any(|p| p.ends_with("uplink-assessment-hook.yml")),
+                "{forge:?} must not embed company assessment hook: {paths:?}"
+            );
+            let submit = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-submit.yml"))
+                .unwrap();
+            let text = String::from_utf8_lossy(&submit.1);
+            assert!(
+                text.contains("uplink-assessment-hook.yml"),
+                "{forge:?}\n{text}"
+            );
+            assert!(text.contains("uplink-packet-extra"), "{forge:?}");
+            assert!(text.contains("run-id:"), "{forge:?}");
+            assert!(text.contains("needs: finalize"), "{forge:?}");
+            assert!(text.contains("assessment.md"), "{forge:?}");
+            assert!(text.contains("continue-on-error: true"), "{forge:?}");
+            assert!(
+                paths.contains(&".github/workflows/uplink-assess.yml"),
+                "{forge:?} {paths:?}"
+            );
+        }
     }
 }

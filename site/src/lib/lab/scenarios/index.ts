@@ -1,4 +1,5 @@
 import type { LabScenario } from "../../simulator";
+import { assessmentHook } from "./assessment-hook";
 import { camTwoDeps } from "./cam-two-deps";
 import { fullLifecycle } from "./full-lifecycle";
 import { internalOnly } from "./internal-only";
@@ -17,6 +18,7 @@ export const LAB_SCENARIOS: LabScenario[] = [
   upstreamConflict,
   camTwoDeps,
   internalOnly,
+  assessmentHook,
 ];
 
 export function scenarioById(id: string | null | undefined): LabScenario {

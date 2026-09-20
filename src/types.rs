@@ -110,7 +110,7 @@ pub struct PatchEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareCheck {
+pub struct AssessCheck {
     pub id: String,
     pub status: String,
     pub detail: String,
@@ -118,7 +118,7 @@ pub struct PrepareCheck {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PrepareReport {
+pub struct AssessReport {
     pub at: String,
     pub ok: bool,
     #[serde(default)]
@@ -132,7 +132,7 @@ pub struct PrepareReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_email: Option<String>,
     pub cutoff_found: bool,
-    pub checks: Vec<PrepareCheck>,
+    pub checks: Vec<AssessCheck>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -280,7 +280,7 @@ pub struct Patch {
     pub patch_id_stable: Option<String>,
     pub source: PatchSource,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prepare: Option<PrepareReport>,
+    pub assess: Option<AssessReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream: Option<PatchUpstream>,
     #[serde(skip_serializing_if = "Option::is_none")]

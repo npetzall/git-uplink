@@ -31,7 +31,7 @@ git push -u origin feat/sha256
 
 On GitHub, open **Compare & pull request** for `feat/sha256` into `main`. Title: `Use SHA-256 for tokens`. Body: paste [`patches/asha-sha256.pr.md`](../patches/asha-sha256.pr.md).
 
-Wait until **Uplink prepare for upstream** and **Uplink export preflight** are green. The first run compiles git-uplink and is slow.
+Wait until **Uplink assess for upstream** and **Uplink export preflight** are green. The first run compiles git-uplink and is slow.
 
 ## Import (product gate)
 
@@ -48,7 +48,7 @@ Asha’s patch is `queued` (`upl_` + 10 hex digits). `src/tokens.js` on `main` c
 
 **Actions → Uplink submit → Run workflow** on internal `main`, input `patch_id` = that id.
 
-The packet job writes `.uplink/reports/<id>/prepare.md` on `uplink/state`. The submit job waits on Environment **to-upstream**. Open the run → **Review deployments** → approve `to-upstream`.
+The packet job writes `.uplink/reports/<id>/assessment.md` on `uplink/state`. The submit job waits on Environment **to-upstream**. Open the run → **Review deployments** → approve `to-upstream`.
 
 After it finishes, `git uplink status` shows `submitted`. GitHub has a PR from `uplink-example-upstream-contrib` (`uplink/<id>`) into `uplink-example-upstream`.
 

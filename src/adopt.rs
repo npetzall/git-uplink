@@ -4,10 +4,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::assess::{assert_assess_ok, assess_from_message, company_commit_message};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::lock::with_queue_lock;
-use crate::prepare::{assert_prepare_ok, company_commit_message, prepare_from_message};
 use crate::queue::{
     add_event, cannot_depend_on, get_patch, patch_path, read_queue as read_queue_file,
     write_queue as write_queue_file,
@@ -439,7 +439,7 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
                     )),
                     ..Default::default()
                 },
-                prepare: None,
+                assess: None,
                 upstream: None,
                 merged: None,
                 conflict: None,
@@ -456,7 +456,7 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
                     &group.head_sha[..group.head_sha.len().min(8)]
                 ),
             );
-            patch.prepare = Some(prepare_from_message(
+            patch.assess = Some(assess_from_message(
                 repo,
                 &queue,
                 &group.from_sha,
@@ -465,10 +465,10 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
                 Some(&group.title),
                 intent,
             )?);
-            if let Some(report) = &patch.prepare {
+            if let Some(report) = &patch.assess {
                 patch.commit_message = report.commit_message.clone();
                 if intent == "upstream" {
-                    assert_prepare_ok(report, &group.title)?;
+                    assert_assess_ok(report, &group.title)?;
                 }
             }
             let message = company_commit_message(&patch);

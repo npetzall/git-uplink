@@ -5,13 +5,12 @@ use std::path::Path;
 
 use regex::Regex;
 
-use crate::error::{Error, PrepareError, Result};
+use crate::error::{AssessError, Error, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::queue::now_iso;
 use crate::repo::{ensure_revs, has_ref, show_at, state_branch};
 use crate::types::{
-    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR, Patch, PrepareCheck, PrepareReport,
-    QueueState,
+    AssessCheck, AssessReport, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR, Patch, QueueState,
 };
 
 pub const TO_UPSTREAM_ENVIRONMENT: &str = "to-upstream";
@@ -209,13 +208,13 @@ fn with_trailers(message: &str, patch: &Patch) -> String {
 }
 
 fn public_subject_and_body(patch: &Patch) -> (String, String) {
-    if let Some(prepare) = &patch.prepare {
-        let subject = if prepare.public_subject.is_empty() {
+    if let Some(assess) = &patch.assess {
+        let subject = if assess.public_subject.is_empty() {
             patch.title.clone()
         } else {
-            prepare.public_subject.clone()
+            assess.public_subject.clone()
         };
-        return (subject, prepare.public_body.trim().to_string());
+        return (subject, assess.public_body.trim().to_string());
     }
     let (public, _) = split_internal_message(&stored_commit_message(patch), DEFAULT_CUTOFF);
     subject_and_body(&public, &patch.title)
@@ -225,14 +224,14 @@ pub fn stored_commit_message(patch: &Patch) -> String {
     if !patch.commit_message.trim().is_empty() {
         return patch.commit_message.trim().to_string();
     }
-    if let Some(prepare) = &patch.prepare {
-        if !prepare.commit_message.trim().is_empty() {
-            return prepare.commit_message.trim().to_string();
+    if let Some(assess) = &patch.assess {
+        if !assess.commit_message.trim().is_empty() {
+            return assess.commit_message.trim().to_string();
         }
-        let mut parts = vec![prepare.public_subject.clone()];
-        if !prepare.public_body.trim().is_empty() {
+        let mut parts = vec![assess.public_subject.clone()];
+        if !assess.public_body.trim().is_empty() {
             parts.push(String::new());
-            parts.push(prepare.public_body.trim().to_string());
+            parts.push(assess.public_body.trim().to_string());
         }
         let joined = parts.join("\n");
         if !joined.trim().is_empty() {
@@ -260,7 +259,7 @@ fn format_fenced(message: &str) -> String {
     format!("```\n{}\n```", message.trim_end())
 }
 
-pub fn format_prepare_markdown(report: &PrepareReport) -> String {
+pub fn format_assess_markdown(report: &AssessReport) -> String {
     let checks = report
         .checks
         .iter()
@@ -284,7 +283,7 @@ pub fn format_prepare_markdown(report: &PrepareReport) -> String {
         report.commit_message.trim().to_string()
     };
     format!(
-        "## Uplink prepare-for-upstream\n\n\
+        "## Uplink assess-for-upstream\n\n\
 This is the contribution as it would leave the enterprise. HTML comments from the PR template are stripped. Internal lines below the cutoff stay on company main and are removed before export. Author is rewritten. Approvers can use this report instead of reconstructing the public PR by hand.\n\n\
 **Ready:** {}\n\
 **Public subject:** {}\n\
@@ -314,12 +313,12 @@ This is the contribution as it would leave the enterprise. HTML comments from th
 }
 
 pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
-    let prepare = patch
-        .prepare
+    let assessment = patch
+        .assess
         .as_ref()
-        .map(format_prepare_markdown)
+        .map(format_assess_markdown)
         .unwrap_or_else(|| {
-            "## Uplink prepare-for-upstream\n\nNo prepare report stored. Run `git uplink prepare` on the internal PR first.\n".into()
+            "## Uplink assess-for-upstream\n\nNo assess report stored. Run `git uplink assess` on the internal PR first.\n".into()
         });
     let pr = patch
         .source
@@ -354,7 +353,7 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 {company}\n\n\
 ### Upstream contrib\n\n\
 {contrib}\n\n\
-{prepare}\n\
+{assessment}\n\
 ## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
@@ -371,11 +370,61 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 }
 
 pub fn format_contribution_packet(repo: &Path, patch: &Patch) -> Result<String> {
-    if patch.status == "amended" {
-        format_delta_approver_packet(repo, patch)
+    format_contribution_packet_with_extras(repo, patch, None)
+}
+
+pub fn format_contribution_packet_with_extras(
+    repo: &Path,
+    patch: &Patch,
+    extra_dir: Option<&Path>,
+) -> Result<String> {
+    let packet = if patch.status == "amended" {
+        format_delta_approver_packet(repo, patch)?
     } else {
-        Ok(format_approver_packet(patch))
+        format_approver_packet(patch)
+    };
+    prepend_report_extras(&packet, extra_dir)
+}
+
+pub fn load_extra_markdown(dir: &Path) -> Result<String> {
+    if !dir.is_dir() {
+        return Err(Error::msg(format!(
+            "extra-dir {} is not a directory",
+            dir.display()
+        )));
     }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || !name.ends_with(".md") || entry.path().is_dir() {
+            continue;
+        }
+        crate::queue::require_path_component(name.as_ref())?;
+        names.push(name.into_owned());
+    }
+    names.sort();
+    let mut parts = Vec::new();
+    for name in names {
+        let body = fs::read_to_string(dir.join(&name))?;
+        let body = body.trim();
+        if !body.is_empty() {
+            parts.push(body.to_string());
+        }
+    }
+    Ok(parts.join("\n\n"))
+}
+
+pub fn prepend_report_extras(packet: &str, extra_dir: Option<&Path>) -> Result<String> {
+    let Some(dir) = extra_dir else {
+        return Ok(packet.to_string());
+    };
+    let extras = load_extra_markdown(dir)?;
+    if extras.is_empty() {
+        return Ok(packet.to_string());
+    }
+    Ok(format!("{extras}\n\n{packet}"))
 }
 
 pub fn format_delta_approver_packet(repo: &Path, patch: &Patch) -> Result<String> {
@@ -644,10 +693,10 @@ fn format_historical_approvals(repo: &Path, patch: &Patch) -> Result<String> {
         "## Previously approved packets\n\nEach packet below **was already approved**. The delta above is what still needs review.\n"
             .to_string(),
     ];
-    let (_, prepare_path, approval_path) = report_paths(&patch.id)?;
+    let (_, assessment_path, approval_path) = report_paths(&patch.id)?;
     for approval in &patch.approvals {
-        let packet = show_at(repo, &approval.sha, &prepare_path)
-            .unwrap_or_else(|_| "No `prepare.md` stored at this commit.\n".into());
+        let packet = show_at(repo, &approval.sha, &assessment_path)
+            .unwrap_or_else(|_| "No `assessment.md` stored at this commit.\n".into());
         let receipt = show_at(repo, &approval.sha, &approval_path).ok();
         let run = approval.run_url.as_deref().unwrap_or("not recorded");
         let mut body = format!(
@@ -712,7 +761,7 @@ pub fn report_paths(id: &str) -> Result<(String, String, String)> {
     let dir = format!(".uplink/reports/{id}");
     Ok((
         dir.clone(),
-        format!("{dir}/prepare.md"),
+        format!("{dir}/assessment.md"),
         format!("{dir}/approval.md"),
     ))
 }
@@ -805,7 +854,7 @@ These commits match a company patch (`{trailer}` trailer or `git patch-id --stab
     ))
 }
 
-pub fn prepare_from_message(
+pub fn assess_from_message(
     repo: &Path,
     queue: &QueueState,
     from_ref: &str,
@@ -813,7 +862,7 @@ pub fn prepare_from_message(
     message: &str,
     title: Option<&str>,
     intent: &str,
-) -> Result<PrepareReport> {
+) -> Result<AssessReport> {
     let shas = ensure_revs(repo, &[from_ref, head_ref])?;
     let from_ref = shas[0].as_str();
     let head_ref = shas[1].as_str();
@@ -862,7 +911,7 @@ pub fn prepare_from_message(
         .collect();
 
     let mut checks = vec![
-        PrepareCheck {
+        AssessCheck {
             id: "message-scrubbed".into(),
             status: "pass".into(),
             detail: if !internal_text.is_empty() {
@@ -871,7 +920,7 @@ pub fn prepare_from_message(
                 "No cutoff in the message. The whole message is treated as public.".into()
             },
         },
-        PrepareCheck {
+        AssessCheck {
             id: "cutoff-used".into(),
             status: if !internal_text.is_empty() {
                 "pass".into()
@@ -893,7 +942,7 @@ pub fn prepare_from_message(
                 )
             },
         },
-        PrepareCheck {
+        AssessCheck {
             id: "author-rewrite".into(),
             status: "pass".into(),
             detail: format!(
@@ -907,13 +956,13 @@ pub fn prepare_from_message(
     ];
 
     if intent == "internal-only" {
-        checks.push(PrepareCheck {
+        checks.push(AssessCheck {
             id: "affiliation-leak".into(),
             status: "skip".into(),
             detail: "internal-only patches are not exported; keyword scan skipped.".into(),
         });
     } else if keys.is_empty() && domains.is_empty() {
-        checks.push(PrepareCheck {
+        checks.push(AssessCheck {
             id: "affiliation-leak".into(),
             status: "warn".into(),
             detail: "No redactKeywords / internalEmailDomains configured. Set them (or UPLINK_REDACT_KEYWORDS) so tests cannot mention the company.".into(),
@@ -921,7 +970,7 @@ pub fn prepare_from_message(
     } else {
         let mut hits = key_hits;
         hits.extend(domain_hits);
-        checks.push(PrepareCheck {
+        checks.push(AssessCheck {
             id: "affiliation-leak".into(),
             status: if hits.is_empty() { "pass" } else { "fail" }.into(),
             detail: if hits.is_empty() {
@@ -937,7 +986,7 @@ pub fn prepare_from_message(
 
     let ok = checks.iter().all(|c| c.status != "fail");
     let cutoff_found = !internal_text.is_empty() || stored.contains(&marker);
-    Ok(PrepareReport {
+    Ok(AssessReport {
         at: now_iso(),
         ok,
         commit_message: stored,
@@ -952,7 +1001,7 @@ pub fn prepare_from_message(
     })
 }
 
-pub fn assert_prepare_ok(report: &PrepareReport, label: &str) -> Result<()> {
+pub fn assert_assess_ok(report: &AssessReport, label: &str) -> Result<()> {
     if report.ok {
         return Ok(());
     }
@@ -963,9 +1012,9 @@ pub fn assert_prepare_ok(report: &PrepareReport, label: &str) -> Result<()> {
         .map(|c| format!("{}: {}", c.id, c.detail))
         .collect::<Vec<_>>()
         .join("\n");
-    Err(Error::Prepare(PrepareError::new(
+    Err(Error::Assess(AssessError::new(
         format!(
-            "Prepare-for-upstream failed for {label}. No import/approval/submit until this is clean.\n{failed}"
+            "Assess-for-upstream failed for {label}. No import/approval/submit until this is clean.\n{failed}"
         ),
         report.clone(),
     )))

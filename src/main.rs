@@ -9,13 +9,12 @@ use git_uplink::{
     AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight,
     InitOpts, MergeVia, PreflightError, PushOpts, RebuildOpts, STATE_BRANCH,
     TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch, adopted_next_steps, approve_patch_at,
-    commit_queue, drop_patch, format_approval_receipt, format_contribution_packet,
-    format_prepare_markdown, format_status_table, from_upstream_report_paths, git_ok, init,
-    load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
-    preflight_existing_patch, preflight_incoming_change, prepare_from_message, push_queue,
-    read_queue, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
-    report_paths, reset_from_origin, resolve_conflict, status_report, status_snapshot,
-    submit_patch, sync, transfer_patch,
+    assess_from_message, commit_queue, drop_patch, format_approval_receipt, format_assess_markdown,
+    format_contribution_packet_with_extras, format_status_table, from_upstream_report_paths,
+    git_ok, init, load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
+    preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
+    resolve_conflict, status_report, status_snapshot, submit_patch, sync, transfer_patch,
 };
 use git_uplink::{Patch, QueueState, SyncResult, TransferDirection, TransferResult};
 
@@ -25,7 +24,7 @@ use git_uplink::{Patch, QueueState, SyncResult, TransferDirection, TransferResul
     bin_name = "git uplink",
     about = "Carry internal patches on upstream, contribute once, drop when merged.",
     long_about = "Developers open PRs and merge them; they never push main.\n\
-add records a merged PR as a queued patch on uplink/state. prepare uses the PR\n\
+add records a merged PR as a queued patch on uplink/state. assess uses the PR\n\
 title and body as the single commit message, rewrites the export author, strips\n\
 the internal section before contrib export, and scans for company affiliation.\n\
 On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment;\n\
@@ -108,7 +107,7 @@ enum Commands {
         #[arg(long)]
         internal_only: bool,
     },
-    Prepare {
+    Assess {
         #[arg(long, help = "Base revision (fetched from origin if missing)")]
         from: Option<String>,
         #[arg(long, help = "Head revision (fetched from origin if missing)")]
@@ -126,6 +125,11 @@ enum Commands {
         id: String,
         #[arg(long)]
         out: Option<PathBuf>,
+        #[arg(
+            long = "extra-dir",
+            help = "Directory of *.md files prepended to the packet"
+        )]
+        extra_dir: Option<PathBuf>,
     },
     Status {
         #[arg(long)]
@@ -317,7 +321,7 @@ Add to the PR body (one per line) and import again:\n\n\
 fn print_failure_comment(err: &Error) {
     match err {
         Error::Preflight(pre) => print!("{}", preflight_comment(pre)),
-        Error::Prepare(pre) => print!("{}", format_prepare_markdown(&pre.report)),
+        Error::Assess(pre) => print!("{}", format_assess_markdown(&pre.report)),
         _ => {}
     }
 }
@@ -683,7 +687,7 @@ fn run() -> Result<(), Error> {
             println!("{} {}", STATE_BRANCH, result.state_sha);
             println!("uplink/upstream {}", result.upstream_sha);
         }
-        Commands::Prepare {
+        Commands::Assess {
             from,
             head,
             title,
@@ -694,7 +698,7 @@ fn run() -> Result<(), Error> {
             let queue = read_queue(&repo)?;
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
-            let report = prepare_from_message(
+            let report = assess_from_message(
                 &repo,
                 &queue,
                 from.as_deref().unwrap_or("main"),
@@ -707,20 +711,21 @@ fn run() -> Result<(), Error> {
                     "upstream"
                 },
             )?;
-            let markdown = format_prepare_markdown(&report);
+            let markdown = format_assess_markdown(&report);
             println!("{markdown}");
             append_step_summary(&markdown);
             if !report.ok {
-                return Err(Error::msg("prepare failed"));
+                return Err(Error::msg("assess failed"));
             }
         }
-        Commands::Report { id, out } => {
+        Commands::Report { id, out, extra_dir } => {
             let queue = read_queue(&repo)?;
             let patch = queue
                 .all_patches()
                 .find(|p| p.id == id)
                 .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
-            let packet = format_contribution_packet(&repo, patch)?;
+            let packet =
+                format_contribution_packet_with_extras(&repo, patch, extra_dir.as_deref())?;
             let default_out = report_paths(&id)?.1;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &packet);
@@ -1018,7 +1023,7 @@ fn main() -> ExitCode {
             // follow-on apply conflict (sync, or resolve after a successful amend).
             let code = match &err {
                 Error::Conflict(_) => 2,
-                Error::Message(m) if m == "prepare failed" || m == "sync conflict" => 2,
+                Error::Message(m) if m == "assess failed" || m == "sync conflict" => 2,
                 _ => 1,
             };
             if code == 1 || matches!(err, Error::Conflict(_)) {

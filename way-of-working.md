@@ -9,10 +9,10 @@ Write every change **as if it were the upstream submission**. Company-only detai
 | Phase | What you do | Result |
 | --- | --- | --- |
 | Write | Branch from company `main`. Public rationale in the PR title and above the cutoff in the body. | One internal branch. |
-| Prepare | Opens with the internal PR. `git uplink prepare` | Scrubbed message, rewritten author, affiliation scan. Report on the PR and in `GITHUB_STEP_SUMMARY`. |
+| Assess | Opens with the internal PR. `git uplink assess` | Scrubbed message, rewritten author, affiliation scan. Report on the PR and in `GITHUB_STEP_SUMMARY`. |
 | Export preflight | Same PR | Diff must stand on public `main` + declared deps; `UPLINK_PREFLIGHT` must pass. |
 | Internal product | Review + merge | Status `queued`. Product builds it. |
-| Contribution / IP | Dispatch **Uplink submit**. IP approves GitHub Environment **`to-upstream`**. Same run submits. | Report + approval committed under `.uplink/reports/`. Public PR uses the prepared identity. GitHub audit log records the reviewer. |
+| Contribution / IP | Dispatch **Uplink submit**. Optional company assessment-hook extras prepend onto the packet. IP approves GitHub Environment **`to-upstream`**. Same run submits. | Report + approval committed under `.uplink/reports/`. Public PR uses the prepared identity. GitHub audit log records the reviewer. |
 | Inbound upstream | Hourly **Uplink sync**. Foreign public commits wait on GitHub Environment **`from-upstream`**. Flow-back of our patches skips that wait. | `uplink/upstream` updates; company `main` rebuilds. |
 
 Default destination is the upstream queue. `uplink:internal-only` is the escape hatch: it records the patch in `internal[]` and never goes through the second gate.
@@ -23,9 +23,10 @@ On GitHub Enterprise Cloud this is an option, and it is the option to use. Do no
 
 Create a repository Environment named **`to-upstream`**. Required reviewers are IP/legal. Put the GitHub App secrets that can push the public contribution fork **on that environment only**. Dispatch `Uplink submit` with the patch id. The workflow:
 
-1. **Packet job** (no environment, no App secrets). Runs `git uplink report <id>`, which writes `.uplink/reports/<id>/prepare.md` and appends the same markdown to `GITHUB_STEP_SUMMARY`. Commits the report to `uplink/state` as a fast-forward (not a force-push). Reports stay on that orphan branch, so a later product rebuild does not drop them.
-2. **Submit job** (`environment: to-upstream`). GitHub holds the job until a required reviewer approves the deployment. That click is the IP gate. GitHub records it on the Deployments tab and in the enterprise audit log. The dispatcher is not the approver; turn on **Prevent self-review**.
-3. After approval, the job writes `.uplink/reports/<id>/approval.md` (receipt pointing at the run), then `git uplink approve` and `git uplink submit`. App credentials exist only now. Submit is still the first time contribution bytes leave the private forge.
+1. **Packet job** (no environment, no App secrets). Runs `git uplink report <id>`, which writes `.uplink/reports/<id>/assessment.md` and appends the same markdown to `GITHUB_STEP_SUMMARY`. Commits the report to `uplink/state` as a fast-forward (not a force-push). Reports stay on that orphan branch, so a later product rebuild does not drop them.
+2. **Finalize job** (no environment). If `.github/workflows/uplink-assessment-hook.yml` exists, dispatches it with `patch_id` and `caller_run_id`, waits (`timeout-minutes` on the job), downloads artifact `uplink-packet-extra` from that run, and re-runs `git uplink report --extra-dir` so company extras sit at the top of `assessment.md`. A failed assessment hook fails this job, so IP is never asked. Job outputs are not the contract (1 MB, same-run only). `on: workflow_run` for **Uplink submit** is too late — it fires after the environment wait. The hook must not push `uplink/state`. Copy-paste: `examples/github/patches/uplink-assessment-hook.yml`.
+3. **Submit job** (`environment: to-upstream`). GitHub holds the job until a required reviewer approves the deployment. That click is the IP gate. GitHub records it on the Deployments tab and in the enterprise audit log. The dispatcher is not the approver; turn on **Prevent self-review**.
+4. After approval, the job writes `.uplink/reports/<id>/approval.md` (receipt pointing at the run), then `git uplink approve` and `git uplink submit`. App credentials exist only now. Submit is still the first time contribution bytes leave the private forge.
 
 Why this fits a workflow:
 
@@ -118,9 +119,9 @@ Asha needs to change token hashing. Nobody else is in her way.
    Uplink-Export-Author: Asha <asha@users.noreply.github.com>
    ```
 
-   Open an internal PR against company `main`. Two checks start: **prepare** (scrub, author rewrite, affiliation scan) and **export preflight**. Approvers read the prepare report on the PR, including both the company commit message (cutoff kept) and the upstream commit message (cutoff removed).
+   Open an internal PR against company `main`. Two checks start: **assess** (scrub, author rewrite, affiliation scan) and **export preflight**. Approvers read the assess report on the PR, including both the company commit message (cutoff kept) and the upstream commit message (cutoff removed).
 
-3. **Engineering review.** Required reviewers / CODEOWNERS. This is not IP review. Merge is blocked until prepare and preflight are green.
+3. **Engineering review.** Required reviewers / CODEOWNERS. This is not IP review. Merge is blocked until assess and preflight are green.
 
 4. **Import — approved for the internal.** Merge the PR after review. Actions runs:
 
@@ -136,9 +137,9 @@ Asha needs to change token hashing. Nobody else is in her way.
 
 5. **Other developers now build her change** the next time they branch from `main`. IP has not run. Nothing has left the enterprise.
 
-6. **Contribution approval.** An operator dispatches **Uplink submit** with `upl_asha`. The packet job commits `.uplink/reports/upl_asha/prepare.md` and writes the Actions job summary. IP/legal approves the waiting **`to-upstream`** Environment deployment (GitHub audit log + Deployments). The same run then records `approval.md`, `git uplink approve`, and `git uplink submit`.
+6. **Contribution approval.** An operator dispatches **Uplink submit** with `upl_asha`. The packet job commits `.uplink/reports/upl_asha/assessment.md` and writes the Actions job summary. IP/legal approves the waiting **`to-upstream`** Environment deployment (GitHub audit log + Deployments). The same run then records `approval.md`, `git uplink approve`, and `git uplink submit`.
 
-   `approve` is refused if prepare failed or the patch is `internal-only`. `submit` is refused until the patch is `approved` and prepare is still clean. Submit is the first time bytes leave the private forge. The public commit uses the prepared author (machine user or `Uplink-Export-Author`) and the scrubbed message, plus `Uplink-Patch-Id`. App credentials are not available until the environment review succeeds.
+   `approve` is refused if assess failed or the patch is `internal-only`. `submit` is refused until the patch is `approved` and assess is still clean. Submit is the first time bytes leave the private forge. The public commit uses the export author (machine user or `Uplink-Export-Author`) and the scrubbed message, plus `Uplink-Patch-Id`. App credentials are not available until the environment review succeeds.
 
 7. **Upstream review.** Maintainers review a normal GitHub PR. If they want changes, Asha amends the **same** internal patch (fix the files, import again or `git uplink resolve` after a conflict). If the patch was already submitted, it becomes `amended` and IP approves the delta before submit force-pushes the same fork branch. She still does not grow a second branch.
 

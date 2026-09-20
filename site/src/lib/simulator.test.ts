@@ -164,4 +164,17 @@ describe("lab scenarios", () => {
     expect(cam?.prNumber).toBe(420);
     expect(cam?.files["src/tokens.js"]).toContain("describeToken");
   });
+
+  it("prepends assessment-hook extras and never exports the workflow file", () => {
+    const scenario = scenarioById("assessment-hook");
+    const submitted = runThrough(scenario, scenario.steps.length);
+    expect(submitted.company[".github/workflows/uplink-assessment-hook.yml"]).toContain(
+      "Uplink assessment hook",
+    );
+    expect(submitted.patches.find((patch) => patch.id === "upl_hook")?.queue).toBe("internal");
+    expect(submitted.patches.find((patch) => patch.id === "upl_asha")?.status).toBe("submitted");
+    const asha = submitted.contrib.find((branch) => branch.branch === "uplink/upl_asha");
+    expect(asha?.files["src/tokens.js"]).toContain("sha256");
+    expect(JSON.stringify(asha?.files)).not.toContain("uplink-assessment-hook.yml");
+  });
 });

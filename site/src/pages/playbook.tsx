@@ -154,7 +154,7 @@ export function PlaybookPage() {
           </p>
           <ol>
             <li>
-              <strong>Prepare for upstream (on the internal PR).</strong> A second workflow rewrites
+              <strong>Assess for upstream (on the internal PR).</strong> A second workflow rewrites
               the change as a contribution: PR title and body become the single commit message
               (HTML comments stripped), public text above the cutoff, export author
               (machine user or <code>Uplink-Export-Author</code>), affiliation scan (company name,
@@ -176,7 +176,7 @@ export function PlaybookPage() {
               <strong>Contribution / IP (status <code>approved</code>, then{" "}
               <code>submitted</code>).</strong> Dispatch <code>Uplink submit</code>. IP reviews
               the packet on <code>GITHUB_STEP_SUMMARY</code> and in{" "}
-              <code>.uplink/reports/&lt;id&gt;/prepare.md</code>, then approves the GitHub
+              <code>.uplink/reports/&lt;id&gt;/assessment.md</code>, then approves the GitHub
               Environment named <code>to-upstream</code>. GitHub records that review (Deployments +
               enterprise audit log). The same run writes <code>approval.md</code>, then{" "}
               <code>git uplink approve</code> / <code>git uplink submit</code>. App credentials that can
@@ -195,11 +195,15 @@ export function PlaybookPage() {
           </p>
           <p>
             Dispatch <code>Uplink submit</code> from company <code>main</code>. A packet job writes{" "}
-            <code>.uplink/reports/&lt;id&gt;/prepare.md</code>, appends{" "}
-            <code>GITHUB_STEP_SUMMARY</code>, and fast-forwards that file onto{" "}
-            <code>uplink/state</code>. Reports stay on the orphan branch, so a product rebuild does
-            not drop them. The submit job then waits on <code>environment: to-upstream</code>. After review,
-            it commits <code>approval.md</code> and runs <code>git uplink approve</code> then{" "}
+            <code>.uplink/reports/&lt;id&gt;/assessment.md</code> and appends{" "}
+            <code>GITHUB_STEP_SUMMARY</code>. Finalize optionally runs company{" "}
+            <code>.github/workflows/uplink-assessment-hook.yml</code>, downloads artifact{" "}
+            <code>uplink-packet-extra</code> from that other run, and prepends those markdown files
+            onto the packet before pushing <code>uplink/state</code>. The assessment hook must not
+            push state.
+            Reports stay on the orphan branch, so a product rebuild does not drop them. The submit
+            job then waits on <code>environment: to-upstream</code>. After review, it commits{" "}
+            <code>approval.md</code> and runs <code>git uplink approve</code> then{" "}
             <code>git uplink submit</code> in the same workflow.
           </p>
           <p>
@@ -276,7 +280,7 @@ export function PlaybookPage() {
               GitHub Actions <code>concurrency: uplink-mutate</code> on import and resolve
               (workflow level), on the sync inspect/apply jobs (job level, with workflow group{" "}
               <code>uplink-sync</code> so a waiting <code>from-upstream</code> review does not
-              stack hourly runs or freeze imports), and on the submit packet/submit jobs (job
+              stack hourly runs or freeze imports), and on the submit packet/finalize/submit jobs (job
               level, so the <code>to-upstream</code> environment wait does not freeze imports).
               One mutation at a time; later jobs wait rather than cancel.
             </li>
@@ -343,8 +347,8 @@ export function PlaybookPage() {
               writing the PR and are stripped on import. Git commit logs are not concatenated.
             </li>
             <li>
-              Open an internal PR. CI runs prepare (scrub, author, affiliation), export preflight
-              (skipped for <code>uplink:internal-only</code>), and company-tree tests. If prepare
+              Open an internal PR. CI runs assess (scrub, author, affiliation), export preflight
+              (skipped for <code>uplink:internal-only</code>), and company-tree tests. If assess
               fails, remove company names from the diff (including tests) or move internal notes
               below the cutoff.
             </li>
@@ -504,7 +508,7 @@ export function PlaybookPage() {
             <li>
               Run <code>git uplink init --upstream … --contrib … --forge ghec</code> in the
               company product repo (then <code>git uplink init --upgrade</code> when the binary
-              gains new workflows). Make prepare and export preflight required checks. Create Environment{" "}
+              gains new workflows). Make assess and export preflight required checks. Create Environment{" "}
               <code>to-upstream</code> with IP/legal as required reviewers and the contrib GitHub App
               secrets on that environment only. Store internal and upstream git secrets at repo
               level. Set <code>UPLINK_REDACT_KEYWORDS</code> and <code>UPLINK_EXPORT_AUTHOR</code>.

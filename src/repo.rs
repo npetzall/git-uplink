@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::assess::{company_commit_message, export_commit_message};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok};
-use crate::prepare::{company_commit_message, export_commit_message};
 use crate::queue::{now_iso, patch_path};
 use crate::types::{PATCH_DIR, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH};
 
@@ -255,12 +255,12 @@ pub fn apply_patch_file(
     }
 
     let mut opts = GitOpts::default();
-    if export_identity && let Some(prepare) = &patch.prepare {
+    if export_identity && let Some(assess) = &patch.assess {
         opts.extra_env = vec![
-            ("GIT_AUTHOR_NAME".into(), prepare.author_name.clone()),
-            ("GIT_AUTHOR_EMAIL".into(), prepare.author_email.clone()),
-            ("GIT_COMMITTER_NAME".into(), prepare.author_name.clone()),
-            ("GIT_COMMITTER_EMAIL".into(), prepare.author_email.clone()),
+            ("GIT_AUTHOR_NAME".into(), assess.author_name.clone()),
+            ("GIT_AUTHOR_EMAIL".into(), assess.author_email.clone()),
+            ("GIT_COMMITTER_NAME".into(), assess.author_name.clone()),
+            ("GIT_COMMITTER_EMAIL".into(), assess.author_email.clone()),
         ];
     }
     let message = if export_identity {
