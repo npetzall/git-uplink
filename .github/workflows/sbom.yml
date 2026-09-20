@@ -1,0 +1,44 @@
+name: SBOM
+
+on:
+  push:
+  pull_request:
+  release:
+    types: [published]
+
+concurrency:
+  group: sbom-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: ${{ github.event_name == 'release' && 'write' || 'read' }}
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: anchore/sbom-action/download-syft@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2
+        id: syft
+        with:
+          syft-version: v1.52.0
+      - name: Generate CycloneDX and SPDX SBOMs
+        run: |
+          version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          ${{ steps.syft.outputs.cmd }} dir:. --source-version "$version"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          if-no-files-found: error
+          path: |
+            git-uplink.cdx.json
+            git-uplink.spdx.json
+      - name: Attach SBOMs to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          cp git-uplink.cdx.json "git-uplink-${tag}.cdx.json"
+          cp git-uplink.spdx.json "git-uplink-${tag}.spdx.json"
+          gh release upload "$tag" "git-uplink-${tag}.cdx.json" "git-uplink-${tag}.spdx.json" --clobber

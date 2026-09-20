@@ -1,0 +1,31 @@
+# Distribution SBOM: git-uplink binary + embedded web/ UI.
+# site/ is GitHub Pages only and is not part of the shipped product.
+
+check-for-app-update: false
+
+source:
+  name: git-uplink
+
+output:
+  - cyclonedx-json=git-uplink.cdx.json
+  - spdx-json=git-uplink.spdx.json
+
+default-catalogers:
+  - rust-cargo-lock-cataloger
+  - javascript-lock-cataloger
+
+select-catalogers:
+  - "-file"
+
+exclude:
+  - ./site/**
+  - ./examples/**
+  - ./templates/**
+  - ./.github/**
+
+file:
+  metadata:
+    selection: none
+
+javascript:
+  include-dev-dependencies: true

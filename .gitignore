@@ -7,3 +7,5 @@
 /node_modules
 next-env.d.ts
 /agent-tools
+/git-uplink.cdx.json
+/git-uplink.spdx.json

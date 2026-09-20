@@ -98,6 +98,8 @@ Live lab scenario tests live in `site/` (`npm test --prefix site`): drop-on-merg
 
 CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a `web/` job (`npm ci`, typecheck), a `site/` job (`npm ci`, typecheck, vitest, build), and `cargo deny` (RustSec advisories plus licenses, bans, and sources).
 
+Distribution SBOMs (CycloneDX JSON and SPDX JSON) cover the Rust crate and the embedded `web/` UI. `site/` is excluded because it is GitHub Pages only, not part of the shipped binary. Generate both files locally with [Syft](https://github.com/anchore/syft): `syft dir:.` reads `.syft.yaml`. `.github/workflows/sbom.yml` uploads them as workflow artifacts on push/PR and attaches `git-uplink-<tag>.cdx.json` / `git-uplink-<tag>.spdx.json` when a GitHub Release is published.
+
 ## Product-repo workflows
 
 `git uplink init --upstream <url> --contrib <url> --forge ghec` writes the GHEC pack from `templates/ghec/` plus `templates/github/pull_request_template.md`. Those jobs assume `git-uplink` is on `PATH`. Re-run `git uplink init --upgrade` after upgrading the binary to refresh the same internal-only tooling patch. The example walkthrough uses `--forge example-github`.
