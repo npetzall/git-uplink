@@ -16,6 +16,9 @@ path = "src/main.rs"
 name = "git_uplink"
 path = "src/lib.rs"
 
+[lints.rust]
+warnings = "deny"
+
 [dependencies]
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 clap = { version = "=4.6.7", features = ["derive", "env"] }
