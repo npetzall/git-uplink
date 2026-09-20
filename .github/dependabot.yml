@@ -4,6 +4,8 @@ updates:
     directory: "/site"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       site-npm:
         patterns:
@@ -13,6 +15,8 @@ updates:
     directory: "/web"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       web-npm:
         patterns:
@@ -22,6 +26,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       rust-crates:
         patterns:
@@ -35,6 +41,8 @@ updates:
       - "/templates/ghec/.github/workflows"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns:

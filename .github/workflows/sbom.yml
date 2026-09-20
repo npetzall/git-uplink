@@ -14,6 +14,7 @@ permissions: {}
 
 jobs:
   sbom:
+    name: Generate SBOMs
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,7 +22,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: anchore/sbom-action/download-syft@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         id: syft
         with:
           syft-version: v1.52.0
@@ -40,12 +41,13 @@ jobs:
             git-uplink.spdx.json
 
   attach:
+    name: Attach SBOMs to release
     if: github.event_name == 'release'
     needs: sbom
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      actions: read
+      contents: write # upload SBOM files to the GitHub Release
+      actions: read # download artifacts from the sbom job
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
