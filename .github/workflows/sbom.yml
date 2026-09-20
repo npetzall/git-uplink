@@ -19,14 +19,18 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: anchore/sbom-action/download-syft@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2
         id: syft
         with:
           syft-version: v1.52.0
       - name: Generate CycloneDX and SPDX SBOMs
+        env:
+          SYFT_CMD: ${{ steps.syft.outputs.cmd }}
         run: |
           version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
-          ${{ steps.syft.outputs.cmd }} dir:. --source-version "$version"
+          "$SYFT_CMD" dir:. --source-version "$version"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom
