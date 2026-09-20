@@ -56,7 +56,9 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
       || gh label edit "$name" --repo "$INTERNAL" --color "$color" --description "$description"
   }
   create_label "uplink:internal-only" "5319E7" "Never approve or submit this change upstream"
-  create_label "uplink:conflict" "B60205" "Uplink sync conflict; checkout the conflict branch, do not open a PR"
+  create_label "uplink:conflict" "B60205" "Uplink sync conflict; resolve via the gated work PR"
+  create_label "uplink:transfer-to-upstream" "1D76DB" "Uplink gated transfer to the upstream queue"
+  create_label "uplink:transfer-to-internal" "1D76DB" "Uplink gated transfer to the internal queue"
 
   set_var() {
     gh variable set "$1" --repo "$INTERNAL" --body "$2"

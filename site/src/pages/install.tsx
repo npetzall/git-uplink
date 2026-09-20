@@ -79,11 +79,12 @@ git uplink submit <id>
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote origin]
 git uplink sync
 git uplink accept-upstream
-git uplink conflicted <id> --issue-url <url> [--issue <n>] [--push-remote origin]
+git uplink gated <id> --pr-url <url> [--pr <n>] [--push-remote origin]
 git uplink merged <id> [--via pr|trailer|patch-id|empty-rebase|manual] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
 git uplink resolve <id>
+git uplink transfer <id> --to-upstream|--to-internal [--complete]
 git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]`}</pre>
           </CardContent>
         </Card>

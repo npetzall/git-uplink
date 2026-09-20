@@ -7,15 +7,20 @@ use std::time::Duration;
 
 use crate::adopt::{self, AdoptGroup};
 use crate::error::{ConflictError, Error, Result};
+use crate::gate::{
+    assert_resolution_clean, commit_resolution, cut_gated_work, format_patch_at_head, recover_onto,
+};
 use crate::git::{GitOpts, configure_repo, git, git_ok};
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
-use crate::preflight::assert_export_preflight;
+use crate::preflight::{
+    assert_export_preflight, assert_upstream_layer_applies, run_preflight_command_in,
+};
 use crate::prepare::{
     IncomingFlowedBack, assert_prepare_ok, company_commit_message, depends_on_from_message,
     format_incoming_packet, from_upstream_report_paths, prepare_from_message,
 };
 use crate::queue::{
-    add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut, patch_path,
+    add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut, move_patch, patch_path,
     read_queue as read_queue_file, topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
@@ -30,8 +35,9 @@ use crate::repo::{
     state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
 use crate::types::{
-    Forge, LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged, PatchSource,
-    PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
+    Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged,
+    PatchSource, PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
+    TransferDirection,
 };
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
@@ -1058,7 +1064,7 @@ pub fn record_pull_request(
     })
 }
 
-pub fn record_conflict_issue(
+pub fn record_gated_pr(
     repo: &Path,
     id: &str,
     number: u64,
@@ -1075,20 +1081,20 @@ pub fn record_conflict_issue(
         let Some(conflict) = patch.conflict.clone() else {
             return Err(Error::msg(format!("{id} has no conflict record")));
         };
-        if conflict.issue_number == Some(number) && conflict.issue_url.as_deref() == Some(url) {
+        if conflict.pr_number == Some(number) && conflict.pr_url.as_deref() == Some(url) {
             if let Some(remote) = push_remote {
                 push_state_branch(repo, remote, &state_branch)?;
             }
             return Ok(patch);
         }
-        if conflict.issue_number.is_some()
-            && (conflict.issue_number != Some(number) || conflict.issue_url.as_deref() != Some(url))
+        if conflict.pr_number.is_some()
+            && (conflict.pr_number != Some(number) || conflict.pr_url.as_deref() != Some(url))
         {
             let recorded = conflict
-                .issue_url
-                .unwrap_or_else(|| format!("#{}", conflict.issue_number.unwrap()));
+                .pr_url
+                .unwrap_or_else(|| format!("#{}", conflict.pr_number.unwrap()));
             return Err(Error::msg(format!(
-                "{id} already has conflict issue {recorded}; will not retarget to {url}"
+                "{id} already has conflict PR {recorded}; will not retarget to {url}"
             )));
         }
         {
@@ -1097,12 +1103,12 @@ pub fn record_conflict_issue(
                 .conflict
                 .as_mut()
                 .ok_or_else(|| Error::msg(format!("{id} has no conflict record")))?;
-            conflict.issue_number = Some(number);
-            conflict.issue_url = Some(url.into());
-            add_event(patch, "conflict-issue", format!("Conflict issue {url}"));
+            conflict.pr_number = Some(number);
+            conflict.pr_url = Some(url.into());
+            add_event(patch, "conflict-pr", format!("Conflict PR {url}"));
         }
         write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: conflict issue {id} #{number}"))?;
+        commit_queue(repo, &format!("uplink: conflict PR {id} #{number}"))?;
         if let Some(remote) = push_remote {
             push_state_branch(repo, remote, &queue.config.state_branch)?;
         }
@@ -1402,33 +1408,13 @@ fn persist_apply_conflict(
     files: Vec<String>,
 ) -> Result<ConflictError> {
     let onto = rev_parse(repo, "HEAD")?;
-    let branch = format!("uplink/conflict/{}", patch.id);
-    git(repo, &["branch", "-f", &branch, "HEAD"], GitOpts::default())?;
-    git(
+    let (branch, work) = cut_gated_work(
         repo,
-        &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
-        GitOpts::default(),
+        GateKind::Conflict,
+        &patch.id,
+        &onto,
+        &format!("uplink: conflict applying {}", patch.id),
     )?;
-    git(repo, &["add", "-A"], GitOpts::default())?;
-    let staged = git(
-        repo,
-        &["diff", "--cached", "--quiet"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if staged.code != 0 {
-        git(
-            repo,
-            &[
-                "commit",
-                "-m",
-                &format!("uplink: conflict applying {}", patch.id),
-            ],
-            GitOpts::default(),
-        )?;
-    }
 
     let message = format!(
         "Patch {} (\"{}\") does not apply onto the current upstream prefix.",
@@ -1439,11 +1425,12 @@ fn persist_apply_conflict(
         current.status = "conflict".into();
         current.conflict = Some(PatchConflict {
             branch: branch.clone(),
+            work_branch: Some(work),
             files: files.clone(),
             message: message.clone(),
             onto: Some(onto),
-            issue_number: None,
-            issue_url: None,
+            pr_number: None,
+            pr_url: None,
         });
         add_event(
             current,
@@ -1528,6 +1515,8 @@ fn is_reserved_rebuild_branch(name: &str, config: &crate::types::QueueConfig) ->
         || name == "uplink/upstream"
         || name == adopt::ADOPT_FROM_REF
         || name.starts_with("uplink/conflict/")
+        || name.starts_with("uplink/transfer-to-upstream/")
+        || name.starts_with("uplink/transfer-to-internal/")
 }
 
 fn checkout_identity(repo: &Path) -> Result<(String, String)> {
@@ -1877,11 +1866,12 @@ pub fn accept_upstream(repo: &Path) -> Result<SyncResult> {
 
 pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
     with_queue_lock(repo, || {
-        let expected_branch = format!("uplink/conflict/{id}");
+        let base = GateKind::Conflict.base_branch(id);
+        let work = GateKind::Conflict.work_branch(id);
         let head = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-        if head != expected_branch {
+        if head != base && head != work {
             return Err(Error::msg(format!(
-                "Check out {expected_branch} before resolving {id} (currently on {head})."
+                "Check out {base} or {work} before resolving {id} (currently on {head})."
             )));
         }
         let queue_ref = state_branch(repo);
@@ -1904,63 +1894,16 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         if patch.status != "conflict" {
             return Err(Error::msg(format!("{id} is not in conflict")));
         }
-        let unmerged = conflicted_files(repo)?;
-        if !unmerged.is_empty() {
-            return Err(Error::msg(format!(
-                "Conflict still has unmerged files: {}. Fix and git add them first.",
-                unmerged.join(", ")
-            )));
-        }
-        let markers = git(
-            repo,
-            &["grep", "-I", "-l", "^<<<<<<<", "--", ".", ":!.uplink"],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
-        )?;
-        if markers.code == 0 && !markers.stdout.trim().is_empty() {
-            return Err(Error::msg(format!(
-                "Conflict markers still present in {}. Remove them before resolve.",
-                markers.stdout.trim().replace('\n', ", ")
-            )));
-        }
-        git(repo, &["add", "-A"], GitOpts::default())?;
-        let staged = git(
-            repo,
-            &["diff", "--cached", "--quiet"],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
-        )?;
-        if staged.code != 0 {
-            let message = company_commit_message(&patch);
-            git(repo, &["commit", "-m", &message], GitOpts::default())?;
-        }
-        if let Some(onto) = patch.conflict.as_ref().and_then(|c| c.onto.as_deref()) {
-            git(repo, &["reset", "--soft", onto], GitOpts::default())?;
-            let staged = git(
-                repo,
-                &["diff", "--cached", "--quiet"],
-                GitOpts {
-                    allow_fail: true,
-                    ..GitOpts::default()
-                },
-            )?;
-            if staged.code != 0 {
-                let message = company_commit_message(&patch);
-                git(repo, &["commit", "-m", &message], GitOpts::default())?;
-            }
-        }
-        let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;
+        assert_resolution_clean(repo)?;
+        let onto = patch
+            .conflict
+            .as_ref()
+            .and_then(|c| c.onto.clone())
+            .unwrap_or(recover_onto(repo, GateKind::Conflict, id, &head)?);
+        let message = company_commit_message(&patch);
+        commit_resolution(repo, &onto, &message)?;
         fs::create_dir_all(repo.join(".uplink/patches"))?;
-        let body = if formatted.ends_with('\n') {
-            formatted
-        } else {
-            format!("{formatted}\n")
-        };
-        fs::write(repo.join(patch_path(id)?), body)?;
+        fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
         {
             let patch = get_patch_mut(&mut queue, id)?;
             patch.status = if patch.upstream.is_some() {
@@ -1981,6 +1924,392 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: amend {id} after conflict"))?;
         rebuild(repo)
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct TransferResult {
+    pub queue: QueueState,
+    pub id: String,
+    pub direction: TransferDirection,
+    pub transferred: bool,
+    pub gated: bool,
+    pub base_branch: Option<String>,
+    pub work_branch: Option<String>,
+    pub onto: Option<String>,
+    pub files: Vec<String>,
+    pub message: Option<String>,
+    pub pr_close_url: Option<String>,
+    pub pr_close_number: Option<u64>,
+}
+
+pub fn transfer_patch(
+    repo: &Path,
+    id: &str,
+    direction: TransferDirection,
+    complete: bool,
+) -> Result<TransferResult> {
+    with_queue_lock(repo, || {
+        if complete {
+            complete_transfer(repo, id, direction)
+        } else {
+            start_transfer(repo, id, direction)
+        }
+    })
+}
+
+fn validate_transfer(queue: &QueueState, id: &str, direction: TransferDirection) -> Result<Patch> {
+    if queue.is_tooling(id) {
+        return Err(Error::msg(format!(
+            "{id} is tooling and cannot be transferred"
+        )));
+    }
+    let source_ok = match direction {
+        TransferDirection::ToUpstream => queue.is_internal(id),
+        TransferDirection::ToInternal => queue.is_upstream(id),
+    };
+    if !source_ok {
+        let want = match direction {
+            TransferDirection::ToUpstream => "internal",
+            TransferDirection::ToInternal => "upstream",
+        };
+        return Err(Error::msg(format!(
+            "{id} is not in the {want} queue; cannot transfer {}",
+            direction.as_str()
+        )));
+    }
+    let patch = get_patch(queue, id)?.clone();
+    match patch.status.as_str() {
+        "merged" | "dropped" | "conflict" => {
+            return Err(Error::msg(format!(
+                "{id} cannot be transferred while status is {}",
+                patch.status
+            )));
+        }
+        _ => {}
+    }
+
+    let mut preview = queue.clone();
+    move_patch(&mut preview, id, direction.to_internal())?;
+    for dep in &patch.depends_on {
+        if cannot_depend_on(&preview, direction.to_internal(), dep) {
+            return Err(Error::msg(format!(
+                "{id} cannot depend on {dep} after transfer {}",
+                direction.as_str()
+            )));
+        }
+    }
+    for other in preview.all_patches() {
+        if other.id == id || !other.depends_on.iter().any(|d| d == id) {
+            continue;
+        }
+        if cannot_depend_on(&preview, preview.is_internal(&other.id), id) {
+            return Err(Error::msg(format!(
+                "{} depends on {id}; transferring {} would break layer rules",
+                other.id,
+                direction.as_str()
+            )));
+        }
+    }
+    Ok(patch)
+}
+
+fn start_transfer(repo: &Path, id: &str, direction: TransferDirection) -> Result<TransferResult> {
+    let queue = read_queue_file(repo)?;
+    let patch = validate_transfer(&queue, id, direction)?;
+    let company_branch = queue.config.internal_branch.clone();
+    let mut preview = queue.clone();
+    move_patch(&mut preview, id, direction.to_internal())?;
+
+    ensure_upstream_ref(repo)?;
+    let upstream_ref = if has_ref(repo, "uplink/upstream")? {
+        "uplink/upstream"
+    } else {
+        company_branch.as_str()
+    };
+    let (original, original_sha) = checkout_identity(repo)?;
+    let snapshot = snapshot_uplink(repo)?;
+    let kind = direction.gate_kind();
+    let outcome = (|| -> Result<TransferResult> {
+        git(
+            repo,
+            &["checkout", "-f", "--quiet", "--detach", upstream_ref],
+            GitOpts::default(),
+        )?;
+        let mut target_onto = None;
+        let mut target_after = None;
+        for item in topological_active(&preview)? {
+            if item.status == "conflict" {
+                return Err(Error::msg(format!(
+                    "Queue is blocked on conflict in {}",
+                    item.id
+                )));
+            }
+            let onto_here = rev_parse(repo, "HEAD")?;
+            let patch_file = snapshot.join(patch_path(&item.id)?);
+            let result = apply_patch_file(repo, &item, &patch_file, false)?;
+            if result == "conflict" {
+                if item.id != id {
+                    return Err(Error::msg(format!(
+                        "Cannot transfer {id}: {} (\"{}\") would not apply after the move.",
+                        item.id, item.title
+                    )));
+                }
+                let files = conflicted_files(repo)?;
+                let (base, work) = cut_gated_work(
+                    repo,
+                    kind,
+                    id,
+                    &onto_here,
+                    &format!("uplink: transfer {id} {}", direction.as_str()),
+                )?;
+                return Ok(gated_transfer_result(
+                    queue.clone(),
+                    id,
+                    direction,
+                    (base, work, onto_here),
+                    files,
+                    format!("Patch {id} does not apply in the destination layer."),
+                ));
+            }
+            if item.id == id {
+                target_onto = Some(onto_here);
+                target_after = Some(rev_parse(repo, "HEAD")?);
+            }
+        }
+
+        copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
+        let preflight = match direction {
+            TransferDirection::ToUpstream => {
+                let abs = snapshot.join(patch_path(id)?);
+                assert_export_preflight(repo, &preview, &patch, &abs, None)
+                    .and_then(|_| assert_upstream_layer_applies(repo, &preview))
+            }
+            TransferDirection::ToInternal => run_preflight_command_in(&preview, repo),
+        };
+        let _ = fs::remove_dir_all(repo.join(".uplink"));
+        if let Err(err) = preflight {
+            let onto = target_onto.ok_or_else(|| {
+                Error::msg(format!("{id} was not applied during transfer preview"))
+            })?;
+            if let Some(after) = &target_after {
+                git(
+                    repo,
+                    &["checkout", "-f", "--quiet", after],
+                    GitOpts::default(),
+                )?;
+            }
+            let (base, work) = cut_gated_work(
+                repo,
+                kind,
+                id,
+                &onto,
+                &format!("uplink: transfer {id} {}", direction.as_str()),
+            )?;
+            return Ok(gated_transfer_result(
+                queue.clone(),
+                id,
+                direction,
+                (base, work, onto),
+                Vec::new(),
+                err.to_string(),
+            ));
+        }
+
+        restore_checkout(repo, &original, &original_sha)?;
+        crate::repo::ensure_state_worktree(repo)?;
+        finish_successful_transfer(repo, id, direction)
+    })();
+    let _ = fs::remove_dir_all(&snapshot);
+    match outcome {
+        Ok(result) if result.gated => {
+            restore_checkout(repo, &original, &original_sha)?;
+            crate::repo::ensure_state_worktree(repo)?;
+            Ok(result)
+        }
+        Ok(result) => Ok(result),
+        Err(err) => {
+            let _ = restore_checkout(repo, &original, &original_sha);
+            let _ = crate::repo::ensure_state_worktree(repo);
+            Err(err)
+        }
+    }
+}
+
+fn gated_transfer_result(
+    queue: QueueState,
+    id: &str,
+    direction: TransferDirection,
+    (base, work, onto): (String, String, String),
+    files: Vec<String>,
+    message: String,
+) -> TransferResult {
+    TransferResult {
+        queue,
+        id: id.into(),
+        direction,
+        transferred: false,
+        gated: true,
+        base_branch: Some(base),
+        work_branch: Some(work),
+        onto: Some(onto),
+        files,
+        message: Some(message),
+        pr_close_url: None,
+        pr_close_number: None,
+    }
+}
+
+fn finish_successful_transfer(
+    repo: &Path,
+    id: &str,
+    direction: TransferDirection,
+) -> Result<TransferResult> {
+    let mut queue = read_queue_file(repo)?;
+    validate_transfer(&queue, id, direction)?;
+    let mut pr_close_url = None;
+    let mut pr_close_number = None;
+    {
+        let patch = get_patch(&queue, id)?;
+        if direction.to_internal() {
+            pr_close_url = patch.upstream.as_ref().and_then(|u| u.pr_url.clone());
+            pr_close_number = patch.upstream.as_ref().and_then(|u| u.pr_number);
+        }
+    }
+    move_patch(&mut queue, id, direction.to_internal())?;
+    {
+        let patch = get_patch_mut(&mut queue, id)?;
+        patch.status = "queued".into();
+        patch.conflict = None;
+        if direction.to_internal() {
+            patch.upstream = None;
+            patch.approvals.clear();
+        }
+        add_event(
+            patch,
+            "transferred",
+            format!("Moved {}", direction.as_str()),
+        );
+    }
+    write_queue_file(repo, &queue)?;
+    commit_queue(
+        repo,
+        &format!("uplink: transfer {id} {}", direction.as_str()),
+    )?;
+    let queue = rebuild(repo)?;
+    Ok(TransferResult {
+        queue,
+        id: id.into(),
+        direction,
+        transferred: true,
+        gated: false,
+        base_branch: None,
+        work_branch: None,
+        onto: None,
+        files: Vec::new(),
+        message: None,
+        pr_close_url,
+        pr_close_number,
+    })
+}
+
+fn complete_transfer(
+    repo: &Path,
+    id: &str,
+    direction: TransferDirection,
+) -> Result<TransferResult> {
+    let kind = direction.gate_kind();
+    let base = kind.base_branch(id);
+    let work = kind.work_branch(id);
+    let head = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if head != base && head != work {
+        return Err(Error::msg(format!(
+            "Check out {base} or {work} before completing transfer of {id} (currently on {head})."
+        )));
+    }
+    let queue_ref = state_branch(repo);
+    if has_ref(repo, &queue_ref)? {
+        git(
+            repo,
+            &[
+                "restore",
+                "--source",
+                &queue_ref,
+                "--worktree",
+                "--",
+                ".uplink",
+            ],
+            GitOpts::default(),
+        )?;
+    }
+    let queue = read_queue_file(repo)?;
+    let patch = validate_transfer(&queue, id, direction)?;
+    assert_resolution_clean(repo)?;
+    let onto = recover_onto(repo, kind, id, &head)?;
+    let message = company_commit_message(&patch);
+    commit_resolution(repo, &onto, &message)?;
+    fs::create_dir_all(repo.join(".uplink/patches"))?;
+    fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
+
+    let mut preview = queue.clone();
+    move_patch(&mut preview, id, direction.to_internal())?;
+    let preflight = match direction {
+        TransferDirection::ToUpstream => {
+            let abs = repo.join(patch_path(id)?);
+            assert_export_preflight(repo, &preview, get_patch(&preview, id)?, &abs, None)
+                .and_then(|_| assert_upstream_layer_applies(repo, &preview))
+        }
+        TransferDirection::ToInternal => run_preflight_command_in(&preview, repo),
+    };
+    preflight?;
+
+    let rel = patch_path(id)?.to_string_lossy().into_owned();
+    let stable = stable_patch_id(repo, &rel)?;
+    let mut queue = read_queue_file(repo)?;
+    let mut pr_close_url = None;
+    let mut pr_close_number = None;
+    {
+        let current = get_patch(&queue, id)?;
+        if direction.to_internal() {
+            pr_close_url = current.upstream.as_ref().and_then(|u| u.pr_url.clone());
+            pr_close_number = current.upstream.as_ref().and_then(|u| u.pr_number);
+        }
+    }
+    move_patch(&mut queue, id, direction.to_internal())?;
+    {
+        let current = get_patch_mut(&mut queue, id)?;
+        current.status = "queued".into();
+        current.conflict = None;
+        current.patch_id_stable = Some(stable);
+        if direction.to_internal() {
+            current.upstream = None;
+            current.approvals.clear();
+        }
+        add_event(
+            current,
+            "transferred",
+            format!("Moved {} after gated work", direction.as_str()),
+        );
+    }
+    write_queue_file(repo, &queue)?;
+    commit_queue(
+        repo,
+        &format!("uplink: transfer {id} {}", direction.as_str()),
+    )?;
+    let queue = rebuild(repo)?;
+    Ok(TransferResult {
+        queue,
+        id: id.into(),
+        direction,
+        transferred: true,
+        gated: false,
+        base_branch: None,
+        work_branch: None,
+        onto: None,
+        files: Vec::new(),
+        message: None,
+        pr_close_url,
+        pr_close_number,
     })
 }
 

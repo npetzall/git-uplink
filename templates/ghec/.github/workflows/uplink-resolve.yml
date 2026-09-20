@@ -2,18 +2,17 @@
 # Requires `git-uplink` on PATH.
 # Empty UPLINK_*_AUTH defaults to app.
 #
-# Human pushes to uplink/conflict/<id> after fixing markers. This job
-# runs git uplink resolve, rebuilds company main, and deletes the
-# conflict branch. If the patch was already submitted, status becomes
-# amended and this job dispatches Uplink submit so IP can approve the
-# delta. If rebuild stops on a later patch, it publishes that conflict
-# the same way sync does. It must not run when the sync or resolve bot
-# publishes the conflict branch (Uplink Bot author, or github-actions[bot]
-# if checkout still used GITHUB_TOKEN).
+# Runs when the gated conflict PR is merged into uplink/conflict/<id>.
+# git uplink resolve amends the patch, rebuilds company main, and
+# deletes the protected base plus -work branch. If the patch was already
+# submitted, status becomes amended and this job dispatches Uplink submit.
+# If rebuild stops on a later patch, it publishes that conflict the same
+# way sync does.
 name: Uplink resolve
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches:
       - "uplink/conflict/**"
 
@@ -29,7 +28,7 @@ permissions:
 
 jobs:
   resolve:
-    if: github.actor != 'github-actions[bot]' && github.event.head_commit.author.name != 'Uplink Bot'
+    if: github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
     steps:
       - name: Mint internal GitHub App token
@@ -59,6 +58,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+          ref: ${{ github.event.pull_request.base.ref }}
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Resolve patch and rebuild main
@@ -66,13 +66,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           git uplink init
           git fetch origin main
           git branch -f main origin/main
-          id="${GITHUB_REF_NAME#uplink/conflict/}"
-          if [ -z "$id" ] || [ "$id" = "$GITHUB_REF_NAME" ]; then
-            echo "Could not parse patch id from $GITHUB_REF_NAME"
+          id="${BASE_REF#uplink/conflict/}"
+          if [ -z "$id" ] || [ "$id" = "$BASE_REF" ] || [[ "$id" == *-work ]]; then
+            echo "Could not parse patch id from $BASE_REF"
             exit 1
           fi
 
@@ -113,43 +114,35 @@ jobs:
             gh workflow run "Uplink submit" --ref main -f "patch_id=$id"
           fi
 
-          close_url=$(jq -r '.gh.issueClose.url // empty' <<<"$resolve_json")
-          close_comment=$(jq -r '.gh.issueClose.comment // empty' <<<"$resolve_json")
-          if [ -n "$close_url" ]; then
-            gh issue close "$close_url" --comment "$close_comment"
-          else
-            issue=$(gh issue list --state open --json number,title --jq ".[] | select(.title==\"Uplink conflict: ${id}\") | .number" | head -n 1)
-            if [ -n "$issue" ]; then
-              gh issue close "$issue" --comment "Resolved ${id}; company main rebuilt. Do not open a conflict PR."
-            fi
-          fi
-
           if [ "$code" -eq 2 ]; then
             conflict_id=$(jq -r '.conflict.id // empty' <<<"$resolve_json")
             conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$resolve_json")
+            work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$resolve_json")
             if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
               echo "resolve exited 2 but no conflict patch was recorded"
             else
               if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
                 git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
               fi
+              if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
+                git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
+              fi
 
-              title=$(jq -r '.gh.issueCreate.title' <<<"$resolve_json")
-              body_file=$(jq -r '.gh.issueCreate.bodyFile' <<<"$resolve_json")
-              existing=$(gh issue list --state open --json url,title --jq ".[] | select(.title==\"${title}\") | .url" | head -n 1)
+              title=$(jq -r '.gh.prCreate.title' <<<"$resolve_json")
+              body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$resolve_json")
+              head=$(jq -r '.gh.prCreate.head' <<<"$resolve_json")
+              base=$(jq -r '.gh.prCreate.base' <<<"$resolve_json")
+              existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
               if [ -z "$existing" ]; then
-                gh label create uplink:conflict --description "Uplink sync conflict; checkout the conflict branch, do not open a PR" --color B60205 || true
-                url=$(gh issue create --title "$title" --label uplink:conflict --body-file "$body_file")
+                gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
+                url=$(gh pr create --title "$title" --base "$base" --head "$head" --label uplink:conflict --body-file "$body_file")
               else
                 url="$existing"
               fi
-              git uplink conflicted "$conflict_id" --issue-url "$url"
+              git uplink gated "$conflict_id" --pr-url "$url"
             fi
           fi
 
-          pr=$(gh pr list --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number')
-          if [ -n "$pr" ]; then
-            gh pr close "$pr" --comment "Resolved ${id}; company main rebuilt. Conflicts are tracked as issues, not PRs. Do not merge a conflict PR."
-          fi
-          git push origin --delete "$GITHUB_REF_NAME"
+          git push origin --delete "uplink/conflict/${id}" || true
+          git push origin --delete "uplink/conflict/${id}-work" || true
           exit "$code"

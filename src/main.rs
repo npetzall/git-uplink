@@ -11,13 +11,13 @@ use git_uplink::{
     TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch, adopted_next_steps, approve_patch_at,
     commit_queue, drop_patch, format_approval_receipt, format_contribution_packet,
     format_prepare_markdown, format_status_table, from_upstream_report_paths, git_ok, init,
-    load_groups_file, mark_merged, parse_github_repo, parse_issue_url, parse_pull_request_url,
+    load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, prepare_from_message, push_queue,
-    read_queue, rebuild_with, record_conflict_issue, record_pull_request, refresh_from_origin,
+    read_queue, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
     report_paths, reset_from_origin, resolve_conflict, status_report, status_snapshot,
-    submit_patch, sync,
+    submit_patch, sync, transfer_patch,
 };
-use git_uplink::{Patch, QueueState, SyncResult};
+use git_uplink::{Patch, QueueState, SyncResult, TransferDirection, TransferResult};
 
 #[derive(Parser)]
 #[command(
@@ -30,7 +30,7 @@ title and body as the single commit message, rewrites the export author, strips\
 the internal section before contrib export, and scans for company affiliation.\n\
 On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment;\n\
 approve/submit run after that review. git uplink talks to git only; workflows\n\
-use gh for GitHub and follow-up commands (submitted, conflicted) to record results."
+use gh for GitHub and follow-up commands (submitted, gated) to record results."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -152,12 +152,14 @@ enum Commands {
     /// Promote a pending public main after from-upstream environment approval.
     #[command(name = "accept-upstream")]
     AcceptUpstream,
-    Conflicted {
+    /// Record the company PR that gates a conflict.
+    #[command(alias = "conflicted")]
+    Gated {
         id: String,
-        #[arg(long = "issue-url")]
-        issue_url: String,
+        #[arg(long = "pr-url")]
+        pr_url: String,
         #[arg(long)]
-        issue: Option<u64>,
+        pr: Option<u64>,
         #[arg(long = "push-remote", default_value = "origin")]
         push_remote: String,
     },
@@ -186,6 +188,16 @@ enum Commands {
     },
     Resolve {
         id: String,
+    },
+    /// Move a patch between the internal and upstream queues.
+    Transfer {
+        id: String,
+        #[arg(long = "to-upstream", conflicts_with = "to_internal")]
+        to_upstream: bool,
+        #[arg(long = "to-internal", conflicts_with = "to_upstream")]
+        to_internal: bool,
+        #[arg(long, help = "Finish a gated transfer after the work PR is merged")]
+        complete: bool,
     },
     /// Start the embedded operator dashboard and open a browser.
     #[command(name = "web-ui")]
@@ -312,25 +324,25 @@ fn print_failure_comment(err: &Error) {
 
 fn conflict_body(
     id: &str,
-    branch: &str,
+    work_branch: &str,
     onto: Option<&str>,
     resolved_from: Option<&str>,
 ) -> String {
     let intro = if let Some(from) = resolved_from {
         format!(
-            "Rebuild after resolving `{from}` stopped on `{id}`. Checkout `{branch}`, remove the conflict markers, and push. Then run `git uplink resolve {id}` (or let **Uplink resolve** run on that push)."
+            "Rebuild after resolving `{from}` stopped on `{id}`. Checkout `{work_branch}`, remove the conflict markers, and open or update the PR into the protected base. Merge runs `git uplink resolve {id}`."
         )
     } else {
         format!(
-            "Sync stopped on `{id}`. Checkout `{branch}`, remove the conflict markers, and push. Then run `git uplink resolve {id}` (or let **Uplink resolve** run on that push)."
+            "Sync stopped on `{id}`. Checkout `{work_branch}`, remove the conflict markers, and push that work branch. Merge the PR into the protected base to run `git uplink resolve {id}`."
         )
     };
     let mut body = format!(
-        "Company `main` is bot-owned. **Do not open or merge a pull request** for this conflict.\n\n\
+        "Company `main` is bot-owned. Resolve this conflict through the gated PR from `{work_branch}` into the protected base.\n\n\
 {intro}\n\n\
 Remaining patches wait until this id is resolved.\n"
     );
-    if let Some(compare) = compare_url(onto, branch) {
+    if let Some(compare) = compare_url(onto, work_branch) {
         body.push_str(&format!(
             "\nCompare the failed apply (not frozen main): {compare}\n"
         ));
@@ -338,15 +350,19 @@ Remaining patches wait until this id is resolved.\n"
     body
 }
 
-fn issue_create_artifact(
+fn conflict_pr_create_artifact(
     repo: &Path,
     patch: &Patch,
     resolved_from: Option<&str>,
 ) -> serde_json::Value {
     let conflict = patch.conflict.as_ref();
-    let branch = conflict.map(|c| c.branch.as_str()).unwrap_or("");
+    let base = conflict.map(|c| c.branch.as_str()).unwrap_or("");
+    let work = conflict
+        .and_then(|c| c.work_branch.as_deref())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(base);
     let onto = conflict.and_then(|c| c.onto.as_deref());
-    let body = conflict_body(&patch.id, branch, onto, resolved_from);
+    let body = conflict_body(&patch.id, work, onto, resolved_from);
     let body_file = match report_paths(&patch.id) {
         Ok((dir, _, _)) => format!("{dir}/conflict.md"),
         Err(_) => return serde_json::json!({"error": "invalid patch id"}),
@@ -355,21 +371,10 @@ fn issue_create_artifact(
     serde_json::json!({
         "title": format!("Uplink conflict: {}", patch.id),
         "bodyFile": body_file,
-        "label": "uplink:conflict"
+        "head": work,
+        "base": base,
+        "labels": ["uplink:conflict"]
     })
-}
-
-fn issue_close_artifact(patch: &Patch) -> Option<serde_json::Value> {
-    let conflict = patch.conflict.as_ref()?;
-    let url = conflict.issue_url.as_ref()?;
-    Some(serde_json::json!({
-        "number": conflict.issue_number,
-        "url": url,
-        "comment": format!(
-            "Resolved {}; company main rebuilt. Do not open a conflict PR.",
-            patch.id
-        )
-    }))
 }
 
 fn print_sync_artifact(repo: &Path, result: &SyncResult) {
@@ -387,11 +392,64 @@ fn print_sync_artifact(repo: &Path, result: &SyncResult) {
         value["conflict"] = serde_json::json!({
             "id": patch.id,
             "branch": patch.conflict.as_ref().map(|c| &c.branch),
+            "workBranch": patch.conflict.as_ref().and_then(|c| c.work_branch.clone()),
             "onto": patch.conflict.as_ref().and_then(|c| c.onto.clone()),
         });
         value["gh"] = serde_json::json!({
-            "issueCreate": issue_create_artifact(repo, patch, None),
+            "prCreate": conflict_pr_create_artifact(repo, patch, None),
         });
+    }
+    println!("{value}");
+}
+
+fn print_transfer_artifact(repo: &Path, result: &TransferResult) {
+    let mut value = serde_json::json!({
+        "id": result.id,
+        "direction": result.direction.as_str(),
+        "transferred": result.transferred,
+        "gated": result.gated,
+    });
+    if result.gated {
+        value["base"] = serde_json::Value::String(result.base_branch.clone().unwrap_or_default());
+        value["work"] = serde_json::Value::String(result.work_branch.clone().unwrap_or_default());
+        value["onto"] = serde_json::Value::String(result.onto.clone().unwrap_or_default());
+        let kind = result.direction.gate_kind();
+        let body = format!(
+            "Transfer of `{}` {} needs product changes (git conflict or preflight).\n\n\
+Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing the PR without merging aborts; the queue is unchanged.\n",
+            result.id,
+            result.direction.as_str(),
+            result.work_branch.as_deref().unwrap_or("")
+        );
+        let body_file = match report_paths(&result.id) {
+            Ok((dir, _, _)) => format!("{dir}/transfer.md"),
+            Err(_) => "transfer.md".into(),
+        };
+        write_markdown_file(repo, Path::new(&body_file), &body);
+        value["gh"] = serde_json::json!({
+            "prCreate": {
+                "title": format!("Uplink transfer {}: {}", result.direction.as_str(), result.id),
+                "bodyFile": body_file,
+                "head": result.work_branch,
+                "base": result.base_branch,
+                "labels": [kind.label()]
+            }
+        });
+    } else {
+        let mut gh = serde_json::Map::new();
+        if let Some(url) = &result.pr_close_url {
+            gh.insert(
+                "prClose".into(),
+                serde_json::json!({
+                    "number": result.pr_close_number,
+                    "url": url,
+                    "comment": format!("Abandoned public PR; {} moved to internal.", result.id),
+                }),
+            );
+        }
+        if !gh.is_empty() {
+            value["gh"] = serde_json::Value::Object(gh);
+        }
     }
     println!("{value}");
 }
@@ -421,19 +479,15 @@ fn finish_sync(repo: &Path, result: SyncResult) -> Result<(), Error> {
 fn print_resolve_artifact(
     repo: &Path,
     resolved_id: &str,
-    prior: &Patch,
     queue: &QueueState,
     follow_on_conflict: bool,
 ) {
     let mut gh = serde_json::Map::new();
-    if let Some(close) = issue_close_artifact(prior) {
-        gh.insert("issueClose".into(), close);
-    }
     let conflict = queue.all_patches().find(|p| p.status == "conflict");
     if follow_on_conflict && let Some(patch) = conflict {
         gh.insert(
-            "issueCreate".into(),
-            issue_create_artifact(repo, patch, Some(resolved_id)),
+            "prCreate".into(),
+            conflict_pr_create_artifact(repo, patch, Some(resolved_id)),
         );
     }
     let status = queue
@@ -449,6 +503,7 @@ fn print_resolve_artifact(
         value["conflict"] = serde_json::json!({
             "id": patch.id,
             "branch": patch.conflict.as_ref().map(|c| &c.branch),
+            "workBranch": patch.conflict.as_ref().and_then(|c| c.work_branch.clone()),
             "onto": patch.conflict.as_ref().and_then(|c| c.onto.clone()),
         });
     }
@@ -827,20 +882,19 @@ fn run() -> Result<(), Error> {
             append_step_summary(&receipt);
             finish_sync(&repo, accept_upstream(&repo)?)?;
         }
-        Commands::Conflicted {
+        Commands::Gated {
             id,
-            issue_url,
-            issue,
+            pr_url,
+            pr,
             push_remote,
         } => {
-            let number = issue
-                .or_else(|| parse_issue_url(&issue_url))
+            let number = pr
+                .or_else(|| parse_pull_request_url(&pr_url))
                 .ok_or_else(|| {
-                    Error::msg(format!("could not parse issue number from {issue_url}"))
+                    Error::msg(format!("could not parse pull request number from {pr_url}"))
                 })?;
-            let patch =
-                record_conflict_issue(&repo, &id, number, &issue_url, Some(push_remote.as_str()))?;
-            println!("{} conflict issue {issue_url}", patch.id);
+            let patch = record_gated_pr(&repo, &id, number, &pr_url, Some(push_remote.as_str()))?;
+            println!("{} conflict PR {pr_url}", patch.id);
         }
         Commands::Merged { id, via, sha } => {
             let via = MergeVia::parse(&via).ok_or_else(|| Error::msg("invalid --via"))?;
@@ -883,34 +937,57 @@ fn run() -> Result<(), Error> {
                 println!("rebuild complete");
             }
         }
-        Commands::Resolve { id } => {
-            let prior = read_queue(&repo)?;
-            let prior_patch = prior
-                .all_patches()
-                .find(|p| p.id == id)
-                .cloned()
-                .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
-            match resolve_conflict(&repo, &id) {
-                Ok(queue) => {
-                    print_resolve_artifact(&repo, &id, &prior_patch, &queue, false);
+        Commands::Resolve { id } => match resolve_conflict(&repo, &id) {
+            Ok(queue) => {
+                print_resolve_artifact(&repo, &id, &queue, false);
+            }
+            Err(Error::Conflict(err)) => {
+                let queue = read_queue(&repo)?;
+                print_resolve_artifact(&repo, &id, &queue, true);
+                if let Some(conflict) = queue.all_patches().find(|p| p.status == "conflict") {
+                    eprintln!(
+                        "CONFLICT {} on {}",
+                        conflict.id,
+                        conflict
+                            .conflict
+                            .as_ref()
+                            .map(|c| c.branch.as_str())
+                            .unwrap_or("")
+                    );
                 }
-                Err(Error::Conflict(err)) => {
-                    let queue = read_queue(&repo)?;
-                    print_resolve_artifact(&repo, &id, &prior_patch, &queue, true);
-                    if let Some(conflict) = queue.all_patches().find(|p| p.status == "conflict") {
-                        eprintln!(
-                            "CONFLICT {} on {}",
-                            conflict.id,
-                            conflict
-                                .conflict
-                                .as_ref()
-                                .map(|c| c.branch.as_str())
-                                .unwrap_or("")
-                        );
-                    }
-                    return Err(Error::Conflict(err));
-                }
-                Err(err) => return Err(err),
+                return Err(Error::Conflict(err));
+            }
+            Err(err) => return Err(err),
+        },
+        Commands::Transfer {
+            id,
+            to_upstream,
+            to_internal,
+            complete,
+        } => {
+            let direction = if to_upstream {
+                TransferDirection::ToUpstream
+            } else if to_internal {
+                TransferDirection::ToInternal
+            } else {
+                return Err(Error::msg("specify --to-upstream or --to-internal"));
+            };
+            let result = transfer_patch(&repo, &id, direction, complete)?;
+            print_transfer_artifact(&repo, &result);
+            if result.gated {
+                eprintln!(
+                    "TRANSFER {} needs work on {}",
+                    result.id,
+                    result.work_branch.as_deref().unwrap_or("")
+                );
+                return Err(Error::Conflict(git_uplink::ConflictError::new(
+                    result
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| format!("transfer {id} needs byte changes")),
+                    result.id.clone(),
+                    result.files.clone(),
+                )));
             }
         }
         Commands::WebUi {

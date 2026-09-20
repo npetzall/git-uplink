@@ -6,13 +6,13 @@ use std::thread;
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
     GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QueueConfig, QueueState,
-    RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, accept_upstream,
-    add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
+    RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
+    accept_upstream, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
     format_approver_packet, format_contribution_packet, from_upstream_report_paths, git, git_ok,
     init, init_repo, mark_merged, parse_depends_on, preflight_incoming_change, push_queue, rebuild,
-    rebuild_with, record_conflict_issue, record_pull_request, refresh_from_origin, report_paths,
+    rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
     reset_from_origin, resolve_conflict, status_snapshot, strip_html_comments, submit_patch,
-    summarize_queue, sync, write_queue,
+    summarize_queue, sync, transfer_patch, write_queue,
 };
 use tempfile::TempDir;
 
@@ -251,6 +251,14 @@ fn add_landed_patch(repo: &Path, mut opts: AddPatchOpts) -> Result<Patch> {
     opts.from_ref = Some(from_sha);
     opts.head_ref = Some(head_sha);
     add_patch(repo, opts)
+}
+
+fn work_branch_of(patch: &Patch) -> String {
+    patch
+        .conflict
+        .as_ref()
+        .and_then(|c| c.work_branch.clone())
+        .unwrap_or_else(|| format!("{}-work", patch.conflict.as_ref().unwrap().branch))
 }
 
 #[test]
@@ -2415,6 +2423,11 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
         .map(|c| c.branch.as_str())
         .unwrap();
     assert_eq!(conflict_branch, format!("uplink/conflict/{}", ttl_patch.id));
+    let work_branch = work_branch_of(conflicted);
+    assert_eq!(
+        work_branch,
+        format!("uplink/conflict/{}-work", ttl_patch.id)
+    );
 
     let on_main = git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
     assert_eq!(on_main, "main");
@@ -2424,7 +2437,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
 
     git(
         company,
-        &["checkout", "--quiet", conflict_branch],
+        &["checkout", "--quiet", &work_branch],
         GitOpts::default(),
     )
     .unwrap();
@@ -4357,7 +4370,7 @@ fn submit_does_not_commit_queue_until_submitted() {
 }
 
 #[test]
-fn conflicted_records_the_issue_on_the_patch() {
+fn gated_records_the_conflict_pr_on_the_patch() {
     let world = setup_world();
     let company = &world.company;
     let upstream = &world.upstream;
@@ -4394,20 +4407,20 @@ fn conflicted_records_the_issue_on_the_patch() {
     let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(conflicted.status, "conflict");
 
-    let url = "https://github.com/acme/product/issues/12";
-    let recorded = record_conflict_issue(company, &ttl_patch.id, 12, url, None).unwrap();
-    assert_eq!(recorded.conflict.as_ref().unwrap().issue_number, Some(12));
+    let url = "https://github.com/acme/product/pull/12";
+    let recorded = record_gated_pr(company, &ttl_patch.id, 12, url, None).unwrap();
+    assert_eq!(recorded.conflict.as_ref().unwrap().pr_number, Some(12));
     assert_eq!(
-        recorded.conflict.as_ref().unwrap().issue_url.as_deref(),
+        recorded.conflict.as_ref().unwrap().pr_url.as_deref(),
         Some(url)
     );
-    let again = record_conflict_issue(company, &ttl_patch.id, 12, url, None).unwrap();
-    assert_eq!(again.conflict.as_ref().unwrap().issue_number, Some(12));
-    let err = record_conflict_issue(
+    let again = record_gated_pr(company, &ttl_patch.id, 12, url, None).unwrap();
+    assert_eq!(again.conflict.as_ref().unwrap().pr_number, Some(12));
+    let err = record_gated_pr(
         company,
         &ttl_patch.id,
         13,
-        "https://github.com/acme/product/issues/13",
+        "https://github.com/acme/product/pull/13",
         None,
     )
     .unwrap_err();
@@ -4795,8 +4808,12 @@ fn git_uplink_help_includes_web_ui() {
         "expected submitted subcommand in help, got:\n{text}"
     );
     assert!(
-        text.contains("conflicted"),
-        "expected conflicted subcommand in help, got:\n{text}"
+        text.contains("gated"),
+        "expected gated subcommand in help, got:\n{text}"
+    );
+    assert!(
+        text.contains("transfer"),
+        "expected transfer subcommand in help, got:\n{text}"
     );
     assert!(
         text.contains("reset"),
@@ -4806,4 +4823,241 @@ fn git_uplink_help_includes_web_ui() {
         text.contains("refresh"),
         "expected refresh subcommand in help, got:\n{text}"
     );
+}
+
+fn add_internal_notes(company: &Path) -> Patch {
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_all(company, "internal notes");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn ref_exists(repo: &Path, name: &str) -> bool {
+    git(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{name}"),
+        ],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .unwrap()
+    .code
+        == 0
+}
+
+#[test]
+fn transfer_to_upstream_moves_immediately_when_apply_and_preflight_pass() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(result.transferred, "{result:?}");
+    assert!(!result.gated);
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert!(queue.is_upstream(&patch.id));
+    assert!(!queue.is_internal(&patch.id));
+    assert!(!ref_exists(
+        company,
+        &format!("uplink/transfer-to-upstream/{}", patch.id)
+    ));
+}
+
+#[test]
+fn transfer_to_upstream_gates_on_preflight_failure_without_writing_queue() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.preflight_command = Some("exit 1".into());
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: failing preflight").unwrap();
+
+    let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(result.gated, "{result:?}");
+    assert!(!result.transferred);
+    let base = format!("uplink/transfer-to-upstream/{}", patch.id);
+    let work = format!("{base}-work");
+    assert_eq!(result.base_branch.as_deref(), Some(base.as_str()));
+    assert_eq!(result.work_branch.as_deref(), Some(work.as_str()));
+    assert!(ref_exists(company, &base));
+    assert!(ref_exists(company, &work));
+
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    let notes = fs::read_to_string(company.join("NOTES.md")).unwrap();
+    assert!(notes.contains("internal-notes"), "{notes}");
+    assert!(!notes.contains("<<<<<<"), "{notes}");
+
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let after = git_uplink::read_queue(company).unwrap();
+    assert!(after.is_internal(&patch.id));
+    assert!(!after.is_upstream(&patch.id));
+    assert_eq!(
+        after
+            .all_patches()
+            .find(|p| p.id == patch.id)
+            .unwrap()
+            .status,
+        "queued"
+    );
+}
+
+#[test]
+fn transfer_abort_deletes_branches_and_leaves_the_source_queue() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.preflight_command = Some("exit 1".into());
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: failing preflight").unwrap();
+    let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(result.gated);
+    let base = result.base_branch.unwrap();
+    let work = result.work_branch.unwrap();
+    git(company, &["branch", "-D", &base, &work], GitOpts::default()).unwrap();
+    assert!(!ref_exists(company, &base));
+    assert!(!ref_exists(company, &work));
+    let after = git_uplink::read_queue(company).unwrap();
+    assert!(after.is_internal(&patch.id));
+    let again = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(again.gated);
+    assert!(ref_exists(
+        company,
+        &format!("uplink/transfer-to-upstream/{}", patch.id)
+    ));
+}
+
+#[test]
+fn transfer_complete_applies_work_and_moves_the_patch() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.preflight_command = Some("grep -q ready NOTES.md".into());
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: notes preflight").unwrap();
+    let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(result.gated, "{result:?}");
+    let work = result.work_branch.unwrap();
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "NOTES.md", "internal-notes\nready\n");
+    git(company, &["add", "NOTES.md"], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["commit", "-m", "make preflight pass"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let done = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, true).unwrap();
+    assert!(done.transferred, "{done:?}");
+    assert!(!done.gated);
+    let after = git_uplink::read_queue(company).unwrap();
+    assert!(after.is_upstream(&patch.id));
+}
+
+#[test]
+fn transfer_refuses_the_wrong_source_queue() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let err = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap_err();
+    assert!(
+        err.to_string().contains("not in the internal queue"),
+        "{err}"
+    );
+}
+
+#[test]
+fn transfer_to_internal_of_submitted_clears_upstream() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    approve_patch(company, &patch.id).unwrap();
+    let submitted = submit_patch(company, &patch.id).unwrap();
+    record_pull_request(
+        company,
+        &patch.id,
+        44,
+        "https://github.com/upstream/tokenkit/pull/44",
+        &submitted.branch,
+        None,
+    )
+    .unwrap();
+    let result = transfer_patch(company, &patch.id, TransferDirection::ToInternal, false).unwrap();
+    assert!(result.transferred, "{result:?}");
+    assert_eq!(
+        result.pr_close_url.as_deref(),
+        Some("https://github.com/upstream/tokenkit/pull/44")
+    );
+    let after = git_uplink::read_queue(company).unwrap();
+    let moved = after.all_patches().find(|p| p.id == patch.id).unwrap();
+    assert!(after.is_internal(&patch.id));
+    assert_eq!(moved.status, "queued");
+    assert!(moved.upstream.is_none());
+    assert!(moved.approvals.is_empty());
 }

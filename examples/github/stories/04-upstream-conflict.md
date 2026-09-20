@@ -53,10 +53,10 @@ git push origin main
 **Actions → Uplink sync** on internal. Inspect finds the shorten-ttl commit is not a company patch, so the apply job waits on Environment **from-upstream**. Approve that deployment. After apply, the run exits 2. Internal gets:
 
 - Ben’s status `conflict` on `uplink/state`
-- branch `uplink/conflict/<id>` with markers
-- issue labeled `uplink:conflict`
+- protected base `uplink/conflict/<id>` (apply prefix) and `uplink/conflict/<id>-work` (conflict markers)
+- a gated PR from `-work` into the base, labeled `uplink:conflict`
 
-**Do not open a pull request for the conflict.** Company `main` stays at the last successful rebuild (still 7200, no markers).
+Company `main` stays at the last successful rebuild (still 7200, no markers). Work on `-work` only; merge is the only update to the base.
 
 ```bash
 git uplink reset
@@ -64,14 +64,14 @@ git fetch origin '+refs/heads/uplink/conflict/*:refs/heads/uplink/conflict/*'
 git uplink status
 ```
 
-## Resolve on the conflict branch
+## Resolve on the work branch
 
 In **internal**:
 
 ```bash
 id=upl_YOUR_ID
 git fetch origin
-git checkout "uplink/conflict/${id}"
+git checkout "uplink/conflict/${id}-work"
 ```
 
 If the file still has conflict markers, keep Ben’s 7200 on the new upstream:
@@ -91,10 +91,10 @@ p.write_text(text)
 PY
 git add src/tokens.js
 git commit -m "Resolve ttl onto the new upstream"
-git push origin "uplink/conflict/${id}"
+git push origin "uplink/conflict/${id}-work"
 ```
 
-**Uplink resolve** runs on that push. It refreshes the same patch id, rebuilds `main`, closes the issue, and deletes the conflict branch.
+Merge the gated PR into `uplink/conflict/${id}`. **Uplink resolve** runs on that merge. It refreshes the same patch id, rebuilds `main`, and deletes both conflict branches.
 
 ```bash
 git uplink reset

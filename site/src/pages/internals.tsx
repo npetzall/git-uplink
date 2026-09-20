@@ -9,6 +9,7 @@ flowchart TB
     main["company main"]
     upstreamRef["uplink/upstream"]
     conflict["uplink/conflict/id"]
+    work["uplink/conflict/id-work"]
     feat["feat branches"]
   end
   subgraph contribFork [Contribution fork public]
@@ -20,6 +21,7 @@ flowchart TB
   state -->|"source of truth"| main
   upstreamRef -->|"rebuild base"| main
   feat -->|"merge PR"| main
+  work -->|"gated PR"| conflict
   conflict -->|"resolve amends patch"| state
   state -->|"submit"| forkBranch
   forkBranch -->|"maintainer merge"| upMain
@@ -37,7 +39,7 @@ sequenceDiagram
     Upstream->>Upstream: git apply patch
     alt conflict
       Upstream-->>Main: stop do not move main
-      Upstream->>State: mark conflict publish uplink/conflict/id
+      Upstream->>State: mark conflict publish uplink/conflict/id plus work
     else empty upstream-bound
       Upstream->>State: mark merged
     else applied
@@ -80,7 +82,17 @@ const BRANCHES = [
   {
     ref: "uplink/conflict/<id>",
     where: "Private forge",
-    role: "Conflict worktree only. Humans fix files; resolve amends the patch.",
+    role: "Protected conflict base at the apply prefix. Humans do not push it. Merge from -work runs resolve.",
+  },
+  {
+    ref: "uplink/conflict/<id>-work",
+    where: "Private forge",
+    role: "Unprotected work branch. Humans fix files here and open a PR into the base.",
+  },
+  {
+    ref: "uplink/transfer-to-*/<id>",
+    where: "Private forge",
+    role: "Protected transfer bases (to-upstream / to-internal). Not recorded on the queue until the move succeeds. Close the PR without merging to abort.",
   },
   {
     ref: "feat/*",
@@ -140,8 +152,9 @@ export function InternalsPage() {
           </div>
           <p>
             Never base product work on <code>uplink/state</code>, <code>uplink/upstream</code>, contrib{" "}
-            <code>uplink/&lt;id&gt;</code>, or <code>uplink/conflict/&lt;id&gt;</code>. Branch from
-            latest company <code>main</code>.
+            <code>uplink/&lt;id&gt;</code>, or a protected uplink base. Work on{" "}
+            <code>uplink/conflict/&lt;id&gt;-work</code> (or a transfer <code>-work</code>) only to
+            finish that gated PR. Branch new product work from latest company <code>main</code>.
           </p>
         </section>
 
@@ -166,7 +179,7 @@ export function InternalsPage() {
               <code>git apply</code> each active patch. Empty apply of an upstream-bound patch marks
               it <code>merged</code>. Conflict stops the replay: later patches are not skipped;
               product <code>main</code> stays at the last good rebuild; the bot publishes{" "}
-              <code>uplink/conflict/&lt;id&gt;</code>.
+              <code>uplink/conflict/&lt;id&gt;</code> plus <code>-work</code>.
             </li>
             <li>
               Force company <code>main</code> to that HEAD, restore <code>.uplink/</code> from the

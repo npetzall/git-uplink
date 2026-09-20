@@ -1,0 +1,66 @@
+# example-github forge pack (`git uplink init --forge example-github`).
+# Required check on PRs into protected uplink bases. These PRs are not imports.
+name: Uplink gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - "uplink/conflict/**"
+      - "uplink/transfer-to-upstream/**"
+      - "uplink/transfer-to-internal/**"
+
+concurrency:
+  group: uplink-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    if: ${{ !endsWith(github.event.pull_request.base.ref, '-work') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          src: ${{ vars.UPLINK_SRC }}
+          rev: ${{ vars.UPLINK_REV }}
+
+      - name: Validate gated work
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git uplink init
+          if git grep -I -l '^<<<<<<<' -- . ':!.uplink' >/dev/null 2>&1; then
+            echo "Conflict markers still present; remove them before merge."
+            exit 1
+          fi
+          if [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
+            {
+              printf '%s\n\n' "$TITLE"
+              printf '%s\n' "${BODY:-}"
+            } > /tmp/uplink-msg.txt
+            git uplink preflight \
+              --title "$TITLE" \
+              --message-file /tmp/uplink-msg.txt \
+              --from "$FROM_SHA" \
+              --head "$HEAD_SHA"
+          elif [[ "$BASE_REF" == uplink/transfer-to-internal/* ]]; then
+            if [ -n "$UPLINK_PREFLIGHT" ]; then
+              sh -c "$UPLINK_PREFLIGHT"
+            fi
+          fi

@@ -86,7 +86,7 @@ export KIT=/path/to/git-uplink/examples/github
 
 If `bootstrap_internal.sh` did not run `gh`, do this in **uplink-example-internal**:
 
-**Labels:** `uplink:internal-only`, `uplink:conflict`
+**Labels:** `uplink:internal-only`, `uplink:conflict`, `uplink:transfer-to-upstream`, `uplink:transfer-to-internal`
 
 **Variables** (Settings → Secrets and variables → Actions → Variables):
 
@@ -178,7 +178,7 @@ On **each** repo: **Actions → Reset example → Run workflow**. The stub YAML 
 | --- | --- |
 | `uplink-example-upstream` | Close PRs; delete extra branches (keeps `main`, `seed`, `example-reset`); `main` ← `seed` |
 | `uplink-example-upstream-contrib` | Delete extra branches (`uplink/<id>`). Keeps `main`, `seed`, `example-reset`. Does not move `main`. No PRs on this repo |
-| `uplink-example-internal` | Close PRs and `uplink:conflict` issues; keeps `example-reset` and seed refs; `main` ← `seed`; `uplink/state` ← `seed-state`; `uplink/upstream` ← `seed-upstream` |
+| `uplink-example-internal` | Close PRs (including gated conflict/transfer PRs); keeps `example-reset` and seed refs; `main` ← `seed`; `uplink/state` ← `seed-state`; `uplink/upstream` ← `seed-upstream` |
 
 Then in the clones:
 
@@ -194,7 +194,13 @@ git reset --hard origin/main
 
 ## Optional: branch protection
 
-Not required. Sync and resolve persist `UPLINK_INTERNAL_TOKEN` on checkout so shell origin git can push workflow files. `git uplink` origin transport uses the same token. Production rulesets are in [`templates/README.md`](../../templates/README.md).
+Not required for the walkthrough. Production rulesets are in [`templates/README.md`](../../templates/README.md):
+
+- Protect `main` as usual (PR required).
+- Protect the three gated **bases**: `uplink/conflict/*`, `uplink/transfer-to-upstream/*`, `uplink/transfer-to-internal/*`. **Exclude** `*-work`. Require a pull request; no direct pushes. Require the **Uplink gate** check.
+- Bypass for the internal Uplink App/PAT and GitHub Actions is only to **create and delete** those protected bases. Humans push `-work` only; merge is the only update to a base.
+
+Sync, resolve, and transfer persist `UPLINK_INTERNAL_TOKEN` on checkout so shell origin git can push those refs. `git uplink` origin transport uses the same token.
 
 ## Next
 

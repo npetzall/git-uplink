@@ -21,7 +21,7 @@ export const upstreamConflict: LabScenario = {
   id: "upstream-conflict",
   title: "04 — Upstream conflict",
   blurb:
-    "Ben’s TTL patch is queued. Upstream shortens the same lines. Sync stops; Ben is conflict; you resolve on uplink/conflict/<id>, not a PR.",
+    "Ben’s TTL patch is queued. Upstream shortens the same lines. Sync stops; Ben is conflict; you work on uplink/conflict/<id>-work and merge the gated PR.",
   highlight: "7200",
   initial: exampleSeed,
   startOperations: startExample(),
@@ -58,7 +58,7 @@ export const upstreamConflict: LabScenario = {
       id: "sync-conflict",
       title: "Upstream overlaps; sync stops",
       summary:
-        "Upstream shortens default ttl to 1800. Inspect finds a foreign commit, so apply waits on from-upstream. After approval, Ben’s patch does not apply. Status conflict. Company main stays at the last successful rebuild (still 7200, no markers). An issue is opened; do not open a PR.",
+        "Upstream shortens default ttl to 1800. Inspect finds a foreign commit, so apply waits on from-upstream. After approval, Ben’s patch does not apply. Status conflict. Company main stays at the last successful rebuild (still 7200, no markers). A gated PR is opened from -work into the protected base.",
       why: "Sync must fail closed. Later patches wait. A conflict is not an export.",
       operations: [
         you(
@@ -92,17 +92,17 @@ export const upstreamConflict: LabScenario = {
           },
           log: [
             ...state.log,
-            "from-upstream approved. Sync conflict on upl_ben. Opened uplink/conflict/upl_ben. Company main not rebuilt.",
+            "from-upstream approved. Sync conflict on upl_ben. Opened uplink/conflict/upl_ben and -work. Company main not rebuilt.",
           ],
         };
       },
     },
     {
       id: "conflict-fix",
-      title: "Checkout the conflict branch and fix",
+      title: "Checkout the work branch and fix",
       summary:
-        "Fetch, check out uplink/conflict/upl_ben, keep Ben’s 7200 on the new upstream, commit, and push. Status stays conflict until resolve runs.",
-      why: "Humans fix files on the conflict branch. They do not hand-edit company main.",
+        "Fetch, check out uplink/conflict/upl_ben-work, keep Ben’s 7200 on the new upstream, commit, and push. Status stays conflict until the gated PR is merged and resolve runs.",
+      why: "Humans push -work only. Merge is the only update to the protected base. They do not hand-edit company main.",
       operations: fixConflict("upl_ben"),
       apply: (state) => {
         if (!state.conflict) return state;
@@ -116,7 +116,7 @@ export const upstreamConflict: LabScenario = {
           },
           log: [
             ...state.log,
-            "Checked out uplink/conflict/upl_ben. Kept return 7200 and staged src/tokens.js.",
+            "Checked out uplink/conflict/upl_ben-work. Kept return 7200 and staged src/tokens.js.",
           ],
         };
       },
@@ -125,7 +125,7 @@ export const upstreamConflict: LabScenario = {
       id: "resolve",
       title: "Resolve the same patch id",
       summary:
-        "Uplink resolve rewrites only that patch file, rebuilds main, closes the issue, and deletes the conflict branch. Ben is queued again. src/tokens.js has return 7200 and not 1800.",
+        "Uplink resolve rewrites only that patch file, rebuilds main, and deletes the base and -work branches. Ben is queued again. src/tokens.js has return 7200 and not 1800.",
       why: "One patch identity. Resolve is not submit; queued work still needs to-upstream before it can leave the private forge.",
       operations: resolveOps("upl_ben"),
       apply: (state) => {

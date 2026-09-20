@@ -1,0 +1,246 @@
+# ghec forge pack (`git uplink init --forge ghec`).
+# Requires `git-uplink` on PATH.
+# Empty UPLINK_*_AUTH defaults to app.
+#
+# Dispatch starts a transfer. If apply+preflight pass, the queue is updated
+# immediately. If byte changes are needed, this workflow pushes the
+# protected base and -work branch and opens a PR. Merging that PR runs
+# --complete. Closing it without merging deletes both branches and leaves
+# the queue unchanged.
+name: Uplink transfer
+run-name: Uplink transfer ${{ inputs.patch_id || github.event.pull_request.base.ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_id:
+        description: Patch id to move (upl_…)
+        required: true
+      direction:
+        description: Destination queue
+        required: true
+        type: choice
+        options:
+          - to-upstream
+          - to-internal
+  pull_request:
+    types: [closed]
+    branches:
+      - "uplink/transfer-to-upstream/**"
+      - "uplink/transfer-to-internal/**"
+
+concurrency:
+  group: uplink-mutate
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  start:
+    name: Start transfer
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          permission-contents: read
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: main
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+
+      - name: Transfer patch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+          PATCH_ID: ${{ inputs.patch_id }}
+          DIRECTION: ${{ inputs.direction }}
+        run: |
+          git uplink init
+          main_before=$(git rev-parse HEAD)
+
+          set +e
+          transfer_json=$(git uplink transfer "$PATCH_ID" --"$DIRECTION")
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+            exit "$code"
+          fi
+
+          if [ "$code" -eq 0 ]; then
+            git push origin uplink/state
+            main_after=$(git rev-parse HEAD)
+            if [ "$main_after" != "$main_before" ]; then
+              git push origin HEAD:main --force-with-lease
+            fi
+            close_url=$(jq -r '.gh.prClose.url // empty' <<<"$transfer_json")
+            close_comment=$(jq -r '.gh.prClose.comment // empty' <<<"$transfer_json")
+            if [ -n "$close_url" ]; then
+              gh pr close "$close_url" --comment "$close_comment" || true
+            fi
+            exit 0
+          fi
+
+          base=$(jq -r '.base // empty' <<<"$transfer_json")
+          work=$(jq -r '.work // empty' <<<"$transfer_json")
+          if [ -z "$base" ] || [ -z "$work" ]; then
+            echo "transfer exited 2 but no base/work branches were recorded"
+            exit 2
+          fi
+          git push origin "refs/heads/${base}:refs/heads/${base}" --force
+          git push origin "refs/heads/${work}:refs/heads/${work}" --force
+          title=$(jq -r '.gh.prCreate.title' <<<"$transfer_json")
+          body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$transfer_json")
+          label=$(jq -r '.gh.prCreate.labels[0]' <<<"$transfer_json")
+          gh label create "$label" --description "Uplink gated transfer" --color 1D76DB || true
+          gh pr create --title "$title" --base "$base" --head "$work" --label "$label" --body-file "$body_file"
+          exit 2
+
+  complete:
+    name: Complete transfer
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          permission-contents: read
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.base.ref }}
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+
+      - name: Complete gated transfer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git uplink init
+          git fetch origin main
+          git branch -f main origin/main
+          if [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
+            id="${BASE_REF#uplink/transfer-to-upstream/}"
+            direction=to-upstream
+          elif [[ "$BASE_REF" == uplink/transfer-to-internal/* ]]; then
+            id="${BASE_REF#uplink/transfer-to-internal/}"
+            direction=to-internal
+          else
+            echo "Unexpected base $BASE_REF"
+            exit 1
+          fi
+          if [ -z "$id" ] || [[ "$id" == *-work ]]; then
+            echo "Could not parse patch id from $BASE_REF"
+            exit 1
+          fi
+
+          main_before=$(git rev-parse origin/main)
+          transfer_json=$(git uplink transfer "$id" --"$direction" --complete)
+
+          head=$(git rev-parse --abbrev-ref HEAD)
+          if [ "$head" != "main" ]; then
+            echo "HEAD is ${head}, not main; refusing to push"
+            exit 1
+          fi
+
+          git push origin uplink/state
+          main_after=$(git rev-parse HEAD)
+          if [ "$main_after" != "$main_before" ]; then
+            git push origin main --force-with-lease
+          fi
+          close_url=$(jq -r '.gh.prClose.url // empty' <<<"$transfer_json")
+          close_comment=$(jq -r '.gh.prClose.comment // empty' <<<"$transfer_json")
+          if [ -n "$close_url" ]; then
+            gh pr close "$close_url" --comment "$close_comment" || true
+          fi
+          git push origin --delete "$BASE_REF" || true
+          git push origin --delete "${BASE_REF}-work" || true
+
+  cleanup:
+    name: Abort transfer
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == false && !endsWith(github.event.pull_request.base.ref, '-work')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+
+      - name: Delete transfer branches
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git push origin --delete "$BASE_REF" || true
+          git push origin --delete "$HEAD_REF" || true
+          if [[ "$BASE_REF" != *-work ]]; then
+            git push origin --delete "${BASE_REF}-work" || true
+          fi
