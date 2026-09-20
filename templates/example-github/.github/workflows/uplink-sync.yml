@@ -29,7 +29,7 @@ jobs:
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
           private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
@@ -41,7 +41,7 @@ jobs:
       - name: Mint upstream GitHub App token
         id: upstream-app
         if: ${{ vars.UPLINK_UPSTREAM_AUTH == 'app' }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
           private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
@@ -49,7 +49,7 @@ jobs:
           repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
           permission-contents: read
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: true
@@ -137,7 +137,7 @@ jobs:
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
           private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
@@ -149,7 +149,7 @@ jobs:
       - name: Mint upstream GitHub App token
         id: upstream-app
         if: ${{ vars.UPLINK_UPSTREAM_AUTH == 'app' }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
           private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
@@ -157,7 +157,7 @@ jobs:
           repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
           permission-contents: read
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: true
