@@ -9,7 +9,7 @@ use crate::git::{GitOpts, git, git_ok};
 use crate::lock::with_queue_lock;
 use crate::prepare::{assert_prepare_ok, company_commit_message, prepare_from_message};
 use crate::queue::{
-    add_event, cannot_depend_on, get_patch, read_queue as read_queue_file,
+    add_event, cannot_depend_on, get_patch, patch_path, read_queue as read_queue_file,
     write_queue as write_queue_file,
 };
 use crate::repo::{
@@ -474,10 +474,8 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
             let message = company_commit_message(&patch);
             write_product_patch(repo, &id, &group.from_sha, &message, &group.head_sha)?;
             written.push(id.clone());
-            patch.patch_id_stable = Some(stable_patch_id(
-                repo,
-                &format!(".uplink/patches/{id}.patch"),
-            )?);
+            let rel = patch_path(&id)?.to_string_lossy().into_owned();
+            patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
             if intent == "upstream" {
                 last_upstream_id = Some(id.clone());
             }
@@ -493,7 +491,9 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
     })();
     if outcome.is_err() {
         for id in written {
-            let _ = fs::remove_file(repo.join(format!(".uplink/patches/{id}.patch")));
+            if let Ok(rel) = patch_path(&id) {
+                let _ = fs::remove_file(repo.join(rel));
+            }
         }
     }
     outcome?;

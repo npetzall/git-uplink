@@ -7,15 +7,16 @@ use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::prepare::prepare_from_message;
 use crate::queue::{
-    add_event, get_patch, read_queue as read_queue_file, write_queue as write_queue_file,
+    add_event, get_patch, patch_path, read_queue as read_queue_file,
+    write_queue as write_queue_file,
 };
 use crate::repo::{
     commit_queue, ensure_uplink_dirs, ensure_upstream_ref, has_ref, new_patch_id,
     stable_patch_id_from_contents, stamp,
 };
 use crate::types::{
-    DEFAULT_CUTOFF, Forge, ForgeFamily, PATCH_DIR, Patch, PatchSource, QueueState,
-    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchSource, QueueState, TOOLING_PATCH_KIND,
+    TOOLING_PATCH_TITLE,
 };
 
 #[derive(RustEmbed)]
@@ -78,7 +79,7 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
         (new_patch_id(), true)
     };
 
-    let patch_rel = format!("{PATCH_DIR}/{id}.patch");
+    let patch_rel = patch_path(&id)?;
     fs::write(repo.join(&patch_rel), &formatted)?;
 
     let message = tooling_commit_message();
@@ -204,7 +205,10 @@ fn find_tooling_patch(queue: &QueueState, repo: &Path) -> Result<Option<String>>
         return Ok(Some(patch.id.clone()));
     }
     for patch in queue.internal.iter().chain(queue.upstream.iter()) {
-        let path = repo.join(format!("{PATCH_DIR}/{}.patch", patch.id));
+        let Ok(rel) = patch_path(&patch.id) else {
+            continue;
+        };
+        let path = repo.join(rel);
         if !path.is_file() {
             continue;
         }

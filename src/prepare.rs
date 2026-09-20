@@ -644,7 +644,7 @@ fn format_historical_approvals(repo: &Path, patch: &Patch) -> Result<String> {
         "## Previously approved packets\n\nEach packet below **was already approved**. The delta above is what still needs review.\n"
             .to_string(),
     ];
-    let (_, prepare_path, approval_path) = report_paths(&patch.id);
+    let (_, prepare_path, approval_path) = report_paths(&patch.id)?;
     for approval in &patch.approvals {
         let packet = show_at(repo, &approval.sha, &prepare_path)
             .unwrap_or_else(|_| "No `prepare.md` stored at this commit.\n".into());
@@ -709,13 +709,14 @@ This file is the in-repo receipt. The authoritative approval event is the GitHub
     )
 }
 
-pub fn report_paths(id: &str) -> (String, String, String) {
+pub fn report_paths(id: &str) -> Result<(String, String, String)> {
+    let id = crate::queue::require_path_component(id)?;
     let dir = format!(".uplink/reports/{id}");
-    (
+    Ok((
         dir.clone(),
         format!("{dir}/prepare.md"),
         format!("{dir}/approval.md"),
-    )
+    ))
 }
 
 pub fn from_upstream_report_paths() -> (String, String, String) {

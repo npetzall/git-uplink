@@ -44,7 +44,7 @@ fn commit_all(repo: &Path, message: &str) {
 
 fn commit_contribution_packet(repo: &Path, patch: &Patch) {
     let packet = format_approver_packet(patch);
-    let (_, prepare_path, _) = report_paths(&patch.id);
+    let (_, prepare_path, _) = report_paths(&patch.id).unwrap();
     write(repo, &prepare_path, &packet);
     git_uplink::commit_queue(repo, &format!("uplink: contribution packet {}", patch.id)).unwrap();
 }
@@ -2541,7 +2541,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert!(packet.contains(&amended.approvals[0].sha));
     assert!(packet.contains("Uplink-Patch-Id"));
 
-    let (_, prepare_path, _) = report_paths(&ttl_patch.id);
+    let (_, prepare_path, _) = report_paths(&ttl_patch.id).unwrap();
     write(company, &prepare_path, &packet);
     git_uplink::commit_queue(
         company,
@@ -4241,7 +4241,7 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
     assert!(packet.contains("### Upstream contrib"));
     assert!(packet.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
 
-    let (_, prepare_path, approval_path) = report_paths(&patch.id);
+    let (_, prepare_path, approval_path) = report_paths(&patch.id).unwrap();
     write(company, &prepare_path, &packet);
     write(
         company,

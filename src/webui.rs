@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 use crate::ops::{QueueCounts, StateStatus, refresh_from_origin, state_status_at, summarize_queue};
-use crate::queue::{get_patch, patch_path};
+use crate::queue::{get_patch, patch_path, require_path_component};
 use crate::repo::{
     COMPANY_REMOTE, FileRevision, file_history, has_ref, queue_at, rev_parse, show_at, state_branch,
 };
@@ -173,6 +173,16 @@ fn launch_browser(url: &str) {
     }
 }
 
+fn trusted_repo(path: &Path) -> crate::error::Result<PathBuf> {
+    let s = path
+        .to_str()
+        .ok_or_else(|| crate::error::Error::msg("repo path is not utf-8"))?;
+    if s.contains("..") {
+        return Err(crate::error::Error::msg("invalid repo path"));
+    }
+    Ok(PathBuf::from(s))
+}
+
 fn wants_fetch(value: Option<&str>) -> bool {
     match value.map(str::trim) {
         None => true,
@@ -251,6 +261,9 @@ fn upstream_head(repo: &Path, source: QueueSource) -> Option<String> {
 }
 
 fn is_uplink_path(path: &str) -> bool {
+    if path.contains("..") {
+        return false;
+    }
     let path = path.trim_start_matches('/');
     let parsed = Path::new(path);
     if parsed.is_absolute()
@@ -264,6 +277,22 @@ fn is_uplink_path(path: &str) -> bool {
         return false;
     }
     path == ".uplink" || path.starts_with(".uplink/")
+}
+
+fn read_worktree_uplink_file(repo: &Path, path: &str) -> crate::error::Result<String> {
+    let uplink_root = repo.join(".uplink");
+    let file_path = repo.join(path);
+    let file_path = file_path
+        .canonicalize()
+        .map_err(|err| crate::error::Error::msg(format!("{path}: {err}")))?;
+    let uplink_root = uplink_root
+        .canonicalize()
+        .map_err(|err| crate::error::Error::msg(format!("{path}: {err}")))?;
+    if !file_path.starts_with(&uplink_root) {
+        return Err(crate::error::Error::msg("path must be under .uplink/"));
+    }
+    std::fs::read_to_string(file_path)
+        .map_err(|err| crate::error::Error::msg(format!("{path}: {err}")))
 }
 
 fn read_uplink_file(
@@ -281,8 +310,7 @@ fn read_uplink_file(
         _ => false,
     };
     if use_worktree {
-        return std::fs::read_to_string(repo.join(path))
-            .map_err(|err| crate::error::Error::msg(format!("{path}: {err}")));
+        return read_worktree_uplink_file(repo, path);
     }
     let git_ref = match sha {
         Some(sha) => sha.to_string(),
@@ -297,7 +325,9 @@ fn patch_revisions(
     id: &str,
     uncommitted: &[String],
 ) -> Vec<FileRevision> {
-    let path = patch_path(id).to_string_lossy().into_owned();
+    let path = patch_path(id)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let git_ref = source_ref(repo, source);
     let mut revisions = file_history(repo, &git_ref, &path).unwrap_or_default();
     if source == QueueSource::Checkout && uncommitted.iter().any(|p| p == &path) {
@@ -379,7 +409,20 @@ fn build_patch(repo: &Path, id: &str, source: QueueSource) -> PatchResponse {
         .map(|s| s.uncommitted)
         .unwrap_or_default();
     let revisions = patch_revisions(repo, source, id, &uncommitted);
-    let path = patch_path(id).to_string_lossy().into_owned();
+    let path = match patch_path(id) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(err) => {
+            return PatchResponse {
+                present: false,
+                source: source.as_str().into(),
+                error: Some(err.to_string()),
+                layer: None,
+                patch: None,
+                revisions: Vec::new(),
+                patch_file: None,
+            };
+        }
+    };
     let default_sha = revisions.first().map(|r| r.sha.as_str());
     let patch_file = read_uplink_file(repo, source, default_sha, &path).ok();
     PatchResponse {
@@ -397,24 +440,39 @@ async fn status(
     State(state): State<Arc<AppState>>,
     Query(query): Query<StatusQuery>,
 ) -> Json<StatusResponse> {
-    let repo = state.repo.clone();
     let source = QueueSource::parse(query.source.as_deref());
     let fetch = wants_fetch(query.fetch.as_deref());
+    let repo = match trusted_repo(&state.repo) {
+        Ok(repo) => repo,
+        Err(err) => {
+            return Json(missing_status(
+                state.repo.display().to_string(),
+                source,
+                err.to_string(),
+            ));
+        }
+    };
+    let cwd = repo.display().to_string();
     Json(
         tokio::task::spawn_blocking(move || build_status(&repo, source, fetch))
             .await
-            .unwrap_or_else(|err| {
-                missing_status(
-                    state.repo.display().to_string(),
-                    source,
-                    format!("status worker: {err}"),
-                )
-            }),
+            .unwrap_or_else(|err| missing_status(cwd, source, format!("status worker: {err}"))),
     )
 }
 
 async fn refresh(State(state): State<Arc<AppState>>) -> Response {
-    let repo = state.repo.clone();
+    let repo = match trusted_repo(&state.repo) {
+        Ok(repo) => repo,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorBody {
+                    error: err.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
     match tokio::task::spawn_blocking(move || refresh_from_origin(&repo)).await {
         Ok(Ok(result)) => Json(result).into_response(),
         Ok(Err(err)) => (
@@ -434,13 +492,41 @@ async fn refresh(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+fn missing_patch(source: QueueSource, error: String) -> PatchResponse {
+    PatchResponse {
+        present: false,
+        source: source.as_str().into(),
+        error: Some(error),
+        layer: None,
+        patch: None,
+        revisions: Vec::new(),
+        patch_file: None,
+    }
+}
+
 async fn patch_detail(
     State(state): State<Arc<AppState>>,
     PathParam(id): PathParam<String>,
     Query(query): Query<PatchQuery>,
 ) -> Response {
-    let repo = state.repo.clone();
     let source = QueueSource::parse(query.source.as_deref());
+    if let Err(err) = require_path_component(&id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(missing_patch(source, err.to_string())),
+        )
+            .into_response();
+    }
+    let repo = match trusted_repo(&state.repo) {
+        Ok(repo) => repo,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(missing_patch(source, err.to_string())),
+            )
+                .into_response();
+        }
+    };
     match tokio::task::spawn_blocking(move || build_patch(&repo, &id, source)).await {
         Ok(body) => {
             let status = if body.present {
@@ -452,22 +538,25 @@ async fn patch_detail(
         }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(PatchResponse {
-                present: false,
-                source: source.as_str().into(),
-                error: Some(format!("patch worker: {err}")),
-                layer: None,
-                patch: None,
-                revisions: Vec::new(),
-                patch_file: None,
-            }),
+            Json(missing_patch(source, format!("patch worker: {err}"))),
         )
             .into_response(),
     }
 }
 
 async fn file_at(State(state): State<Arc<AppState>>, Query(query): Query<FileQuery>) -> Response {
-    let repo = state.repo.clone();
+    let repo = match trusted_repo(&state.repo) {
+        Ok(repo) => repo,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorBody {
+                    error: err.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
     let source = QueueSource::parse(query.source.as_deref());
     let sha = query.sha.clone();
     let path = query.path.clone();
@@ -527,11 +616,28 @@ mod tests {
     use axum::http::Request;
     use tower::util::ServiceExt;
 
+    fn test_app(repo: PathBuf) -> Router {
+        router(Arc::new(AppState { repo }))
+    }
+
+    async fn json_body(response: Response) -> serde_json::Value {
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[test]
+    fn is_uplink_path_rejects_traversal() {
+        assert!(is_uplink_path(".uplink/queue.json"));
+        assert!(is_uplink_path(".uplink/patches/upl_abcdefghij.patch"));
+        assert!(!is_uplink_path("../Cargo.toml"));
+        assert!(!is_uplink_path(".uplink/../Cargo.toml"));
+        assert!(!is_uplink_path("Cargo.toml"));
+        assert!(!is_uplink_path("/etc/passwd"));
+    }
+
     #[tokio::test]
     async fn patch_detail_route_captures_id() {
-        let app = router(Arc::new(AppState {
-            repo: PathBuf::from("/tmp"),
-        }));
+        let app = test_app(PathBuf::from("/tmp"));
         let response = app
             .oneshot(
                 Request::builder()
@@ -551,8 +657,77 @@ mod tests {
             content_type.starts_with("application/json"),
             "expected JSON from the patch handler, got {content_type:?}"
         );
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let body = json_body(response).await;
         assert_eq!(body["present"], false);
+    }
+
+    #[tokio::test]
+    async fn patch_detail_rejects_parent_segments() {
+        let app = test_app(PathBuf::from("/tmp"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/patches/..%2Fetc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = json_body(response).await;
+        assert_eq!(body["present"], false);
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("invalid path component")),
+            "expected path-component error, got {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_at_rejects_repo_root_and_serves_uplink() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join(".uplink")).unwrap();
+        std::fs::write(repo.join("Cargo.toml"), "SECRET_ROOT_FILE\n").unwrap();
+        std::fs::write(repo.join(".uplink/queue.json"), "{\"ok\":true}\n").unwrap();
+        let app = test_app(repo.to_path_buf());
+
+        for uri in [
+            "/api/file?path=../Cargo.toml",
+            "/api/file?path=.uplink/../Cargo.toml",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_ne!(response.status(), StatusCode::OK, "{uri}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let text = String::from_utf8_lossy(&body);
+            assert!(
+                !text.contains("SECRET_ROOT_FILE"),
+                "{uri} leaked repo-root content: {text}"
+            );
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/file?path=.uplink/queue.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["path"], ".uplink/queue.json");
+        assert!(
+            body["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("\"ok\":true")),
+            "expected queue.json body, got {body}"
+        );
     }
 }
