@@ -186,12 +186,12 @@ Re-run `git uplink init --upstream <url> --contrib <url>` to record remotes.",
 }
 
 fn check_name(out: &mut Vec<String>, field: &str, requested: Option<&str>, stored: &str) {
-    if let Some(requested) = requested {
-        if requested != stored {
-            out.push(format!(
-                "  {field}: stored \"{stored}\", requested \"{requested}\""
-            ));
-        }
+    if let Some(requested) = requested
+        && requested != stored
+    {
+        out.push(format!(
+            "  {field}: stored \"{stored}\", requested \"{requested}\""
+        ));
     }
 }
 
@@ -223,12 +223,12 @@ fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
         opts.internal_branch.as_deref(),
         &queue.config.internal_branch,
     );
-    if let (Some(stored), Some(requested)) = (queue.config.forge, opts.forge) {
-        if stored != requested {
-            mismatches.push(format!(
-                "  forge: stored \"{stored}\", requested \"{requested}\""
-            ));
-        }
+    if let (Some(stored), Some(requested)) = (queue.config.forge, opts.forge)
+        && stored != requested
+    {
+        mismatches.push(format!(
+            "  forge: stored \"{stored}\", requested \"{requested}\""
+        ));
     }
     if !mismatches.is_empty() {
         return Err(Error::msg(format!(
@@ -238,17 +238,17 @@ fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
     }
 
     let mut urls_changed = false;
-    if let Some(url) = nonempty(opts.upstream_url.clone()) {
-        if queue.config.upstream_url.as_deref() != Some(url.as_str()) {
-            queue.config.upstream_url = Some(url);
-            urls_changed = true;
-        }
+    if let Some(url) = nonempty(opts.upstream_url.clone())
+        && queue.config.upstream_url.as_deref() != Some(url.as_str())
+    {
+        queue.config.upstream_url = Some(url);
+        urls_changed = true;
     }
-    if let Some(url) = nonempty(opts.contrib_url.clone()) {
-        if queue.config.contrib_url.as_deref() != Some(url.as_str()) {
-            queue.config.contrib_url = Some(url);
-            urls_changed = true;
-        }
+    if let Some(url) = nonempty(opts.contrib_url.clone())
+        && queue.config.contrib_url.as_deref() != Some(url.as_str())
+    {
+        queue.config.contrib_url = Some(url);
+        urls_changed = true;
     }
     if urls_changed {
         write_queue_file(repo, &queue)?;
@@ -432,15 +432,14 @@ fn add_patch_attempt(
     head_sha: &str,
 ) -> Result<Patch> {
     let mut queue = read_queue_file(repo)?;
-    if let Some(pr) = opts.internal_pr_number {
-        if let Some(existing) = queue
+    if let Some(pr) = opts.internal_pr_number
+        && let Some(existing) = queue
             .all_patches()
             .find(|p| p.source.internal_pr_number == Some(pr))
-        {
-            let id = existing.id.clone();
-            apply_new_patch_on_company(repo, &id, false)?;
-            return Ok(get_patch(&read_queue_file(repo)?, &id)?.clone());
-        }
+    {
+        let id = existing.id.clone();
+        apply_new_patch_on_company(repo, &id, false)?;
+        return Ok(get_patch(&read_queue_file(repo)?, &id)?.clone());
     }
     add_patch_once(repo, &mut queue, opts, from_sha, head_sha)
 }
@@ -694,10 +693,10 @@ fn restack_local_patches(
         if remote_ids.contains(patch.id.as_str()) {
             return false;
         }
-        if let Some(pr) = patch.source.internal_pr_number {
-            if remote_prs.contains(&pr) {
-                return false;
-            }
+        if let Some(pr) = patch.source.internal_pr_number
+            && remote_prs.contains(&pr)
+        {
+            return false;
         }
         true
     };
@@ -1399,12 +1398,11 @@ fn persist_apply_conflict(
     snapshot: &Path,
     company_branch: &str,
     upstream_ref: &str,
-    patch_id: &str,
-    title: &str,
+    patch: &Patch,
     files: Vec<String>,
 ) -> Result<ConflictError> {
     let onto = rev_parse(repo, "HEAD")?;
-    let branch = format!("uplink/conflict/{patch_id}");
+    let branch = format!("uplink/conflict/{}", patch.id);
     git(repo, &["branch", "-f", &branch, "HEAD"], GitOpts::default())?;
     git(
         repo,
@@ -1426,16 +1424,18 @@ fn persist_apply_conflict(
             &[
                 "commit",
                 "-m",
-                &format!("uplink: conflict applying {patch_id}"),
+                &format!("uplink: conflict applying {}", patch.id),
             ],
             GitOpts::default(),
         )?;
     }
 
-    let message =
-        format!("Patch {patch_id} (\"{title}\") does not apply onto the current upstream prefix.");
+    let message = format!(
+        "Patch {} (\"{}\") does not apply onto the current upstream prefix.",
+        patch.id, patch.title
+    );
     {
-        let current = get_patch_mut(queue, patch_id)?;
+        let current = get_patch_mut(queue, &patch.id)?;
         current.status = "conflict".into();
         current.conflict = Some(PatchConflict {
             branch: branch.clone(),
@@ -1466,8 +1466,8 @@ fn persist_apply_conflict(
     fs::create_dir_all(repo.join(".uplink/patches"))?;
     copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
     write_queue_file(repo, queue)?;
-    commit_queue(repo, &format!("uplink: conflict on {patch_id}"))?;
-    Ok(ConflictError::new(message, patch_id, files))
+    commit_queue(repo, &format!("uplink: conflict on {}", patch.id))?;
+    Ok(ConflictError::new(message, &patch.id, files))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1679,8 +1679,7 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
                     &snapshot,
                     &company_branch,
                     upstream_ref,
-                    &patch.id,
-                    &patch.title,
+                    &patch,
                     files,
                 )?));
             }
@@ -2103,12 +2102,11 @@ fn submit_base(repo: &Path, queue: &QueueState, patch: &Patch) -> Result<String>
         .filter_map(|id| queue.all_patches().find(|p| p.id == *id))
         .filter(|dep| queue.is_upstream(&dep.id) && dep.status == "submitted")
         .collect();
-    if let Some(last) = submitted_deps.last() {
-        if let Some(branch) = last.upstream.as_ref().map(|u| u.contrib_branch.as_str()) {
-            if has_ref(repo, branch)? {
-                return Ok(branch.to_string());
-            }
-        }
+    if let Some(last) = submitted_deps.last()
+        && let Some(branch) = last.upstream.as_ref().map(|u| u.contrib_branch.as_str())
+        && has_ref(repo, branch)?
+    {
+        return Ok(branch.to_string());
     }
     ensure_upstream_ref(repo)?;
     Ok("uplink/upstream".into())
@@ -2260,8 +2258,8 @@ pub fn format_status_table(snapshot: &StatusSnapshot) -> String {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "{:<12}  {:<10}  {:<14}  {}  {}",
-        "id", "status", "queue", "title", "link"
+        "{:<12}  {:<10}  {:<14}  title  link",
+        "id", "status", "queue"
     );
     for patch in snapshot.queue.all_patches() {
         let layer = crate::queue::layer_label(&snapshot.queue, &patch.id);

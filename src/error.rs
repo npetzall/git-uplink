@@ -63,14 +63,14 @@ impl std::error::Error for PreflightError {}
 #[derive(Debug)]
 pub struct PrepareError {
     message: String,
-    pub report: PrepareReport,
+    pub report: Box<PrepareReport>,
 }
 
 impl PrepareError {
     pub fn new(message: impl Into<String>, report: PrepareReport) -> Self {
         Self {
             message: message.into(),
-            report,
+            report: Box::new(report),
         }
     }
 }

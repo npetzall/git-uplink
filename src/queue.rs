@@ -81,10 +81,10 @@ pub fn add_event(patch: &mut Patch, kind: &str, detail: impl Into<String>) {
 
 pub fn apply_order_active(queue: &QueueState) -> Result<Vec<Patch>> {
     let mut ordered = Vec::new();
-    if let Some(tooling) = &queue.tooling {
-        if is_active(tooling) {
-            ordered.push(tooling.clone());
-        }
+    if let Some(tooling) = &queue.tooling
+        && is_active(tooling)
+    {
+        ordered.push(tooling.clone());
     }
     ordered.extend(topological_layer(
         queue
@@ -107,10 +107,10 @@ pub fn apply_order_active(queue: &QueueState) -> Result<Vec<Patch>> {
 
 pub fn apply_order_upstream_layer(queue: &QueueState) -> Result<Vec<Patch>> {
     let mut ordered = Vec::new();
-    if let Some(tooling) = &queue.tooling {
-        if is_active(tooling) {
-            ordered.push(tooling.clone());
-        }
+    if let Some(tooling) = &queue.tooling
+        && is_active(tooling)
+    {
+        ordered.push(tooling.clone());
     }
     ordered.extend(topological_layer(
         queue

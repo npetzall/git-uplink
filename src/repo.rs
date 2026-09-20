@@ -255,15 +255,15 @@ pub fn apply_patch_file(
     }
 
     let mut opts = GitOpts::default();
-    if export_identity {
-        if let Some(prepare) = &patch.prepare {
-            opts.extra_env = vec![
-                ("GIT_AUTHOR_NAME".into(), prepare.author_name.clone()),
-                ("GIT_AUTHOR_EMAIL".into(), prepare.author_email.clone()),
-                ("GIT_COMMITTER_NAME".into(), prepare.author_name.clone()),
-                ("GIT_COMMITTER_EMAIL".into(), prepare.author_email.clone()),
-            ];
-        }
+    if export_identity
+        && let Some(prepare) = &patch.prepare
+    {
+        opts.extra_env = vec![
+            ("GIT_AUTHOR_NAME".into(), prepare.author_name.clone()),
+            ("GIT_AUTHOR_EMAIL".into(), prepare.author_email.clone()),
+            ("GIT_COMMITTER_NAME".into(), prepare.author_name.clone()),
+            ("GIT_COMMITTER_EMAIL".into(), prepare.author_email.clone()),
+        ];
     }
     let message = if export_identity {
         export_commit_message(patch)
@@ -360,14 +360,12 @@ pub fn fetch_upstream(repo: &Path, queue: &QueueState) -> Result<String> {
 
 pub fn state_branch(repo: &Path) -> String {
     let path = repo.join(QUEUE_PATH);
-    if path.is_file() {
-        if let Ok(raw) = fs::read_to_string(&path) {
-            if let Ok(queue) = serde_json::from_str::<QueueState>(&raw) {
-                if !queue.config.state_branch.is_empty() {
-                    return queue.config.state_branch;
-                }
-            }
-        }
+    if path.is_file()
+        && let Ok(raw) = fs::read_to_string(&path)
+        && let Ok(queue) = serde_json::from_str::<QueueState>(&raw)
+        && !queue.config.state_branch.is_empty()
+    {
+        return queue.config.state_branch;
     }
     STATE_BRANCH.to_string()
 }

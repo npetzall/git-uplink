@@ -171,7 +171,7 @@ fn ssh_to_https(url: &str) -> Option<String> {
     let rest = rest.strip_prefix("git@").unwrap_or(rest);
     let (hostport, path) = rest.split_once('/')?;
     let host = match hostport.rsplit_once(':') {
-        Some((name, port)) if port == "22" => name,
+        Some((name, "22")) => name,
         Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => {
             return Some(format!("https://{name}:{port}/{path}"));
         }
@@ -379,10 +379,10 @@ fn auth_role_for(cwd: &Path, spec: &str, url: &str, opts: &GitOpts<'_>) -> Resul
         ("upstream", AuthRole::Upstream),
         ("contrib", AuthRole::Contrib),
     ] {
-        if let Some(remote_url) = remote_get_url(cwd, name, opts) {
-            if urls_match(&remote_url, url) {
-                return Ok(role);
-            }
+        if let Some(remote_url) = remote_get_url(cwd, name, opts)
+            && urls_match(&remote_url, url)
+        {
+            return Ok(role);
         }
     }
     if !is_explicit_url(spec)
@@ -513,10 +513,10 @@ fn git_inner(
     }
 
     let mut child = cmd.spawn().map_err(Error::from)?;
-    if let Some(input) = opts.input {
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(input)?;
-        }
+    if let Some(input) = opts.input
+        && let Some(mut stdin) = child.stdin.take()
+    {
+        stdin.write_all(input)?;
     }
     let output = child.wait_with_output()?;
     let result = GitResult {

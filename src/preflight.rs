@@ -173,7 +173,7 @@ pub fn suggest_depends_on(
         }
         for id in &candidates {
             reset_export(dir, repo)?;
-            if apply_deps(dir, repo, queue, &[id.clone()])? == "conflict" {
+            if apply_deps(dir, repo, queue, std::slice::from_ref(id))? == "conflict" {
                 continue;
             }
             if apply_abs(dir, candidate_abs, candidate_message)? != "conflict" {
