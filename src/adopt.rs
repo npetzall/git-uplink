@@ -511,7 +511,7 @@ pub fn groups_from_numbers(commits: &[AdoptCommit], numbers: &[u32]) -> Result<V
     if commits.len() != numbers.len() {
         return Err(Error::msg("group assignment does not match commit list"));
     }
-    if numbers.iter().any(|n| *n == 0) {
+    if numbers.contains(&0) {
         return Err(Error::msg("every commit must be assigned a group number"));
     }
     let mut groups = Vec::new();

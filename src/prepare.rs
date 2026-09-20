@@ -132,10 +132,10 @@ fn internal_domains(queue: &QueueState) -> Vec<String> {
 
 fn resolve_export_author(queue: &QueueState, internal_text: &str) -> (String, String) {
     let re = Regex::new(r"(?im)^Uplink-Export-Author:\s*(.+)$").unwrap();
-    if let Some(caps) = re.captures(internal_text) {
-        if let Some(person) = parse_person(Some(&caps[1])) {
-            return person;
-        }
+    if let Some(caps) = re.captures(internal_text)
+        && let Some(person) = parse_person(Some(&caps[1]))
+    {
+        return person;
     }
     if let Some(person) = parse_person(env::var("UPLINK_EXPORT_AUTHOR").ok().as_deref()) {
         return person;
@@ -664,14 +664,14 @@ This historical report has **already been approved**.\n\n\
             version = approval.version,
             sha = approval.sha,
         );
-        if let Some(receipt) = receipt {
-            if !receipt.trim().is_empty() {
-                body.push_str(
-                    "\n<details>\n<summary>Approval receipt at this commit</summary>\n\n",
-                );
-                body.push_str(&receipt);
-                body.push_str("\n</details>\n");
-            }
+        if let Some(receipt) = receipt
+            && !receipt.trim().is_empty()
+        {
+            body.push_str(
+                "\n<details>\n<summary>Approval receipt at this commit</summary>\n\n",
+            );
+            body.push_str(&receipt);
+            body.push_str("\n</details>\n");
         }
         sections.push(body);
     }
