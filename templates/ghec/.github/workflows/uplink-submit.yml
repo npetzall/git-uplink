@@ -14,16 +14,15 @@ on:
         description: Patch id to export (upl_…)
         required: true
 
-permissions:
-  contents: write
-  deployments: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   packet:
     name: Write contribution packet
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     concurrency:
       group: uplink-mutate
       cancel-in-progress: false
@@ -31,6 +30,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: true
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
@@ -40,13 +40,16 @@ jobs:
           private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
 
       - name: Write approver packet
         env:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          PATCH_ID: ${{ inputs.patch_id }}
         run: |
           git uplink init
-          git uplink report ${{ inputs.patch_id }}
+          git uplink report "$PATCH_ID"
           git push origin uplink/state
 
   submit:
@@ -54,6 +57,9 @@ jobs:
     needs: packet
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      deployments: write
     environment:
       name: to-upstream
       url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/${{ inputs.patch_id }}/prepare.md
@@ -64,6 +70,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: main
       - name: Mint internal GitHub App token
         id: internal-app
@@ -74,6 +81,8 @@ jobs:
           private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
 
       - name: Mint contrib GitHub App token
         id: contrib-app
@@ -84,6 +93,8 @@ jobs:
           private-key: ${{ secrets.UPLINK_CONTRIB_APP_PRIVATE_KEY }}
           owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
           repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Record approval, export, and record the public PR
         env:
@@ -92,10 +103,11 @@ jobs:
           UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream
+          PATCH_ID: ${{ inputs.patch_id }}
         run: |
           git uplink init
-          git uplink approve ${{ inputs.patch_id }}
-          submit_json=$(git uplink submit ${{ inputs.patch_id }})
+          git uplink approve "$PATCH_ID"
+          submit_json=$(git uplink submit "$PATCH_ID")
 
           repo=$(jq -r '.gh.prCreate.repo // empty' <<<"$submit_json")
           head=$(jq -r '.gh.prCreate.head // empty' <<<"$submit_json")
@@ -110,4 +122,4 @@ jobs:
               --title "$(jq -r .gh.prCreate.title <<<"$submit_json")" \
               --body-file "$(jq -r .gh.prCreate.bodyFile <<<"$submit_json")")
           fi
-          git uplink submitted ${{ inputs.patch_id }} --pr-url "$url"
+          git uplink submitted "$PATCH_ID" --pr-url "$url"
