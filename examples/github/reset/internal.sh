@@ -24,19 +24,6 @@ close_open_prs() {
   done <<<"$numbers"
 }
 
-close_conflict_issues() {
-  local numbers
-  numbers=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label uplink:conflict --json number --jq '.[].number' 2>/dev/null || true)
-  if [[ -z "$numbers" ]]; then
-    return
-  fi
-  while IFS= read -r n; do
-    [[ -z "$n" ]] && continue
-    echo "Closing issue #$n"
-    gh issue close "$n" --repo "$GITHUB_REPOSITORY" --comment "$comment" || true
-  done <<<"$numbers"
-}
-
 delete_extra_heads() {
   local refs
   refs=$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads" --jq '.[].ref' 2>/dev/null || true)
@@ -55,7 +42,6 @@ delete_extra_heads() {
 
 echo "Reset $GITHUB_REPOSITORY from seed refs"
 close_open_prs
-close_conflict_issues
 delete_extra_heads
 
 git fetch origin seed seed-state seed-upstream

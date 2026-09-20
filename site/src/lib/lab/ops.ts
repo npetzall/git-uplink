@@ -143,7 +143,7 @@ export function syncFromUpstream(conflictId?: string): LabOperation[] {
       [
         "git uplink init",
         "git uplink accept-upstream",
-        ...(conflictId ? [`git uplink conflicted ${conflictId} --issue-url <url>`] : []),
+        ...(conflictId ? [`git uplink gated ${conflictId} --pr-url <url>`] : []),
       ],
       "After from-upstream approval. Patch apply conflicts are recorded after promotion.",
     ),
@@ -155,13 +155,13 @@ export function fixConflict(id: string): LabOperation[] {
     you(
       [
         "git fetch origin",
-        `git checkout uplink/conflict/${id}`,
+        `git checkout uplink/conflict/${id}-work`,
         "# fix conflict markers",
         "git add -A",
         `git commit -m "Resolve ${id} onto the new upstream"`,
-        `git push origin uplink/conflict/${id}`,
+        `git push origin uplink/conflict/${id}-work`,
       ],
-      "Do not open a pull request for the conflict.",
+      "Work on -work. Merge the gated PR into the protected base. Status stays conflict until resolve.",
     ),
   ];
 }
@@ -172,7 +172,7 @@ export function resolveOps(id: string): LabOperation[] {
     ciJob(
       "Uplink resolve",
       ["git uplink init", `git uplink resolve ${id}`],
-      `Runs on a human push to uplink/conflict/${id}.`,
+      `Runs when the gated PR is merged into uplink/conflict/${id}.`,
     ),
   ];
 }

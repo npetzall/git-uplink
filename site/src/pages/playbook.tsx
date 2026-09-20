@@ -297,7 +297,7 @@ export function PlaybookPage() {
             If two still-open PRs overlap, rebase the later one onto the new main after the first
             merge, then merge. Independent files land without developer coordination beyond the
             usual rebase-after-main-moved. Sync conflicts are resolved on{" "}
-            <code>uplink/conflict/&lt;id&gt;</code>.
+            <code>uplink/conflict/&lt;id&gt;-work</code>, then merged into the protected base.
           </p>
         </Section>
 
@@ -419,17 +419,32 @@ export function PlaybookPage() {
             Hourly (and on demand) the bot fetches public upstream, drops merged patches, and
             replays the rest onto <code>main</code> only if upstream moved. Queue status is
             recorded on <code>uplink/state</code>. If apply fails, it records{" "}
-            <code>conflict</code> without moving product files, commits{" "}
-            <code>uplink/conflict/&lt;id&gt;</code>, and opens an internal issue. Do not open a PR.
-            Fix the files on the conflict branch and push.{" "}
-            <code>uplink-resolve.yml</code> skips <code>Uplink Bot</code>-authored
-            conflict publishes (and <code>github-actions[bot]</code>), runs{" "}
+            <code>conflict</code> without moving product files, pushes{" "}
+            <code>uplink/conflict/&lt;id&gt;</code> (protected base) plus{" "}
+            <code>&lt;id&gt;-work</code>, and opens a gated PR. Work on{" "}
+            <code>-work</code> only; merge is the only update to the base. Status stays{" "}
+            <code>conflict</code> until resolve.{" "}
+            <code>uplink-resolve.yml</code> runs on that merge, runs{" "}
             <code>git uplink resolve &lt;id&gt;</code>, and rebuilds <code>main</code>. Remaining
             patches then replay. If a later patch fails to apply, resolve exits 2 and the job
             publishes that conflict the same way sync does. If the patch was already submitted,
             resolve sets status <code>amended</code> and dispatches <code>Uplink submit</code>.
             IP reviews a delta-first packet (historical packets are already approved). After
             to-upstream approval the same public PR is force-pushed; no second PR is opened.
+          </p>
+        </Section>
+
+        <Section title="Transfer between queues">
+          <p>
+            <code>git uplink transfer &lt;id&gt; --to-upstream</code> or{" "}
+            <code>--to-internal</code> moves a patch between <code>internal[]</code> and{" "}
+            <code>upstream[]</code>. If git apply and preflight both pass, the move is written
+            immediately. If either fails, git-uplink cuts{" "}
+            <code>uplink/transfer-to-*/&lt;id&gt;</code> plus <code>-work</code> and does{" "}
+            <strong className="text-foreground">not</strong> write <code>queue.json</code>. Merge
+            the gated PR to complete; close it without merging to abort (branches deleted, queue
+            unchanged). <code>--to-internal</code> of a submitted patch abandons the public contrib
+            PR.
           </p>
         </Section>
 
@@ -461,9 +476,9 @@ export function PlaybookPage() {
           <p>
             A machine-user fine-grained PAT also works per role. It is worse to rotate and is tied
             to a person. Use it only if the matching App cannot be installed. The company-repo{" "}
-            <code>GITHUB_TOKEN</code> stays for <code>gh</code> on the company repo (issues,
-            comments). Sync and resolve check out with the internal token so shell origin
-            git can push workflow files. <code>git uplink</code> does not use{" "}
+            <code>GITHUB_TOKEN</code> stays for <code>gh</code> on the company repo (gated PRs,
+            comments). Sync, resolve, and transfer check out with the internal token so shell origin
+            git can push workflow files and gated bases. <code>git uplink</code> does not use{" "}
             <code>GITHUB_TOKEN</code> as transport. It cannot open the public pull request.
           </p>
         </Section>

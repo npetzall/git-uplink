@@ -182,22 +182,88 @@ pub struct PatchMerged {
     pub upstream_sha: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateKind {
+    Conflict,
+    TransferToUpstream,
+    TransferToInternal,
+}
+
+impl GateKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conflict => "conflict",
+            Self::TransferToUpstream => "transfer-to-upstream",
+            Self::TransferToInternal => "transfer-to-internal",
+        }
+    }
+
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Conflict => "uplink/conflict",
+            Self::TransferToUpstream => "uplink/transfer-to-upstream",
+            Self::TransferToInternal => "uplink/transfer-to-internal",
+        }
+    }
+
+    pub fn base_branch(self, id: &str) -> String {
+        format!("{}/{}", self.prefix(), id)
+    }
+
+    pub fn work_branch(self, id: &str) -> String {
+        format!("{}-work", self.base_branch(id))
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Conflict => "uplink:conflict",
+            Self::TransferToUpstream => "uplink:transfer-to-upstream",
+            Self::TransferToInternal => "uplink:transfer-to-internal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferDirection {
+    ToUpstream,
+    ToInternal,
+}
+
+impl TransferDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ToUpstream => "to-upstream",
+            Self::ToInternal => "to-internal",
+        }
+    }
+
+    pub fn gate_kind(self) -> GateKind {
+        match self {
+            Self::ToUpstream => GateKind::TransferToUpstream,
+            Self::ToInternal => GateKind::TransferToInternal,
+        }
+    }
+
+    pub fn to_internal(self) -> bool {
+        matches!(self, Self::ToInternal)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PatchConflict {
     pub branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_branch: Option<String>,
     pub files: Vec<String>,
     pub message: String,
     /// Prefix commit the conflict branch was cut from (upstream + earlier patches).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onto: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "issueNumber"
-    )]
-    pub issue_number: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "issueUrl")]
-    pub issue_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

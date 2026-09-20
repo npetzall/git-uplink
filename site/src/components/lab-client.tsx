@@ -45,7 +45,7 @@ function FileView({ files, highlight }: { files: SimFileMap; highlight?: string 
 function patchLink(patch: SimPatch, blockedBy?: string) {
   if (patch.mergedVia) return patch.mergedVia;
   if (patch.prNumber) return `upstream#${patch.prNumber}`;
-  if (patch.status === "conflict") return `uplink/conflict/${patch.id}`;
+  if (patch.status === "conflict") return `uplink/conflict/${patch.id}-work`;
   if (blockedBy) return `waiting on ${blockedBy}`;
   if (patch.dependsOn.length) return `depends ${patch.dependsOn.join(", ")}`;
   if (patch.queue === "internal") return "internal queue";

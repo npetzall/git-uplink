@@ -202,7 +202,7 @@ export const fullLifecycle: LabScenario = {
       id: "conflict",
       title: "Sync stops: upstream overlaps a pending patch",
       summary:
-        "Someone rewrites hash() to bind the digest before returning. The logging patch still inserts console.log next to return saltedSha256(value), so git apply fails. Sync records upl_logs as conflict, opens uplink/conflict/upl_logs, and does not move company main.",
+        "Someone rewrites hash() to bind the digest before returning. The logging patch still inserts console.log next to return saltedSha256(value), so git apply fails. Sync records upl_logs as conflict, opens uplink/conflict/upl_logs plus -work, and does not move company main.",
       why: "Sync must fail closed. Later patches — including independent internal-only work — wait. The contribution fork stays empty of logs because that patch was never IP-approved; a conflict is not an export.",
       operations: syncFromUpstream("upl_logs"),
       apply: (state) => {
@@ -225,17 +225,17 @@ export const fullLifecycle: LabScenario = {
           },
           log: [
             ...state.log,
-            "Sync conflict on upl_logs. Opened uplink/conflict/upl_logs. Company main not rebuilt. upl_vendor not applied.",
+            "Sync conflict on upl_logs. Opened uplink/conflict/upl_logs and -work. Company main not rebuilt. upl_vendor not applied.",
           ],
         };
       },
     },
     {
       id: "conflict-fix",
-      title: "Checkout the conflict branch and fix",
+      title: "Checkout the work branch and fix",
       summary:
-        "Ben fetches, checks out uplink/conflict/upl_logs, and edits the conflicted file. He keeps upstream’s digest local and logs after it. git add stages the resolution. The patch id is unchanged. Status is still conflict until resolve runs.",
-      why: "Humans fix files on the conflict branch. They do not hand-edit company main or the contribution fork. Those refs are derived from the patch object after resolve.",
+        "Ben fetches, checks out uplink/conflict/upl_logs-work, and edits the conflicted file. He keeps upstream’s digest local and logs after it. git add stages the resolution. The patch id is unchanged. Status is still conflict until the gated PR is merged and resolve runs.",
+      why: "Humans push -work only. Merge is the only update to the protected base. They do not hand-edit company main or the contribution fork. Those refs are derived from the patch object after resolve.",
       operations: fixConflict("upl_logs"),
       apply: (state) => {
         if (!state.conflict) return state;
@@ -249,7 +249,7 @@ export const fullLifecycle: LabScenario = {
           },
           log: [
             ...state.log,
-            "Checked out uplink/conflict/upl_logs. Resolved markers in src/tokens.js and staged the file.",
+            "Checked out uplink/conflict/upl_logs-work. Resolved markers in src/tokens.js and staged the file.",
           ],
         };
       },

@@ -180,17 +180,23 @@ export function PatchPage() {
               {patch.conflict ? (
                 <p className="text-amber-300">
                   Conflict on {patch.conflict.branch}
-                  {patch.conflict.issueUrl ? (
+                  {patch.conflict.workBranch ? (
+                    <>
+                      {" "}
+                      · work {patch.conflict.workBranch}
+                    </>
+                  ) : null}
+                  {patch.conflict.prUrl ? (
                     <>
                       {" "}
                       ·{" "}
                       <a
-                        href={patch.conflict.issueUrl}
+                        href={patch.conflict.prUrl}
                         className="text-primary hover:underline"
                         target="_blank"
                         rel="noreferrer"
                       >
-                        issue
+                        company PR
                       </a>
                     </>
                   ) : null}

@@ -31,11 +31,12 @@ export type PatchEvent = {
 
 export type PatchConflict = {
   branch: string;
+  workBranch?: string;
   files: string[];
   message: string;
   onto?: string;
-  issueNumber?: number;
-  issueUrl?: string;
+  prNumber?: number;
+  prUrl?: string;
 };
 
 export type PatchMerged = {

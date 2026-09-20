@@ -26,7 +26,7 @@ const STORIES = [
     scenario: "upstream-conflict",
     href: `${GITHUB_BLOB}/examples/github/stories/04-upstream-conflict.md`,
     title: "04 — Upstream conflict",
-    body: "Sync conflict issue, resolve branch, rebuild.",
+    body: "Sync conflict gated PR, work on -work, merge, rebuild.",
   },
   {
     scenario: "cam-two-deps",

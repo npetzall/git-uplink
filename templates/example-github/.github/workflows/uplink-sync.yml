@@ -20,6 +20,7 @@ jobs:
     permissions:
       contents: write
       issues: write
+      pull-requests: write
     concurrency:
       group: uplink-mutate
       cancel-in-progress: false
@@ -98,6 +99,7 @@ jobs:
 
           conflict_id=$(jq -r '.conflict.id // empty' <<<"$sync_json")
           conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$sync_json")
+          work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$sync_json")
           if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
             echo "sync exited 2 but no conflict patch was recorded"
             exit 2
@@ -105,17 +107,22 @@ jobs:
           if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
             git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
           fi
+          if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
+            git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
+          fi
 
-          title=$(jq -r '.gh.issueCreate.title' <<<"$sync_json")
-          body_file=$(jq -r '.gh.issueCreate.bodyFile' <<<"$sync_json")
-          existing=$(gh issue list --state open --json url,title --jq ".[] | select(.title==\"${title}\") | .url" | head -n 1)
+          title=$(jq -r '.gh.prCreate.title' <<<"$sync_json")
+          body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$sync_json")
+          head=$(jq -r '.gh.prCreate.head' <<<"$sync_json")
+          base=$(jq -r '.gh.prCreate.base' <<<"$sync_json")
+          existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
           if [ -z "$existing" ]; then
-            gh label create uplink:conflict --description "Uplink sync conflict; checkout the conflict branch, do not open a PR" --color B60205 || true
-            url=$(gh issue create --title "$title" --label uplink:conflict --body-file "$body_file")
+            gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
+            url=$(gh pr create --title "$title" --base "$base" --head "$head" --label uplink:conflict --body-file "$body_file")
           else
             url="$existing"
           fi
-          git uplink conflicted "$conflict_id" --issue-url "$url"
+          git uplink gated "$conflict_id" --pr-url "$url"
           exit 2
 
   apply:
@@ -126,6 +133,7 @@ jobs:
     permissions:
       contents: write
       issues: write
+      pull-requests: write
       deployments: write
     environment:
       name: from-upstream
@@ -200,6 +208,7 @@ jobs:
 
           conflict_id=$(jq -r '.conflict.id // empty' <<<"$sync_json")
           conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$sync_json")
+          work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$sync_json")
           if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
             echo "accept-upstream exited 2 but no conflict patch was recorded"
             exit 2
@@ -207,15 +216,20 @@ jobs:
           if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
             git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
           fi
+          if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
+            git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
+          fi
 
-          title=$(jq -r '.gh.issueCreate.title' <<<"$sync_json")
-          body_file=$(jq -r '.gh.issueCreate.bodyFile' <<<"$sync_json")
-          existing=$(gh issue list --state open --json url,title --jq ".[] | select(.title==\"${title}\") | .url" | head -n 1)
+          title=$(jq -r '.gh.prCreate.title' <<<"$sync_json")
+          body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$sync_json")
+          head=$(jq -r '.gh.prCreate.head' <<<"$sync_json")
+          base=$(jq -r '.gh.prCreate.base' <<<"$sync_json")
+          existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
           if [ -z "$existing" ]; then
-            gh label create uplink:conflict --description "Uplink sync conflict; checkout the conflict branch, do not open a PR" --color B60205 || true
-            url=$(gh issue create --title "$title" --label uplink:conflict --body-file "$body_file")
+            gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
+            url=$(gh pr create --title "$title" --base "$base" --head "$head" --label uplink:conflict --body-file "$body_file")
           else
             url="$existing"
           fi
-          git uplink conflicted "$conflict_id" --issue-url "$url"
+          git uplink gated "$conflict_id" --pr-url "$url"
           exit 2

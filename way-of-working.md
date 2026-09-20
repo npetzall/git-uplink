@@ -4,7 +4,7 @@ This is how developers use Uplink day to day. You open one internal PR per chang
 
 Read this alongside `.uplink/queue.json` (on `uplink/state`) and `git uplink status`. The binary is `git-uplink` (a Git subcommand). Durable queue history lives on the orphan branch `uplink/state`. Company `main` is product-only: public upstream plus every patch that is not merged or dropped. Sync force-updates `main` only when upstream moved (or a drop/resolve requires a replay).
 
-Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. `git uplink init --forge ghec` installs `templates/github/pull_request_template.md` as `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`push`, `sync`, `submit`) uses per-remote `UPLINK_INTERNAL_*`, `UPLINK_CONTRIB_*`, or `UPLINK_UPSTREAM_*` KEY or TOKEN (KEY wins; keys must be passwordless), not `GITHUB_TOKEN` or your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `conflicted` record the result.
+Write every change **as if it were the upstream submission**. Company-only details (issue ids, internal reviewers, export-author override) go **below the cutoff** in the **pull request** title and body. `git uplink init --forge ghec` installs `templates/github/pull_request_template.md` as `.github/pull_request_template.md` in the product repo. HTML comments in that template are visible while writing the PR and are stripped when Uplink stores the message. Company `main` keeps the cutoff; the contribution fork does not. That template does not turn off your commit signing: `git uplink` keeps bot identity and unsigned commits on the subprocess only. Network git (`push`, `sync`, `submit`) uses per-remote `UPLINK_INTERNAL_*`, `UPLINK_CONTRIB_*`, or `UPLINK_UPSTREAM_*` KEY or TOKEN (KEY wins; keys must be passwordless), not `GITHUB_TOKEN` or your default SSH key. GitHub itself is `gh` in the workflows; `submitted` / `gated` record the result.
 
 | Phase | What you do | Result |
 | --- | --- | --- |
@@ -266,7 +266,7 @@ Upstream changes a file Asha also changed. That is a foreign commit. Sync:
 
 What you have then:
 
-- `upl_asha` status `conflict`. Sync records that on `uplink/state` (product files on `main` stay at the last successful rebuild) and commits `uplink/conflict/upl_asha` with the conflicted files. The Actions sync job opens an internal issue (`uplink:conflict`). **Do not open a PR for it.**
+- `upl_asha` status `conflict`. Sync records that on `uplink/state` (product files on `main` stay at the last successful rebuild) and creates `uplink/conflict/upl_asha` (protected base at the apply prefix) plus `uplink/conflict/upl_asha-work` (conflict markers). The Actions sync job opens a gated PR from `-work` into the base (`uplink:conflict`).
 - **Ben is not applied**, even though he does not depend on Asha. A blocked patch blocks the rest of the rebuild. Company `main` is not updated to “upstream + Ben, skip Asha.” There is no skip.
 - Ben’s public PR, if he already submitted, is untouched until his patch is replayed.
 
@@ -276,14 +276,14 @@ Asha owns this. Ben does not merge her conflict for her unless he is covering.
 
 ```bash
 git fetch origin
-git checkout uplink/conflict/upl_asha
+git checkout uplink/conflict/upl_asha-work
 # fix files so the change is correct on the new upstream
 git add -A
 git commit -m "Resolve upl_asha onto the new upstream"
-git push origin uplink/conflict/upl_asha
+git push origin uplink/conflict/upl_asha-work
 ```
 
-On GHEC, pushing that branch runs **Uplink resolve** (`uplink-resolve.yml`), which skips `Uplink Bot`-authored conflict publishes (and `github-actions[bot]`). Locally (or if the workflow is not installed), stay on the conflict branch:
+Merge the gated PR into `uplink/conflict/upl_asha`. On GHEC that merge runs **Uplink resolve** (`uplink-resolve.yml`). Locally (or if the workflow is not installed), checkout the base or work branch after the tree is clean:
 
 ```bash
 git uplink resolve upl_asha
@@ -293,9 +293,13 @@ git uplink resolve upl_asha
 
 If Asha was never submitted, she returns to `queued`. If she **was** already submitted (public PR still open), she becomes `amended`. Company `main` has the new bytes immediately. The contribution fork still has the last IP-approved bytes. On GHEC, **Uplink resolve** dispatches **Uplink submit** for that id. IP reviews a **delta-first** packet: the change since the last approval, then the historical packet marked already approved. After to-upstream approval, submit force-pushes `uplink/upl_asha`. Same id, same PR, no second branch. `git uplink submit` refuses `amended` until that delta is approved.
 
-If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s conflict branch and issue, then closes Asha’s issue. If Asha is `amended`, it still dispatches submit for her delta. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
+If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben` plus `-work`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s gated PR, then Asha’s PR is already merged. If Asha is `amended`, it still dispatches submit for her delta. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
 
 ---
+
+## Transfer between queues
+
+`git uplink transfer <id> --to-upstream` or `--to-internal` moves a patch between `internal[]` and `upstream[]`. The patch must already be in the source queue. If git apply **and** preflight (`UPLINK_PREFLIGHT` / export checks for `--to-upstream`) both pass, the move is committed immediately. If either fails, git-uplink cuts `uplink/transfer-to-*/<id>` plus `-work` and does **not** write `queue.json`. Merge the gated PR to complete; **close the PR without merging** to abort (branches deleted, queue unchanged). `--to-internal` of a submitted patch abandons the public contrib PR.
 
 ## Story 5 — Cam depends on both Asha and Ben; run until Ben flows back
 
@@ -396,7 +400,7 @@ You are choosing a **tree to write code against**, not a second long-lived branc
    - `uplink/state` — queue, patches, and uplink reports. Do not commit product work here.  
    - `uplink/upstream` — public `main` without company patches. You would reinvent the queue in your working tree.  
    - `uplink/<id>` on the contribution fork — generated, bot-owned, may be force-pushed.  
-   - `uplink/conflict/<id>` — only to resolve that patch, then `git uplink resolve`.
+   - `uplink/conflict/<id>` — protected conflict base; do not push it. Work on `uplink/conflict/<id>-work` and merge the gated PR. Same pattern for `uplink/transfer-to-*/<id>`.
 
 6. **After every merge or sync that moved `main`, rebase in-flight branches onto new `main`.**
    Merge lands product history. Sync force-updates `main` only when upstream (or drop/resolve) requires a replay.

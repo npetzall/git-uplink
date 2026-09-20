@@ -175,6 +175,25 @@ fn topological_layer(active: Vec<Patch>) -> Result<Vec<Patch>> {
     Ok(ordered)
 }
 
+pub fn take_patch(queue: &mut QueueState, id: &str) -> Result<Patch> {
+    if let Some(idx) = queue.upstream.iter().position(|p| p.id == id) {
+        return Ok(queue.upstream.remove(idx));
+    }
+    if let Some(idx) = queue.internal.iter().position(|p| p.id == id) {
+        return Ok(queue.internal.remove(idx));
+    }
+    if queue.tooling.as_ref().is_some_and(|p| p.id == id) {
+        return Err(Error::msg(format!("{id} is tooling and cannot be moved")));
+    }
+    Err(Error::msg(format!("Unknown patch {id}")))
+}
+
+pub fn move_patch(queue: &mut QueueState, id: &str, to_internal: bool) -> Result<Patch> {
+    let patch = take_patch(queue, id)?;
+    queue.push_patch(patch.clone(), to_internal);
+    Ok(get_patch(queue, id)?.clone())
+}
+
 pub fn cannot_depend_on(queue: &QueueState, from_internal: bool, dep_id: &str) -> bool {
     if queue.is_tooling(dep_id) {
         return true;

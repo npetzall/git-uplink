@@ -332,6 +332,57 @@ pub struct IncomingPreflight {
     pub internal_only: bool,
 }
 
+pub fn run_preflight_command_in(queue: &QueueState, cwd: &Path) -> Result<()> {
+    let Some(command) = preflight_command_for(queue) else {
+        return Ok(());
+    };
+    let (code, output) = run_shell(&command, cwd);
+    if code == 0 {
+        return Ok(());
+    }
+    let output_suffix = if output.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{output}")
+    };
+    Err(Error::Preflight(PreflightError::new(
+        format!("Preflight failed ({command}, exit {code}).{output_suffix}"),
+        Vec::new(),
+        "command",
+        if output.is_empty() {
+            None
+        } else {
+            Some(output)
+        },
+    )))
+}
+
+pub fn assert_upstream_layer_applies(repo: &Path, queue: &QueueState) -> Result<()> {
+    with_upstream_worktree(repo, |dir| {
+        for patch in apply_order_upstream_layer(queue)? {
+            if patch.status == "conflict" {
+                return Err(Error::msg(format!(
+                    "Queue is blocked on conflict in {}; cannot preflight the upstream layer.",
+                    patch.id
+                )));
+            }
+            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
+            if result == "conflict" {
+                return Err(Error::Preflight(PreflightError::new(
+                    format!(
+                        "Queued patch \"{}\" does not apply onto tooling + upstream.",
+                        patch.title
+                    ),
+                    Vec::new(),
+                    "apply",
+                    None,
+                )));
+            }
+        }
+        Ok(())
+    })
+}
+
 pub fn assert_upstream_layer_preflight(
     repo: &Path,
     queue: &QueueState,

@@ -35,7 +35,7 @@ Reset all three repos at the start of each story: **Actions → Reset example** 
 | [01 — Solo fix](stories/01-solo-fix.md) | Asha SHA-256: PR, import, to-upstream submit, upstream merge, drop-on-merge |
 | [02 — Parallel independent](stories/02-parallel-independent.md) | Asha hash + Ben TTL; merge Ben first; Asha stays queued |
 | [03 — Stacked depends-on](stories/03-stacked-depends-on.md) | Ben log needs Asha; preflight without the trailer; submit order |
-| [04 — Upstream conflict](stories/04-upstream-conflict.md) | Sync conflict issue, resolve branch, rebuild |
+| [04 — Upstream conflict](stories/04-upstream-conflict.md) | Sync conflict gated PR, work on `-work`, merge, rebuild |
 | [05 — Cam on two siblings](stories/05-cam-two-deps.md) | Cam depends on Asha and Ben; wait until both merge before submitting Cam |
 | [06 — Internal-only](stories/06-internal-only.md) | Telemetry patch never goes through to-upstream / submit |
 
