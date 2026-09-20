@@ -129,7 +129,7 @@ pub fn write_product_patch(
     head_ref: &str,
 ) -> Result<PathBuf> {
     ensure_uplink_dirs(repo)?;
-    let file = patch_path(id);
+    let file = patch_path(id)?;
     let diff = git_ok(
         repo,
         &[
@@ -808,7 +808,7 @@ pub fn file_history(repo: &Path, git_ref: &str, path: &str) -> Result<Vec<FileRe
 
 pub fn patch_state_commit(repo: &Path, id: &str) -> Result<String> {
     let branch = state_branch(repo);
-    let path = format!(".uplink/patches/{id}.patch");
+    let path = patch_path(id)?.to_string_lossy().into_owned();
     let result = git(
         repo,
         &["log", "-1", "--format=%H", &branch, "--", &path],

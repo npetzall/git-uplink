@@ -8,8 +8,19 @@ pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-pub fn patch_path(id: &str) -> PathBuf {
-    PathBuf::from(PATCH_DIR).join(format!("{id}.patch"))
+pub fn require_path_component(name: &str) -> Result<&str> {
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err(Error::msg(format!("invalid path component {name}")));
+    }
+    Ok(name)
+}
+
+pub fn patch_file_name(id: &str) -> Result<String> {
+    Ok(format!("{}.patch", require_path_component(id)?))
+}
+
+pub fn patch_path(id: &str) -> Result<PathBuf> {
+    Ok(PathBuf::from(PATCH_DIR).join(patch_file_name(id)?))
 }
 
 pub fn empty_queue(config: QueueConfig) -> QueueState {
@@ -236,5 +247,22 @@ mod tests {
         assert!(!cannot_depend_on(&queue, false, "upl_up"));
         assert!(!cannot_depend_on(&queue, true, "upl_up"));
         assert!(cannot_depend_on(&queue, true, "upl_tool"));
+    }
+
+    #[test]
+    fn require_path_component_rejects_traversal() {
+        assert!(require_path_component("upl_abcdefghij").is_ok());
+        assert!(require_path_component("..").is_err());
+        assert!(require_path_component("foo/bar").is_err());
+        assert!(require_path_component("foo\\bar").is_err());
+        assert!(require_path_component("upl_ab/../cd").is_err());
+    }
+
+    #[test]
+    fn patch_path_stays_under_patches_dir() {
+        let path = patch_path("upl_abcdefghij").unwrap();
+        assert_eq!(path, PathBuf::from(PATCH_DIR).join("upl_abcdefghij.patch"));
+        assert!(patch_path("../etc").is_err());
+        assert!(patch_path("a/b").is_err());
     }
 }

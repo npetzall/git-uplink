@@ -15,7 +15,7 @@ use crate::prepare::{
     format_incoming_packet, from_upstream_report_paths, prepare_from_message,
 };
 use crate::queue::{
-    add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut,
+    add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut, patch_path,
     read_queue as read_queue_file, topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
@@ -535,17 +535,15 @@ fn add_patch_once(
 
     let message = company_commit_message(&patch);
     write_product_patch(repo, &id, from_sha, &message, head_sha)?;
-    patch.patch_id_stable = Some(stable_patch_id(
-        repo,
-        &format!(".uplink/patches/{id}.patch"),
-    )?);
+    let rel = patch_path(&id)?.to_string_lossy().into_owned();
+    patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
     if let Some(duplicate) = queue.all_patches().find(|item| {
         item.patch_id_stable.is_some() && item.patch_id_stable == patch.patch_id_stable
     }) {
         return Ok(duplicate.clone());
     }
 
-    let candidate_abs = repo.join(format!(".uplink/patches/{id}.patch"));
+    let candidate_abs = repo.join(patch_path(&id)?);
     if !opts.internal_only {
         let preflight = assert_export_preflight(
             repo,
@@ -732,7 +730,7 @@ fn restack_local_patches(
 
     let mut paths = Vec::new();
     for patch in &carry {
-        let path = format!(".uplink/patches/{}.patch", patch.id);
+        let path = patch_path(&patch.id)?.to_string_lossy().into_owned();
         if !path_exists_at(repo, local_sha, &path)? {
             return Err(Error::msg(format!(
                 "local-only patch {} has no patch file on {branch}",
@@ -845,7 +843,7 @@ fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) ->
     let mut queue = read_queue_file(repo)?;
     let company_branch = queue.config.internal_branch.clone();
     let patch = get_patch(&queue, id)?.clone();
-    let patch_file = repo.join(format!(".uplink/patches/{id}.patch"));
+    let patch_file = repo.join(patch_path(id)?);
 
     if mark_empty_merged
         && queue.is_upstream(id)
@@ -1586,9 +1584,7 @@ fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
                     patch.id
                 )));
             }
-            let patch_file = snapshot
-                .join(".uplink/patches")
-                .join(format!("{}.patch", patch.id));
+            let patch_file = snapshot.join(patch_path(&patch.id)?);
             let result = apply_patch_file(repo, &patch, &patch_file, false)?;
             if result == "empty" {
                 continue;
@@ -1655,9 +1651,7 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
                     patch.conflict.map(|c| c.files).unwrap_or_default(),
                 )));
             }
-            let patch_file = snapshot
-                .join(".uplink/patches")
-                .join(format!("{}.patch", patch.id));
+            let patch_file = snapshot.join(patch_path(&patch.id)?);
             let result = apply_patch_file(repo, &patch, &patch_file, false)?;
             if result == "empty" {
                 let is_upstream = queue.is_upstream(&patch.id);
@@ -1967,7 +1961,7 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         } else {
             format!("{formatted}\n")
         };
-        fs::write(repo.join(format!(".uplink/patches/{id}.patch")), body)?;
+        fs::write(repo.join(patch_path(id)?), body)?;
         {
             let patch = get_patch_mut(&mut queue, id)?;
             patch.status = if patch.upstream.is_some() {
@@ -1977,10 +1971,8 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
             }
             .into();
             patch.conflict = None;
-            patch.patch_id_stable = Some(stable_patch_id(
-                repo,
-                &format!(".uplink/patches/{id}.patch"),
-            )?);
+            let rel = patch_path(id)?.to_string_lossy().into_owned();
+            patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
             add_event(
                 patch,
                 "amended",
@@ -2025,13 +2017,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
                 "{id} is not ready for contribution. Fix prepare-for-upstream findings first."
             )));
         }
-        assert_export_preflight(
-            repo,
-            &queue,
-            &patch,
-            &repo.join(format!(".uplink/patches/{id}.patch")),
-            None,
-        )?;
+        assert_export_preflight(repo, &queue, &patch, &repo.join(patch_path(id)?), None)?;
 
         let branch = format!("uplink/{id}");
         let start = submit_base(repo, &queue, &patch)?;
@@ -2042,12 +2028,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
                 &["checkout", "-f", "--quiet", "--detach", &start],
                 GitOpts::default(),
             )?;
-            apply_patch_file(
-                repo,
-                &patch,
-                &snapshot.join(".uplink/patches").join(format!("{id}.patch")),
-                true,
-            )
+            apply_patch_file(repo, &patch, &snapshot.join(patch_path(id)?), true)
         })();
         let applied = match applied {
             Ok(v) => v,

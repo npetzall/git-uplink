@@ -347,7 +347,10 @@ fn issue_create_artifact(
     let branch = conflict.map(|c| c.branch.as_str()).unwrap_or("");
     let onto = conflict.and_then(|c| c.onto.as_deref());
     let body = conflict_body(&patch.id, branch, onto, resolved_from);
-    let body_file = format!(".uplink/reports/{}/conflict.md", patch.id);
+    let body_file = match report_paths(&patch.id) {
+        Ok((dir, _, _)) => format!("{dir}/conflict.md"),
+        Err(_) => return serde_json::json!({"error": "invalid patch id"}),
+    };
     write_markdown_file(repo, Path::new(&body_file), &body);
     serde_json::json!({
         "title": format!("Uplink conflict: {}", patch.id),
@@ -462,7 +465,10 @@ fn submit_artifact(repo: &Path, queue: &QueueState, patch: &Patch, branch: &str,
         "Company contribution exported by Uplink.\n\nUplink-Patch-Id: {}\n",
         patch.id
     );
-    let body_file = format!(".uplink/reports/{}/pr.md", patch.id);
+    let body_file = match report_paths(&patch.id) {
+        Ok((dir, _, _)) => format!("{dir}/pr.md"),
+        Err(_) => return,
+    };
     write_markdown_file(repo, Path::new(&body_file), &body);
     let existing = patch.upstream.as_ref().and_then(|u| {
         u.pr_url.as_ref().map(|url| {
@@ -662,7 +668,7 @@ fn run() -> Result<(), Error> {
                 .find(|p| p.id == id)
                 .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
             let packet = format_contribution_packet(&repo, patch)?;
-            let default_out = report_paths(&id).1;
+            let default_out = report_paths(&id)?.1;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &packet);
             append_step_summary(&packet);
@@ -742,7 +748,7 @@ fn run() -> Result<(), Error> {
                 sha: &sha,
                 at: None,
             });
-            let default_out = report_paths(&id).2;
+            let default_out = report_paths(&id)?.2;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &receipt);
             append_step_summary(&receipt);

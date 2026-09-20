@@ -105,8 +105,8 @@ fn reset_export(dir: &Path, repo: &Path) -> Result<()> {
     Ok(())
 }
 
-fn dep_patch_abs(repo: &Path, id: &str) -> PathBuf {
-    repo.join(patch_path(id))
+fn dep_patch_abs(repo: &Path, id: &str) -> Result<PathBuf> {
+    Ok(repo.join(patch_path(id)?))
 }
 
 fn apply_deps(
@@ -119,7 +119,7 @@ fn apply_deps(
         let dep = get_patch(queue, id)?;
         let result = apply_abs(
             dir,
-            &dep_patch_abs(repo, id),
+            &dep_patch_abs(repo, id)?,
             &format!("{} (dep)", dep.title),
         )?;
         if result == "conflict" {
@@ -319,7 +319,7 @@ fn suggest_command_deps(
 
 pub fn preflight_existing_patch(repo: &Path, queue: &QueueState, id: &str) -> Result<()> {
     let patch = get_patch(queue, id)?.clone();
-    assert_export_preflight(repo, queue, &patch, &repo.join(patch_path(id)), None)
+    assert_export_preflight(repo, queue, &patch, &repo.join(patch_path(id)?), None)
 }
 
 pub struct IncomingPreflight {
@@ -346,7 +346,7 @@ pub fn assert_upstream_layer_preflight(
                     patch.id
                 )));
             }
-            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id), &patch.title)?;
+            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
             if result == "conflict" {
                 return Err(Error::Preflight(PreflightError::new(
                     format!(
@@ -408,7 +408,7 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
     let message = export_commit_message(&patch);
     let shas = ensure_revs(repo, &[&opts.from_ref, &opts.head_ref])?;
     write_product_patch(repo, &id, &shas[0], &message, &shas[1])?;
-    let candidate_abs = repo.join(patch_path(&id));
+    let candidate_abs = repo.join(patch_path(&id)?);
     let result = (|| {
         assert_export_preflight(
             repo,
