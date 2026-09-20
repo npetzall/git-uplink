@@ -3,7 +3,7 @@ diff --git a/src/tokens.js b/src/tokens.js
 +++ b/src/tokens.js
 @@ -13,5 +13,5 @@
  }
- 
+
  export function ttl() {
 -  return 3600;
 +  return 7200;

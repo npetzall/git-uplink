@@ -180,4 +180,3 @@ Local equivalent:
 git uplink sync                 # may print needsApproval and write incoming.md
 git uplink accept-upstream      # after you have reviewed the packet
 ```
-

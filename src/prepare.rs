@@ -667,9 +667,7 @@ This historical report has **already been approved**.\n\n\
         if let Some(receipt) = receipt
             && !receipt.trim().is_empty()
         {
-            body.push_str(
-                "\n<details>\n<summary>Approval receipt at this commit</summary>\n\n",
-            );
+            body.push_str("\n<details>\n<summary>Approval receipt at this commit</summary>\n\n");
             body.push_str(&receipt);
             body.push_str("\n</details>\n");
         }

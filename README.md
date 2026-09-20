@@ -96,7 +96,7 @@ The suite drives real git (temp repos): stacked patches, drop-on-merge, conflict
 
 Live lab scenario tests live in `site/` (`npm test --prefix site`): drop-on-merge, internal-only staying off the fork, queued work staying off the fork until to-upstream approval, and every lab step completing. Typecheck is `npm run typecheck --prefix site` and `npm run typecheck --prefix web`.
 
-CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a `web/` job (`npm ci`, typecheck), a `site/` job (`npm ci`, typecheck, vitest, build), and `cargo deny` (RustSec advisories plus licenses, bans, and sources). [zizmor](https://zizmor.sh/) audits GitHub Actions YAML in this repo and the forge templates; `.github/workflows/zizmor.yml` publishes results via code scanning.
+CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a `web/` job (`npm ci`, typecheck), a `site/` job (`npm ci`, typecheck, vitest, build), `cargo deny` (RustSec advisories plus licenses, bans, and sources), and a `pre-commit` job (`uvx pre-commit`, rustfmt, clippy). [zizmor](https://zizmor.sh/) audits GitHub Actions YAML in this repo and the forge templates; `.github/workflows/zizmor.yml` publishes results via code scanning.
 
 Distribution SBOMs (CycloneDX JSON and SPDX JSON) cover the Rust crate and the embedded `web/` UI. `site/` is excluded because it is GitHub Pages only, not part of the shipped binary. Generate both files locally with [Syft](https://github.com/anchore/syft): `syft dir:.` reads `.syft.yaml`. `.github/workflows/sbom.yml` uploads them as workflow artifacts on push/PR and attaches `git-uplink-<tag>.cdx.json` / `git-uplink-<tag>.spdx.json` when a GitHub Release is published.
 

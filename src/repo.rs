@@ -255,9 +255,7 @@ pub fn apply_patch_file(
     }
 
     let mut opts = GitOpts::default();
-    if export_identity
-        && let Some(prepare) = &patch.prepare
-    {
+    if export_identity && let Some(prepare) = &patch.prepare {
         opts.extra_env = vec![
             ("GIT_AUTHOR_NAME".into(), prepare.author_name.clone()),
             ("GIT_AUTHOR_EMAIL".into(), prepare.author_email.clone()),

@@ -3,10 +3,10 @@ diff --git a/src/tokens.js b/src/tokens.js
 +++ b/src/tokens.js
 @@ -9,7 +9,7 @@
  }
- 
+
  export function hash(value) {
 -  return sha1(value);
 +  return sha256(value);
  }
- 
+
  export function ttl() {
