@@ -3,6 +3,7 @@
 //! Install the binary as `git-uplink` on `PATH` and invoke it as `git uplink`.
 
 mod adopt;
+mod assess;
 mod error;
 mod gate;
 mod git;
@@ -10,7 +11,6 @@ mod github;
 mod lock;
 mod ops;
 mod preflight;
-mod prepare;
 mod queue;
 mod repo;
 mod tooling;
@@ -19,7 +19,16 @@ mod types;
 pub mod webui;
 
 pub use adopt::{AdoptGroup, adopted_next_steps, load_groups_file};
-pub use error::{ConflictError, Error, PreflightError, PrepareError, Result};
+pub use assess::{
+    ApprovalReceipt, FROM_UPSTREAM_ENVIRONMENT, IncomingFlowedBack, TO_UPSTREAM_ENVIRONMENT,
+    assert_assess_ok, assess_from_message, company_commit_message, depends_on_from_message,
+    export_commit_message, format_approval_receipt, format_approver_packet, format_assess_markdown,
+    format_contribution_packet, format_contribution_packet_with_extras,
+    format_delta_approver_packet, format_incoming_packet, from_upstream_report_paths,
+    load_extra_markdown, parse_depends_on, prepend_report_extras, report_paths,
+    split_internal_message, strip_html_comments,
+};
+pub use error::{AssessError, ConflictError, Error, PreflightError, Result};
 pub use git::{GitError, GitOpts, GitResult, configure_repo, git, git_ok};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use ops::{
@@ -34,18 +43,10 @@ pub use ops::{
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,
 };
-pub use prepare::{
-    ApprovalReceipt, FROM_UPSTREAM_ENVIRONMENT, IncomingFlowedBack, TO_UPSTREAM_ENVIRONMENT,
-    assert_prepare_ok, company_commit_message, depends_on_from_message, export_commit_message,
-    format_approval_receipt, format_approver_packet, format_contribution_packet,
-    format_delta_approver_packet, format_incoming_packet, format_prepare_markdown,
-    from_upstream_report_paths, parse_depends_on, prepare_from_message, report_paths,
-    split_internal_message, strip_html_comments,
-};
 pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};
 pub use types::{
-    DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Forge, GateKind, MergeVia, Patch, PatchApproval,
-    PatchLayer, PatchStatus, PendingUpstream, PrepareReport, QUEUE_PATH, QUEUE_VERSION,
+    AssessReport, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Forge, GateKind, MergeVia, Patch,
+    PatchApproval, PatchLayer, PatchStatus, PendingUpstream, QUEUE_PATH, QUEUE_VERSION,
     QueueConfig, QueueState, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
     TransferDirection,
 };

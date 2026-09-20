@@ -106,6 +106,8 @@ Each `UPLINK_*_AUTH` is `pat` or `app`. Empty defaults to `pat` in this example 
 
 **Actions:** workflow permissions **Read and write**.
 
+**Required checks** (branch protection / ruleset on `main`): **Uplink assess for upstream**, **Uplink export preflight**.
+
 **Environment `to-upstream`:** Settings → Environments → New environment → `to-upstream`.
 
 1. **Required reviewers** — add yourself. For a solo walkthrough leave **Prevent self-review** off.

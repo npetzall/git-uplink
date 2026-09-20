@@ -6,6 +6,10 @@ use std::thread;
 use std::time::Duration;
 
 use crate::adopt::{self, AdoptGroup};
+use crate::assess::{
+    IncomingFlowedBack, assert_assess_ok, assess_from_message, company_commit_message,
+    depends_on_from_message, format_incoming_packet, from_upstream_report_paths,
+};
 use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
     assert_resolution_clean, commit_resolution, cut_gated_work, format_patch_at_head, recover_onto,
@@ -14,10 +18,6 @@ use crate::git::{GitOpts, configure_repo, git, git_ok};
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
 use crate::preflight::{
     assert_export_preflight, assert_upstream_layer_applies, run_preflight_command_in,
-};
-use crate::prepare::{
-    IncomingFlowedBack, assert_prepare_ok, company_commit_message, depends_on_from_message,
-    format_incoming_packet, from_upstream_report_paths, prepare_from_message,
 };
 use crate::queue::{
     add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut, move_patch, patch_path,
@@ -486,7 +486,7 @@ fn add_patch_once(
             internal_pr_number: opts.internal_pr_number,
             internal_pr_url: opts.internal_pr_url.clone(),
         },
-        prepare: None,
+        assess: None,
         upstream: None,
         merged: None,
         conflict: None,
@@ -518,7 +518,7 @@ fn add_patch_once(
             )
         },
     );
-    patch.prepare = Some(prepare_from_message(
+    patch.assess = Some(assess_from_message(
         repo,
         queue,
         from_sha,
@@ -531,10 +531,10 @@ fn add_patch_once(
             "upstream"
         },
     )?);
-    if let Some(report) = &patch.prepare {
+    if let Some(report) = &patch.assess {
         patch.commit_message = report.commit_message.clone();
         if !opts.internal_only {
-            assert_prepare_ok(report, &opts.title)?;
+            assert_assess_ok(report, &opts.title)?;
         }
     }
 
@@ -910,9 +910,9 @@ pub fn approve_patch_at(
                 )));
             }
             let patch = get_patch_mut(&mut queue, id)?;
-            if patch.prepare.as_ref().is_some_and(|p| !p.ok) {
+            if patch.assess.as_ref().is_some_and(|p| !p.ok) {
                 return Err(Error::msg(format!(
-                    "{id} is not ready for contribution. Fix prepare-for-upstream findings first."
+                    "{id} is not ready for contribution. Fix assess-for-upstream findings first."
                 )));
             }
             let kind = if patch.status == "queued" {
@@ -2340,9 +2340,9 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
                 return Err(Error::msg(format!("Submit {dep_id} before {id}")));
             }
         }
-        if patch.prepare.as_ref().is_some_and(|p| !p.ok) {
+        if patch.assess.as_ref().is_some_and(|p| !p.ok) {
             return Err(Error::msg(format!(
-                "{id} is not ready for contribution. Fix prepare-for-upstream findings first."
+                "{id} is not ready for contribution. Fix assess-for-upstream findings first."
             )));
         }
         assert_export_preflight(repo, &queue, &patch, &repo.join(patch_path(id)?), None)?;

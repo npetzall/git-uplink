@@ -53,13 +53,13 @@ function addCommand(opts: { title: string; internalOnly?: boolean; dependsOn?: s
   return `git uplink add --title "${opts.title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha> --pr <n>${flags ? ` ${flags}` : ""}`;
 }
 
-export function prepareCi(title: string, extra = ""): LabOperation {
+export function assessCi(title: string, extra = ""): LabOperation {
   const flag = extra ? ` ${extra}` : "";
   return ciJob(
-    "Uplink prepare for upstream",
+    "Uplink assess for upstream",
     [
       "git uplink init",
-      `git uplink prepare --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
+      `git uplink assess --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
     ],
     "Runs when the internal PR is opened or updated.",
   );
@@ -86,7 +86,7 @@ export function importOps(opts: {
   const publish = opts.internalOnly ? "git uplink push" : "git uplink rebuild --push";
   return [
     you([add, publish], "After engineering review. Merge is the internal product gate."),
-    prepareCi(opts.title, opts.internalOnly ? "--internal-only" : ""),
+    assessCi(opts.title, opts.internalOnly ? "--internal-only" : ""),
     ...(opts.internalOnly ? [] : [preflightCi(opts.title)]),
     ciJob("Uplink import", ["git uplink init", add, publish], "Runs after the internal PR is merged."),
   ];
@@ -104,6 +104,11 @@ export function submitOps(id: string): LabOperation[] {
       "Uplink submit",
       ["git uplink init", `git uplink report ${id}`],
       "Dispatch Uplink submit from company main. Packet job; no environment secrets yet.",
+    ),
+    ciJob(
+      "Uplink submit",
+      ["git uplink init", `git uplink report ${id} --extra-dir <artifact>`],
+      "Finalize: optional uplink-assessment-hook.yml; extras prepended. Skipped if the file is absent.",
     ),
     ciJob(
       "Uplink submit",

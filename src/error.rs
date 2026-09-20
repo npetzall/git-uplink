@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::types::PrepareReport;
+use crate::types::AssessReport;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -17,7 +17,7 @@ pub enum Error {
     #[error("{0}")]
     Preflight(#[from] PreflightError),
     #[error("{0}")]
-    Prepare(#[from] PrepareError),
+    Assess(#[from] AssessError),
     #[error("{0}")]
     Conflict(#[from] ConflictError),
 }
@@ -61,13 +61,13 @@ impl fmt::Display for PreflightError {
 impl std::error::Error for PreflightError {}
 
 #[derive(Debug)]
-pub struct PrepareError {
+pub struct AssessError {
     message: String,
-    pub report: Box<PrepareReport>,
+    pub report: Box<AssessReport>,
 }
 
-impl PrepareError {
-    pub fn new(message: impl Into<String>, report: PrepareReport) -> Self {
+impl AssessError {
+    pub fn new(message: impl Into<String>, report: AssessReport) -> Self {
         Self {
             message: message.into(),
             report: Box::new(report),
@@ -75,13 +75,13 @@ impl PrepareError {
     }
 }
 
-impl fmt::Display for PrepareError {
+impl fmt::Display for AssessError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for PrepareError {}
+impl std::error::Error for AssessError {}
 
 #[derive(Debug)]
 pub struct ConflictError {

@@ -37,7 +37,7 @@ export function PatchPage() {
   const [patchText, setPatchText] = useState<string>("");
   const [approvalSha, setApprovalSha] = useState<string>("");
   const [approvalText, setApprovalText] = useState<string>("");
-  const [prepareText, setPrepareText] = useState<string>("");
+  const [assessmentText, setAssessmentText] = useState<string>("");
   const [approvedPatch, setApprovedPatch] = useState<string>("");
   const [fileError, setFileError] = useState<string | null>(null);
 
@@ -87,18 +87,18 @@ export function PatchPage() {
   useEffect(() => {
     if (!id || !selectedApproval) {
       setApprovalText("");
-      setPrepareText("");
+      setAssessmentText("");
       setApprovedPatch("");
       return;
     }
     const dir = `.uplink/reports/${id}`;
     Promise.allSettled([
       loadFile(`${dir}/approval.md`, source, selectedApproval.sha),
-      loadFile(`${dir}/prepare.md`, source, selectedApproval.sha),
+      loadFile(`${dir}/assessment.md`, source, selectedApproval.sha),
       loadFile(`.uplink/patches/${id}.patch`, source, selectedApproval.sha),
-    ]).then(([approval, prepare, patch]) => {
+    ]).then(([approval, assessment, patch]) => {
       setApprovalText(approval.status === "fulfilled" ? approval.value : "");
-      setPrepareText(prepare.status === "fulfilled" ? prepare.value : "");
+      setAssessmentText(assessment.status === "fulfilled" ? assessment.value : "");
       setApprovedPatch(patch.status === "fulfilled" ? patch.value : "");
     });
   }, [id, source, selectedApproval]);
@@ -298,13 +298,13 @@ export function PatchPage() {
                       {approvalText}
                     </pre>
                   ) : null}
-                  {prepareText ? (
+                  {assessmentText ? (
                     <details>
                       <summary className="cursor-pointer text-sm text-muted-foreground">
-                        Prepare packet at this approval
+                        Assessment packet at this approval
                       </summary>
                       <pre className="mt-2 max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
-                        {prepareText}
+                        {assessmentText}
                       </pre>
                     </details>
                   ) : null}

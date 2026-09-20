@@ -1,13 +1,24 @@
-# example-github forge pack (`git uplink init --forge example-github`).
-# Installs git-uplink on the runner.
-name: Uplink prepare for upstream
+# ghec forge pack (`git uplink init --forge ghec`).
+#
+# Secondary process on every internal PR to company main: rewrite the
+# contribution as it would leave the enterprise. Uses the PR title and
+# body as the single commit message (HTML comments stripped). Internal
+# lines below the cutoff stay on company main and are removed before
+# export. Replaces author with the machine user or Uplink-Export-Author,
+# and scans the export diff for company keywords / internal emails.
+# Posts a report on the PR so IP approval can inspect both messages.
+#
+# Company extras for the IP packet are not collected here (no patch id
+# yet). Add `.github/workflows/uplink-assessment-hook.yml` and see
+# templates/README.md "Assessment hook".
+name: Uplink assess for upstream
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
 concurrency:
-  group: uplink-prepare-${{ github.event.pull_request.number }}
+  group: uplink-assess-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -15,7 +26,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  prepare:
+  assess:
     if: github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
@@ -24,11 +35,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.base.ref }}
-      - uses: $/.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
-      - name: Prepare contribution
+
+      - name: Assess contribution
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
@@ -49,13 +57,13 @@ jobs:
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
           set +e
-          git uplink prepare \
+          git uplink assess \
             --title "$TITLE" \
             --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" \
             --head "$HEAD_SHA" \
-            $extra > /tmp/uplink-prepare.md
+            $extra > /tmp/uplink-assess.md
           code=$?
           set -e
-          gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-prepare.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-assess.md
           exit "$code"

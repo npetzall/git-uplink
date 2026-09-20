@@ -8,8 +8,8 @@ use ratatui::{
 };
 
 use crate::adopt::{AdoptCommit, AdoptGroup, AheadAnalysis, groups_from_numbers, resolve_groups};
+use crate::assess::{assert_assess_ok, assess_from_message};
 use crate::error::{Error, Result};
-use crate::prepare::{assert_prepare_ok, prepare_from_message};
 use crate::types::QueueState;
 
 enum Phase {
@@ -290,7 +290,7 @@ fn finish(
                     .as_deref()
                     .filter(|s| !s.trim().is_empty())
                     .unwrap_or(group.title.as_str());
-                match prepare_from_message(
+                match assess_from_message(
                     repo,
                     queue,
                     from,
@@ -300,7 +300,7 @@ fn finish(
                     &group.intent,
                 ) {
                     Ok(report) if group.intent == "upstream" => {
-                        if let Err(err) = assert_prepare_ok(&report, &group.title) {
+                        if let Err(err) = assert_assess_ok(&report, &group.title) {
                             ui.phase = Phase::Details { index: i };
                             ui.status = err.to_string();
                             return Ok(None);

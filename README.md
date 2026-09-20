@@ -8,7 +8,7 @@ It is for a company on a private forge that must build on a public project, keep
 public upstream/main  +  tooling  +  active upstream[]  +  active internal[]
 ```
 
-`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. On GitHub Enterprise Cloud, dispatch the **to-upstream** Environment workflow (resolve of a submitted patch does this for you); `git uplink report` writes `.uplink/reports/<id>/prepare.md` on `uplink/state` and `GITHUB_STEP_SUMMARY`.
+`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. On GitHub Enterprise Cloud, dispatch the **to-upstream** Environment workflow (resolve of a submitted patch does this for you); `git uplink report` writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and `GITHUB_STEP_SUMMARY`.
 
 ```bash
 cargo install --path .
@@ -52,10 +52,10 @@ git uplink reset
 git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
             [--depends-on <id>]...
-git uplink prepare [--from <ref>] [--head <ref>] [--title <text>]
+git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
             [--internal-only]
-git uplink report <id> [--out <file>]
+git uplink report <id> [--out <file>] [--extra-dir <path>]
 git uplink status [--json]
 git uplink approve <id> [--out <file>]
 git uplink submit <id>
@@ -93,7 +93,7 @@ npm test --prefix site
 cargo deny check
 ```
 
-The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, prepare/scrub, contribution packets, plus a check that the UI was embedded.
+The suite drives real git (temp repos): stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, assess/scrub, contribution packets, plus a check that the UI was embedded.
 
 Live lab scenario tests live in `site/` (`npm test --prefix site`): drop-on-merge, internal-only staying off the fork, queued work staying off the fork until to-upstream approval, and every lab step completing. Typecheck is `npm run typecheck --prefix site` and `npm run typecheck --prefix web`.
 
@@ -107,7 +107,7 @@ Distribution SBOMs (CycloneDX JSON and SPDX JSON) cover the Rust crate and the e
 
 | Workflow | When |
 | --- | --- |
-| `uplink-prepare.yml` | Every PR to `main` — PR title/body as the commit message, cutoff, export author, affiliation scan |
+| `uplink-assess.yml` | Every PR to `main` — PR title/body as the commit message, cutoff, export author, affiliation scan |
 | `uplink-preflight.yml` | Every PR to `main` — apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT` |
 | `uplink-import.yml` | Merge to `main` — product gate, records the patch as status `queued` |
 | `uplink-sync.yml` | Hourly / manual — fetch upstream; apply flowed-back patches immediately; foreign commits wait on `from-upstream` then `accept-upstream`. Persist conflicts and open a gated PR from `-work` into `uplink/conflict/<id>` |

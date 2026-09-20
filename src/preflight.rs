@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use uuid::Uuid;
 
+use crate::assess::{depends_on_from_message, export_commit_message};
 use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git};
-use crate::prepare::{depends_on_from_message, export_commit_message};
 use crate::queue::{
     active_upstream, apply_order_upstream_layer, get_patch, patch_path, read_queue,
 };
@@ -448,7 +448,7 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
         patch_id_stable: None,
         commit_message: String::new(),
         source: Default::default(),
-        prepare: None,
+        assess: None,
         upstream: None,
         merged: None,
         conflict: None,

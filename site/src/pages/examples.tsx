@@ -40,6 +40,12 @@ const STORIES = [
     title: "06 — Internal-only",
     body: "Telemetry patch never goes through to-upstream / submit.",
   },
+  {
+    scenario: "assessment-hook",
+    href: `${GITHUB_BLOB}/examples/github/stories/07-assessment-hook.md`,
+    title: "07 — Assessment hook",
+    body: "Internal-only assessment hook; extras prepended on Asha’s IP packet.",
+  },
 ];
 
 export function ExamplesPage() {

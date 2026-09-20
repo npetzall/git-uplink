@@ -35,7 +35,7 @@ git push -u origin feat/ttl
 
 Open two PRs in the GitHub UI (Compare & pull request). Titles `Use SHA-256 for tokens` and `Extend TTL`. Bodies: [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md) and [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md).
 
-Wait for prepare + preflight on both. Merge Asha first, then Ben (one after the other; import is serialized by `uplink-mutate`).
+Wait for assess + preflight on both. Merge Asha first, then Ben (one after the other; import is serialized by `uplink-mutate`).
 
 ```bash
 git uplink reset

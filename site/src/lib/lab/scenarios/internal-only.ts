@@ -4,7 +4,7 @@ import {
   branchPush,
   ciJob,
   importOps,
-  prepareCi,
+  assessCi,
   resetStatus,
   startExample,
   you,
@@ -14,33 +14,33 @@ export const internalOnly: LabScenario = {
   id: "internal-only",
   title: "06 — Internal-only",
   blurb:
-    "A company-only telemetry hook must never pass the IP gate. Prepare fails without the label. Submit is refused.",
+    "A company-only telemetry hook must never pass the IP gate. Assess fails without the label. Submit is refused.",
   highlight: "companyTelemetry",
   initial: exampleSeed,
   startOperations: startExample(),
   steps: [
     {
-      id: "prepare-fail",
-      title: "Prepare fails without the label",
+      id: "assess-fail",
+      title: "Assess fails without the label",
       summary:
-        "Open a PR for vendor telemetry without uplink:internal-only. Uplink prepare for upstream fails: the export surface contains companyTelemetry (in UPLINK_REDACT_KEYWORDS). Close this PR.",
+        "Open a PR for vendor telemetry without uplink:internal-only. Uplink assess for upstream fails: the export surface contains companyTelemetry (in UPLINK_REDACT_KEYWORDS). Close this PR.",
       why: "Affiliation scan is the guard. Internal-only is an explicit label, not a silent default.",
       operations: [
         branchPush("feat/telemetry-public", "internal-telemetry.diff", "Vendor telemetry"),
         you(
           [
-            'git uplink prepare --title "Vendor telemetry" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>',
+            'git uplink assess --title "Vendor telemetry" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>',
           ],
-          "No uplink:internal-only label. Prepare fails on companyTelemetry.",
+          "No uplink:internal-only label. Assess fails on companyTelemetry.",
         ),
-        prepareCi("Vendor telemetry"),
+        assessCi("Vendor telemetry"),
       ],
       apply: (state) => ({
         ...state,
-        stepId: "prepare-fail",
+        stepId: "assess-fail",
         log: [
           ...state.log,
-          "Prepare failed: companyTelemetry is in UPLINK_REDACT_KEYWORDS. PR not merged.",
+          "Assess failed: companyTelemetry is in UPLINK_REDACT_KEYWORDS. PR not merged.",
         ],
       }),
     },
@@ -48,7 +48,7 @@ export const internalOnly: LabScenario = {
       id: "import-internal",
       title: "Import with uplink:internal-only",
       summary:
-        "Open a new PR and add label uplink:internal-only before Create (prepare only sees labels that exist when the check runs). Merge. The patch is queued on the internal queue. Company main calls companyTelemetry().",
+        "Open a new PR and add label uplink:internal-only before Create (assess only sees labels that exist when the check runs). Merge. The patch is queued on the internal queue. Company main calls companyTelemetry().",
       why: "The label appends to internal[] and skips export preflight. Tooling from bootstrap is the same class of change.",
       operations: [
         branchPush("feat/telemetry", "internal-telemetry.diff", "Vendor telemetry"),
