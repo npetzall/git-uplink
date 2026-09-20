@@ -32,6 +32,8 @@ jobs:
           private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
 
       - name: Mint upstream GitHub App token
         id: upstream-app
@@ -42,12 +44,14 @@ jobs:
           private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
           owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
           repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          permission-contents: read
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: true
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-      - uses: ./.github/actions/install-git-uplink
+      - uses: $/.github/actions/install-git-uplink
         with:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}

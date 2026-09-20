@@ -28,7 +28,7 @@ runs:
         cache-on-failure: true
     - name: Install git-uplink
       shell: bash
-      run: |
+      run: | # zizmor: ignore[github-env] constant PATH entry for cargo --root
         cargo install --path _git-uplink-src --locked --force --root "$HOME/.local"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         "$HOME/.local/bin/git-uplink" -h >/dev/null
