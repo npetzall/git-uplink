@@ -25,7 +25,7 @@ Create a repository Environment named **`to-upstream`**. Required reviewers are 
 
 1. **Packet job** (no environment, no App secrets). Runs `git uplink report <id>`, which writes `.uplink/reports/<id>/assessment.md` and appends the same markdown to `GITHUB_STEP_SUMMARY`. Commits the report to `uplink/state` as a fast-forward (not a force-push). Reports stay on that orphan branch, so a later product rebuild does not drop them.
 2. **Finalize job** (no environment). If `.github/workflows/uplink-assessment-hook.yml` exists, dispatches it with `patch_id` and `caller_run_id`, waits (`timeout-minutes` on the job), downloads artifact `uplink-packet-extra` from that run, and re-runs `git uplink report --extra-dir` so company extras sit at the top of `assessment.md`. A failed assessment hook fails this job, so IP is never asked. Job outputs are not the contract (1 MB, same-run only). `on: workflow_run` for **Uplink submit** is too late — it fires after the environment wait. The hook must not push `uplink/state`. Copy-paste: `examples/github/patches/uplink-assessment-hook.yml`.
-3. **Submit job** (`environment: to-upstream`). GitHub holds the job until a required reviewer approves the deployment. That click is the IP gate. GitHub records it on the Deployments tab and in the enterprise audit log. The dispatcher is not the approver; turn on **Prevent self-review**.
+3. **Submit job** (`environment: to-upstream`, not `uplink-mutate`). GitHub holds the job until a required reviewer approves the deployment. That click is the IP gate. GitHub records it on the Deployments tab and in the enterprise audit log. The dispatcher is not the approver; turn on **Prevent self-review**. Packet and finalize already released `uplink-mutate`, so import/resolve can run during this wait. Resolve of a submitted patch cancels this run (waiting or in progress, run-name `Uplink submit <id>`) and dispatches a new one for the delta packet.
 4. After approval, the job writes `.uplink/reports/<id>/approval.md` (receipt pointing at the run), then `git uplink approve` and `git uplink submit`. App credentials exist only now. Submit is still the first time contribution bytes leave the private forge.
 
 Why this fits a workflow:
@@ -45,9 +45,10 @@ Public `main` can move for reasons that are not a company contribution flowing b
 Create a repository Environment named **`from-upstream`**. Required reviewers are inbound/security (not the `to-upstream` IP reviewers unless you want the same people). Do not put origin-push or contrib secrets on it.
 
 1. **Inspect job** (no environment). `git uplink sync` fetches public `main` but does not move `uplink/upstream`. Commits that match a company patch (trailer / `patch-id`) apply immediately. Unchanged public `main` is a no-op.
-2. **Apply job** (`environment: from-upstream`). Only scheduled when inspect found unmatched commits. GitHub holds the job until a reviewer approves. The packet is `.uplink/reports/from-upstream/incoming.md` on `uplink/state` (and `GITHUB_STEP_SUMMARY`). After approval, `git uplink accept-upstream` promotes the frozen SHA, marks flowed-back patches `merged`, and rebuilds. Apply conflicts still open `uplink/conflict/<id>` — after this gate, not instead of it.
+2. **Wait job** (`environment: from-upstream`, no `uplink-mutate`). Only scheduled when inspect found unmatched commits. GitHub holds this job until a reviewer approves. The packet is `.uplink/reports/from-upstream/incoming.md` on `uplink/state` (and `GITHUB_STEP_SUMMARY`).
+3. **Apply job** (`uplink-mutate`, no environment). After approval, `git uplink accept-upstream` promotes the frozen SHA, marks flowed-back patches `merged`, and rebuilds. Apply conflicts still open `uplink/conflict/<id>` — after this gate, not instead of it.
 
-Workflow group `uplink-sync` serializes inbound reviews (hourly cron will not stack deployments). Inspect/apply take `uplink-mutate` per job so the wait does not freeze imports.
+Workflow group `uplink-sync` serializes inbound reviews (hourly cron will not stack deployments). Inspect and apply take `uplink-mutate`; the environment wait does not, so inbound review does not freeze import/resolve.
 
 Local engine tests call `git uplink accept-upstream` directly after a sync that set `needsApproval`.
 
@@ -159,7 +160,7 @@ Asha and Ben start from the same company `main`. Their changes are independent (
 
 1. Both branch from `origin/main`, open two internal PRs.
 2. Review can overlap. GitHub serializes the merges. Import is serialized:
-   - Actions group `uplink-mutate` (import / sync / submit wait; they do not cancel each other).
+   - Actions group `uplink-mutate` (import / sync inspect and apply / submit packet and finalize; they do not cancel each other). Environment waits (`to-upstream`, `from-upstream`) do not take this group.
    - `.git/uplink.lock` in one checkout.
    - Each job isolates **that PR’s** `base.sha..head.sha`, then refreshes latest `main` and `uplink/state`, appends the patch on the state branch, and fast-forward pushes `uplink/state`. If the other import landed first, the push fails and the job retries. The same internal PR number is imported at most once.
 3. Asha’s PR is merged and imported first. Queue: `[upl_asha]`. Company `main` already includes Asha.
@@ -292,7 +293,7 @@ git uplink resolve upl_asha
 
 `resolve` refreshes **only** `upl_asha`’s patch file (same id), then rebuilds. Remaining patches replay. If Ben still applies, he stays `queued` / `submitted` and company `main` becomes new upstream + amended Asha + Ben.
 
-If Asha was never submitted, she returns to `queued`. If she **was** already submitted (public PR still open), she becomes `amended`. Company `main` has the new bytes immediately. The contribution fork still has the last IP-approved bytes. On GHEC, **Uplink resolve** dispatches **Uplink submit** for that id. IP reviews a **delta-first** packet: the change since the last approval, then the historical packet marked already approved. After to-upstream approval, submit force-pushes `uplink/upl_asha`. Same id, same PR, no second branch. `git uplink submit` refuses `amended` until that delta is approved.
+If Asha was never submitted, she returns to `queued`. If she **was** already submitted (public PR still open), she becomes `amended`. Company `main` has the new bytes immediately. The contribution fork still has the last IP-approved bytes. On GHEC, **Uplink resolve** cancels any waiting or in-progress **Uplink submit** for that id and dispatches a new run. IP reviews a **delta-first** packet: the change since the last approval, then the historical packet marked already approved. After to-upstream approval, submit force-pushes `uplink/upl_asha`. Same id, same PR, no second branch. `git uplink submit` refuses `amended` until that delta is approved.
 
 If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben` plus `-work`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s gated PR, then Asha’s PR is already merged. If Asha is `amended`, it still dispatches submit for her delta. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
 

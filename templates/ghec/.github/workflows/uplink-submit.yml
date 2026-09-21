@@ -142,6 +142,9 @@ jobs:
             printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  # Do not put uplink-mutate on this job. A required-reviewer environment
+  # holds its concurrency group the whole time the job is Waiting, which
+  # would freeze import/resolve/transfer and block resolve's cancel+redispatch.
   submit:
     name: Approve to-upstream environment and submit
     needs: finalize
@@ -153,9 +156,6 @@ jobs:
     environment:
       name: to-upstream
       url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/${{ inputs.patch_id }}/assessment.md
-    concurrency:
-      group: uplink-mutate
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
