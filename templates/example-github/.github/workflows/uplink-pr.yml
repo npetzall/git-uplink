@@ -3,6 +3,7 @@
 #
 # Parallel required checks on every internal PR to company main except
 # uplink:internal-only. See templates/ghec/.github/workflows/uplink-pr.yml.
+# Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
 #
 # Company extras for the IP packet are not collected here (no patch id
 # yet). Add `.github/workflows/uplink-assessment-hook.yml` and see
@@ -43,6 +44,8 @@ jobs:
       - name: Assess contribution
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
           UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
           UPLINK_EXPORT_AUTHOR: ${{ vars.UPLINK_EXPORT_AUTHOR }}
@@ -88,6 +91,8 @@ jobs:
       - name: Export preflight
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}

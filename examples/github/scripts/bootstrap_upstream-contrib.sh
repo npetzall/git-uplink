@@ -4,7 +4,7 @@
 # Upstream must already be bootstrapped and forked.
 #
 #   export CONTRIB_DIR=$HOME/src/uplink-example-upstream-contrib
-#   # optional, to check the fork owner differs from upstream:
+#   # optional, to reject the same repository and warn when owners differ:
 #   export UPSTREAM_DIR=$HOME/src/uplink-example-upstream
 #   ./examples/github/scripts/bootstrap_upstream-contrib.sh
 #
@@ -21,7 +21,7 @@ require_clone CONTRIB_DIR
 
 if [[ -n "${UPSTREAM_DIR:-}" ]]; then
   require_clone UPSTREAM_DIR
-  ensure_contrib_owner_differs
+  ensure_contrib_repo
 fi
 
 echo "Contrib clone:  $CONTRIB_DIR   ($CONTRIB)"
