@@ -56,19 +56,19 @@ function addCommand(opts: { title: string; internalOnly?: boolean; dependsOn?: s
 export function assessCi(title: string, extra = ""): LabOperation {
   const flag = extra ? ` ${extra}` : "";
   return ciJob(
-    "Uplink assess for upstream",
+    "Uplink upstream assess",
     [
       "git uplink init",
       `git uplink assess --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
     ],
-    "Runs when the internal PR is opened or updated.",
+    "Runs when the internal PR is opened or updated. Skipped for uplink:internal-only.",
   );
 }
 
 export function preflightCi(title: string, extra = ""): LabOperation {
   const flag = extra ? ` ${extra}` : "";
   return ciJob(
-    "Uplink export preflight",
+    "Uplink upstream preflight",
     [
       "git uplink init",
       `git uplink preflight --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
@@ -86,8 +86,9 @@ export function importOps(opts: {
   const publish = opts.internalOnly ? "git uplink push" : "git uplink rebuild --push";
   return [
     you([add, publish], "After engineering review. Merge is the internal product gate."),
-    assessCi(opts.title, opts.internalOnly ? "--internal-only" : ""),
-    ...(opts.internalOnly ? [] : [preflightCi(opts.title)]),
+    ...(opts.internalOnly
+      ? []
+      : [assessCi(opts.title), preflightCi(opts.title)]),
     ciJob("Uplink import", ["git uplink init", add, publish], "Runs after the internal PR is merged."),
   ];
 }

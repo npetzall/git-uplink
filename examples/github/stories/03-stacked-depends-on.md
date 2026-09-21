@@ -48,7 +48,7 @@ git push -u origin feat/ben-log-nodep
 
 Open a PR. Body: [`ben-log.pr.md`](../patches/ben-log.pr.md) **without** the `Uplink-Depends-On` line.
 
-**Uplink export preflight** should fail and comment suggested `Uplink-Depends-On` lines. Do not merge. Close the PR in the GitHub UI.
+**Uplink upstream preflight** should fail and comment suggested `Uplink-Depends-On` lines. Do not merge. Close the PR in the GitHub UI.
 
 ## Import Ben with the trailer
 

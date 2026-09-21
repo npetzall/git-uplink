@@ -52,7 +52,7 @@ git commit -m "Use SHA-256 for tokens"
 git push -u origin feat/sha256
 ```
 
-Open a PR. Title: `Use SHA-256 for tokens`. Body: [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md). Wait until **Uplink assess for upstream** and **Uplink export preflight** are green. Merge.
+Open a PR. Title: `Use SHA-256 for tokens`. Body: [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md). Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green. Merge.
 
 ```bash
 git uplink reset

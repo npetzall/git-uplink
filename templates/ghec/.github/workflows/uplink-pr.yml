@@ -1,0 +1,116 @@
+# ghec forge pack (`git uplink init --forge ghec`).
+#
+# Parallel required checks on every internal PR to company main except
+# uplink:internal-only. Assess rewrites the contribution as it would leave
+# the enterprise (PR title/body as the commit message, cutoff, export
+# author, keyword / internal-email scan) and posts the report. Preflight
+# applies the unique diff onto public upstream plus declared
+# Uplink-Depends-On, then tooling + queued upstream (internal omitted),
+# then UPLINK_PREFLIGHT. Fail these instead of opening a contribution
+# later that leaks company text or is missing queued work from main.
+#
+# Company extras for the IP packet are not collected here (no patch id
+# yet). Add `.github/workflows/uplink-assessment-hook.yml` and see
+# templates/README.md "Assessment hook".
+#
+# Put both job names in the required status checks for the PR.
+# This workflow does not write uplink/state (not uplink-mutate).
+name: Uplink PR checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches:
+      - main
+
+concurrency:
+  group: uplink-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  assess:
+    name: Uplink upstream assess
+    if: ${{ !contains(join(github.event.pull_request.labels.*.name, ','), 'uplink:internal-only') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Assess contribution
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
+          UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
+          UPLINK_EXPORT_AUTHOR: ${{ vars.UPLINK_EXPORT_AUTHOR }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git uplink init
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > /tmp/uplink-msg.txt
+          set +e
+          git uplink assess \
+            --title "$TITLE" \
+            --message-file /tmp/uplink-msg.txt \
+            --from "$FROM_SHA" \
+            --head "$HEAD_SHA" > /tmp/uplink-assess.md
+          code=$?
+          set -e
+          gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-assess.md
+          exit "$code"
+
+  preflight:
+    name: Uplink upstream preflight
+    if: ${{ !contains(join(github.event.pull_request.labels.*.name, ','), 'uplink:internal-only') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Export preflight
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git uplink init
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > /tmp/uplink-msg.txt
+          set +e
+          git uplink preflight \
+            --title "$TITLE" \
+            --message-file /tmp/uplink-msg.txt \
+            --from "$FROM_SHA" \
+            --head "$HEAD_SHA" > /tmp/uplink-preflight.md
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-preflight.md
+            exit "$code"
+          fi

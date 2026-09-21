@@ -2,8 +2,8 @@
 # Installs git-uplink on the runner.
 # Empty UPLINK_*_AUTH defaults to pat.
 #
-# Dispatch starts a transfer. If apply+preflight pass, the queue is updated
-# immediately. If byte changes are needed, this workflow pushes the
+# Dispatch starts a transfer. If apply+assess+preflight pass, the queue is
+# updated immediately. If byte changes are needed, this workflow pushes the
 # protected base and -work branch and opens a PR. Merging that PR runs
 # --complete. Closing it without merging deletes both branches and leaves
 # the queue unchanged.

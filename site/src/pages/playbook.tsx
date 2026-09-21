@@ -316,14 +316,15 @@ export function PlaybookPage() {
           <p>
             Failure blocks import, does not push the contribution fork, and does not open an
             upstream PR. The workflow comments the internal PR with suggested{" "}
-            <code>Uplink-Depends-On</code> lines. Init with <code>--forge ghec</code> installs{" "}
+            <code>Uplink-Depends-On</code> lines.             Init with <code>--forge ghec</code> installs{" "}
             <a
-              href={`${GITHUB_BLOB}/templates/ghec/.github/workflows/uplink-preflight.yml`}
+              href={`${GITHUB_BLOB}/templates/ghec/.github/workflows/uplink-pr.yml`}
               className="text-primary underline-offset-4 hover:underline"
             >
-              uplink-preflight.yml
+              uplink-pr.yml
             </a>
-            ; make it a required check.
+            ; make <strong>Uplink upstream assess</strong> and{" "}
+            <strong>Uplink upstream preflight</strong> required checks.
             Set Actions variable <code>UPLINK_PREFLIGHT</code> to the command that must pass for a
             contribution (for example <code>npm test</code>).
           </p>
@@ -347,15 +348,15 @@ export function PlaybookPage() {
               writing the PR and are stripped on import. Git commit logs are not concatenated.
             </li>
             <li>
-              Open an internal PR. CI runs assess (scrub, author, affiliation), export preflight
-              (skipped for <code>uplink:internal-only</code>), and company-tree tests. If assess
-              fails, remove company names from the diff (including tests) or move internal notes
-              below the cutoff.
+              Open an internal PR. CI runs <strong>Uplink upstream assess</strong> (scrub, author,
+              affiliation) and <strong>Uplink upstream preflight</strong> (both skipped for{" "}
+              <code>uplink:internal-only</code>), plus company-tree tests. If assess fails, remove
+              company names from the diff (including tests) or move internal notes below the cutoff.
             </li>
             <li>
               Labels: default destination is the upstream queue. Escape hatch:{" "}
-              <code>uplink:internal-only</code> (appends to <code>internal[]</code>; skips export
-              preflight).
+              <code>uplink:internal-only</code> (appends to <code>internal[]</code>; skips both
+              Uplink PR checks).
             </li>
             <li>
               Engineering review (required reviewers / CODEOWNERS). This is code review, not IP.
@@ -442,8 +443,9 @@ export function PlaybookPage() {
           <p>
             <code>git uplink transfer &lt;id&gt; --to-upstream</code> or{" "}
             <code>--to-internal</code> moves a patch between <code>internal[]</code> and{" "}
-            <code>upstream[]</code>. If git apply and preflight both pass, the move is written
-            immediately. If either fails, git-uplink cuts{" "}
+            <code>upstream[]</code>. <code>--to-upstream</code> re-assesses with intent{" "}
+            <code>upstream</code>. If git apply, assess, and preflight all pass, the move is written
+            immediately. If any fails, git-uplink cuts{" "}
             <code>uplink/transfer-to-*/&lt;id&gt;</code> plus <code>-work</code> and does{" "}
             <strong className="text-foreground">not</strong> write <code>queue.json</code>. Merge
             the gated PR to complete; close it without merging to abort (branches deleted, queue
@@ -508,7 +510,8 @@ export function PlaybookPage() {
             <li>
               Run <code>git uplink init --upstream … --contrib … --forge ghec</code> in the
               company product repo (then <code>git uplink init --upgrade</code> when the binary
-              gains new workflows). Make assess and export preflight required checks. Create Environment{" "}
+              gains new workflows). Make <strong>Uplink upstream assess</strong> and{" "}
+              <strong>Uplink upstream preflight</strong> required checks. Create Environment{" "}
               <code>to-upstream</code> with IP/legal as required reviewers and the contrib GitHub App
               secrets on that environment only. Store internal and upstream git secrets at repo
               level. Set <code>UPLINK_REDACT_KEYWORDS</code> and <code>UPLINK_EXPORT_AUTHOR</code>.
