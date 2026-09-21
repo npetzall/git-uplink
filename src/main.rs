@@ -60,6 +60,8 @@ enum Commands {
             help = "JSON file of commit groups when internal is ahead of upstream"
         )]
         adopt_groups: Option<PathBuf>,
+        #[arg(long, help = "Print queue config as JSON")]
+        json: bool,
     },
     Add {
         #[arg(long)]
@@ -593,26 +595,26 @@ fn run() -> Result<(), Error> {
             forge,
             upgrade,
             adopt_groups,
+            json,
         } => {
             let adopt_groups = match adopt_groups {
                 Some(path) => Some(load_groups_file(&path)?),
                 None => None,
             };
-            let queue = init(
-                &repo,
-                InitOpts {
-                    upstream_url: upstream,
-                    contrib_url: contrib,
-                    upstream_remote_name,
-                    upstream_branch,
-                    contrib_remote_name,
-                    internal_branch,
-                    forge,
-                    upgrade,
-                    adopt_groups,
-                    interactive: None,
-                },
-            )?;
+            let opts = InitOpts {
+                upstream_url: upstream,
+                contrib_url: contrib,
+                upstream_remote_name,
+                upstream_branch,
+                contrib_remote_name,
+                internal_branch,
+                forge,
+                upgrade,
+                adopt_groups,
+                interactive: None,
+            };
+            let hydrate = !opts.has_args() && opts.forge.is_none() && !opts.upgrade;
+            let queue = init(&repo, opts)?;
             if queue.all_patches().any(|p| {
                 p.source
                     .note
@@ -621,7 +623,11 @@ fn run() -> Result<(), Error> {
             }) {
                 eprintln!("{}", adopted_next_steps());
             }
-            println!("{}", serde_json::to_string_pretty(&queue)?);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&queue.config)?);
+            } else if !hydrate {
+                println!("{}", serde_json::to_string_pretty(&queue)?);
+            }
         }
         Commands::Add {
             title,
