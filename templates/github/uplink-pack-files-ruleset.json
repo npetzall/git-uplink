@@ -1,0 +1,33 @@
+{
+  "name": "Uplink pack files on gated refs",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [
+    {
+      "actor_id": 15368,
+      "actor_type": "Integration",
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "include": [
+        "refs/heads/uplink/conflict/**",
+        "refs/heads/uplink/transfer-to-upstream/**",
+        "refs/heads/uplink/transfer-to-internal/**"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "file_path_restriction",
+      "parameters": {
+        "restricted_file_paths": [
+          ".github/workflows/uplink-*.yml",
+          ".github/actions/install-git-uplink/**"
+        ]
+      }
+    }
+  ]
+}

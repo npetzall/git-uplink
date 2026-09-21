@@ -112,7 +112,7 @@ Distribution SBOMs (CycloneDX JSON and SPDX JSON) cover the Rust crate and the e
 | `uplink-sync.yml` | Hourly / manual — fetch upstream; apply flowed-back patches immediately; foreign commits wait on `from-upstream` then `accept-upstream`. Persist conflicts and open a gated PR from `-work` into `uplink/conflict/<id>` |
 | `uplink-resolve.yml` | Merge of the conflict PR — `git uplink resolve`, rebuild `main`; if already submitted, status `amended` and dispatch submit for a delta IP pass; publish a later conflict like sync |
 | `uplink-transfer.yml` | Dispatch to move a patch between queues; `--to-upstream` re-assesses; merge of a transfer PR runs `--complete`; close without merge deletes both branches |
-| `uplink-gate.yml` | PRs into protected uplink bases — no conflict markers; transfer-to-upstream also runs export preflight |
+| `uplink-gate.yml` | PRs into protected uplink bases (`pull_request_target` from default branch) — no conflict markers; refuse pack-file diffs; transfer-to-upstream also runs export preflight |
 | `uplink-submit.yml` | Dispatch with a patch id — `to-upstream` Environment IP gate (full packet or delta), then approve + submit. Skips opening a second PR when `pr_number` is already stored |
 
 Environment setup is in `templates/README.md`. Developer stories: [way-of-working.md](way-of-working.md).

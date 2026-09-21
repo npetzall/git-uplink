@@ -1,9 +1,10 @@
 # ghec forge pack (`git uplink init --forge ghec`).
 # Required check on PRs into protected uplink bases. These PRs are not imports.
+# YAML is loaded from the default branch so *-work cannot replace this sidecar.
 name: Uplink gate
 
-on:
-  pull_request:
+on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data; contents: read; persist-credentials: false
+  pull_request_target:
     types: [opened, synchronize, reopened]
     branches:
       - "uplink/conflict/**"
@@ -16,7 +17,6 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   validate:
@@ -31,16 +31,21 @@ jobs:
 
       - name: Validate gated work
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           git uplink init
+          git fetch origin "$BASE_REF" --depth=1
+          if git diff --name-only "$FROM_SHA" "$HEAD_SHA" | grep -E \
+            -q '^(\.github/workflows/uplink-.*\.yml|\.github/actions/install-git-uplink/)'; then
+            echo "Gated PRs must not change Uplink pack files (uplink-*.yml / install-git-uplink)."
+            echo "Edit product workflows as needed. Change sidecars on main via git uplink init --upgrade."
+            exit 1
+          fi
           if git grep -I -l '^<<<<<<<' -- . ':!.uplink' >/dev/null 2>&1; then
             echo "Conflict markers still present; remove them before merge."
             exit 1

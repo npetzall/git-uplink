@@ -3,10 +3,11 @@
 # Empty UPLINK_*_AUTH defaults to pat.
 #
 # Runs when the gated conflict PR is merged into uplink/conflict/<id>.
+# YAML is loaded from the default branch so *-work cannot replace this sidecar.
 name: Uplink resolve
 
-on:
-  pull_request:
+on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data
+  pull_request_target:
     types: [closed]
     branches:
       - "uplink/conflict/**"
@@ -15,16 +16,16 @@ concurrency:
   group: uplink-mutate
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-  actions: write
+permissions: {}
 
 jobs:
   resolve:
     if: github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
     steps:
       - name: Mint internal GitHub App token
         id: internal-app
@@ -51,14 +52,18 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-          persist-credentials: true
-          ref: ${{ github.event.pull_request.base.ref }}
-          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: $/.github/actions/install-git-uplink
         with:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.base.ref }}
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Resolve patch and rebuild main
         env:
