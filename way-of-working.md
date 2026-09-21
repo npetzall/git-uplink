@@ -268,7 +268,7 @@ Upstream changes a file Asha also changed. That is a foreign commit. Sync:
 
 What you have then:
 
-- `upl_asha` status `conflict`. Sync records that on `uplink/state` (product files on `main` stay at the last successful rebuild) and creates `uplink/conflict/upl_asha` (protected base at the apply prefix) plus `uplink/conflict/upl_asha-work` (conflict markers). The Actions sync job opens a gated PR from `-work` into the base (`uplink:conflict`).
+- `upl_asha` status `conflict`. Sync records that on `uplink/state` (product files on `main` stay at the last successful rebuild) and creates `uplink/conflict/upl_asha` (protected base at the apply prefix) plus `uplink/conflict/upl_asha-work` (conflict markers). The Actions sync job **succeeds** and opens a gated PR from `-work` into the base (`uplink:conflict`). Company `main` is frozen until that PR is merged; look at `git uplink status` (`counts.conflict`) or open `uplink:conflict` PRs, not a red sync run.
 - **Ben is not applied**, even though he does not depend on Asha. A blocked patch blocks the rest of the rebuild. Company `main` is not updated to “upstream + Ben, skip Asha.” There is no skip.
 - Ben’s public PR, if he already submitted, is untouched until his patch is replayed.
 
@@ -295,7 +295,7 @@ git uplink resolve upl_asha
 
 If Asha was never submitted, she returns to `queued`. If she **was** already submitted (public PR still open), she becomes `amended`. Company `main` has the new bytes immediately. The contribution fork still has the last IP-approved bytes. On GHEC, **Uplink resolve** cancels any waiting or in-progress **Uplink submit** for that id and dispatches a new run. IP reviews a **delta-first** packet: the change since the last approval, then the historical packet marked already approved. After to-upstream approval, submit force-pushes `uplink/upl_asha`. Same id, same PR, no second branch. `git uplink submit` refuses `amended` until that delta is approved.
 
-If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben` plus `-work`). `git uplink resolve` exits **2** (this id was amended; the next id did not apply). On GHEC the resolve job pushes company `main` (amend + Ben’s `conflict` status), publishes Ben’s gated PR, then Asha’s PR is already merged. If Asha is `amended`, it still dispatches submit for her delta. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her.
+If Ben **also** conflicts with the new upstream, rebuild stops on him next (`uplink/conflict/upl_ben` plus `-work`). `git uplink resolve` **succeeds** (this id was amended; stdout JSON / stderr name the next conflict). On GHEC the resolve job stays **green**, pushes company `main` (amend + Ben’s `conflict` status), and publishes Ben’s gated PR. If Asha is `amended`, it still dispatches submit for her delta. He resolves the same way. Order is the queue order: Asha first, then Ben. You cannot resolve Ben while Asha is still `conflict`; the queue is blocked on her. Do not retrigger sync after a green resolve; that rebuild already replayed the stack on the promoted `uplink/upstream`.
 
 ---
 

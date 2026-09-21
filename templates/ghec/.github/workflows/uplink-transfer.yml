@@ -88,15 +88,9 @@ jobs:
           git uplink init
           main_before=$(git rev-parse HEAD)
 
-          set +e
           transfer_json=$(git uplink transfer "$PATCH_ID" --"$DIRECTION")
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
-            exit "$code"
-          fi
-
-          if [ "$code" -eq 0 ]; then
+          gated=$(jq -r '.gated // false' <<<"$transfer_json")
+          if [ "$gated" != "true" ]; then
             git push origin uplink/state
             main_after=$(git rev-parse HEAD)
             if [ "$main_after" != "$main_before" ]; then
@@ -113,8 +107,8 @@ jobs:
           base=$(jq -r '.base // empty' <<<"$transfer_json")
           work=$(jq -r '.work // empty' <<<"$transfer_json")
           if [ -z "$base" ] || [ -z "$work" ]; then
-            echo "transfer exited 2 but no base/work branches were recorded"
-            exit 2
+            echo "transfer is gated but no base/work branches were recorded"
+            exit 1
           fi
           git push origin "refs/heads/${base}:refs/heads/${base}" --force
           git push origin "refs/heads/${work}:refs/heads/${work}" --force
@@ -123,7 +117,6 @@ jobs:
           label=$(jq -r '.gh.prCreate.labels[0]' <<<"$transfer_json")
           gh label create "$label" --description "Uplink gated transfer" --color 1D76DB || true
           gh pr create --title "$title" --base "$base" --head "$work" --label "$label" --body-file "$body_file"
-          exit 2
 
   complete:
     name: Complete transfer

@@ -70,13 +70,7 @@ jobs:
           git uplink init
           main_before=$(git rev-parse HEAD)
 
-          set +e
           sync_json=$(git uplink sync)
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
-            exit "$code"
-          fi
 
           needs_approval=$(jq -r '.needsApproval // false' <<<"$sync_json")
           echo "needs_approval=${needs_approval}" >> "$GITHUB_OUTPUT"
@@ -93,37 +87,34 @@ jobs:
             git push origin HEAD:main --force-with-lease
           fi
 
-          if [ "$code" -ne 2 ]; then
-            exit 0
-          fi
+          if jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
+            conflict_id=$(jq -r '.conflict.id // empty' <<<"$sync_json")
+            conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$sync_json")
+            work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$sync_json")
+            if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+              echo "sync recorded a conflict but no conflict patch id was present"
+              exit 1
+            fi
+            if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+              git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+            fi
+            if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
+              git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
+            fi
 
-          conflict_id=$(jq -r '.conflict.id // empty' <<<"$sync_json")
-          conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$sync_json")
-          work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$sync_json")
-          if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
-            echo "sync exited 2 but no conflict patch was recorded"
-            exit 2
+            title=$(jq -r '.gh.prCreate.title' <<<"$sync_json")
+            body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$sync_json")
+            head=$(jq -r '.gh.prCreate.head' <<<"$sync_json")
+            base=$(jq -r '.gh.prCreate.base' <<<"$sync_json")
+            existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
+            if [ -z "$existing" ]; then
+              gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
+              url=$(gh pr create --title "$title" --base "$base" --head "$head" --label uplink:conflict --body-file "$body_file")
+            else
+              url="$existing"
+            fi
+            git uplink gated "$conflict_id" --pr-url "$url"
           fi
-          if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
-            git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
-          fi
-          if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
-            git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
-          fi
-
-          title=$(jq -r '.gh.prCreate.title' <<<"$sync_json")
-          body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$sync_json")
-          head=$(jq -r '.gh.prCreate.head' <<<"$sync_json")
-          base=$(jq -r '.gh.prCreate.base' <<<"$sync_json")
-          existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
-          if [ -z "$existing" ]; then
-            gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
-            url=$(gh pr create --title "$title" --base "$base" --head "$head" --label uplink:conflict --body-file "$body_file")
-          else
-            url="$existing"
-          fi
-          git uplink gated "$conflict_id" --pr-url "$url"
-          exit 2
 
   # Environment Waiting occupies a concurrency group. Keep the long
   # from-upstream review off uplink-mutate; apply takes the group after approval.
@@ -197,13 +188,7 @@ jobs:
           git uplink init
           main_before=$(git rev-parse HEAD)
 
-          set +e
           sync_json=$(git uplink accept-upstream)
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
-            exit "$code"
-          fi
 
           git push origin uplink/state
           git push origin uplink/upstream --force || true
@@ -213,7 +198,7 @@ jobs:
             git push origin HEAD:main --force-with-lease
           fi
 
-          if [ "$code" -ne 2 ]; then
+          if ! jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
             exit 0
           fi
 
@@ -221,8 +206,8 @@ jobs:
           conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$sync_json")
           work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$sync_json")
           if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
-            echo "accept-upstream exited 2 but no conflict patch was recorded"
-            exit 2
+            echo "accept-upstream recorded a conflict but no conflict patch id was present"
+            exit 1
           fi
           if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
             git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
@@ -243,4 +228,3 @@ jobs:
             url="$existing"
           fi
           git uplink gated "$conflict_id" --pr-url "$url"
-          exit 2

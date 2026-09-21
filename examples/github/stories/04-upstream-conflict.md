@@ -50,7 +50,7 @@ git commit -am "shorten default ttl"
 git push origin main
 ```
 
-**Actions → Uplink sync** on internal. Inspect finds the shorten-ttl commit is not a company patch, so the apply job waits on Environment **from-upstream**. Approve that deployment. After apply, the run exits 2. Internal gets:
+**Actions → Uplink sync** on internal. Inspect finds the shorten-ttl commit is not a company patch, so the apply job waits on Environment **from-upstream**. Approve that deployment. Apply succeeds and opens a gated PR (the run stays green). Internal gets:
 
 - Ben’s status `conflict` on `uplink/state`
 - protected base `uplink/conflict/<id>` (apply prefix) and `uplink/conflict/<id>-work` (conflict markers)

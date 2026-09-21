@@ -431,7 +431,7 @@ export function PlaybookPage() {
             <code>conflict</code> until resolve.{" "}
             <code>uplink-resolve.yml</code> runs on that merge, runs{" "}
             <code>git uplink resolve &lt;id&gt;</code>, and rebuilds <code>main</code>. Remaining
-            patches then replay. If a later patch fails to apply, resolve exits 2 and the job
+            patches then replay. If a later patch fails to apply, resolve succeeds and the job
             publishes that conflict the same way sync does. If the patch was already submitted,
             resolve sets status <code>amended</code> and dispatches <code>Uplink submit</code>.
             IP reviews a delta-first packet (historical packets are already approved). After
