@@ -106,8 +106,10 @@ jobs:
             status=$(printf '%s\n' "$queue_json" | jq -r --arg id "$id" '(.tooling, .upstream[], .internal[]) | select(. != null and .id==$id) | .status')
           fi
           if [ "$status" = "amended" ]; then
-            waiting=$(gh run list --workflow="Uplink submit" --status=waiting --json databaseId,displayTitle,name 2>/dev/null || echo '[]')
-            echo "$waiting" | jq -r --arg id "$id" '.[] | select((.displayTitle // "" | contains($id)) or (.name // "" | contains($id))) | .databaseId' | while read -r run_id; do
+            runs=$(gh run list --workflow="Uplink submit" --limit 20 --json databaseId,displayTitle,status 2>/dev/null || echo '[]')
+            echo "$runs" | jq -r --arg title "Uplink submit $id" \
+              '.[] | select((.displayTitle // "") == $title and (.status == "waiting" or .status == "in_progress")) | .databaseId' \
+              | while read -r run_id; do
               if [ -n "$run_id" ]; then
                 gh run cancel "$run_id" || true
               fi

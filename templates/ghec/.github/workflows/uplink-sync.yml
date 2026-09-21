@@ -131,19 +131,30 @@ jobs:
           git uplink gated "$conflict_id" --pr-url "$url"
           exit 2
 
-  apply:
-    name: Approve from-upstream environment and apply
+  # Environment Waiting occupies a concurrency group. Keep the long
+  # from-upstream review off uplink-mutate; apply takes the group after approval.
+  wait-from-upstream:
+    name: Wait for from-upstream approval
     needs: inspect
     if: needs.inspect.outputs.needs_approval == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      deployments: write
+    environment:
+      name: from-upstream
+      url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/from-upstream/incoming.md
+    steps:
+      - name: from-upstream approved
+        run: echo "from-upstream approved for ${{ github.repository }}"
+
+  apply:
+    name: Apply accepted upstream
+    needs: wait-from-upstream
     runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
       pull-requests: write
-      deployments: write
-    environment:
-      name: from-upstream
-      url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/from-upstream/incoming.md
     concurrency:
       group: uplink-mutate
       cancel-in-progress: false

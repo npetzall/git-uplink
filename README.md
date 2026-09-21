@@ -110,7 +110,7 @@ Distribution SBOMs (CycloneDX JSON and SPDX JSON) cover the Rust crate and the e
 | `uplink-pr.yml` | Every PR to `main` except `uplink:internal-only` — parallel **Uplink upstream assess** (message, cutoff, author, affiliation) and **Uplink upstream preflight** (apply onto public `main` + declared deps, then `UPLINK_PREFLIGHT`) |
 | `uplink-import.yml` | Merge to `main` — product gate, records the patch as status `queued` |
 | `uplink-sync.yml` | Hourly / manual — fetch upstream; apply flowed-back patches immediately; foreign commits wait on `from-upstream` then `accept-upstream`. Persist conflicts and open a gated PR from `-work` into `uplink/conflict/<id>` |
-| `uplink-resolve.yml` | Merge of the conflict PR — `git uplink resolve`, rebuild `main`; if already submitted, status `amended` and dispatch submit for a delta IP pass; publish a later conflict like sync |
+| `uplink-resolve.yml` | Merge of the conflict PR — `git uplink resolve`, rebuild `main`; if already submitted, status `amended`, cancel any waiting/in-progress submit for that id, and dispatch submit for a delta IP pass; publish a later conflict like sync |
 | `uplink-transfer.yml` | Dispatch to move a patch between queues; `--to-upstream` re-assesses; merge of a transfer PR runs `--complete`; close without merge deletes both branches |
 | `uplink-gate.yml` | PRs into protected uplink bases (`pull_request_target` from default branch) — no conflict markers; refuse pack-file diffs; transfer-to-upstream also runs export preflight |
 | `uplink-submit.yml` | Dispatch with a patch id — `to-upstream` Environment IP gate (full packet or delta), then approve + submit. Skips opening a second PR when `pr_number` is already stored |

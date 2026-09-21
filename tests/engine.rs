@@ -4465,6 +4465,78 @@ fn submit_does_not_commit_queue_until_submitted() {
 }
 
 #[test]
+fn submitted_push_replays_pr_fields_when_origin_state_moved() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = world.upstream.clone();
+    let origin = publish_origin(company);
+    let (_asha_keep, asha) = clone_company_from(&origin, &upstream);
+    let (_ben_keep, ben) = clone_company_from(&origin, &upstream);
+
+    git(&asha, &["checkout", "-b", "feat/hash"], GitOpts::default()).unwrap();
+    write(
+        &asha,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(&asha, "use sha256");
+    let asha_patch = add_landed_patch(
+        &asha,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    push_queue(
+        &asha,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+
+    reset_from_origin(&ben).unwrap();
+    git(&ben, &["checkout", "-b", "feat/notes"], GitOpts::default()).unwrap();
+    write(&ben, "NOTES.md", "from-ben\n");
+    commit_all(&ben, "notes from ben");
+    add_landed_patch(
+        &ben,
+        AddPatchOpts {
+            title: "Notes from Ben".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    push_queue(
+        &ben,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+
+    let url = "https://github.com/upstream/tokenkit/pull/7";
+    record_pull_request(&asha, &asha_patch.id, 7, url, "uplink/asha", Some("origin")).unwrap();
+
+    let (_check_keep, check) = clone_company_from(&origin, &upstream);
+    let queue = status_snapshot(&check).unwrap().queue;
+    let recorded = queue.all_patches().find(|p| p.id == asha_patch.id).unwrap();
+    assert_eq!(recorded.status, "submitted");
+    assert_eq!(recorded.upstream.as_ref().unwrap().pr_number, Some(7));
+    assert_eq!(
+        recorded.upstream.as_ref().unwrap().pr_url.as_deref(),
+        Some(url)
+    );
+    assert!(
+        queue.all_patches().any(|p| p.title == "Notes from Ben"),
+        "origin must keep Ben's import that moved uplink/state"
+    );
+}
+
+#[test]
 fn gated_records_the_conflict_pr_on_the_patch() {
     let world = setup_world();
     let company = &world.company;

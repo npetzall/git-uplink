@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::adopt::{self, AdoptGroup};
 use crate::assess::{
     IncomingFlowedBack, assert_assess_ok, assess_from_message, company_commit_message,
-    depends_on_from_message, format_incoming_packet, from_upstream_report_paths,
+    depends_on_from_message, format_incoming_packet, from_upstream_report_paths, report_paths,
     stored_commit_message,
 };
 use crate::error::{ConflictError, Error, Result};
@@ -1011,6 +1011,114 @@ pub fn mark_merged(
     })
 }
 
+const STATE_PATCH_PUSH_ATTEMPTS: u32 = 8;
+
+fn origin_amended_after_local(local: &Patch, origin: &Patch) -> bool {
+    let local_had_amend = local.events.iter().any(|e| e.kind == "amended");
+    let origin_amended =
+        origin.status == "amended" || origin.events.iter().any(|e| e.kind == "amended");
+    origin_amended && !local_had_amend
+}
+
+fn replay_recorded_patch_onto_origin(repo: &Path, id: &str, from_sha: &str) -> Result<()> {
+    let source = queue_at(repo, from_sha)?;
+    let src = get_patch(&source, id)?.clone();
+    let mut queue = read_queue_file(repo)?;
+    {
+        let dest = get_patch_mut(&mut queue, id)?;
+        if dest.status == "conflict" && src.status != "conflict" {
+            return Err(Error::msg(format!(
+                "{id} is conflict on origin; not recording the pull request"
+            )));
+        }
+        if dest.status == "dropped" {
+            return Err(Error::msg(format!(
+                "{id} is dropped on origin; not recording the pull request"
+            )));
+        }
+        if origin_amended_after_local(&src, dest) {
+            return Err(Error::msg(format!(
+                "{id} was amended on origin after this recording; not clobbering with a stale PR"
+            )));
+        }
+        dest.status = src.status.clone();
+        dest.upstream = src.upstream.clone();
+        dest.approvals = src.approvals.clone();
+        if let Some(src_conflict) = src.conflict {
+            match dest.conflict.as_mut() {
+                Some(dest_conflict) => {
+                    dest_conflict.pr_number = src_conflict.pr_number;
+                    dest_conflict.pr_url = src_conflict.pr_url;
+                }
+                None => dest.conflict = Some(src_conflict),
+            }
+        }
+        for event in src.events {
+            if !dest
+                .events
+                .iter()
+                .any(|existing| existing.kind == event.kind && existing.detail == event.detail)
+            {
+                dest.events.push(event);
+            }
+        }
+        dest.updated_at = stamp();
+    }
+    write_queue_file(repo, &queue)?;
+    if let Ok((_, _, receipt)) = report_paths(id)
+        && path_exists_at(repo, from_sha, &receipt)?
+    {
+        restore_paths_from(repo, from_sha, &[receipt])?;
+    }
+    Ok(())
+}
+
+fn push_state_replaying_patch(
+    repo: &Path,
+    remote: &str,
+    branch: &str,
+    id: &str,
+    local_sha: &str,
+    message: &str,
+) -> Result<()> {
+    let mut last_error = None;
+    for attempt in 0..STATE_PATCH_PUSH_ATTEMPTS {
+        match push_state_branch(repo, remote, branch) {
+            Ok(()) => return Ok(()),
+            Err(err) if is_push_lease_rejected(&err) && attempt + 1 < STATE_PATCH_PUSH_ATTEMPTS => {
+                let Some(remote_sha) = fetch_state_tracking(repo, remote, branch)? else {
+                    return Err(err);
+                };
+                if is_ancestor(repo, local_sha, &remote_sha)? {
+                    set_state_branch(repo, branch, &remote_sha)?;
+                    return Ok(());
+                }
+                set_state_branch(repo, branch, &remote_sha)?;
+                replay_recorded_patch_onto_origin(repo, id, local_sha)?;
+                commit_queue(repo, message)?;
+                last_error = Some(err);
+                thread::sleep(Duration::from_millis(40 * 2u64.pow(attempt)));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| Error::msg("push failed")))
+}
+
+fn push_recorded_patch(
+    repo: &Path,
+    id: &str,
+    state_branch: &str,
+    message: &str,
+    push_remote: Option<&str>,
+) -> Result<()> {
+    let Some(remote) = push_remote else {
+        return Ok(());
+    };
+    let local_sha = rev_parse(repo, state_branch)?;
+    push_state_replaying_patch(repo, remote, state_branch, id, &local_sha, message)
+}
+
 pub fn record_pull_request(
     repo: &Path,
     id: &str,
@@ -1028,9 +1136,8 @@ pub fn record_pull_request(
                 && existing.pr_url.as_deref() == Some(url)
                 && patch.status == "submitted"
             {
-                if let Some(remote) = push_remote {
-                    push_state_branch(repo, remote, &state_branch)?;
-                }
+                let message = format!("uplink: submit {id} as PR {number}");
+                push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
                 return Ok(patch);
             }
             if existing.pr_number.is_some()
@@ -1057,11 +1164,10 @@ pub fn record_pull_request(
             add_event(patch, "submitted", format!("Upstream PR {url}"));
         }
         write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: submit {id} as PR {number}"))?;
-        if let Some(remote) = push_remote {
-            push_state_branch(repo, remote, &state_branch)?;
-        }
-        Ok(get_patch(&queue, id)?.clone())
+        let message = format!("uplink: submit {id} as PR {number}");
+        commit_queue(repo, &message)?;
+        push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
+        Ok(get_patch(&read_queue_file(repo)?, id)?.clone())
     })
 }
 
@@ -1083,9 +1189,8 @@ pub fn record_gated_pr(
             return Err(Error::msg(format!("{id} has no conflict record")));
         };
         if conflict.pr_number == Some(number) && conflict.pr_url.as_deref() == Some(url) {
-            if let Some(remote) = push_remote {
-                push_state_branch(repo, remote, &state_branch)?;
-            }
+            let message = format!("uplink: conflict PR {id} #{number}");
+            push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
             return Ok(patch);
         }
         if conflict.pr_number.is_some()
@@ -1109,11 +1214,10 @@ pub fn record_gated_pr(
             add_event(patch, "conflict-pr", format!("Conflict PR {url}"));
         }
         write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: conflict PR {id} #{number}"))?;
-        if let Some(remote) = push_remote {
-            push_state_branch(repo, remote, &queue.config.state_branch)?;
-        }
-        Ok(get_patch(&queue, id)?.clone())
+        let message = format!("uplink: conflict PR {id} #{number}");
+        commit_queue(repo, &message)?;
+        push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
+        Ok(get_patch(&read_queue_file(repo)?, id)?.clone())
     })
 }
 
