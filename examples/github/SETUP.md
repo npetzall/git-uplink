@@ -201,6 +201,7 @@ Not required for the walkthrough. Production rulesets are in [`templates/README.
 - Protect `main` as usual (PR required).
 - Protect the three gated **bases**: `uplink/conflict/*`, `uplink/transfer-to-upstream/*`, `uplink/transfer-to-internal/*`. **Exclude** `*-work`. Require a pull request; no direct pushes. Require the **Uplink gate** check.
 - Bypass for the internal Uplink App/PAT and GitHub Actions is only to **create and delete** those protected bases. Humans push `-work` only; merge is the only update to a base.
+- A separate ruleset **including** `*-work` must not freeze product CI. Restrict only pack paths (`.github/workflows/uplink-*.yml`, `.github/actions/install-git-uplink/**`) so a gated PR can still fix `ci.yml`. Sample JSON: [`templates/github/uplink-pack-files-ruleset.json`](../../templates/github/uplink-pack-files-ruleset.json). Bypass the internal App/PAT and GitHub Actions so conflict/transfer branches can still be created.
 
 Sync, resolve, and transfer persist `UPLINK_INTERNAL_TOKEN` on checkout so shell origin git can push those refs. `git uplink` origin transport uses the same token.
 

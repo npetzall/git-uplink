@@ -396,4 +396,56 @@ mod embed_tests {
             );
         }
     }
+
+    #[test]
+    fn gated_branch_sidecars_load_from_default_branch() {
+        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+            let files = composed_files(forge).unwrap();
+            let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+            assert!(
+                paths.contains(&".github/uplink-pack-files-ruleset.json"),
+                "{forge:?} {paths:?}"
+            );
+            for name in [
+                "uplink-gate.yml",
+                "uplink-resolve.yml",
+                "uplink-transfer.yml",
+            ] {
+                let text = files
+                    .iter()
+                    .find(|(p, _)| p.ends_with(name))
+                    .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_else(|| panic!("{forge:?} missing {name}"));
+                assert!(
+                    text.contains("pull_request_target:"),
+                    "{forge:?} {name} must use pull_request_target\n{text}"
+                );
+                assert!(
+                    text.contains("zizmor: ignore[dangerous-triggers]"),
+                    "{forge:?} {name} must ignore dangerous-triggers\n{text}"
+                );
+                assert!(
+                    !text.contains("\n  pull_request:\n"),
+                    "{forge:?} {name} must not use pull_request\n{text}"
+                );
+            }
+            let gate = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-gate.yml"))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap();
+            assert!(
+                gate.contains("uplink-.*\\.yml"),
+                "{forge:?} gate must refuse pack-file diffs\n{gate}"
+            );
+            assert!(
+                gate.contains("contents: read"),
+                "{forge:?} gate must be contents: read\n{gate}"
+            );
+            assert!(
+                !gate.contains("pull-requests: write"),
+                "{forge:?} gate must not request pull-requests: write\n{gate}"
+            );
+        }
+    }
 }

@@ -7,10 +7,12 @@
 # protected base and -work branch and opens a PR. Merging that PR runs
 # --complete. Closing it without merging deletes both branches and leaves
 # the queue unchanged.
+# Closed-PR jobs load YAML from the default branch so *-work cannot replace
+# this sidecar.
 name: Uplink transfer
 run-name: Uplink transfer ${{ inputs.patch_id || github.event.pull_request.base.ref }}
 
-on:
+on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data
   workflow_dispatch:
     inputs:
       patch_id:
@@ -23,7 +25,7 @@ on:
         options:
           - to-upstream
           - to-internal
-  pull_request:
+  pull_request_target:
     types: [closed]
     branches:
       - "uplink/transfer-to-upstream/**"
@@ -38,7 +40,7 @@ permissions: {}
 jobs:
   start:
     name: Start transfer
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -129,7 +131,7 @@ jobs:
 
   complete:
     name: Complete transfer
-    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -160,14 +162,18 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-          persist-credentials: true
-          ref: ${{ github.event.pull_request.base.ref }}
-          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: $/.github/actions/install-git-uplink
         with:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.base.ref }}
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Complete gated transfer
         env:
@@ -219,7 +225,7 @@ jobs:
 
   cleanup:
     name: Abort transfer
-    if: github.event_name == 'pull_request' && github.event.pull_request.merged == false && !endsWith(github.event.pull_request.base.ref, '-work')
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == false && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -240,6 +246,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+          ref: ${{ github.event.repository.default_branch }}
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Delete transfer branches
