@@ -5,7 +5,9 @@
 # Resolve of an already-submitted patch dispatches this workflow so IP can
 # approve the delta.
 #
-# Empty UPLINK_*_AUTH defaults to app.
+# Empty UPLINK_CONTRIB_AUTH defaults to app.
+# Origin reads and uplink/state fast-forwards use the Actions token
+# (UPLINK_INTERNAL_TOKEN). Contrib force-push still mints UPLINK_CONTRIB_*.
 name: Uplink submit
 run-name: Uplink submit ${{ inputs.patch_id }}
 
@@ -33,21 +35,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Mint internal GitHub App token
-        id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
-          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
 
       - name: Write approver packet
         env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
         run: |
           git uplink init
@@ -71,17 +62,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Mint internal GitHub App token
-        id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
-          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
 
       - name: Dispatch company packet hooks
         id: hooks
@@ -128,7 +108,7 @@ jobs:
 
       - name: Reassemble packet with extras
         env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
           EXTRA_DIR: ${{ runner.temp }}/uplink-packet-extra
         run: |
@@ -162,18 +142,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: main
-      - name: Mint internal GitHub App token
-        id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
-          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
-
       - name: Mint contrib GitHub App token
         id: contrib-app
         if: ${{ vars.UPLINK_CONTRIB_AUTH != 'pat' }}
@@ -189,7 +157,7 @@ jobs:
       - name: Record approval, export, and record the public PR
         env:
           GH_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream

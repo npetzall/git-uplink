@@ -1,6 +1,8 @@
 # ghec forge pack (`git uplink init --forge ghec`).
 # Required check on PRs into protected uplink bases. These PRs are not imports.
 # YAML is loaded from the default branch so *-work cannot replace this sidecar.
+# Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
+# The shell git fetch of the protected base uses that token for one command.
 name: Uplink gate
 
 on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data; contents: read; persist-credentials: false
@@ -31,6 +33,7 @@ jobs:
 
       - name: Validate gated work
         env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
@@ -39,7 +42,11 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: |
           git uplink init
-          git fetch origin "$BASE_REF" --depth=1
+          auth=$(printf 'x-access-token:%s' "$UPLINK_INTERNAL_TOKEN" | base64 -w0)
+          git \
+            -c "http.${GITHUB_SERVER_URL}/.extraheader=" \
+            -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
+            fetch origin "$BASE_REF" --depth=1
           if git diff --name-only "$FROM_SHA" "$HEAD_SHA" | grep -E \
             -q '^(\.github/workflows/uplink-.*\.yml|\.github/actions/install-git-uplink/)'; then
             echo "Gated PRs must not change Uplink pack files (uplink-*.yml / install-git-uplink)."

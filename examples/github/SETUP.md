@@ -128,7 +128,7 @@ Each `UPLINK_*_AUTH` is `pat` or `app`. Empty defaults to `pat` in this example 
 
 ### Internal (repo secrets; origin force-push)
 
-Used by import, sync, resolve, and the submit packet job.
+Used by import, sync, resolve, and transfer. PR checks, gate, and submit copy the Actions `GITHUB_TOKEN` into `UPLINK_INTERNAL_TOKEN` for origin reads and `uplink/state` fast-forwards.
 
 #### PAT (default, `UPLINK_INTERNAL_AUTH=pat`)
 
@@ -209,7 +209,7 @@ Not required for the walkthrough. Production rulesets are in [`templates/README.
 - Bypass for the internal Uplink App/PAT and GitHub Actions is only to **create and delete** those protected bases. Humans push `-work` only; merge is the only update to a base.
 - A separate ruleset **including** `*-work` must not freeze product CI. Restrict only pack paths (`.github/workflows/uplink-*.yml`, `.github/actions/install-git-uplink/**`) so a gated PR can still fix `ci.yml`. Sample JSON: [`templates/github/uplink-pack-files-ruleset.json`](../../templates/github/uplink-pack-files-ruleset.json). Bypass the internal App/PAT and GitHub Actions so conflict/transfer branches can still be created.
 
-Sync, resolve, and transfer persist `UPLINK_INTERNAL_TOKEN` on checkout so shell origin git can push those refs. `git uplink` origin transport uses the same token.
+Sync, resolve, and transfer persist the internal PAT or App on checkout so shell origin git can push `main` and gated branches. `git uplink` origin transport on those jobs uses the same token. PR checks, gate, and submit set `UPLINK_INTERNAL_TOKEN` to the Actions `GITHUB_TOKEN` for origin reads and fast-forwards of `uplink/state`.
 
 ## Next
 
