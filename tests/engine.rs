@@ -2413,7 +2413,35 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
         GitOpts::default(),
     )
     .unwrap();
-    let queued = sync_apply(company);
+    let bin = env!("CARGO_BIN_EXE_git-uplink");
+    let sync_out = Command::new(bin)
+        .args(["sync"])
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert_eq!(
+        sync_out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&sync_out.stderr)
+    );
+    let after_sync = git_uplink::read_queue(company).unwrap();
+    let queued = if after_sync.pending_upstream.is_some() {
+        let acc = Command::new(bin)
+            .args(["accept-upstream"])
+            .current_dir(company)
+            .output()
+            .unwrap();
+        assert_eq!(
+            acc.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&acc.stderr)
+        );
+        git_uplink::read_queue(company).unwrap()
+    } else {
+        after_sync
+    };
     let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(conflicted.status, "conflict");
     let conflict_branch = conflicted
@@ -2736,8 +2764,8 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "expected resolve exit 2 after amending asha, got {:?}\n{stderr}",
+        Some(0),
+        "expected resolve to succeed after amending asha, got {:?}\n{stderr}",
         output.status.code()
     );
     assert!(

@@ -463,19 +463,16 @@ fn finish_sync(repo: &Path, result: SyncResult) -> Result<(), Error> {
         append_step_summary(report);
     }
     print_sync_artifact(repo, &result);
-    if result.queue.all_patches().any(|p| p.status == "conflict") {
-        if let Some(conflict) = result.queue.all_patches().find(|p| p.status == "conflict") {
-            eprintln!(
-                "CONFLICT {} on {}",
-                conflict.id,
-                conflict
-                    .conflict
-                    .as_ref()
-                    .map(|c| c.branch.as_str())
-                    .unwrap_or("")
-            );
-        }
-        return Err(Error::msg("sync conflict"));
+    if let Some(conflict) = result.queue.all_patches().find(|p| p.status == "conflict") {
+        eprintln!(
+            "CONFLICT {} on {}",
+            conflict.id,
+            conflict
+                .conflict
+                .as_ref()
+                .map(|c| c.branch.as_str())
+                .unwrap_or("")
+        );
     }
     Ok(())
 }
@@ -946,7 +943,7 @@ fn run() -> Result<(), Error> {
             Ok(queue) => {
                 print_resolve_artifact(&repo, &id, &queue, false);
             }
-            Err(Error::Conflict(err)) => {
+            Err(Error::Conflict(_)) => {
                 let queue = read_queue(&repo)?;
                 print_resolve_artifact(&repo, &id, &queue, true);
                 if let Some(conflict) = queue.all_patches().find(|p| p.status == "conflict") {
@@ -960,7 +957,6 @@ fn run() -> Result<(), Error> {
                             .unwrap_or("")
                     );
                 }
-                return Err(Error::Conflict(err));
             }
             Err(err) => return Err(err),
         },
@@ -985,14 +981,6 @@ fn run() -> Result<(), Error> {
                     result.id,
                     result.work_branch.as_deref().unwrap_or("")
                 );
-                return Err(Error::Conflict(git_uplink::ConflictError::new(
-                    result
-                        .message
-                        .clone()
-                        .unwrap_or_else(|| format!("transfer {id} needs byte changes")),
-                    result.id.clone(),
-                    result.files.clone(),
-                )));
             }
         }
         Commands::WebUi {
@@ -1019,17 +1007,8 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            // 1 = this command did not complete. 2 = this command persisted a
-            // follow-on apply conflict (sync, or resolve after a successful amend).
-            let code = match &err {
-                Error::Conflict(_) => 2,
-                Error::Message(m) if m == "assess failed" || m == "sync conflict" => 2,
-                _ => 1,
-            };
-            if code == 1 || matches!(err, Error::Conflict(_)) {
-                eprintln!("{err}");
-            }
-            ExitCode::from(code)
+            eprintln!("{err}");
+            ExitCode::from(1)
         }
     }
 }
