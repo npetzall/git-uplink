@@ -458,6 +458,41 @@ fn init_without_args_hydrates_remotes_from_origin_state() {
 }
 
 #[test]
+fn init_without_args_cli_is_quiet_and_hydrates_remotes() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .arg("init")
+        .current_dir(&clone)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        remote_get_url(&clone, "upstream"),
+        world.upstream.to_str().unwrap()
+    );
+    assert_eq!(
+        remote_get_url(&clone, "contrib"),
+        remote_get_url(&world.company, "contrib")
+    );
+}
+
+#[test]
 fn init_without_args_fails_when_state_is_missing() {
     let keep = temp_dir();
     let repo = keep.path();
