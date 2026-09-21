@@ -180,8 +180,6 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           git uplink init
-          git fetch origin main
-          git branch -f main origin/main
           if [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
             id="${BASE_REF#uplink/transfer-to-upstream/}"
             direction=to-upstream

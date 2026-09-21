@@ -829,6 +829,23 @@ pub fn refresh_company_branch(repo: &Path, remote: &str, branch: &str) -> Result
     Ok(sha)
 }
 
+/// Fetch `branch` from `remote` and point the local branch at that tip.
+/// Does not check the branch out. A checked-out branch is left as-is so the
+/// worktree stays put; a missing remote branch fails the fetch.
+pub fn ensure_company_branch_ref(repo: &Path, remote: &str, branch: &str) -> Result<String> {
+    let sha = fetch_tracking_sha(repo, remote, branch)?;
+    let head = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if head == branch {
+        return Ok(sha);
+    }
+    git(
+        repo,
+        &["update-ref", &format!("refs/heads/{branch}"), &sha],
+        GitOpts::default(),
+    )?;
+    Ok(sha)
+}
+
 /// Force-with-lease push of a local branch (preview or company main).
 pub fn push_branch_force_lease(repo: &Path, remote: &str, branch: &str) -> Result<()> {
     let fetch_spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");

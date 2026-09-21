@@ -458,6 +458,91 @@ fn init_without_args_hydrates_remotes_from_origin_state() {
 }
 
 #[test]
+fn init_without_args_materializes_main_without_leaving_detach() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    git(
+        &clone,
+        &["checkout", "--quiet", "--detach"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(&clone, &["branch", "-D", "main"], GitOpts::default()).unwrap();
+    let head_before = git_ok(&clone, &["rev-parse", "HEAD"]).unwrap();
+    let origin_main = git_ok(&clone, &["rev-parse", "origin/main"]).unwrap();
+
+    init(&clone, InitOpts::default()).unwrap();
+
+    assert_eq!(git_ok(&clone, &["rev-parse", "main"]).unwrap(), origin_main);
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "HEAD"
+    );
+    assert_eq!(git_ok(&clone, &["rev-parse", "HEAD"]).unwrap(), head_before);
+}
+
+#[test]
+fn init_without_args_leaves_checked_out_main_alone() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    write(&clone, "local.txt", "not on origin\n");
+    commit_all(&clone, "local only");
+    let main_before = git_ok(&clone, &["rev-parse", "main"]).unwrap();
+
+    init(&clone, InitOpts::default()).unwrap();
+
+    assert_eq!(git_ok(&clone, &["rev-parse", "main"]).unwrap(), main_before);
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    assert_eq!(git_ok(&clone, &["rev-parse", "HEAD"]).unwrap(), main_before);
+    assert!(clone.join("local.txt").is_file());
+}
+
+#[test]
+fn init_without_args_fails_when_company_branch_is_missing_on_origin() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    git(
+        &origin,
+        &["update-ref", "-d", "refs/heads/main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let err = init(&clone, InitOpts::default()).unwrap_err().to_string();
+    assert!(err.contains("Could not fetch origin main"), "{err}");
+}
+
+#[test]
 fn init_without_args_cli_is_quiet_and_hydrates_remotes() {
     let world = setup_uninitialized();
     init_with_recorded_urls(&world);
