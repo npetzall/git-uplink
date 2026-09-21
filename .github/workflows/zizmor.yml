@@ -26,3 +26,4 @@ jobs:
         with:
           version: v1.30.1
           inputs: . templates/ghec templates/example-github
+          token: ${{ secrets.GITHUB_TOKEN }}
