@@ -26,9 +26,9 @@ use crate::queue::{
 };
 use crate::repo::{
     COMPANY_REMOTE, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha, commit_queue,
-    conflicted_files, copy_dir, ensure_configured_remotes, ensure_revs, ensure_state_worktree,
-    ensure_upstream_ref, fetch_state_tracking, fetch_tracking_sha, fetch_upstream,
-    fetch_upstream_remote, has_ref, is_ancestor, merge_base, new_patch_id,
+    conflicted_files, copy_dir, ensure_company_branch_ref, ensure_configured_remotes, ensure_revs,
+    ensure_state_worktree, ensure_upstream_ref, fetch_state_tracking, fetch_tracking_sha,
+    fetch_upstream, fetch_upstream_remote, has_ref, is_ancestor, merge_base, new_patch_id,
     patch_already_applied_on, path_exists_at, point_branch_at, promote_upstream,
     push_branch_force_lease, push_state_branch, queue_at, refresh_company_branch,
     refresh_upstream_ref, replace_state_from_origin, restore_paths_from, rev_parse,
@@ -106,10 +106,12 @@ fn config_from_opts(opts: &InitOpts) -> QueueConfig {
     config
 }
 
-/// Create or hydrate an uplink queue. No CLI args fetches `origin` `uplink/state`
-/// and reconstitutes remotes from stored URLs. Args create the queue when state
-/// is missing, or sanity-check an existing queue. `--forge` is required when
-/// creating a queue. `--upgrade` amends the stored forge pack in place.
+/// Create or hydrate an uplink queue. No CLI args fetches `origin` `uplink/state`,
+/// `uplink/upstream`, and the configured company branch, materializes that local
+/// ref without checking it out, and reconstitutes remotes from stored URLs. Args
+/// create the queue when state is missing, or sanity-check an existing queue.
+/// `--forge` is required when creating a queue. `--upgrade` amends the stored
+/// forge pack in place.
 pub fn init(repo: &Path, opts: InitOpts) -> Result<QueueState> {
     configure_repo(repo)?;
     if opts.upgrade {
@@ -135,6 +137,7 @@ fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
     require_stored_urls(&queue.config)?;
     ensure_configured_remotes(repo, &queue.config)?;
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
+    ensure_company_branch_ref(repo, COMPANY_REMOTE, &queue.config.internal_branch)?;
     Ok(queue)
 }
 
