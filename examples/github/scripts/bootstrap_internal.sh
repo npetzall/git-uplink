@@ -22,7 +22,7 @@ need_cmd git-uplink
 require_clone UPSTREAM_DIR
 require_clone CONTRIB_DIR
 require_clone INTERNAL_DIR
-ensure_contrib_owner_differs
+ensure_contrib_repo
 
 echo "Upstream clone: $UPSTREAM_DIR  ($UPSTREAM)"
 echo "Contrib clone:  $CONTRIB_DIR   ($CONTRIB)"
@@ -100,4 +100,4 @@ echo "  $UPSTREAM  main + seed + example-reset"
 echo "  $CONTRIB   main (upstream fork) + example-reset"
 echo "  $INTERNAL  main + uplink/state + uplink/upstream + seed refs + example-reset"
 echo
-echo "Finish SETUP.md (to-upstream, from-upstream, and abandon-contrib reviewers; UPLINK_INTERNAL_TOKEN, UPLINK_UPSTREAM_TOKEN, UPLINK_CONTRIB_TOKEN on to-upstream and abandon-contrib), then walk examples/github/stories/."
+echo "Finish SETUP.md (credentials before environments: UPLINK_INTERNAL_TOKEN and UPLINK_UPSTREAM_TOKEN as repository secrets; UPLINK_CONTRIB_TOKEN on to-upstream and abandon-contrib; reviewers on those environments and on from-upstream), then walk examples/github/stories/."

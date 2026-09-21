@@ -6,6 +6,13 @@
 # approve the delta.
 #
 # Empty UPLINK_*_AUTH defaults to app.
+# Origin reads and uplink/state fast-forwards use the Actions token
+# (UPLINK_INTERNAL_TOKEN). Contrib force-push mints UPLINK_CONTRIB_*.
+# The public pull request is POST /repos/{parent}/pulls with UPLINK_UPSTREAM_*
+# (contents read on the parent and the fork, pull requests write, no contents
+# write on the fork) and maintainer_can_modify false. head is the branch
+# and head_repo is <contrib_owner>/<contrib_repo>.
+# Owner and repo come from queue.json. App mint runs only when both are the same owner.
 name: Uplink submit
 run-name: Uplink submit ${{ inputs.patch_id }}
 
@@ -33,21 +40,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Mint internal GitHub App token
-        id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
-          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
 
       - name: Write approver packet
         env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
         run: |
           git uplink init
@@ -71,17 +67,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Mint internal GitHub App token
-        id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
-          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
 
       - name: Dispatch company packet hooks
         id: hooks
@@ -128,7 +113,7 @@ jobs:
 
       - name: Reassemble packet with extras
         env:
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
           EXTRA_DIR: ${{ runner.temp }}/uplink-packet-extra
         run: |
@@ -162,54 +147,106 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: main
-      - name: Mint internal GitHub App token
-        id: internal-app
-        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
-          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-workflows: write
+      - name: Read upstream and contrib from the queue
+        id: queue
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config=$(git uplink init --json)
+          jq -r '
+            def owner_repo:
+              sub("\\.git$";"") | sub("/$";"")
+              | capture("github\\.com[:/](?<owner>[^/]+)/(?<repo>.+)$")
+              // error("Could not parse GitHub owner/repo from queue URL");
+            (.upstreamUrl // "") as $u | (.contribUrl // "") as $c
+            | if ($u == "" or $c == "") then error("queue.json is missing upstreamUrl or contribUrl") else . end
+            | ($u | owner_repo) as $up | ($c | owner_repo) as $co
+            | "upstream_owner=\($up.owner)",
+              "upstream_repo=\($up.repo)",
+              "contrib_owner=\($co.owner)",
+              "contrib_repo=\($co.repo)",
+              "same_owner=\(if ($up.owner | ascii_downcase) == ($co.owner | ascii_downcase) then "true" else "false" end)"
+          ' <<<"$config" >> "$GITHUB_OUTPUT"
 
       - name: Mint contrib GitHub App token
         id: contrib-app
-        if: ${{ vars.UPLINK_CONTRIB_AUTH != 'pat' }}
+        if: ${{ vars.UPLINK_CONTRIB_AUTH != 'pat' && steps.queue.outputs.same_owner == 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.UPLINK_CONTRIB_APP_ID }}
           private-key: ${{ secrets.UPLINK_CONTRIB_APP_PRIVATE_KEY }}
-          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
-          repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
+          owner: ${{ steps.queue.outputs.contrib_owner }}
+          repositories: ${{ steps.queue.outputs.contrib_repo }}
           permission-contents: write
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' && steps.queue.outputs.same_owner == 'true' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ steps.queue.outputs.upstream_owner }}
+          repositories: ${{ steps.queue.outputs.upstream_repo }},${{ steps.queue.outputs.contrib_repo }}
+          permission-contents: read
           permission-pull-requests: write
 
       - name: Record approval, export, and record the public PR
         env:
-          GH_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
-          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          GH_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream
           PATCH_ID: ${{ inputs.patch_id }}
+          HEAD_REPO: ${{ steps.queue.outputs.contrib_owner }}/${{ steps.queue.outputs.contrib_repo }}
         run: |
-          git uplink init
           git uplink approve "$PATCH_ID"
           submit_json=$(git uplink submit "$PATCH_ID")
 
           repo=$(jq -r '.gh.prCreate.repo // empty' <<<"$submit_json")
           head=$(jq -r '.gh.prCreate.head // empty' <<<"$submit_json")
+          if [ -n "$repo" ] && [ -n "$head" ]; then
+            parent_owner=${repo%%/*}
+            head_owner=${head%%:*}
+            parent_lc=$(printf '%s' "$parent_owner" | tr '[:upper:]' '[:lower:]')
+            head_lc=$(printf '%s' "$head_owner" | tr '[:upper:]' '[:lower:]')
+            if [ "$parent_lc" = "$head_lc" ]; then
+              account_type=$(gh api "users/${parent_owner}" --jq '.type // empty' || true)
+              if [ "$account_type" = "User" ]; then
+                echo "Upstream and the contribution fork cannot both be under a user account. Fork into the same organization, or use a different owner with a machine user classic PAT."
+                exit 1
+              fi
+            else
+              case "$GH_TOKEN" in
+                ghp_*) ;;
+                *)
+                  echo "Upstream and the contribution fork are different owners. Fine-grained PATs and GitHub App tokens cannot open this pull request. Use a machine user with a classic PAT."
+                  exit 1
+                  ;;
+              esac
+            fi
+          fi
           url=$(jq -r '.existingPr.url // empty' <<<"$submit_json")
           if [ -z "$url" ] && [ -n "$repo" ] && [ -n "$head" ]; then
-            url=$(gh pr list -R "$repo" --head "$head" --state open --json url --jq '.[0].url')
+            url=$(gh api --method GET "/repos/${repo}/pulls" -f state=open -f head="$head" --jq '.[0].html_url // empty')
           fi
           if [ -z "$url" ]; then
-            url=$(gh pr create -R "$repo" \
-              --head "$head" \
-              --base "$(jq -r .gh.prCreate.base <<<"$submit_json")" \
-              --title "$(jq -r .gh.prCreate.title <<<"$submit_json")" \
-              --body-file "$(jq -r .gh.prCreate.bodyFile <<<"$submit_json")")
+            title=$(jq -r .gh.prCreate.title <<<"$submit_json")
+            body_file=$(jq -r .gh.prCreate.bodyFile <<<"$submit_json")
+            base=$(jq -r .gh.prCreate.base <<<"$submit_json")
+            branch=$(jq -r '.branch // empty' <<<"$submit_json")
+            url=$(gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/${repo}/pulls" \
+              -f title="$title" \
+              -F "body=@${body_file}" \
+              -f head="$branch" \
+              -f head_repo="$HEAD_REPO" \
+              -f base="$base" \
+              -F maintainer_can_modify=false \
+              --jq .html_url)
           fi
           git uplink submitted "$PATCH_ID" --pr-url "$url"

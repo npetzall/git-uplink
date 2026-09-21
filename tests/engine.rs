@@ -1220,6 +1220,10 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
         prepare.contains("name: Uplink upstream assess"),
         "{prepare}"
     );
+    assert!(
+        prepare.contains("GH_REPO: ${{ github.repository }}"),
+        "{prepare}"
+    );
     assert!(prepare.contains("git uplink preflight"), "{prepare}");
     assert!(!prepare.trim().eq("stale"));
 }

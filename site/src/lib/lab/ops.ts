@@ -117,7 +117,7 @@ export function submitOps(id: string): LabOperation[] {
         "git uplink init",
         `git uplink approve ${id}`,
         `git uplink submit ${id}`,
-        `gh pr create -R <upstream> --head <contrib:uplink/${id}> --base main --title <title> --body-file <body>`,
+        `gh api --method POST /repos/<upstream>/pulls -f head=<contrib_org>:uplink/${id} -f base=main -f title=<title> -F maintainer_can_modify=false`,
         `git uplink submitted ${id} --pr-url <url>`,
       ],
       "Submit job waits on Environment to-upstream. Approve the deployment, then the same run exports.",

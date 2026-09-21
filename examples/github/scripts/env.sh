@@ -73,10 +73,18 @@ require_clone() {
   printf -v "${prefix}" '%s' "$owner_repo"
 }
 
-ensure_contrib_owner_differs() {
+ensure_contrib_repo() {
   if [[ "$UPSTREAM" == "$CONTRIB" ]]; then
-    echo "Contrib must be a fork under a different owner than upstream." >&2
+    echo "Contrib must be a different repository than upstream." >&2
     exit 1
+  fi
+  local upstream_owner=${UPSTREAM%%/*}
+  local contrib_owner=${CONTRIB%%/*}
+  local upstream_lc contrib_lc
+  upstream_lc=$(printf '%s' "$upstream_owner" | tr '[:upper:]' '[:lower:]')
+  contrib_lc=$(printf '%s' "$contrib_owner" | tr '[:upper:]' '[:lower:]')
+  if [[ "$upstream_lc" != "$contrib_lc" ]]; then
+    echo "Upstream ($upstream_owner) and contrib ($contrib_owner) are different owners. Credentials must be a machine user classic PAT." >&2
   fi
 }
 
