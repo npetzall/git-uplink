@@ -5337,10 +5337,158 @@ fn transfer_to_internal_of_submitted_clears_upstream() {
         result.pr_close_url.as_deref(),
         Some("https://github.com/upstream/tokenkit/pull/44")
     );
+    assert_eq!(
+        result.pr_close_branch.as_deref(),
+        Some(submitted.branch.as_str())
+    );
     let after = git_uplink::read_queue(company).unwrap();
     let moved = after.all_patches().find(|p| p.id == patch.id).unwrap();
     assert!(after.is_internal(&patch.id));
     assert_eq!(moved.status, "queued");
     assert!(moved.upstream.is_none());
     assert!(moved.approvals.is_empty());
+}
+
+#[test]
+fn transfer_to_internal_refuses_while_upstream_dependents_exist() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/logs"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let current = fs::read_to_string(company.join("src/tokens.js")).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &current.replace(
+            "return sha256(value);",
+            "console.log(\"hash\");\n  return sha256(value);",
+        ),
+    );
+    commit_all(company, "add log");
+    let log_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Log token hashes".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![hash_patch.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let err = transfer_patch(
+        company,
+        &hash_patch.id,
+        TransferDirection::ToInternal,
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("dependents on the upstream queue"),
+        "{err}"
+    );
+    assert!(err.to_string().contains(&log_patch.id), "{err}");
+    assert!(err.to_string().contains("--to-internal first"), "{err}");
+
+    let moved_dep =
+        transfer_patch(company, &log_patch.id, TransferDirection::ToInternal, false).unwrap();
+    assert!(moved_dep.transferred, "{moved_dep:?}");
+
+    let moved = transfer_patch(
+        company,
+        &hash_patch.id,
+        TransferDirection::ToInternal,
+        false,
+    )
+    .unwrap();
+    assert!(moved.transferred, "{moved:?}");
+    let after = git_uplink::read_queue(company).unwrap();
+    assert!(after.is_internal(&hash_patch.id));
+    assert!(after.is_internal(&log_patch.id));
+}
+
+#[test]
+fn transfer_to_upstream_allows_internal_dependents() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_all(company, "internal notes");
+    let notes = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            depends_on: vec![hash_patch.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let result = transfer_patch(
+        company,
+        &hash_patch.id,
+        TransferDirection::ToUpstream,
+        false,
+    )
+    .unwrap();
+    assert!(result.transferred, "{result:?}");
+    let after = git_uplink::read_queue(company).unwrap();
+    assert!(after.is_upstream(&hash_patch.id));
+    assert!(after.is_internal(&notes.id));
 }

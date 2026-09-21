@@ -25,7 +25,8 @@ Sync, resolve, and transfer mint `UPLINK_INTERNAL_TOKEN` first and pass it to `a
 - **Import** (`uplink-import.yml`) — internal product approval. Merge the PR after engineering review. Internal-only import records the patch on `uplink/state` and leaves `main` at the merge tree. Upstream import records the patch, rebuilds `tooling → upstream[] → internal[]`, and publishes rewritten `main` plus `uplink/state`. Export preflight must still pass for upstream-bound PRs.
 - **Sync** (`uplink-sync.yml`) — hourly / manual. Fetches public upstream without moving `uplink/upstream` until inbound review. Commits that match a company patch (trailer / `patch-id`) apply immediately. Any unmatched commit writes `.uplink/reports/from-upstream/incoming.md` and waits on Environment **`from-upstream`**; after approval, `git uplink accept-upstream` promotes `uplink/upstream` and rebuilds `main`. Queue commits are fast-forwards on `uplink/state`. If a patch does not apply, it records `conflict` on the queue (without moving product files), pushes `uplink/conflict/<id>` (protected base) and `<id>-work`, and emits `gh.prCreate` JSON. The workflow opens the gated PR then `git uplink gated`. That run stays **green**; company `main` is frozen until the PR is merged (`git uplink status` / open `uplink:conflict` PRs).
 - **Resolve** (`uplink-resolve.yml`) — when the gated conflict PR is **merged** into `uplink/conflict/<id>`. `pull_request_target` loads this sidecar from the default branch (not `*-work`). Runs `git uplink resolve`, rebuilds `main`, deletes the base and `-work` branches, and if rebuild stops later publishes the next conflict PR (job stays green). If the resolved patch was already submitted, status becomes `amended`; this workflow cancels any waiting or in-progress **Uplink submit** run whose run-name is exactly `Uplink submit <id>` and dispatches a new one for the delta packet.
-- **Transfer** (`uplink-transfer.yml`) — dispatch from `main` with a patch id and `to-upstream` / `to-internal`. `git uplink transfer` moves the patch immediately when apply, assess (for `--to-upstream`), and preflight pass. If bytes must change, it pushes `uplink/transfer-to-*/<id>` plus `-work` and the workflow opens a PR (queue unchanged). Merging runs `--complete` (`pull_request_target`, YAML from the default branch). Closing the PR without merging deletes both branches.
+- **Transfer** (`uplink-transfer.yml`) — dispatch from `main` with a patch id and `to-upstream` / `to-internal`. `git uplink transfer` moves the patch immediately when apply, assess (for `--to-upstream`), and preflight pass. `--to-internal` refuses while another **active** patch still on `upstream[]` lists this id in `dependsOn` (move those dependents `--to-internal` first). If bytes must change, it pushes `uplink/transfer-to-*/<id>` plus `-work` and the workflow opens a PR (queue unchanged). Merging runs `--complete` (`pull_request_target`, YAML from the default branch). Closing the PR without merging deletes both branches. Successful `--to-internal` of a submitted patch dispatches **Uplink abandon contrib** and does not wait.
+- **Abandon contrib** (`uplink-abandon.yml`) — `workflow_dispatch` from `main`, Environment **`abandon-contrib`**. Closes the public PR and deletes `uplink/<id>` on the contrib fork. No `uplink-mutate`. Until this environment is approved, company state is already internal-only while the public leftover remains.
 - **Gate** (`uplink-gate.yml`) — required check on PRs into the three protected bases (`pull_request_target`, YAML from the default branch). Fails if conflict markers remain, or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`). Product workflows (`ci.yml`, and so on) may still change. Transfer-to-upstream PRs also run export preflight / `UPLINK_PREFLIGHT`. These PRs are not imports to `main`.
 - **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`to-upstream` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits `assessment.md` (full contribution, or a delta-first packet when status is `amended`). Finalize optionally dispatches company `.github/workflows/uplink-assessment-hook.yml`, downloads artifact `uplink-packet-extra` from that run, and prepends those markdown files onto the packet. Environment reviewers then approve; the same run `git uplink approve` + `git uplink submit` (contrib git push) + `gh pr create` + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR. Do not edit this workflow to add company scans — add the assessment hook instead.
 
@@ -163,6 +164,36 @@ That still writes the same markdown under `.uplink/reports/`. It does **not** cr
 
 ---
 
+## abandon-contrib environment (withdraw a public contribution)
+
+`--to-internal` of a submitted patch must close the public PR and delete `uplink/<id>` on the contrib fork. That needs the **same contrib write credentials** as submit, but it is not an IP export: reviewers are whoever decided the patch is internal-only (engineering), not legal.
+
+Transfer mutates company `main` / `uplink/state` on `uplink-mutate`, then `gh workflow run "Uplink abandon contrib" --ref main` and **does not wait**. The abandon job waits on Environment **`abandon-contrib`** with no mutate slot.
+
+**Gap:** after transfer succeeds, the queue already says internal-only. The public PR and fork branch stay until `abandon-contrib` is approved. If nobody approves, they stay. That is the control. Do not hide a failed close behind `|| true` on the transfer job.
+
+### Create the environment
+
+In the company product repo:
+
+1. Settings → Environments → New environment → name **`abandon-contrib`** (exact name; the workflow references `environment: abandon-contrib`).
+2. **Required reviewers** — engineering / the people who chose internal-only. Different from `to-upstream` (IP/legal). Turn on **Prevent self-review** in production.
+3. **Deployment branches** — restrict to `main`.
+4. **Secrets** — copy the **same** contrib values as `to-upstream`. GitHub environments do not share secrets. Still **do not** store these at repo or org level:
+
+| Secret | Purpose |
+| --- | --- |
+| `UPLINK_CONTRIB_TOKEN` | When `UPLINK_CONTRIB_AUTH=pat`. Close the public PR and delete the fork branch |
+| `UPLINK_CONTRIB_APP_ID` / `UPLINK_CONTRIB_APP_PRIVATE_KEY` | When `UPLINK_CONTRIB_AUTH=app` |
+| `UPLINK_CONTRIB_REPO` | Contribution fork repository name |
+| `UPLINK_UPSTREAM_OWNER` | Owner used to mint the contrib App (parent org, or the fork owner) |
+
+The contrib App is the same installation as submit (fork contents: write, parent pull requests: write).
+
+`--to-internal` of a patch that was never submitted does not dispatch this workflow (`gh.prClose` is omitted). `--to-upstream` never abandons a public PR.
+
+---
+
 ## Assessment hook
 
 Company scans that must enter the IP packet run **after** the packet job and **before** `to-upstream`. Do not edit `uplink-submit.yml`. Add `.github/workflows/uplink-assessment-hook.yml` as an internal-only product patch (`uplink:internal-only` so it never goes upstream). `--upgrade` never touches a file that is not in the forge pack.
@@ -194,7 +225,7 @@ Assess on the internal PR has no patch id yet. Extra required scans belong in si
 ## from-upstream environment (inbound public main)
 
 
-Hourly sync must not silently take unrelated upstream commits onto company `main`. Create a second repository Environment named **`from-upstream`**. Required reviewers are whoever should review inbound public changes (security / engineering). Do **not** put `UPLINK_INTERNAL_*` or contrib secrets on this environment: inspect and import must not wait, and this gate is review-only. The contrib write App stays on **`to-upstream`**.
+Hourly sync must not silently take unrelated upstream commits onto company `main`. Create a second repository Environment named **`from-upstream`**. Required reviewers are whoever should review inbound public changes (security / engineering). Do **not** put `UPLINK_INTERNAL_*` or contrib secrets on this environment: inspect and import must not wait, and this gate is review-only. The contrib write App stays on **`to-upstream`** (export) and **`abandon-contrib`** (withdraw).
 
 The **Uplink sync** workflow:
 

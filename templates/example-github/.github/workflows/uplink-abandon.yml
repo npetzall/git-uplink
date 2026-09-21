@@ -1,0 +1,104 @@
+# example-github forge pack (`git uplink init --forge example-github`).
+# Empty UPLINK_*_AUTH defaults to pat.
+#
+# Detached public cleanup after --to-internal of a submitted patch.
+# Transfer dispatches this workflow and does not wait. Contrib credentials
+# live on Environment `abandon-contrib` (same secrets as to-upstream,
+# different reviewers). This job must not take uplink-mutate.
+#
+# Until reviewers approve abandon-contrib, company state is already
+# internal-only while the public PR and uplink/<id> fork branch remain.
+name: Uplink abandon contrib
+run-name: Uplink abandon contrib ${{ inputs.patch_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_id:
+        description: Patch id whose public contribution is being abandoned
+        required: true
+      pr_url:
+        description: Public contrib PR URL to close
+        required: false
+      contrib_branch:
+        description: Fork branch to delete (uplink/<id>)
+        required: false
+
+concurrency:
+  group: uplink-abandon-${{ inputs.patch_id }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  abandon:
+    name: Close public PR and delete contrib branch
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      deployments: write
+    environment:
+      name: abandon-contrib
+    steps:
+      - name: Mint contrib GitHub App token
+        id: contrib-app
+        if: ${{ vars.UPLINK_CONTRIB_AUTH == 'app' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_CONTRIB_APP_ID }}
+          private-key: ${{ secrets.UPLINK_CONTRIB_APP_PRIVATE_KEY }}
+          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Close PR and delete fork branch
+        env:
+          GH_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
+          UPLINK_UPSTREAM_OWNER: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          UPLINK_CONTRIB_REPO: ${{ secrets.UPLINK_CONTRIB_REPO }}
+          PATCH_ID: ${{ inputs.patch_id }}
+          PR_URL: ${{ inputs.pr_url }}
+          CONTRIB_BRANCH: ${{ inputs.contrib_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PR_URL" ] && [ -z "$CONTRIB_BRANCH" ]; then
+            echo "No public PR URL or contrib branch to abandon for ${PATCH_ID}"
+            exit 1
+          fi
+
+          if [ -n "$PR_URL" ]; then
+            if ! gh pr close "$PR_URL" --comment "Abandoned public PR; ${PATCH_ID} moved to internal."; then
+              state=$(gh pr view "$PR_URL" --json state --jq '.state // empty' || true)
+              if [ "$state" != "CLOSED" ] && [ "$state" != "MERGED" ]; then
+                echo "failed to close ${PR_URL} (state=${state})"
+                exit 1
+              fi
+            fi
+          fi
+
+          branch="${CONTRIB_BRANCH}"
+          repo=""
+          if [ -n "$PR_URL" ]; then
+            repo=$(gh pr view "$PR_URL" --json headRepository --jq '.headRepository.nameWithOwner // empty' || true)
+            if [ -z "$branch" ]; then
+              branch=$(gh pr view "$PR_URL" --json headRefName --jq '.headRefName // empty' || true)
+            fi
+          fi
+          if [ -z "$repo" ] && [ -n "$UPLINK_UPSTREAM_OWNER" ] && [ -n "$UPLINK_CONTRIB_REPO" ]; then
+            repo="${UPLINK_UPSTREAM_OWNER}/${UPLINK_CONTRIB_REPO}"
+          fi
+          if [ -z "$branch" ]; then
+            echo "No contrib branch to delete for ${PATCH_ID}"
+            exit 0
+          fi
+          if [ -z "$repo" ]; then
+            echo "Cannot resolve contrib repository for ${branch}"
+            exit 1
+          fi
+          if ! gh api --method DELETE "repos/${repo}/git/refs/heads/${branch}"; then
+            if gh api "repos/${repo}/git/refs/heads/${branch}" >/dev/null 2>&1; then
+              echo "failed to delete ${repo} ${branch}"
+              exit 1
+            fi
+          fi

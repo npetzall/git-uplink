@@ -72,7 +72,7 @@ export INTERNAL_DIR=/path/to/uplink-example-internal
 ./examples/github/scripts/bootstrap_internal.sh
 ```
 
-The script needs all three clones. It sets remotes, runs **`git uplink init --forge example-github`** (installs the internal-only Uplink Actions pack), and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environments `to-upstream` and `from-upstream`.
+The script needs all three clones. It sets remotes, runs **`git uplink init --forge example-github`** (installs the internal-only Uplink Actions pack), and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environments `to-upstream`, `from-upstream`, and `abandon-contrib`.
 
 `git uplink status` in the internal clone should show the tooling patch (`Uplink tooling`) in the tooling slot.
 
@@ -120,6 +120,12 @@ Each `UPLINK_*_AUTH` is `pat` or `app`. Empty defaults to `pat` in this example 
 2. **Deployment branches** — restrict to `main` if the UI offers it.
 3. **Secrets** — none. This is the inbound review gate only. Sync inspect must not wait on it.
 
+**Environment `abandon-contrib`:** Settings → Environments → New environment → `abandon-contrib`.
+
+1. **Required reviewers** — add yourself (solo walkthrough: leave **Prevent self-review** off). Different audience than `to-upstream` in production (engineering vs IP/legal).
+2. **Deployment branches** — restrict to `main` if the UI offers it.
+3. **Secrets** — copy the **same** contrib write credentials as `to-upstream`. GitHub environments do not share secrets. After `--to-internal` of a submitted patch, the public PR and `uplink/<id>` fork branch remain until this environment is approved.
+
 ### Internal (repo secrets; origin force-push)
 
 Used by import, sync, resolve, and the submit packet job.
@@ -155,11 +161,11 @@ Fine-grained or classic PAT with:
 - `uplink-example-upstream-contrib`: Contents read/write
 - `uplink-example-upstream`: Contents read, Pull requests read/write
 
-Store it on the **to-upstream** environment as `UPLINK_CONTRIB_TOKEN`. `gh pr create` uses this token (`GH_TOKEN`).
+Store it on the **to-upstream** environment as `UPLINK_CONTRIB_TOKEN`. Copy the same value onto **abandon-contrib**. `gh pr create` (submit) and `gh pr close` (abandon) use this token (`GH_TOKEN`).
 
 #### GitHub App (`UPLINK_CONTRIB_AUTH=app`)
 
-Production-shaped; see [`templates/README.md`](../../templates/README.md). An installation token is one owner. On the **to-upstream** environment:
+Production-shaped; see [`templates/README.md`](../../templates/README.md). An installation token is one owner. On the **to-upstream** and **abandon-contrib** environments:
 
 | Secret | Purpose |
 | --- | --- |

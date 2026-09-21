@@ -21,8 +21,8 @@ use crate::preflight::{
     assert_export_preflight, assert_upstream_layer_applies, run_preflight_command_in,
 };
 use crate::queue::{
-    add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut, move_patch, patch_path,
-    read_queue as read_queue_file, topological_active, write_queue as write_queue_file,
+    add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut, is_active, move_patch,
+    patch_path, read_queue as read_queue_file, topological_active, write_queue as write_queue_file,
 };
 use crate::repo::{
     COMPANY_REMOTE, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha, commit_queue,
@@ -2046,6 +2046,7 @@ pub struct TransferResult {
     pub message: Option<String>,
     pub pr_close_url: Option<String>,
     pub pr_close_number: Option<u64>,
+    pub pr_close_branch: Option<String>,
 }
 
 pub fn transfer_patch(
@@ -2092,6 +2093,23 @@ fn validate_transfer(queue: &QueueState, id: &str, direction: TransferDirection)
             )));
         }
         _ => {}
+    }
+
+    if direction.to_internal() {
+        let dependents: Vec<&str> = queue
+            .upstream
+            .iter()
+            .filter(|other| {
+                other.id != id && is_active(other) && other.depends_on.iter().any(|dep| dep == id)
+            })
+            .map(|other| other.id.as_str())
+            .collect();
+        if !dependents.is_empty() {
+            return Err(Error::msg(format!(
+                "{id} still has dependents on the upstream queue ({}); transfer those --to-internal first",
+                dependents.join(", ")
+            )));
+        }
     }
 
     let mut preview = queue.clone();
@@ -2301,6 +2319,7 @@ fn gated_transfer_result(
         message: Some(message),
         pr_close_url: None,
         pr_close_number: None,
+        pr_close_branch: None,
     }
 }
 
@@ -2312,15 +2331,8 @@ fn finish_successful_transfer(
 ) -> Result<TransferResult> {
     let mut queue = read_queue_file(repo)?;
     validate_transfer(&queue, id, direction)?;
-    let mut pr_close_url = None;
-    let mut pr_close_number = None;
-    {
-        let patch = get_patch(&queue, id)?;
-        if direction.to_internal() {
-            pr_close_url = patch.upstream.as_ref().and_then(|u| u.pr_url.clone());
-            pr_close_number = patch.upstream.as_ref().and_then(|u| u.pr_number);
-        }
-    }
+    let (pr_close_url, pr_close_number, pr_close_branch) =
+        pr_close_from_patch(get_patch(&queue, id)?, direction);
     move_patch(&mut queue, id, direction.to_internal())?;
     {
         let patch = get_patch_mut(&mut queue, id)?;
@@ -2358,6 +2370,7 @@ fn finish_successful_transfer(
         message: None,
         pr_close_url,
         pr_close_number,
+        pr_close_branch,
     })
 }
 
@@ -2419,15 +2432,8 @@ fn complete_transfer(
     let rel = patch_path(id)?.to_string_lossy().into_owned();
     let stable = stable_patch_id(repo, &rel)?;
     let mut queue = read_queue_file(repo)?;
-    let mut pr_close_url = None;
-    let mut pr_close_number = None;
-    {
-        let current = get_patch(&queue, id)?;
-        if direction.to_internal() {
-            pr_close_url = current.upstream.as_ref().and_then(|u| u.pr_url.clone());
-            pr_close_number = current.upstream.as_ref().and_then(|u| u.pr_number);
-        }
-    }
+    let (pr_close_url, pr_close_number, pr_close_branch) =
+        pr_close_from_patch(get_patch(&queue, id)?, direction);
     move_patch(&mut queue, id, direction.to_internal())?;
     {
         let current = get_patch_mut(&mut queue, id)?;
@@ -2466,7 +2472,25 @@ fn complete_transfer(
         message: None,
         pr_close_url,
         pr_close_number,
+        pr_close_branch,
     })
+}
+
+fn pr_close_from_patch(
+    patch: &Patch,
+    direction: TransferDirection,
+) -> (Option<String>, Option<u64>, Option<String>) {
+    if !direction.to_internal() {
+        return (None, None, None);
+    }
+    match &patch.upstream {
+        Some(upstream) => (
+            upstream.pr_url.clone(),
+            upstream.pr_number,
+            Some(upstream.contrib_branch.clone()),
+        ),
+        None => (None, None, None),
+    }
 }
 
 #[derive(Debug)]

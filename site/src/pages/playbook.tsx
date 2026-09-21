@@ -241,7 +241,8 @@ export function PlaybookPage() {
             Create a repository Environment named <code>from-upstream</code>. Required reviewers
             are inbound/security. Do not put origin-push or contrib secrets on it — inspect and
             import must not wait, and the contrib write App stays on{" "}
-            <code>to-upstream</code>. Inspect writes{" "}
+            <code>to-upstream</code> (export) and <code>abandon-contrib</code> (withdraw). Inspect
+            writes{" "}
             <code>.uplink/reports/from-upstream/incoming.md</code> (foreign diffs plus which
             patches flowed back) onto <code>uplink/state</code> and{" "}
             <code>GITHUB_STEP_SUMMARY</code>. The apply job waits on{" "}
@@ -449,8 +450,14 @@ export function PlaybookPage() {
             <code>uplink/transfer-to-*/&lt;id&gt;</code> plus <code>-work</code> and does{" "}
             <strong className="text-foreground">not</strong> write <code>queue.json</code>. Merge
             the gated PR to complete; close it without merging to abort (branches deleted, queue
-            unchanged). <code>--to-internal</code> of a submitted patch abandons the public contrib
-            PR.
+            unchanged). <code>--to-internal</code> refuses while an active upstream patch still
+            depends on this id (move those dependents <code>--to-internal</code> first).{" "}
+            <code>--to-internal</code> of a submitted patch dispatches{" "}
+            <code>Uplink abandon contrib</code>, which waits on Environment{" "}
+            <code>abandon-contrib</code> (same contrib secrets as <code>to-upstream</code>,
+            different reviewers) to close the public PR and delete{" "}
+            <code>uplink/&lt;id&gt;</code> on the contrib fork. Until that environment is
+            approved, company state is already internal-only and the public leftover remains.
           </p>
         </Section>
 
@@ -468,8 +475,10 @@ export function PlaybookPage() {
           <p>
             Prefer a GitHub App registered on public github.com for contrib: install it on the
             contribution fork (contents: write) and the public parent (pull requests: write, contents:
-            read). Store the App ID and private key on the <code>to-upstream</code> environment only. Mint
-            a one-hour installation token in Actions with{" "}
+            read). Store the App ID and private key on the <code>to-upstream</code> and{" "}
+            <code>abandon-contrib</code> environments (copy the same values; environments do not
+            share secrets). Do not store them at repo or org level. Mint a one-hour
+            installation token in Actions with{" "}
             <code>actions/create-github-app-token</code> as <code>UPLINK_CONTRIB_TOKEN</code>. On
             GHEC with EMU, an EMU-created App may be enterprise-scoped and unable to talk to
             repositories outside the enterprise, so do not assume the company can register this App
