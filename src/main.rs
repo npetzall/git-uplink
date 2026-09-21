@@ -439,21 +439,28 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
                 "labels": [kind.label()]
             }
         });
-    } else {
-        let mut gh = serde_json::Map::new();
+    } else if result.pr_close_url.is_some() || result.pr_close_branch.is_some() {
+        let mut pr_close = serde_json::Map::new();
+        if let Some(number) = result.pr_close_number {
+            pr_close.insert("number".into(), serde_json::json!(number));
+        }
         if let Some(url) = &result.pr_close_url {
-            gh.insert(
-                "prClose".into(),
-                serde_json::json!({
-                    "number": result.pr_close_number,
-                    "url": url,
-                    "comment": format!("Abandoned public PR; {} moved to internal.", result.id),
-                }),
+            pr_close.insert("url".into(), serde_json::Value::String(url.clone()));
+        }
+        pr_close.insert(
+            "comment".into(),
+            serde_json::Value::String(format!(
+                "Abandoned public PR; {} moved to internal.",
+                result.id
+            )),
+        );
+        if let Some(branch) = &result.pr_close_branch {
+            pr_close.insert(
+                "contribBranch".into(),
+                serde_json::Value::String(branch.clone()),
             );
         }
-        if !gh.is_empty() {
-            value["gh"] = serde_json::Value::Object(gh);
-        }
+        value["gh"] = serde_json::json!({ "prClose": pr_close });
     }
     println!("{value}");
 }

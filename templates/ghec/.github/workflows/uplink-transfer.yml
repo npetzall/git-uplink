@@ -6,7 +6,8 @@
 # updated immediately. If byte changes are needed, this workflow pushes the
 # protected base and -work branch and opens a PR. Merging that PR runs
 # --complete. Closing it without merging deletes both branches and leaves
-# the queue unchanged.
+# the queue unchanged. Successful --to-internal of a submitted patch
+# dispatches Uplink abandon contrib (fire-and-forget; no uplink-mutate).
 # Closed-PR jobs load YAML from the default branch so *-work cannot replace
 # this sidecar.
 name: Uplink transfer
@@ -45,6 +46,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - name: Mint internal GitHub App token
         id: internal-app
@@ -97,9 +99,14 @@ jobs:
               git push origin HEAD:main --force-with-lease
             fi
             close_url=$(jq -r '.gh.prClose.url // empty' <<<"$transfer_json")
-            close_comment=$(jq -r '.gh.prClose.comment // empty' <<<"$transfer_json")
-            if [ -n "$close_url" ]; then
-              gh pr close "$close_url" --comment "$close_comment" || true
+            close_branch=$(jq -r '.gh.prClose.contribBranch // empty' <<<"$transfer_json")
+            if [ -n "$close_url" ] || [ -n "$close_branch" ]; then
+              if ! gh workflow run "Uplink abandon contrib" --ref main \
+                -f "patch_id=${PATCH_ID}" \
+                -f "pr_url=${close_url}" \
+                -f "contrib_branch=${close_branch}"; then
+                echo "::warning::Failed to dispatch Uplink abandon contrib for ${PATCH_ID}; public PR/branch may remain until abandon-contrib is run."
+              fi
             fi
             exit 0
           fi
@@ -125,6 +132,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - name: Mint internal GitHub App token
         id: internal-app
@@ -197,9 +205,14 @@ jobs:
             git push origin main --force-with-lease
           fi
           close_url=$(jq -r '.gh.prClose.url // empty' <<<"$transfer_json")
-          close_comment=$(jq -r '.gh.prClose.comment // empty' <<<"$transfer_json")
-          if [ -n "$close_url" ]; then
-            gh pr close "$close_url" --comment "$close_comment" || true
+          close_branch=$(jq -r '.gh.prClose.contribBranch // empty' <<<"$transfer_json")
+          if [ -n "$close_url" ] || [ -n "$close_branch" ]; then
+            if ! gh workflow run "Uplink abandon contrib" --ref main \
+              -f "patch_id=${id}" \
+              -f "pr_url=${close_url}" \
+              -f "contrib_branch=${close_branch}"; then
+              echo "::warning::Failed to dispatch Uplink abandon contrib for ${id}; public PR/branch may remain until abandon-contrib is run."
+            fi
           fi
           git push origin --delete "$BASE_REF" || true
           git push origin --delete "${BASE_REF}-work" || true

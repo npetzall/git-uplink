@@ -398,6 +398,30 @@ mod embed_tests {
     }
 
     #[test]
+    fn abandon_contrib_is_detached_from_uplink_mutate() {
+        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-abandon.yml"))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing uplink-abandon.yml"));
+            assert!(
+                text.contains("environment:\n      name: abandon-contrib"),
+                "{forge:?} must wait on abandon-contrib\n{text}"
+            );
+            assert!(
+                !text.contains("group: uplink-mutate"),
+                "{forge:?} abandon must not take uplink-mutate\n{text}"
+            );
+            assert!(
+                text.contains("workflow_dispatch:"),
+                "{forge:?} abandon must be workflow_dispatch\n{text}"
+            );
+        }
+    }
+
+    #[test]
     fn gated_branch_sidecars_load_from_default_branch() {
         for forge in [Forge::Ghec, Forge::ExampleGithub] {
             let files = composed_files(forge).unwrap();

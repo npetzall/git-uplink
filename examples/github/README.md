@@ -2,7 +2,7 @@
 
 A walkthrough of the Uplink operating model on three GitHub repositories. You `git apply` the patches in [`patches/`](patches/), push a branch, and open the PR in the GitHub UI. Actions import, submit, and sync.
 
-Rationale for each flow: [`way-of-working.md`](../../way-of-working.md). Setup, tokens, and the `to-upstream` Environment: [`SETUP.md`](SETUP.md).
+Rationale for each flow: [`way-of-working.md`](../../way-of-working.md). Setup, tokens, and the `to-upstream` / `from-upstream` / `abandon-contrib` Environments: [`SETUP.md`](SETUP.md).
 
 ## Repositories
 

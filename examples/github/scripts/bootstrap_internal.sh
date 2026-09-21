@@ -85,9 +85,13 @@ EOF
     --input - >/dev/null <<'EOF'
 {"wait_timer":0,"prevent_self_review":false}
 EOF
+  gh api --method PUT "repos/${INTERNAL}/environments/abandon-contrib" \
+    --input - >/dev/null <<'EOF'
+{"wait_timer":0,"prevent_self_review":false}
+EOF
 else
   echo
-  echo "gh is not available; set labels, variables, Actions write permission, and Environments to-upstream and from-upstream in the GitHub UI (SETUP.md)."
+  echo "gh is not available; set labels, variables, Actions write permission, and Environments to-upstream, from-upstream, and abandon-contrib in the GitHub UI (SETUP.md)."
 fi
 
 echo
@@ -96,4 +100,4 @@ echo "  $UPSTREAM  main + seed + example-reset"
 echo "  $CONTRIB   main (upstream fork) + example-reset"
 echo "  $INTERNAL  main + uplink/state + uplink/upstream + seed refs + example-reset"
 echo
-echo "Finish SETUP.md (to-upstream and from-upstream reviewers, UPLINK_INTERNAL_TOKEN, UPLINK_UPSTREAM_TOKEN, UPLINK_CONTRIB_TOKEN), then walk examples/github/stories/."
+echo "Finish SETUP.md (to-upstream, from-upstream, and abandon-contrib reviewers; UPLINK_INTERNAL_TOKEN, UPLINK_UPSTREAM_TOKEN, UPLINK_CONTRIB_TOKEN on to-upstream and abandon-contrib), then walk examples/github/stories/."
