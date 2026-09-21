@@ -23,7 +23,7 @@ export const internalOnly: LabScenario = {
       id: "assess-fail",
       title: "Assess fails without the label",
       summary:
-        "Open a PR for vendor telemetry without uplink:internal-only. Uplink assess for upstream fails: the export surface contains companyTelemetry (in UPLINK_REDACT_KEYWORDS). Close this PR.",
+        "Open a PR for vendor telemetry without uplink:internal-only. Uplink upstream assess fails: the export surface contains companyTelemetry (in UPLINK_REDACT_KEYWORDS). Close this PR.",
       why: "Affiliation scan is the guard. Internal-only is an explicit label, not a silent default.",
       operations: [
         branchPush("feat/telemetry-public", "internal-telemetry.diff", "Vendor telemetry"),
@@ -48,8 +48,8 @@ export const internalOnly: LabScenario = {
       id: "import-internal",
       title: "Import with uplink:internal-only",
       summary:
-        "Open a new PR and add label uplink:internal-only before Create (assess only sees labels that exist when the check runs). Merge. The patch is queued on the internal queue. Company main calls companyTelemetry().",
-      why: "The label appends to internal[] and skips export preflight. Tooling from bootstrap is the same class of change.",
+        "Open a new PR and add label uplink:internal-only before Create (Uplink PR checks only see labels that exist when the check runs). Merge. The patch is queued on the internal queue. Company main calls companyTelemetry().",
+      why: "The label appends to internal[] and skips both Uplink PR checks. Tooling from bootstrap is the same class of change.",
       operations: [
         branchPush("feat/telemetry", "internal-telemetry.diff", "Vendor telemetry"),
         ...importOps({ title: "Vendor telemetry", internalOnly: true }),

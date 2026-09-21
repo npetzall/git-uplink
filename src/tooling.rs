@@ -301,9 +301,26 @@ mod embed_tests {
         let files = composed_files(Forge::Ghec).unwrap();
         let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
         assert!(
-            paths.contains(&".github/workflows/uplink-assess.yml"),
+            paths.contains(&".github/workflows/uplink-pr.yml"),
             "{paths:?}"
         );
+        assert!(
+            !paths.contains(&".github/workflows/uplink-assess.yml"),
+            "{paths:?}"
+        );
+        assert!(
+            !paths.contains(&".github/workflows/uplink-preflight.yml"),
+            "{paths:?}"
+        );
+        let pr = files
+            .iter()
+            .find(|(p, _)| p == ".github/workflows/uplink-pr.yml")
+            .unwrap();
+        let text = String::from_utf8_lossy(&pr.1);
+        assert!(text.contains("name: Uplink upstream assess"), "{text}");
+        assert!(text.contains("name: Uplink upstream preflight"), "{text}");
+        assert!(text.contains("git uplink assess"), "{text}");
+        assert!(text.contains("git uplink preflight"), "{text}");
         assert!(
             paths.contains(&".github/pull_request_template.md"),
             "{paths:?}"
@@ -366,7 +383,15 @@ mod embed_tests {
             assert!(text.contains("assessment.md"), "{forge:?}");
             assert!(text.contains("continue-on-error: true"), "{forge:?}");
             assert!(
-                paths.contains(&".github/workflows/uplink-assess.yml"),
+                paths.contains(&".github/workflows/uplink-pr.yml"),
+                "{forge:?} {paths:?}"
+            );
+            assert!(
+                !paths.contains(&".github/workflows/uplink-assess.yml"),
+                "{forge:?} {paths:?}"
+            );
+            assert!(
+                !paths.contains(&".github/workflows/uplink-preflight.yml"),
                 "{forge:?} {paths:?}"
             );
         }

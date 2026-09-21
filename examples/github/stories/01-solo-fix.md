@@ -31,7 +31,7 @@ git push -u origin feat/sha256
 
 On GitHub, open **Compare & pull request** for `feat/sha256` into `main`. Title: `Use SHA-256 for tokens`. Body: paste [`patches/asha-sha256.pr.md`](../patches/asha-sha256.pr.md).
 
-Wait until **Uplink assess for upstream** and **Uplink export preflight** are green. The first run compiles git-uplink and is slow.
+Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green. The first run compiles git-uplink and is slow.
 
 ## Import (product gate)
 

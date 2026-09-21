@@ -27,7 +27,7 @@ git push -u origin feat/telemetry-public
 
 Open a PR in the GitHub UI. Title `Vendor telemetry`. Body: [`internal-telemetry.pr.md`](../patches/internal-telemetry.pr.md). Do **not** add `uplink:internal-only`.
 
-**Uplink assess for upstream** should fail: the export surface contains `companyTelemetry`. Close this PR.
+**Uplink upstream assess** should fail: the export surface contains `companyTelemetry`. Close this PR.
 
 ## Import with uplink:internal-only
 
@@ -39,7 +39,7 @@ git add -A && git commit -m "Vendor telemetry"
 git push -u origin feat/telemetry
 ```
 
-Open a PR. On the **Open pull request** page, add label `uplink:internal-only` **before** you click Create (assess only sees labels that exist when the check runs). Wait for checks. Merge.
+Open a PR. On the **Open pull request** page, add label `uplink:internal-only` **before** you click Create (Uplink PR checks only see labels that exist when the check runs). Wait for product checks. Merge.
 
 ```bash
 git uplink reset

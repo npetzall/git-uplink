@@ -409,7 +409,7 @@ fn init_records_remote_urls_and_internal_branch() {
     assert!(
         world
             .company
-            .join(".github/workflows/uplink-assess.yml")
+            .join(".github/workflows/uplink-pr.yml")
             .is_file()
     );
     assert!(
@@ -973,9 +973,9 @@ fn init_without_args_does_not_rewrite_workflows() {
     .unwrap();
     let clone = clone_parent.join("product");
     fs::remove_dir_all(clone.join(".github")).unwrap();
-    assert!(!clone.join(".github/workflows/uplink-assess.yml").is_file());
+    assert!(!clone.join(".github/workflows/uplink-pr.yml").is_file());
     init(&clone, InitOpts::default()).unwrap();
-    assert!(!clone.join(".github/workflows/uplink-assess.yml").is_file());
+    assert!(!clone.join(".github/workflows/uplink-pr.yml").is_file());
 }
 
 #[test]
@@ -1013,11 +1013,7 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
         GitOpts::default(),
     )
     .unwrap();
-    write(
-        &world.company,
-        ".github/workflows/uplink-assess.yml",
-        "stale\n",
-    );
+    write(&world.company, ".github/workflows/uplink-pr.yml", "stale\n");
     git(&world.company, &["add", "-A"], GitOpts::default()).unwrap();
     git(
         &world.company,
@@ -1065,11 +1061,13 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
         Some("stale")
     );
     let prepare =
-        fs::read_to_string(world.company.join(".github/workflows/uplink-assess.yml")).unwrap();
+        fs::read_to_string(world.company.join(".github/workflows/uplink-pr.yml")).unwrap();
+    assert!(prepare.contains("name: Uplink PR checks"), "{prepare}");
     assert!(
-        prepare.contains("name: Uplink assess for upstream"),
+        prepare.contains("name: Uplink upstream assess"),
         "{prepare}"
     );
+    assert!(prepare.contains("git uplink preflight"), "{prepare}");
     assert!(!prepare.trim().eq("stale"));
 }
 
@@ -1185,7 +1183,7 @@ fn init_adopts_linear_history_without_moving_main() {
     assert!(
         !world
             .company
-            .join(".github/workflows/uplink-assess.yml")
+            .join(".github/workflows/uplink-pr.yml")
             .is_file()
     );
 }
@@ -1240,7 +1238,7 @@ fn rebuild_preview_branch_leaves_main_and_queue_alone() {
         &[
             "cat-file",
             "-e",
-            "uplink/verify:.github/workflows/uplink-assess.yml",
+            "uplink/verify:.github/workflows/uplink-pr.yml",
         ],
         GitOpts::default(),
     )
@@ -1264,7 +1262,7 @@ fn rebuild_after_adopt_replays_onto_main() {
     assert!(
         world
             .company
-            .join(".github/workflows/uplink-assess.yml")
+            .join(".github/workflows/uplink-pr.yml")
             .is_file()
     );
     assert_eq!(
@@ -4977,6 +4975,82 @@ fn transfer_to_upstream_moves_immediately_when_apply_and_preflight_pass() {
         company,
         &format!("uplink/transfer-to-upstream/{}", patch.id)
     ));
+    let moved = queue.all_patches().find(|p| p.id == patch.id).unwrap();
+    let leak = moved
+        .assess
+        .as_ref()
+        .unwrap()
+        .checks
+        .iter()
+        .find(|c| c.id == "affiliation-leak")
+        .unwrap();
+    assert_ne!(
+        leak.status, "skip",
+        "to-upstream must re-assess; leak was {}",
+        leak.status
+    );
+}
+
+#[test]
+fn transfer_to_upstream_gates_on_assess_failure_without_writing_queue() {
+    let world = setup_world();
+    let company = &world.company;
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.redact_keywords = vec!["AcmeCorp".into()];
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: redact keywords").unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/secret"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.test.js",
+        "test(\"AcmeCorp hasher\", () => {});",
+    );
+    commit_all(company, "vendor secret");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Vendor secret".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let imported = git_uplink::read_queue(company).unwrap();
+    assert!(imported.is_internal(&patch.id));
+    let leak = imported
+        .all_patches()
+        .find(|p| p.id == patch.id)
+        .unwrap()
+        .assess
+        .as_ref()
+        .unwrap()
+        .checks
+        .iter()
+        .find(|c| c.id == "affiliation-leak")
+        .unwrap();
+    assert_eq!(leak.status, "skip", "{leak:?}");
+
+    let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(result.gated, "{result:?}");
+    assert!(!result.transferred);
+    assert!(
+        result
+            .message
+            .as_deref()
+            .unwrap_or("")
+            .contains("Assess-for-upstream"),
+        "{result:?}"
+    );
+    let after = git_uplink::read_queue(company).unwrap();
+    assert!(after.is_internal(&patch.id));
+    assert!(!after.is_upstream(&patch.id));
 }
 
 #[test]
@@ -5075,6 +5149,18 @@ fn transfer_complete_applies_work_and_moves_the_patch() {
     assert!(!done.gated);
     let after = git_uplink::read_queue(company).unwrap();
     assert!(after.is_upstream(&patch.id));
+    let leak = after
+        .all_patches()
+        .find(|p| p.id == patch.id)
+        .unwrap()
+        .assess
+        .as_ref()
+        .unwrap()
+        .checks
+        .iter()
+        .find(|c| c.id == "affiliation-leak")
+        .unwrap();
+    assert_ne!(leak.status, "skip", "{leak:?}");
 }
 
 #[test]

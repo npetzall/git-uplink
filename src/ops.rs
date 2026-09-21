@@ -9,6 +9,7 @@ use crate::adopt::{self, AdoptGroup};
 use crate::assess::{
     IncomingFlowedBack, assert_assess_ok, assess_from_message, company_commit_message,
     depends_on_from_message, format_incoming_packet, from_upstream_report_paths,
+    stored_commit_message,
 };
 use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
@@ -35,9 +36,9 @@ use crate::repo::{
     state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
 use crate::types::{
-    Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict, PatchMerged,
-    PatchSource, PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
-    TransferDirection,
+    AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict,
+    PatchMerged, PatchSource, PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig, QueueState,
+    STATE_BRANCH, TransferDirection,
 };
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
@@ -2014,6 +2015,31 @@ fn validate_transfer(queue: &QueueState, id: &str, direction: TransferDirection)
     Ok(patch)
 }
 
+fn assess_transfer_to_upstream(
+    repo: &Path,
+    queue: &QueueState,
+    patch: &Patch,
+    from_ref: &str,
+    head_ref: &str,
+) -> Result<AssessReport> {
+    let report = assess_from_message(
+        repo,
+        queue,
+        from_ref,
+        head_ref,
+        &stored_commit_message(patch),
+        Some(&patch.title),
+        "upstream",
+    )?;
+    assert_assess_ok(&report, &patch.title)?;
+    Ok(report)
+}
+
+fn apply_upstream_assess(patch: &mut Patch, report: AssessReport) {
+    patch.commit_message = report.commit_message.clone();
+    patch.assess = Some(report);
+}
+
 fn start_transfer(repo: &Path, id: &str, direction: TransferDirection) -> Result<TransferResult> {
     let queue = read_queue_file(repo)?;
     let patch = validate_transfer(&queue, id, direction)?;
@@ -2079,46 +2105,60 @@ fn start_transfer(repo: &Path, id: &str, direction: TransferDirection) -> Result
         }
 
         copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
-        let preflight = match direction {
+        let checks = match direction {
             TransferDirection::ToUpstream => {
-                let abs = snapshot.join(patch_path(id)?);
-                assert_export_preflight(repo, &preview, &patch, &abs, None)
-                    .and_then(|_| assert_upstream_layer_applies(repo, &preview))
+                let onto = target_onto.as_deref().ok_or_else(|| {
+                    Error::msg(format!("{id} was not applied during transfer preview"))
+                })?;
+                let after = target_after.as_deref().ok_or_else(|| {
+                    Error::msg(format!("{id} was not applied during transfer preview"))
+                })?;
+                assess_transfer_to_upstream(repo, &preview, &patch, onto, after).and_then(
+                    |report| {
+                        let abs = snapshot.join(patch_path(id)?);
+                        assert_export_preflight(repo, &preview, &patch, &abs, None)
+                            .and_then(|_| assert_upstream_layer_applies(repo, &preview))?;
+                        Ok(Some(report))
+                    },
+                )
             }
-            TransferDirection::ToInternal => run_preflight_command_in(&preview, repo),
+            TransferDirection::ToInternal => run_preflight_command_in(&preview, repo).map(|_| None),
         };
         let _ = fs::remove_dir_all(repo.join(".uplink"));
-        if let Err(err) = preflight {
-            let onto = target_onto.ok_or_else(|| {
-                Error::msg(format!("{id} was not applied during transfer preview"))
-            })?;
-            if let Some(after) = &target_after {
-                git(
+        let assess_report = match checks {
+            Ok(report) => report,
+            Err(err) => {
+                let onto = target_onto.ok_or_else(|| {
+                    Error::msg(format!("{id} was not applied during transfer preview"))
+                })?;
+                if let Some(after) = &target_after {
+                    git(
+                        repo,
+                        &["checkout", "-f", "--quiet", after],
+                        GitOpts::default(),
+                    )?;
+                }
+                let (base, work) = cut_gated_work(
                     repo,
-                    &["checkout", "-f", "--quiet", after],
-                    GitOpts::default(),
+                    kind,
+                    id,
+                    &onto,
+                    &format!("uplink: transfer {id} {}", direction.as_str()),
                 )?;
+                return Ok(gated_transfer_result(
+                    queue.clone(),
+                    id,
+                    direction,
+                    (base, work, onto),
+                    Vec::new(),
+                    err.to_string(),
+                ));
             }
-            let (base, work) = cut_gated_work(
-                repo,
-                kind,
-                id,
-                &onto,
-                &format!("uplink: transfer {id} {}", direction.as_str()),
-            )?;
-            return Ok(gated_transfer_result(
-                queue.clone(),
-                id,
-                direction,
-                (base, work, onto),
-                Vec::new(),
-                err.to_string(),
-            ));
-        }
+        };
 
         restore_checkout(repo, &original, &original_sha)?;
         crate::repo::ensure_state_worktree(repo)?;
-        finish_successful_transfer(repo, id, direction)
+        finish_successful_transfer(repo, id, direction, assess_report)
     })();
     let _ = fs::remove_dir_all(&snapshot);
     match outcome {
@@ -2164,6 +2204,7 @@ fn finish_successful_transfer(
     repo: &Path,
     id: &str,
     direction: TransferDirection,
+    assess: Option<AssessReport>,
 ) -> Result<TransferResult> {
     let mut queue = read_queue_file(repo)?;
     validate_transfer(&queue, id, direction)?;
@@ -2184,6 +2225,9 @@ fn finish_successful_transfer(
         if direction.to_internal() {
             patch.upstream = None;
             patch.approvals.clear();
+        }
+        if let Some(report) = assess {
+            apply_upstream_assess(patch, report);
         }
         add_event(
             patch,
@@ -2253,15 +2297,20 @@ fn complete_transfer(
 
     let mut preview = queue.clone();
     move_patch(&mut preview, id, direction.to_internal())?;
-    let preflight = match direction {
+    let assess_report = match direction {
         TransferDirection::ToUpstream => {
+            let current = get_patch(&preview, id)?;
+            let report = assess_transfer_to_upstream(repo, &preview, current, &onto, "HEAD")?;
             let abs = repo.join(patch_path(id)?);
-            assert_export_preflight(repo, &preview, get_patch(&preview, id)?, &abs, None)
-                .and_then(|_| assert_upstream_layer_applies(repo, &preview))
+            assert_export_preflight(repo, &preview, current, &abs, None)?;
+            assert_upstream_layer_applies(repo, &preview)?;
+            Some(report)
         }
-        TransferDirection::ToInternal => run_preflight_command_in(&preview, repo),
+        TransferDirection::ToInternal => {
+            run_preflight_command_in(&preview, repo)?;
+            None
+        }
     };
-    preflight?;
 
     let rel = patch_path(id)?.to_string_lossy().into_owned();
     let stable = stable_patch_id(repo, &rel)?;
@@ -2284,6 +2333,9 @@ fn complete_transfer(
         if direction.to_internal() {
             current.upstream = None;
             current.approvals.clear();
+        }
+        if let Some(report) = assess_report {
+            apply_upstream_assess(current, report);
         }
         add_event(
             current,

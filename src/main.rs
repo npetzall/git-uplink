@@ -419,7 +419,7 @@ fn print_transfer_artifact(repo: &Path, result: &TransferResult) {
         value["onto"] = serde_json::Value::String(result.onto.clone().unwrap_or_default());
         let kind = result.direction.gate_kind();
         let body = format!(
-            "Transfer of `{}` {} needs product changes (git conflict or preflight).\n\n\
+            "Transfer of `{}` {} needs product changes (git conflict, assess, or preflight).\n\n\
 Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing the PR without merging aborts; the queue is unchanged.\n",
             result.id,
             result.direction.as_str(),

@@ -70,7 +70,7 @@ If an upstream-bound change only applies on internal work, pick one:
 **Export preflight** is the guard against “I branched from company `main` so I thought Asha came with me.” Before import, Uplink applies the candidate onto **public `main` plus declared `dependsOn`**, then onto **tooling + queued upstream** (internal omitted). Then it runs `UPLINK_PREFLIGHT` (the product’s build and test) on that export tree. Internal-only PRs skip both checks.
 
 - If apply or tests fail, **the change is not imported** and **no upstream PR is created**. The internal PR gets a comment with suggested `--depends-on` / `Uplink-Depends-On:` lines, or the three remediations above.
-- Put `Uplink-Depends-On: upl_…` in the PR body (one per line) and re-run. Required check: `uplink-preflight.yml` on every upstream-bound PR to `main`.
+- Put `Uplink-Depends-On: upl_…` in the PR body (one per line) and re-run. Required checks: **Uplink upstream assess** and **Uplink upstream preflight** (`uplink-pr.yml`) on every upstream-bound PR to `main`.
 - Set the repo variable `UPLINK_PREFLIGHT` to the command that must pass on a contribution (for example `npm test` or `make test`). Without it, only the apply check runs; tests are what catch “the patch applies but the code calls Asha’s new API.”
 
 ## Onboarding a repo that is already ahead of upstream
@@ -119,7 +119,7 @@ Asha needs to change token hashing. Nobody else is in her way.
    Uplink-Export-Author: Asha <asha@users.noreply.github.com>
    ```
 
-   Open an internal PR against company `main`. Two checks start: **assess** (scrub, author rewrite, affiliation scan) and **export preflight**. Approvers read the assess report on the PR, including both the company commit message (cutoff kept) and the upstream commit message (cutoff removed).
+   Open an internal PR against company `main`. Two checks start: **Uplink upstream assess** (scrub, author rewrite, affiliation scan) and **Uplink upstream preflight**. Approvers read the assess report on the PR, including both the company commit message (cutoff kept) and the upstream commit message (cutoff removed).
 
 3. **Engineering review.** Required reviewers / CODEOWNERS. This is not IP review. Merge is blocked until assess and preflight are green.
 
@@ -300,7 +300,7 @@ If Ben **also** conflicts with the new upstream, rebuild stops on him next (`upl
 
 ## Transfer between queues
 
-`git uplink transfer <id> --to-upstream` or `--to-internal` moves a patch between `internal[]` and `upstream[]`. The patch must already be in the source queue. If git apply **and** preflight (`UPLINK_PREFLIGHT` / export checks for `--to-upstream`) both pass, the move is committed immediately. If either fails, git-uplink cuts `uplink/transfer-to-*/<id>` plus `-work` and does **not** write `queue.json`. Merge the gated PR to complete; **close the PR without merging** to abort (branches deleted, queue unchanged). `--to-internal` of a submitted patch abandons the public contrib PR.
+`git uplink transfer <id> --to-upstream` or `--to-internal` moves a patch between `internal[]` and `upstream[]`. The patch must already be in the source queue. `--to-upstream` re-assesses with intent `upstream` (replacing the skipped leak scan from internal import). If git apply, assess, **and** preflight (`UPLINK_PREFLIGHT` / export checks for `--to-upstream`) all pass, the move is committed immediately. If any fails, git-uplink cuts `uplink/transfer-to-*/<id>` plus `-work` and does **not** write `queue.json`. Merge the gated PR to complete; **close the PR without merging** to abort (branches deleted, queue unchanged). `--to-internal` of a submitted patch abandons the public contrib PR.
 
 ## Story 5 — Cam depends on both Asha and Ben; run until Ben flows back
 
