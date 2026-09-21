@@ -126,8 +126,13 @@ jobs:
           title=$(jq -r '.gh.prCreate.title' <<<"$transfer_json")
           body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$transfer_json")
           label=$(jq -r '.gh.prCreate.labels[0]' <<<"$transfer_json")
-          gh label create "$label" --description "Uplink gated transfer" --color 1D76DB || true
-          gh pr create --title "$title" --base "$base" --head "$work" --label "$label" --body-file "$body_file"
+          existing=$(gh pr list --head "$work" --base "$base" --state open --json url --jq '.[0].url')
+          if [ -z "$existing" ]; then
+            gh label create "$label" --description "Uplink gated transfer" --color 1D76DB || true
+            gh pr create --title "$title" --base "$base" --head "$work" --label "$label" --body-file "$body_file"
+          else
+            echo "Reusing existing transfer PR $existing"
+          fi
 
   complete:
     name: Complete transfer
