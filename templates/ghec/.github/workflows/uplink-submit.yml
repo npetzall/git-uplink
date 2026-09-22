@@ -11,7 +11,7 @@
 # The public pull request is POST /repos/{parent}/pulls with UPLINK_UPSTREAM_*
 # (contents read on the parent and the fork, pull requests write, no contents
 # write on the fork) and maintainer_can_modify false. head is the branch
-# and head_repo is the contrib repository name.
+# and head_repo is <contrib_owner>/<contrib_repo>.
 # Owner and repo come from queue.json. App mint runs only when both are the same owner.
 name: Uplink submit
 run-name: Uplink submit ${{ inputs.patch_id }}
@@ -200,7 +200,7 @@ jobs:
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream
           PATCH_ID: ${{ inputs.patch_id }}
-          HEAD_REPO: ${{ steps.queue.outputs.contrib_repo }}
+          HEAD_REPO: ${{ steps.queue.outputs.contrib_owner }}/${{ steps.queue.outputs.contrib_repo }}
         run: |
           git uplink approve "$PATCH_ID"
           submit_json=$(git uplink submit "$PATCH_ID")
@@ -230,7 +230,7 @@ jobs:
           fi
           url=$(jq -r '.existingPr.url // empty' <<<"$submit_json")
           if [ -z "$url" ] && [ -n "$repo" ] && [ -n "$head" ]; then
-            url=$(gh pr list -R "$repo" --head "$head" --state open --json url --jq '.[0].url')
+            url=$(gh api "/repos/${repo}/pulls" -f state=open -f head="$head" --jq '.[0].html_url // empty')
           fi
           if [ -z "$url" ]; then
             title=$(jq -r .gh.prCreate.title <<<"$submit_json")
