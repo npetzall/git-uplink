@@ -230,7 +230,7 @@ jobs:
           fi
           url=$(jq -r '.existingPr.url // empty' <<<"$submit_json")
           if [ -z "$url" ] && [ -n "$repo" ] && [ -n "$head" ]; then
-            url=$(gh api "/repos/${repo}/pulls" -f state=open -f head="$head" --jq '.[0].html_url // empty')
+            url=$(gh api --method GET "/repos/${repo}/pulls" -f state=open -f head="$head" --jq '.[0].html_url // empty')
           fi
           if [ -z "$url" ]; then
             title=$(jq -r .gh.prCreate.title <<<"$submit_json")
