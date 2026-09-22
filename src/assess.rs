@@ -358,7 +358,7 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
 3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment (git push to the contrib fork).\n\
-4. The workflow opens the public pull request with `POST /repos/{{parent}}/pulls` (`maintainer_can_modify` false) and runs `git uplink submitted`. No public PR is opened unless export preflight still passes.\n",
+4. The workflow opens the public pull request with `POST /repos/{{parent}}/pulls` (`head` is the branch, `head_repo` is the contrib repository name, `maintainer_can_modify` false) and runs `git uplink submitted`. No public PR is opened unless export preflight still passes.\n",
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
@@ -483,7 +483,7 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
 3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment (git push to the contrib fork).\n\
-4. The workflow opens the public pull request with `POST /repos/{{parent}}/pulls` (`maintainer_can_modify` false) or reuses the recorded PR, then runs `git uplink submitted`. No second PR is opened.\n\n\
+4. The workflow opens the public pull request with `POST /repos/{{parent}}/pulls` (`head` is the branch, `head_repo` is the contrib repository name, `maintainer_can_modify` false) or reuses the recorded PR, then runs `git uplink submitted`. No second PR is opened.\n\n\
 {history}",
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,

@@ -6,7 +6,8 @@
 # (UPLINK_INTERNAL_TOKEN). Contrib force-push mints UPLINK_CONTRIB_*.
 # The public pull request is POST /repos/{parent}/pulls with UPLINK_UPSTREAM_*
 # (contents read on the parent and the fork, pull requests write, no contents
-# write on the fork) and maintainer_can_modify false. head is <contrib_org>:<branch>.
+# write on the fork) and maintainer_can_modify false. head is the branch
+# and head_repo is the contrib repository name.
 # Owner and repo come from queue.json. App mint runs only when both are the same owner.
 name: Uplink submit
 run-name: Uplink submit ${{ inputs.patch_id }}
@@ -157,45 +158,24 @@ jobs:
       - name: Read upstream and contrib from the queue
         id: queue
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
-          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
-          parse_owner_repo() {
-            local url=$1 owner repo
-            if [[ "$url" =~ github.com[:/]([^/]+)/(.+)$ ]]; then
-              owner=${BASH_REMATCH[1]}
-              repo=${BASH_REMATCH[2]}
-              repo=${repo%.git}
-              repo=${repo%/}
-              printf '%s\n%s\n' "$owner" "$repo"
-              return 0
-            fi
-            echo "Could not parse GitHub owner/repo from queue URL" >&2
-            return 1
-          }
-          upstream_url=$(jq -r '.config.upstreamUrl // empty' <<<"$queue")
-          contrib_url=$(jq -r '.config.contribUrl // empty' <<<"$queue")
-          if [ -z "$upstream_url" ] || [ -z "$contrib_url" ]; then
-            echo "queue.json is missing upstreamUrl or contribUrl" >&2
-            exit 1
-          fi
-          mapfile -t upstream < <(parse_owner_repo "$upstream_url")
-          mapfile -t contrib < <(parse_owner_repo "$contrib_url")
-          same_owner=false
-          upstream_lc=$(printf '%s' "${upstream[0]}" | tr '[:upper:]' '[:lower:]')
-          contrib_lc=$(printf '%s' "${contrib[0]}" | tr '[:upper:]' '[:lower:]')
-          if [ "$upstream_lc" = "$contrib_lc" ]; then
-            same_owner=true
-          fi
-          {
-            echo "upstream_owner=${upstream[0]}"
-            echo "upstream_repo=${upstream[1]}"
-            echo "contrib_owner=${contrib[0]}"
-            echo "contrib_repo=${contrib[1]}"
-            echo "same_owner=${same_owner}"
-          } >> "$GITHUB_OUTPUT"
+          config=$(git uplink init --json)
+          jq -r '
+            def owner_repo:
+              sub("\\.git$";"") | sub("/$";"")
+              | capture("github\\.com[:/](?<owner>[^/]+)/(?<repo>.+)$")
+              // error("Could not parse GitHub owner/repo from queue URL");
+            (.upstreamUrl // "") as $u | (.contribUrl // "") as $c
+            | if ($u == "" or $c == "") then error("queue.json is missing upstreamUrl or contribUrl") else . end
+            | ($u | owner_repo) as $up | ($c | owner_repo) as $co
+            | "upstream_owner=\($up.owner)",
+              "upstream_repo=\($up.repo)",
+              "contrib_owner=\($co.owner)",
+              "contrib_repo=\($co.repo)",
+              "same_owner=\(if ($up.owner | ascii_downcase) == ($co.owner | ascii_downcase) then "true" else "false" end)"
+          ' <<<"$config" >> "$GITHUB_OUTPUT"
 
       - name: Mint contrib GitHub App token
         id: contrib-app
@@ -228,8 +208,8 @@ jobs:
           UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream
           PATCH_ID: ${{ inputs.patch_id }}
+          HEAD_REPO: ${{ steps.queue.outputs.contrib_repo }}
         run: |
-          git uplink init
           git uplink approve "$PATCH_ID"
           submit_json=$(git uplink submit "$PATCH_ID")
 
@@ -264,12 +244,15 @@ jobs:
             title=$(jq -r .gh.prCreate.title <<<"$submit_json")
             body_file=$(jq -r .gh.prCreate.bodyFile <<<"$submit_json")
             base=$(jq -r .gh.prCreate.base <<<"$submit_json")
+            branch=$(jq -r '.branch // empty' <<<"$submit_json")
             url=$(gh api --method POST \
               -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
               "/repos/${repo}/pulls" \
               -f title="$title" \
               -F "body=@${body_file}" \
-              -f head="$head" \
+              -f head="$branch" \
+              -f head_repo="$HEAD_REPO" \
               -f base="$base" \
               -F maintainer_can_modify=false \
               --jq .html_url)

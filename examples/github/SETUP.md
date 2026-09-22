@@ -144,7 +144,7 @@ Install on `uplink-example-internal` only.
 
 Authenticated `git fetch` of the public parent (sync, resolve, transfer) and the public pull request (submit `POST /repos/{parent}/pulls`, abandon `gh pr close`). Contents **read** and pull requests **write**. Same organization: that access includes the fork, so the token can resolve `head`. No contents write on the fork.
 
-Submit opens that PR with `maintainer_can_modify` false. `head` is `<contrib_org>:<branch>`. The upstream token can read the fork and cannot push it, so GitHub cannot grant maintainers push access to the head branch. A maintainer commit on that branch would also sit outside the queue: there is no path to bring it back onto company `main`.
+Submit opens that PR with `maintainer_can_modify` false. `head` is the branch and `head_repo` is the contrib repository name. The upstream token can read the fork and cannot push it, so GitHub cannot grant maintainers push access to the head branch. A maintainer commit on that branch would also sit outside the queue: there is no path to bring it back onto company `main`.
 
 Repository secrets. Do not copy them onto `to-upstream` or `abandon-contrib`. Those jobs already read repository secrets.
 
