@@ -1246,6 +1246,34 @@ fn rebuild_preview_branch_leaves_main_and_queue_alone() {
 }
 
 #[test]
+fn rebuild_leaves_stored_patch_bytes_unchanged() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_all(company, "internal notes");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let path = company.join(format!(".uplink/patches/{}.patch", patch.id));
+    let before = fs::read(&path).unwrap();
+    rebuild(company).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
+
+#[test]
 fn rebuild_after_adopt_replays_onto_main() {
     let world = setup_uninitialized();
     let [a, b, c] = three_linear_ahead(&world.company);

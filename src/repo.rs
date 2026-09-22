@@ -270,16 +270,55 @@ pub fn apply_patch_file(
     };
     git(repo, &["commit", "-m", &message], opts)?;
     let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;
-    if let Some(parent) = patch_file_abs.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let body = if formatted.ends_with('\n') {
         formatted
     } else {
         format!("{formatted}\n")
     };
-    fs::write(patch_file_abs, body)?;
+    let stored = fs::read_to_string(patch_file_abs).unwrap_or_default();
+    if patch_substance(&stored) != patch_substance(&body) {
+        if let Some(parent) = patch_file_abs.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(patch_file_abs, body)?;
+    }
     Ok("applied")
+}
+
+/// Patch text with the mbox `From <sha>` line and the `Date:` header removed.
+/// Those two fields change on every replay even when the patch itself does not.
+fn patch_substance(text: &str) -> String {
+    let mut lines = text.lines();
+    let mut out = String::new();
+    if let Some(first) = lines.next()
+        && !is_mbox_from_line(first)
+    {
+        out.push_str(first);
+        out.push('\n');
+    }
+    let mut in_headers = true;
+    for line in lines {
+        if in_headers {
+            if line.is_empty() {
+                in_headers = false;
+            } else if line.starts_with("Date:") {
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn is_mbox_from_line(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("From ") else {
+        return false;
+    };
+    let Some(sha) = rest.split_whitespace().next() else {
+        return false;
+    };
+    sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// True when `git apply --reverse --check` succeeds against `git_ref`'s tree.
@@ -883,4 +922,86 @@ pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::patch_substance;
+
+    const SHA_A: &str = "d075809c4498552bd4e080010af34999967d68f7";
+    const SHA_B: &str = "5529448d17e1f2eb9c08b4396ed7b22b55ccb83d";
+
+    fn sample(sha: &str, date: &str, subject: &str, body_date: &str, hunk: &str) -> String {
+        format!(
+            "From {sha} Mon Sep 17 00:00:00 2001\n\
+From: Uplink Bot <uplink@company.example>\n\
+Date: {date}\n\
+Subject: [PATCH] {subject}\n\
+\n\
+{subject}\n\
+{body_date}\n\
+\n\
+---\n\
+ notes.md | 1 +\n\
+ 1 file changed, 1 insertion(+)\n\
+\n\
+diff --git a/notes.md b/notes.md\n\
+--- a/notes.md\n\
++++ b/notes.md\n\
+@@ -0,0 +1 @@\n\
++{hunk}\n"
+        )
+    }
+
+    #[test]
+    fn sha_and_date_header_do_not_change_patch_substance() {
+        let stored = sample(
+            SHA_A,
+            "Tue, 22 Sep 2026 22:52:44 +0200",
+            "Uplink tooling",
+            "Date: kept in the message",
+            "tooling",
+        );
+        let replayed = sample(
+            SHA_B,
+            "Tue, 22 Sep 2026 21:20:41 +0000",
+            "Uplink tooling",
+            "Date: kept in the message",
+            "tooling",
+        );
+        assert_eq!(patch_substance(&stored), patch_substance(&replayed));
+    }
+
+    #[test]
+    fn hunk_change_is_a_different_patch() {
+        let stored = sample(SHA_A, "Tue, 22 Sep 2026 22:52:44 +0200", "Note", "", "one");
+        let updated = sample(SHA_B, "Tue, 22 Sep 2026 21:20:41 +0000", "Note", "", "two");
+        assert_ne!(patch_substance(&stored), patch_substance(&updated));
+    }
+
+    #[test]
+    fn subject_change_is_a_different_patch() {
+        let stored = sample(SHA_A, "Tue, 22 Sep 2026 22:52:44 +0200", "Note", "", "one");
+        let updated = sample(SHA_B, "Tue, 22 Sep 2026 21:20:41 +0000", "Other", "", "one");
+        assert_ne!(patch_substance(&stored), patch_substance(&updated));
+    }
+
+    #[test]
+    fn date_line_in_the_message_body_is_a_change() {
+        let stored = sample(
+            SHA_A,
+            "Tue, 22 Sep 2026 22:52:44 +0200",
+            "Note",
+            "Date: kept in the message",
+            "one",
+        );
+        let updated = sample(
+            SHA_A,
+            "Tue, 22 Sep 2026 22:52:44 +0200",
+            "Note",
+            "Date: rewritten in the message",
+            "one",
+        );
+        assert_ne!(patch_substance(&stored), patch_substance(&updated));
+    }
 }
