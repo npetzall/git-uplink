@@ -4,7 +4,9 @@
 # Detached public cleanup after --to-internal of a submitted patch.
 # Transfer dispatches this workflow and does not wait. Contrib credentials
 # live on Environment `abandon-contrib` (same secrets as to-upstream,
-# different reviewers). This job must not take uplink-mutate.
+# different reviewers). Closing the public PR uses repository
+# UPLINK_UPSTREAM_* (pull requests write on the parent). Deleting the fork
+# branch uses UPLINK_CONTRIB_*. This job must not take uplink-mutate.
 #
 # Until reviewers approve abandon-contrib, company state is already
 # internal-only while the public PR and uplink/<id> fork branch remain.
@@ -47,15 +49,27 @@ jobs:
         with:
           app-id: ${{ secrets.UPLINK_CONTRIB_APP_ID }}
           private-key: ${{ secrets.UPLINK_CONTRIB_APP_PRIVATE_KEY }}
-          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          owner: ${{ secrets.UPLINK_CONTRIB_OWNER || secrets.UPLINK_UPSTREAM_OWNER }}
           repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
           permission-contents: write
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          permission-contents: read
           permission-pull-requests: write
 
       - name: Close PR and delete fork branch
         env:
-          GH_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
-          UPLINK_UPSTREAM_OWNER: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
+          GH_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
+          UPLINK_CONTRIB_OWNER: ${{ secrets.UPLINK_CONTRIB_OWNER || secrets.UPLINK_UPSTREAM_OWNER }}
           UPLINK_CONTRIB_REPO: ${{ secrets.UPLINK_CONTRIB_REPO }}
           PATCH_ID: ${{ inputs.patch_id }}
           PR_URL: ${{ inputs.pr_url }}
@@ -85,8 +99,8 @@ jobs:
               branch=$(gh pr view "$PR_URL" --json headRefName --jq '.headRefName // empty' || true)
             fi
           fi
-          if [ -z "$repo" ] && [ -n "$UPLINK_UPSTREAM_OWNER" ] && [ -n "$UPLINK_CONTRIB_REPO" ]; then
-            repo="${UPLINK_UPSTREAM_OWNER}/${UPLINK_CONTRIB_REPO}"
+          if [ -z "$repo" ] && [ -n "$UPLINK_CONTRIB_OWNER" ] && [ -n "$UPLINK_CONTRIB_REPO" ]; then
+            repo="${UPLINK_CONTRIB_OWNER}/${UPLINK_CONTRIB_REPO}"
           fi
           if [ -z "$branch" ]; then
             echo "No contrib branch to delete for ${PATCH_ID}"
@@ -96,8 +110,8 @@ jobs:
             echo "Cannot resolve contrib repository for ${branch}"
             exit 1
           fi
-          if ! gh api --method DELETE "repos/${repo}/git/refs/heads/${branch}"; then
-            if gh api "repos/${repo}/git/refs/heads/${branch}" >/dev/null 2>&1; then
+          if ! GH_TOKEN="$UPLINK_CONTRIB_TOKEN" gh api --method DELETE "repos/${repo}/git/refs/heads/${branch}"; then
+            if GH_TOKEN="$UPLINK_CONTRIB_TOKEN" gh api "repos/${repo}/git/refs/heads/${branch}" >/dev/null 2>&1; then
               echo "failed to delete ${repo} ${branch}"
               exit 1
             fi

@@ -1,6 +1,6 @@
 # Set up the GitHub example
 
-Bootstrap upstream first, then fork it (GitHub cannot fork an empty repo), then bootstrap contrib and internal. After that, walk the stories with `git apply` / push and the GitHub UI for PRs and gates.
+Bootstrap upstream first, then fork it (GitHub cannot fork an empty repo), then bootstrap contrib and internal. Create the PATs or Apps next, then put secrets on the environments. After that, walk the stories with `git apply` / push and the GitHub UI for PRs and gates.
 
 You need a **GitHub organization** plus your user account. GitHub will not let one account fork its own repository, and `git uplink submit` opens a real pull request from the contrib fork to upstream.
 
@@ -72,7 +72,7 @@ export INTERNAL_DIR=/path/to/uplink-example-internal
 ./examples/github/scripts/bootstrap_internal.sh
 ```
 
-The script needs all three clones. It sets remotes, runs **`git uplink init --forge example-github`** (installs the internal-only Uplink Actions pack), and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, Environments `to-upstream`, `from-upstream`, and `abandon-contrib`.
+The script needs all three clones. It sets remotes, runs **`git uplink init --forge example-github`** (installs the internal-only Uplink Actions pack), and pushes `main`, `uplink/state`, `uplink/upstream`, `seed`, `seed-state`, `seed-upstream`, and orphan `example-reset`. If `gh` is authenticated: labels, repo variables, Actions write permission, and empty Environments `to-upstream`, `from-upstream`, and `abandon-contrib`. It does not create tokens.
 
 `git uplink status` in the internal clone should show the tooling patch (`Uplink tooling`) in the tooling slot.
 
@@ -82,101 +82,181 @@ Keep the internal and upstream clones for the stories:
 export KIT=/path/to/git-uplink/examples/github
 ```
 
-## 4. GitHub settings (UI)
+## 4. Credentials
 
-If `bootstrap_internal.sh` did not run `gh`, do this in **uplink-example-internal**:
+Create these before you fill environment secrets. Three bots, each a fine-grained PAT or a GitHub App. This example defaults each `UPLINK_*_AUTH` to `pat`. Production templates default to `app`.
 
-**Labels:** `uplink:internal-only`, `uplink:conflict`, `uplink:transfer-to-upstream`, `uplink:transfer-to-internal`
+A PAT is one token stored as `UPLINK_*_TOKEN`. An App is installed on **one owner**; the workflow mints an installation token from the App id and private key. Here the fork owner is your user and the parent owner is the org, so the contrib App and the upstream App are different installations. Use PATs for the walkthrough unless you are rehearsing that App layout.
 
-**Variables** (Settings → Secrets and variables → Actions → Variables):
+### Repository variables
 
-| Variable | Example |
+Settings → Secrets and variables → Actions → Variables. `bootstrap_internal.sh` sets these when `gh` is authenticated.
+
+| Variable | Example | Purpose |
+| --- | --- | --- |
+| `UPLINK_PREFLIGHT` | `npm test` | Build/test command on the export tree |
+| `UPLINK_REDACT_KEYWORDS` | `companyTelemetry,AcmeCorp` | Words that must not appear in a contribution |
+| `UPLINK_INTERNAL_DOMAINS` | `acme.example` | Email domains flagged in the export diff |
+| `UPLINK_EXPORT_AUTHOR` | `Uplink Example <uplink@users.noreply.github.com>` | Public identity for contribution commits |
+| `UPLINK_SRC` | `npetzall/git-uplink` | Repo the example runner builds `git-uplink` from |
+| `UPLINK_REV` | `main` | Git ref of `UPLINK_SRC` |
+| `UPLINK_INTERNAL_AUTH` | `pat` | `pat` or `app` for the internal bot |
+| `UPLINK_UPSTREAM_AUTH` | `pat` | `pat` or `app` for the upstream bot |
+| `UPLINK_CONTRIB_AUTH` | `pat` | `pat` or `app` for the contrib bot |
+
+### Internal
+
+Pushes company `main` and the gated conflict and transfer branches, including `.github/workflows`. Used by import, sync, resolve, and transfer. PR checks, gate, and submit copy the Actions `GITHUB_TOKEN` into `UPLINK_INTERNAL_TOKEN` for origin reads and `uplink/state` fast-forwards.
+
+Repository secrets. Sync cannot wait on an environment.
+
+#### PAT (`UPLINK_INTERNAL_AUTH=pat`)
+
+Fine-grained or classic PAT on `uplink-example-internal`.
+
+| Permission | Access |
 | --- | --- |
-| `UPLINK_PREFLIGHT` | `npm test` |
-| `UPLINK_REDACT_KEYWORDS` | `companyTelemetry,AcmeCorp` |
-| `UPLINK_INTERNAL_DOMAINS` | `acme.example` |
-| `UPLINK_EXPORT_AUTHOR` | `Uplink Example <uplink@users.noreply.github.com>` |
-| `UPLINK_SRC` | `npetzall/git-uplink` |
-| `UPLINK_REV` | `main` |
-| `UPLINK_INTERNAL_AUTH` | `pat` |
-| `UPLINK_CONTRIB_AUTH` | `pat` |
-| `UPLINK_UPSTREAM_AUTH` | `pat` |
+| Contents | Read and write |
+| Workflows | Read and write |
 
-Each `UPLINK_*_AUTH` is `pat` or `app`. Empty defaults to `pat` in this example (production templates default to `app`).
+#### App (`UPLINK_INTERNAL_AUTH=app`)
 
-**Actions:** workflow permissions **Read and write**.
+Install on `uplink-example-internal` only.
 
-**Required checks** (branch protection / ruleset on `main`): **Uplink upstream assess**, **Uplink upstream preflight**.
+| Permission | Access |
+| --- | --- |
+| Contents | Read and write |
+| Workflows | Read and write |
 
-**Environment `to-upstream`:** Settings → Environments → New environment → `to-upstream`.
+#### Secrets
+
+| Secret | When | Value |
+| --- | --- | --- |
+| `UPLINK_INTERNAL_TOKEN` | `pat` | The PAT |
+| `UPLINK_INTERNAL_APP_ID` | `app` | App id |
+| `UPLINK_INTERNAL_APP_PRIVATE_KEY` | `app` | App private key (PEM) |
+
+### Upstream
+
+Authenticated `git fetch` of the public parent (sync, resolve, transfer) and the public pull request (submit `gh pr create`, abandon `gh pr close`). Contents **read** and pull requests **write** on `uplink-example-upstream` only. No access to the fork.
+
+Submit opens that PR with `--no-maintainer-edit`. This token cannot read the fork, so GitHub cannot grant maintainers push access to the head branch. A maintainer commit on that branch would also sit outside the queue: there is no path to bring it back onto company `main`.
+
+Repository secrets. Do not copy them onto `to-upstream` or `abandon-contrib`. Those jobs already read repository secrets. An environment copy of `UPLINK_UPSTREAM_OWNER` would hide the org and mint the App against the fork owner.
+
+#### PAT (`UPLINK_UPSTREAM_AUTH=pat`)
+
+Fine-grained PAT scoped to `uplink-example-upstream` only.
+
+| Permission | Access |
+| --- | --- |
+| Contents | Read |
+| Pull requests | Read and write |
+
+#### App (`UPLINK_UPSTREAM_AUTH=app`)
+
+Install on the org that owns `uplink-example-upstream`. Not on the fork.
+
+| Permission | Access |
+| --- | --- |
+| Contents | Read |
+| Pull requests | Read and write |
+
+Sync, resolve, and transfer mint this App with contents read only. Submit and abandon also request pull requests write.
+
+#### Secrets
+
+| Secret | When | Value |
+| --- | --- | --- |
+| `UPLINK_UPSTREAM_TOKEN` | `pat` | The PAT |
+| `UPLINK_UPSTREAM_APP_ID` | `app` | App id |
+| `UPLINK_UPSTREAM_APP_PRIVATE_KEY` | `app` | App private key (PEM) |
+| `UPLINK_UPSTREAM_OWNER` | `app` | Org that owns `uplink-example-upstream` |
+| `UPLINK_UPSTREAM_REPO` | `app` | `uplink-example-upstream` |
+
+### Contrib
+
+Force-pushes `uplink/<id>` on the fork during submit, and deletes that branch during abandon. Contents write on `uplink-example-upstream-contrib` only. No pull-request permission, and no install on the parent. `git uplink submit` uses `UPLINK_CONTRIB_TOKEN`; `gh pr create` does not.
+
+Environment secrets on **`to-upstream`** and a copy on **`abandon-contrib`**. GitHub environments do not share secrets. Do not also store these at repository or organization level (sync and import must not see the fork write credential).
+
+#### PAT (`UPLINK_CONTRIB_AUTH=pat`)
+
+Fine-grained PAT scoped to `uplink-example-upstream-contrib` only. The fork is a different owner than upstream, so this token does not open the upstream PR.
+
+| Permission | Access |
+| --- | --- |
+| Contents | Read and write |
+
+#### App (`UPLINK_CONTRIB_AUTH=app`)
+
+Install on the fork owner (your user), not the upstream org. One installation token is one owner.
+
+| Permission | Access |
+| --- | --- |
+| Contents | Read and write |
+
+#### Secrets
+
+| Secret | When | Value |
+| --- | --- | --- |
+| `UPLINK_CONTRIB_TOKEN` | `pat` | The PAT |
+| `UPLINK_CONTRIB_APP_ID` | `app` | App id |
+| `UPLINK_CONTRIB_APP_PRIVATE_KEY` | `app` | App private key (PEM) |
+| `UPLINK_CONTRIB_OWNER` | `app` | Your user (fork owner). If the fork lived in the same account as upstream, omit this and the workflow falls back to `UPLINK_UPSTREAM_OWNER` |
+| `UPLINK_CONTRIB_REPO` | `app` | `uplink-example-upstream-contrib` |
+
+### Where each secret lives
+
+| Secret | Repository | `to-upstream` | `abandon-contrib` |
+| --- | --- | --- | --- |
+| `UPLINK_INTERNAL_TOKEN` | PAT | | |
+| `UPLINK_INTERNAL_APP_ID` | App | | |
+| `UPLINK_INTERNAL_APP_PRIVATE_KEY` | App | | |
+| `UPLINK_UPSTREAM_TOKEN` | PAT | | |
+| `UPLINK_UPSTREAM_APP_ID` | App | | |
+| `UPLINK_UPSTREAM_APP_PRIVATE_KEY` | App | | |
+| `UPLINK_UPSTREAM_OWNER` | App | | |
+| `UPLINK_UPSTREAM_REPO` | App | | |
+| `UPLINK_CONTRIB_TOKEN` | | PAT | same PAT |
+| `UPLINK_CONTRIB_APP_ID` | | App | same value |
+| `UPLINK_CONTRIB_APP_PRIVATE_KEY` | | App | same value |
+| `UPLINK_CONTRIB_OWNER` | | App | same value |
+| `UPLINK_CONTRIB_REPO` | | App | same value |
+
+## 5. Environments
+
+`bootstrap_internal.sh` creates the three environments with no reviewers and no secrets when `gh` is authenticated. Add reviewers and the contrib secrets below. If `gh` did not run, create each environment first (Settings → Environments → New environment), then the same settings.
+
+**Environment `to-upstream`:**
 
 1. **Required reviewers** — add yourself. For a solo walkthrough leave **Prevent self-review** off.
 2. **Deployment branches** — restrict to `main` if the UI offers it.
-3. **Secrets** — contrib write credentials live on **to-upstream**. Internal force-push and upstream fetch credentials are **repository** secrets (sync cannot wait on to-upstream).
+3. **Secrets** — the contrib table above. Upstream credentials stay repository secrets; this job reads them anyway.
 
-**Environment `from-upstream`:** Settings → Environments → New environment → `from-upstream`.
+**Environment `from-upstream`:**
 
 1. **Required reviewers** — add yourself (solo walkthrough: leave **Prevent self-review** off).
 2. **Deployment branches** — restrict to `main` if the UI offers it.
 3. **Secrets** — none. This is the inbound review gate only. Sync inspect must not wait on it.
 
-**Environment `abandon-contrib`:** Settings → Environments → New environment → `abandon-contrib`.
+**Environment `abandon-contrib`:**
 
 1. **Required reviewers** — add yourself (solo walkthrough: leave **Prevent self-review** off). Different audience than `to-upstream` in production (engineering vs IP/legal).
 2. **Deployment branches** — restrict to `main` if the UI offers it.
-3. **Secrets** — copy the **same** contrib write credentials as `to-upstream`. GitHub environments do not share secrets. After `--to-internal` of a submitted patch, the public PR and `uplink/<id>` fork branch remain until this environment is approved.
+3. **Secrets** — copy the **same** contrib secrets as `to-upstream`. After `--to-internal` of a submitted patch, the public PR and `uplink/<id>` fork branch remain until this environment is approved. Closing the PR uses the repository upstream token; deleting the branch uses these contrib secrets.
 
-### Internal (repo secrets; origin force-push)
+## 6. Labels, Actions, required checks
 
-Used by import, sync, resolve, and transfer. PR checks, gate, and submit copy the Actions `GITHUB_TOKEN` into `UPLINK_INTERNAL_TOKEN` for origin reads and `uplink/state` fast-forwards.
+If `bootstrap_internal.sh` did not run `gh`, also do this in **uplink-example-internal**:
 
-#### PAT (default, `UPLINK_INTERNAL_AUTH=pat`)
+**Labels:** `uplink:internal-only`, `uplink:conflict`, `uplink:transfer-to-upstream`, `uplink:transfer-to-internal`
 
-Fine-grained or classic PAT with contents read/write **and workflows write** on `uplink-example-internal` (sync/resolve push `main` and conflict branches that include `.github/workflows`). Store as repo secret `UPLINK_INTERNAL_TOKEN`.
+**Actions:** workflow permissions **Read and write**.
 
-#### GitHub App (`UPLINK_INTERNAL_AUTH=app`)
+**Required checks** (branch protection / ruleset on `main`): **Uplink upstream assess**, **Uplink upstream preflight**.
 
-Install an App on the internal repo (contents: write, workflows: write). Repo secrets: `UPLINK_INTERNAL_APP_ID`, `UPLINK_INTERNAL_APP_PRIVATE_KEY`.
-
-### Upstream (repo secrets; authenticated `git fetch` of public parent)
-
-Used by sync and resolve so github.com applies authenticated rate limits. Read-only. Do not reuse contrib write creds.
-
-#### PAT (default, `UPLINK_UPSTREAM_AUTH=pat`)
-
-Fine-grained PAT with contents **read** on `uplink-example-upstream`. Store as repo secret `UPLINK_UPSTREAM_TOKEN`. The same token is what a future GitHub PR merge check would use (no separate `UPLINK_SYNC_TOKEN`).
-
-#### GitHub App (`UPLINK_UPSTREAM_AUTH=app`)
-
-Install an App on the public parent (contents: read). Repo secrets: `UPLINK_UPSTREAM_APP_ID`, `UPLINK_UPSTREAM_APP_PRIVATE_KEY`, plus `UPLINK_UPSTREAM_OWNER` and `UPLINK_UPSTREAM_REPO` (`uplink-example-upstream`).
-
-### Contrib (`to-upstream` environment secrets; fork write + public PR)
-
-#### PAT (default, `UPLINK_CONTRIB_AUTH=pat`)
-
-The contrib fork is on a **different owner** than upstream, so a personal access token can both push the fork and open the upstream PR.
-
-Fine-grained or classic PAT with:
-
-- `uplink-example-upstream-contrib`: Contents read/write
-- `uplink-example-upstream`: Contents read, Pull requests read/write
-
-Store it on the **to-upstream** environment as `UPLINK_CONTRIB_TOKEN`. Copy the same value onto **abandon-contrib**. `gh pr create` (submit) and `gh pr close` (abandon) use this token (`GH_TOKEN`).
-
-#### GitHub App (`UPLINK_CONTRIB_AUTH=app`)
-
-Production-shaped; see [`templates/README.md`](../../templates/README.md). An installation token is one owner. On the **to-upstream** and **abandon-contrib** environments:
-
-| Secret | Purpose |
-| --- | --- |
-| `UPLINK_CONTRIB_APP_ID` | GitHub App id |
-| `UPLINK_CONTRIB_APP_PRIVATE_KEY` | App private key |
-| `UPLINK_UPSTREAM_OWNER` | Owner of the contrib repository |
-| `UPLINK_CONTRIB_REPO` | `uplink-example-upstream-contrib` |
-
-Install the App on the contrib fork (contents: write) and on upstream (contents: read, pull requests: write). Set variable `UPLINK_CONTRIB_AUTH` to `app`.
-
-## 5. Reset (Actions)
+## 7. Reset (Actions)
 
 Each story starts by restoring the three repositories. Force-push is expected.
 
