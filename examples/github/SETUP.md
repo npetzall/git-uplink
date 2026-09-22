@@ -2,12 +2,12 @@
 
 Bootstrap upstream first, then fork it (GitHub cannot fork an empty repo), then bootstrap contrib and internal. Create the PATs or Apps next, then put secrets on the environments. After that, walk the stories with `git apply` / push and the GitHub UI for PRs and gates.
 
-You need a **GitHub organization** plus your user account. GitHub will not let one account fork its own repository, and `git uplink submit` opens a real pull request from the contrib fork to upstream.
+You need a **GitHub organization**. Fork upstream into that same organization when you want a fine-grained PAT or a GitHub App. GitHub will not fork a repository into the same user account. A fork under a different organization or a user can only be pushed, and opened as a pull request, by a machine user with a classic PAT. `git uplink submit` opens a real pull request from the contrib fork to upstream.
 
 | Repository | Owner | Visibility | Role |
 | --- | --- | --- | --- |
 | `uplink-example-upstream` | org | public | Canonical tokenkit project |
-| `uplink-example-upstream-contrib` | your user (fork of upstream) | public on github.com | Contrib remote; `uplink/<id>` branches |
+| `uplink-example-upstream-contrib` | same org, or another owner | public on github.com | Contrib remote; `uplink/<id>` branches |
 | `uplink-example-internal` | org | private | Company product; humans merge PRs to `main`; bot owns `uplink/state` |
 
 A true private fork of a public parent needs GitHub Enterprise. On github.com the fork is public; that is enough for this example.
@@ -33,15 +33,15 @@ The script replaces the clone with [`upstream/`](upstream/) (tokenkit), installs
 
 ## 2. Contrib fork
 
-Fork the bootstrapped upstream to your user as `uplink-example-upstream-contrib`. Clone it.
+Fork the bootstrapped upstream as `uplink-example-upstream-contrib`. A fork in the same organization can use a fine-grained PAT or a GitHub App. A fork under your user, or under another organization, needs a machine user classic PAT later. Clone it.
 
 ```bash
-git clone https://github.com/YOUR_USER/uplink-example-upstream-contrib.git
+git clone https://github.com/YOUR_ORG/uplink-example-upstream-contrib.git
 export CONTRIB_DIR=/path/to/uplink-example-upstream-contrib
 ./examples/github/scripts/bootstrap_upstream-contrib.sh
 ```
 
-The script does **not** change contrib `main` (it must stay a fork of upstream `main` so submit does not rewrite workflows). It publishes orphan `example-reset` with the contrib reset script. If `UPSTREAM_DIR` is still set, it checks that the fork owner differs from upstream.
+The script does **not** change contrib `main` (it must stay a fork of upstream `main` so submit does not rewrite workflows). It publishes orphan `example-reset` with the contrib reset script. If `UPSTREAM_DIR` is set, it rejects the case where contrib is the same repository as upstream. If the owners differ, it prints that those credentials must be a machine user classic PAT.
 
 If you already bootstrapped an older layout that committed reset files on contrib `main`:
 
@@ -84,9 +84,13 @@ export KIT=/path/to/git-uplink/examples/github
 
 ## 4. Credentials
 
-Create these before you fill environment secrets. Three bots, each a fine-grained PAT or a GitHub App. This example defaults each `UPLINK_*_AUTH` to `pat`. Production templates default to `app`.
+Create these before you fill environment secrets. Three bots. This example defaults each `UPLINK_*_AUTH` to `pat`. Production templates default to `app`.
 
-A PAT is one token stored as `UPLINK_*_TOKEN`. An App is installed on **one owner**; the workflow mints an installation token from the App id and private key. Here the fork owner is your user and the parent owner is the org, so the contrib App and the upstream App are different installations. Use PATs for the walkthrough unless you are rehearsing that App layout.
+Owner and repository name are `upstreamUrl` and `contribUrl` on `.uplink/queue.json`. Do not store them as secrets. A PAT is one token stored as `UPLINK_*_TOKEN`. An App is installed on one organization; the workflow mints an installation token from the App id and private key, and the repository list comes from the queue.
+
+When upstream and the contrib fork are in the same organization, each public bot is a fine-grained PAT or a GitHub App on that organization. The upstream fine-grained PAT includes both repositories. Submit and abandon mint the upstream App token for both repository names. The contrib token is contents write on the fork only.
+
+When the fork is under a different organization or a user, the upstream and contrib roles are a machine user's classic PAT (`UPLINK_*_AUTH=pat`). A fine-grained PAT and a GitHub App cannot see both owners, so they cannot open the public pull request.
 
 ### Repository variables
 
@@ -138,15 +142,17 @@ Install on `uplink-example-internal` only.
 
 ### Upstream
 
-Authenticated `git fetch` of the public parent (sync, resolve, transfer) and the public pull request (submit `POST /repos/{parent}/pulls`, abandon `gh pr close`). Contents **read** and pull requests **write** on `uplink-example-upstream` only. No access to the fork.
+Authenticated `git fetch` of the public parent (sync, resolve, transfer) and the public pull request (submit `POST /repos/{parent}/pulls`, abandon `gh pr close`). Contents **read** and pull requests **write**. Same organization: that access includes the fork, so the token can resolve `head`. No contents write on the fork.
 
-Submit opens that PR with `maintainer_can_modify` false. `head` is `<contrib_org>:<branch>`. This token cannot read the fork, so GitHub cannot grant maintainers push access to the head branch. A maintainer commit on that branch would also sit outside the queue: there is no path to bring it back onto company `main`.
+Submit opens that PR with `maintainer_can_modify` false. `head` is `<contrib_org>:<branch>`. The upstream token can read the fork and cannot push it, so GitHub cannot grant maintainers push access to the head branch. A maintainer commit on that branch would also sit outside the queue: there is no path to bring it back onto company `main`.
 
-Repository secrets. Do not copy them onto `to-upstream` or `abandon-contrib`. Those jobs already read repository secrets. An environment copy of `UPLINK_UPSTREAM_OWNER` would hide the org and mint the App against the fork owner.
+Repository secrets. Do not copy them onto `to-upstream` or `abandon-contrib`. Those jobs already read repository secrets.
 
 #### PAT (`UPLINK_UPSTREAM_AUTH=pat`)
 
-Fine-grained PAT scoped to `uplink-example-upstream` only.
+Same organization: fine-grained PAT on the org, with repository access to `uplink-example-upstream` and `uplink-example-upstream-contrib`.
+
+Different owner: classic PAT for a machine user that can access both repositories. Not a fine-grained PAT.
 
 | Permission | Access |
 | --- | --- |
@@ -155,7 +161,9 @@ Fine-grained PAT scoped to `uplink-example-upstream` only.
 
 #### App (`UPLINK_UPSTREAM_AUTH=app`)
 
-Install on the org that owns `uplink-example-upstream`. Not on the fork.
+Install on the organization that owns both repositories. Submit and abandon mint this token for both. Sync, resolve, and transfer mint it for the parent only.
+
+A different fork owner cannot use this App. Use a machine user classic PAT instead.
 
 | Permission | Access |
 | --- | --- |
@@ -171,8 +179,6 @@ Sync, resolve, and transfer mint this App with contents read only. Submit and ab
 | `UPLINK_UPSTREAM_TOKEN` | `pat` | The PAT |
 | `UPLINK_UPSTREAM_APP_ID` | `app` | App id |
 | `UPLINK_UPSTREAM_APP_PRIVATE_KEY` | `app` | App private key (PEM) |
-| `UPLINK_UPSTREAM_OWNER` | `app` | Org that owns `uplink-example-upstream` |
-| `UPLINK_UPSTREAM_REPO` | `app` | `uplink-example-upstream` |
 
 ### Contrib
 
@@ -182,7 +188,9 @@ Environment secrets on **`to-upstream`** and a copy on **`abandon-contrib`**. Gi
 
 #### PAT (`UPLINK_CONTRIB_AUTH=pat`)
 
-Fine-grained PAT scoped to `uplink-example-upstream-contrib` only. The fork is a different owner than upstream, so this token does not open the upstream PR.
+Same organization: fine-grained PAT scoped to `uplink-example-upstream-contrib` only. This token does not open the upstream PR.
+
+Different owner: the machine user's classic PAT (the same token may also be `UPLINK_UPSTREAM_TOKEN`).
 
 | Permission | Access |
 | --- | --- |
@@ -190,7 +198,7 @@ Fine-grained PAT scoped to `uplink-example-upstream-contrib` only. The fork is a
 
 #### App (`UPLINK_CONTRIB_AUTH=app`)
 
-Install on the fork owner (your user), not the upstream org. One installation token is one owner.
+Install on the same organization as upstream. The minted token lists only the fork. One installation token is one owner, so a different fork owner cannot use this App.
 
 | Permission | Access |
 | --- | --- |
@@ -203,8 +211,6 @@ Install on the fork owner (your user), not the upstream org. One installation to
 | `UPLINK_CONTRIB_TOKEN` | `pat` | The PAT |
 | `UPLINK_CONTRIB_APP_ID` | `app` | App id |
 | `UPLINK_CONTRIB_APP_PRIVATE_KEY` | `app` | App private key (PEM) |
-| `UPLINK_CONTRIB_OWNER` | `app` | Your user (fork owner). If the fork lived in the same account as upstream, omit this and the workflow falls back to `UPLINK_UPSTREAM_OWNER` |
-| `UPLINK_CONTRIB_REPO` | `app` | `uplink-example-upstream-contrib` |
 
 ### Where each secret lives
 
@@ -216,13 +222,9 @@ Install on the fork owner (your user), not the upstream org. One installation to
 | `UPLINK_UPSTREAM_TOKEN` | PAT | | |
 | `UPLINK_UPSTREAM_APP_ID` | App | | |
 | `UPLINK_UPSTREAM_APP_PRIVATE_KEY` | App | | |
-| `UPLINK_UPSTREAM_OWNER` | App | | |
-| `UPLINK_UPSTREAM_REPO` | App | | |
 | `UPLINK_CONTRIB_TOKEN` | | PAT | same PAT |
 | `UPLINK_CONTRIB_APP_ID` | | App | same value |
 | `UPLINK_CONTRIB_APP_PRIVATE_KEY` | | App | same value |
-| `UPLINK_CONTRIB_OWNER` | | App | same value |
-| `UPLINK_CONTRIB_REPO` | | App | same value |
 
 ## 5. Environments
 

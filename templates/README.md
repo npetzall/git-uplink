@@ -19,7 +19,7 @@ Sync, resolve, and transfer mint the internal PAT or App and pass it to `actions
 
 PR checks (`uplink-pr.yml`), the gate job, and submit copy `secrets.GITHUB_TOKEN` into `UPLINK_INTERNAL_TOKEN`. That covers origin reads (init, assess, preflight) and fast-forwards of `uplink/state` (submit packet, finalize, and `git uplink submitted`). The binary does not read `GITHUB_TOKEN`; the workflow assigns it. The gate shell `git fetch` of the protected base uses that token as an `http.<server>/.extraheader` for one command. Checkout on PR checks, gate, import, and the submit job stays `persist-credentials: false`. Packet and finalize keep `persist-credentials: true` with the default Actions token so their shell `git push` of `uplink/state` can authenticate.
 
-Import keeps the internal PAT or App: `git uplink rebuild --push` force-pushes `main`, which can include workflow files. The submit job uses `UPLINK_CONTRIB_*` for the contrib force-push and `UPLINK_UPSTREAM_*` as `GH_TOKEN` for `POST /repos/{parent}/pulls` (`maintainer_can_modify` false; `head` is `<contrib_org>:<branch>`). `GITHUB_TOKEN` is also `GH_TOKEN` for `gh` on the company repo (PR comments, dispatching the assessment hook). Company-repo `gh` that runs after `git uplink init` sets `GH_REPO` to the company repository, because init adds the `upstream` remote and `gh` would otherwise query that public parent. It cannot open the public pull request. Import, sync, resolve, and transfer mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write. Submit and abandon mint the contrib App (fork contents write) and the upstream App (contents read and pull requests write on the parent).
+Import keeps the internal PAT or App: `git uplink rebuild --push` force-pushes `main`, which can include workflow files. The submit job uses `UPLINK_CONTRIB_*` for the contrib force-push and `UPLINK_UPSTREAM_*` as `GH_TOKEN` for `POST /repos/{parent}/pulls` (`maintainer_can_modify` false; `head` is `<contrib_org>:<branch>`). `GITHUB_TOKEN` is also `GH_TOKEN` for `gh` on the company repo (PR comments, dispatching the assessment hook). Company-repo `gh` that runs after `git uplink init` sets `GH_REPO` to the company repository, because init adds the `upstream` remote and `gh` would otherwise query that public parent. It cannot open the public pull request. Import, sync, resolve, and transfer mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write. Submit and abandon mint the contrib App (fork contents write) and the upstream App (contents read and pull requests write on the parent and the fork) when both repositories are in the same organization. Owner and repository name come from `upstreamUrl` and `contribUrl` on the queue. A fork under a different organization or a user uses a machine user classic PAT instead of an App.
 
 ## Workflows
 
@@ -43,8 +43,8 @@ Repo variables:
 | `UPLINK_INTERNAL_DOMAINS` | Comma-separated email domains flagged in the export diff (example: `acme.com`) |
 | `UPLINK_EXPORT_AUTHOR` | Default public identity `Name <email>` for contribution commits (machine user). Override per change with `Uplink-Export-Author` below the cutoff. |
 | `UPLINK_INTERNAL_AUTH` | `pat` (token) or `app` (mint installation token). Empty defaults to `app`. |
-| `UPLINK_UPSTREAM_AUTH` | Same models for public upstream fetch and for opening or closing the public PR. Empty defaults to `app`. |
-| `UPLINK_CONTRIB_AUTH` | Same models for contrib force-push and fork branch delete. Empty defaults to `app`. |
+| `UPLINK_UPSTREAM_AUTH` | Same models for public upstream fetch and for opening or closing the public PR. Empty defaults to `app`. App and a fine-grained PAT require the fork in the same organization. A different owner uses `pat` with a machine user classic PAT. |
+| `UPLINK_CONTRIB_AUTH` | Same models for contrib force-push and fork branch delete. Empty defaults to `app`. Same organization constraint as `UPLINK_UPSTREAM_AUTH`. |
 
 Import, resolve, and transfer share the Actions concurrency group `uplink-mutate` at workflow or job level. A GitHub Environment job that is **Waiting** for required reviewers still occupies its concurrency group, so wait jobs must not sit on `uplink-mutate`. Sync uses workflow group **`uplink-sync`** so a waiting `from-upstream` review does not stack hourly runs. Inspect takes `uplink-mutate`; a separate wait job holds `from-upstream` with no mutate slot; apply takes `uplink-mutate` only after approval. Submit takes `uplink-mutate` on packet and finalize only; the `to-upstream` export job keeps the environment (contrib secrets) and does **not** take the group, so IP review does not freeze import/resolve. `git uplink submitted` retries a rejected `uplink/state` push by replaying the PR fields onto the latest origin queue (not the import restack, which would drop updates to an existing id). The CLI also retries a rejected fast-forward of `uplink/state` if another import landed first.
 
@@ -62,7 +62,7 @@ This is the documented option. Use it instead of asking an operator to run `git 
 2. **Committed report** — `.uplink/reports/<id>/assessment.md` on `uplink/state`. The `to-upstream` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
 3. **Environment review UI** — GitHub pauses the submit job until a required reviewer approves the `to-upstream` deployment. That click is the IP gate.
 
-After approval, the submit job writes `.uplink/reports/<id>/approval.md` (in-repo receipt), runs `git uplink approve`, `git uplink submit` (contrib git push), `POST /repos/{parent}/pulls` with `maintainer_can_modify` false, then `git uplink submitted` (records the PR and pushes `uplink/state` with `UPLINK_INTERNAL_TOKEN` set to `secrets.GITHUB_TOKEN`). This job mints the contrib App (fork push) and the upstream App (public PR). Maintainer edits stay off: the upstream credential has no read on the fork, and a maintainer commit on the fork branch would not come back onto the queue.
+After approval, the submit job writes `.uplink/reports/<id>/approval.md` (in-repo receipt), runs `git uplink approve`, `git uplink submit` (contrib git push), `POST /repos/{parent}/pulls` with `maintainer_can_modify` false, then `git uplink submitted` (records the PR and pushes `uplink/state` with `UPLINK_INTERNAL_TOKEN` set to `secrets.GITHUB_TOKEN`). This job mints the contrib App (fork push) and the upstream App (public PR) when both repositories are in the same organization. Maintainer edits stay off: the upstream credential has contents read on the parent and the fork and no contents write on the fork, so a maintainer commit on the fork branch would not come back onto the queue.
 
 ### Why the GitHub audit log is the source of truth
 
@@ -81,7 +81,9 @@ In the company product repo (private forge; GHEC EMU is one implementation):
 2. **Required reviewers** — add the IP/legal team (or named reviewers). Turn on **Prevent self-review**.
 3. **Deployment branches** — restrict to `main` so a dispatch from another ref cannot export.
 4. Optional wait timer if policy wants a cooling-off period.
-5. **Credentials** — three isolated roles. Workflows use a PAT (`UPLINK_*_TOKEN`) or mint an App installation token (`UPLINK_*_AUTH=app`). `POST /repos/{parent}/pulls` with `maintainer_can_modify` false uses the upstream TOKEN (repository secret). The contrib TOKEN only force-pushes the fork.
+5. **Credentials** — three isolated roles. Workflows use a PAT (`UPLINK_*_TOKEN`) or mint an App installation token (`UPLINK_*_AUTH=app`). `POST /repos/{parent}/pulls` with `maintainer_can_modify` false uses the upstream TOKEN (repository secret). The contrib TOKEN only force-pushes the fork. Owner and repository name are `upstreamUrl` and `contribUrl` in `.uplink/queue.json` on `uplink/state`, not secrets.
+
+Upstream and the contribution fork may live in the same organization. GitHub will not fork a repository into the same user account. A fine-grained PAT or a GitHub App can open the public pull request only when both repositories belong to that organization. The upstream token is then contents read and pull requests write on both repository names from the queue. It does not get contents write on the fork. A same-org fine-grained PAT for the upstream role lists both repositories the same way. If the fork is under a different organization or a user, `UPLINK_UPSTREAM_AUTH` and `UPLINK_CONTRIB_AUTH` must be `pat`, and both tokens must be a classic PAT for a machine user that can access both repositories. One classic PAT may fill both secrets. A fine-grained PAT and a GitHub App are limited to one account, so they cannot open `head` on the other owner.
 
 **Repository secrets** (sync/import/resolve must not wait on `to-upstream` or `from-upstream`):
 
@@ -89,24 +91,20 @@ In the company product repo (private forge; GHEC EMU is one implementation):
 | --- | --- |
 | `UPLINK_INTERNAL_TOKEN` | Product origin push (force-push `main`, conflict and transfer branches, workflow files) on import, sync, resolve, and transfer when `UPLINK_INTERNAL_AUTH=pat`. Needs contents + workflows write. PR checks, gate, and submit state writes use the Actions `GITHUB_TOKEN` instead |
 | `UPLINK_INTERNAL_APP_ID` / `UPLINK_INTERNAL_APP_PRIVATE_KEY` | When `UPLINK_INTERNAL_AUTH=app`. Install with contents + workflows write |
-| `UPLINK_UPSTREAM_TOKEN` | Authenticated `git fetch` of public upstream, and `GH_TOKEN` for `POST /repos/{parent}/pulls` (`maintainer_can_modify` false) / `gh pr close`, when `UPLINK_UPSTREAM_AUTH=pat`. Contents read and pull requests write on the parent. No access to the fork |
-| `UPLINK_UPSTREAM_APP_ID` / `UPLINK_UPSTREAM_APP_PRIVATE_KEY` | When `UPLINK_UPSTREAM_AUTH=app`. Install on the parent with contents read and pull requests write. Fetch jobs mint contents read only; submit and abandon also request pull requests write |
-| `UPLINK_UPSTREAM_OWNER` | Account that owns the public parent (required for the upstream App mint). Do not copy this onto an environment: an environment value would hide the parent owner inside submit and abandon |
-| `UPLINK_UPSTREAM_REPO` | Public parent repository name (required for upstream `app` mint) |
+| `UPLINK_UPSTREAM_TOKEN` | Authenticated `git fetch` of public upstream, and `GH_TOKEN` for `POST /repos/{parent}/pulls` (`maintainer_can_modify` false) / `gh pr close`, when `UPLINK_UPSTREAM_AUTH=pat`. Contents read and pull requests write. Same organization: a fine-grained PAT that includes the parent and the fork. Different owner: a machine user classic PAT. No contents write on the fork |
+| `UPLINK_UPSTREAM_APP_ID` / `UPLINK_UPSTREAM_APP_PRIVATE_KEY` | When `UPLINK_UPSTREAM_AUTH=app` and both repositories are in the same organization. Install on that organization with contents read and pull requests write. Fetch jobs mint contents read on the parent only; submit and abandon also request pull requests write and include the fork |
 
-Do not give the upstream role contents write, and do not give it access to the contribution fork.
+Do not give the upstream role contents write.
 
 **Environment `to-upstream` secrets** (fork write only). Do not also store these at repo or org level:
 
 | Secret | Purpose |
 | --- | --- |
-| `UPLINK_CONTRIB_TOKEN` | Contrib force-push when `UPLINK_CONTRIB_AUTH=pat`. The public pull request uses the upstream token |
-| `UPLINK_CONTRIB_APP_ID` | GitHub App id (registered on public github.com) |
+| `UPLINK_CONTRIB_TOKEN` | Contrib force-push when `UPLINK_CONTRIB_AUTH=pat`. Same organization: a fine-grained PAT on the fork. Different owner: the machine user classic PAT. The public pull request uses the upstream token |
+| `UPLINK_CONTRIB_APP_ID` | GitHub App id (registered on public github.com), when the fork is in the same organization as the parent |
 | `UPLINK_CONTRIB_APP_PRIVATE_KEY` | App private key |
-| `UPLINK_CONTRIB_OWNER` | Account that owns the contribution fork. Omit when that account is `UPLINK_UPSTREAM_OWNER`; the workflow falls back |
-| `UPLINK_CONTRIB_REPO` | Repository name of the public contribution fork |
 
-The contrib App is installed on the contribution fork only (contents: write). Do not register that App from an EMU account if the App would then be enterprise-scoped and unable to see public github.com repositories.
+The contrib App is installed on that organization, contents write, and the minted token lists only the fork from `contribUrl`. Do not register that App from an EMU account if the App would then be enterprise-scoped and unable to see public github.com repositories.
 
 `uplink-sync.yml` fetches public `upstream` over git with `UPLINK_UPSTREAM_*` and classifies new commits against the queue (trailer / patch-id). Flow-back of our patches updates `uplink/upstream` immediately. Foreign commits wait on Environment **`from-upstream`** (review gate only; do not put `UPLINK_INTERNAL_*` there). It does **not** mint the contrib write App. If hourly sync later treats the GitHub PR as merged via the API, that call uses `UPLINK_UPSTREAM_TOKEN` (contents read and pull requests write on the public parent; the same token as authenticated `git fetch` and the public pull request).
 
@@ -189,11 +187,9 @@ In the company product repo:
 | Secret | Purpose |
 | --- | --- |
 | `UPLINK_CONTRIB_TOKEN` | When `UPLINK_CONTRIB_AUTH=pat`. Delete the fork branch. Closing the public PR uses repository `UPLINK_UPSTREAM_TOKEN` |
-| `UPLINK_CONTRIB_APP_ID` / `UPLINK_CONTRIB_APP_PRIVATE_KEY` | When `UPLINK_CONTRIB_AUTH=app` |
-| `UPLINK_CONTRIB_OWNER` | Fork owner. Omit when it matches repository `UPLINK_UPSTREAM_OWNER` |
-| `UPLINK_CONTRIB_REPO` | Contribution fork repository name |
+| `UPLINK_CONTRIB_APP_ID` / `UPLINK_CONTRIB_APP_PRIVATE_KEY` | When `UPLINK_CONTRIB_AUTH=app` and the fork is in the same organization as the parent |
 
-The contrib App is the same installation as submit (fork contents: write only).
+The contrib App is the same installation as submit (fork contents: write only). The workflow reads the fork owner and name from `contribUrl`.
 
 `--to-internal` of a patch that was never submitted does not dispatch this workflow (`gh.prClose` is omitted). `--to-upstream` never abandons a public PR.
 

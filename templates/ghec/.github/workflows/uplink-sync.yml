@@ -49,6 +49,49 @@ jobs:
           permission-contents: write
           permission-workflows: write
 
+      - name: Read upstream and contrib from the queue
+        id: queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
+          parse_owner_repo() {
+            local url=$1 owner repo
+            if [[ "$url" =~ github.com[:/]([^/]+)/(.+)$ ]]; then
+              owner=${BASH_REMATCH[1]}
+              repo=${BASH_REMATCH[2]}
+              repo=${repo%.git}
+              repo=${repo%/}
+              printf '%s\n%s\n' "$owner" "$repo"
+              return 0
+            fi
+            echo "Could not parse GitHub owner/repo from queue URL" >&2
+            return 1
+          }
+          upstream_url=$(jq -r '.config.upstreamUrl // empty' <<<"$queue")
+          contrib_url=$(jq -r '.config.contribUrl // empty' <<<"$queue")
+          if [ -z "$upstream_url" ] || [ -z "$contrib_url" ]; then
+            echo "queue.json is missing upstreamUrl or contribUrl" >&2
+            exit 1
+          fi
+          mapfile -t upstream < <(parse_owner_repo "$upstream_url")
+          mapfile -t contrib < <(parse_owner_repo "$contrib_url")
+          same_owner=false
+          upstream_lc=$(printf '%s' "${upstream[0]}" | tr '[:upper:]' '[:lower:]')
+          contrib_lc=$(printf '%s' "${contrib[0]}" | tr '[:upper:]' '[:lower:]')
+          if [ "$upstream_lc" = "$contrib_lc" ]; then
+            same_owner=true
+          fi
+          {
+            echo "upstream_owner=${upstream[0]}"
+            echo "upstream_repo=${upstream[1]}"
+            echo "contrib_owner=${contrib[0]}"
+            echo "contrib_repo=${contrib[1]}"
+            echo "same_owner=${same_owner}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Mint upstream GitHub App token
         id: upstream-app
         if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
@@ -56,8 +99,8 @@ jobs:
         with:
           app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
           private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
-          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
-          repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          owner: ${{ steps.queue.outputs.upstream_owner }}
+          repositories: ${{ steps.queue.outputs.upstream_repo }}
           permission-contents: read
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -163,6 +206,49 @@ jobs:
           permission-contents: write
           permission-workflows: write
 
+      - name: Read upstream and contrib from the queue
+        id: queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
+          parse_owner_repo() {
+            local url=$1 owner repo
+            if [[ "$url" =~ github.com[:/]([^/]+)/(.+)$ ]]; then
+              owner=${BASH_REMATCH[1]}
+              repo=${BASH_REMATCH[2]}
+              repo=${repo%.git}
+              repo=${repo%/}
+              printf '%s\n%s\n' "$owner" "$repo"
+              return 0
+            fi
+            echo "Could not parse GitHub owner/repo from queue URL" >&2
+            return 1
+          }
+          upstream_url=$(jq -r '.config.upstreamUrl // empty' <<<"$queue")
+          contrib_url=$(jq -r '.config.contribUrl // empty' <<<"$queue")
+          if [ -z "$upstream_url" ] || [ -z "$contrib_url" ]; then
+            echo "queue.json is missing upstreamUrl or contribUrl" >&2
+            exit 1
+          fi
+          mapfile -t upstream < <(parse_owner_repo "$upstream_url")
+          mapfile -t contrib < <(parse_owner_repo "$contrib_url")
+          same_owner=false
+          upstream_lc=$(printf '%s' "${upstream[0]}" | tr '[:upper:]' '[:lower:]')
+          contrib_lc=$(printf '%s' "${contrib[0]}" | tr '[:upper:]' '[:lower:]')
+          if [ "$upstream_lc" = "$contrib_lc" ]; then
+            same_owner=true
+          fi
+          {
+            echo "upstream_owner=${upstream[0]}"
+            echo "upstream_repo=${upstream[1]}"
+            echo "contrib_owner=${contrib[0]}"
+            echo "contrib_repo=${contrib[1]}"
+            echo "same_owner=${same_owner}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Mint upstream GitHub App token
         id: upstream-app
         if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
@@ -170,8 +256,8 @@ jobs:
         with:
           app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
           private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
-          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
-          repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          owner: ${{ steps.queue.outputs.upstream_owner }}
+          repositories: ${{ steps.queue.outputs.upstream_repo }}
           permission-contents: read
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

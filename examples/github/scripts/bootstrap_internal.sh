@@ -22,7 +22,7 @@ need_cmd git-uplink
 require_clone UPSTREAM_DIR
 require_clone CONTRIB_DIR
 require_clone INTERNAL_DIR
-ensure_contrib_owner_differs
+ensure_contrib_repo
 
 echo "Upstream clone: $UPSTREAM_DIR  ($UPSTREAM)"
 echo "Contrib clone:  $CONTRIB_DIR   ($CONTRIB)"

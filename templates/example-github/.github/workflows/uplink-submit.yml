@@ -5,8 +5,9 @@
 # Origin reads and uplink/state fast-forwards use the Actions token
 # (UPLINK_INTERNAL_TOKEN). Contrib force-push mints UPLINK_CONTRIB_*.
 # The public pull request is POST /repos/{parent}/pulls with UPLINK_UPSTREAM_*
-# (contents read, pull requests write on the parent only) and
-# maintainer_can_modify false. head is <contrib_org>:<branch>.
+# (contents read on the parent and the fork, pull requests write, no contents
+# write on the fork) and maintainer_can_modify false. head is <contrib_org>:<branch>.
+# Owner and repo come from queue.json. App mint runs only when both are the same owner.
 name: Uplink submit
 run-name: Uplink submit ${{ inputs.patch_id }}
 
@@ -153,26 +154,69 @@ jobs:
         with:
           src: ${{ vars.UPLINK_SRC }}
           rev: ${{ vars.UPLINK_REV }}
+      - name: Read upstream and contrib from the queue
+        id: queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
+          parse_owner_repo() {
+            local url=$1 owner repo
+            if [[ "$url" =~ github.com[:/]([^/]+)/(.+)$ ]]; then
+              owner=${BASH_REMATCH[1]}
+              repo=${BASH_REMATCH[2]}
+              repo=${repo%.git}
+              repo=${repo%/}
+              printf '%s\n%s\n' "$owner" "$repo"
+              return 0
+            fi
+            echo "Could not parse GitHub owner/repo from queue URL" >&2
+            return 1
+          }
+          upstream_url=$(jq -r '.config.upstreamUrl // empty' <<<"$queue")
+          contrib_url=$(jq -r '.config.contribUrl // empty' <<<"$queue")
+          if [ -z "$upstream_url" ] || [ -z "$contrib_url" ]; then
+            echo "queue.json is missing upstreamUrl or contribUrl" >&2
+            exit 1
+          fi
+          mapfile -t upstream < <(parse_owner_repo "$upstream_url")
+          mapfile -t contrib < <(parse_owner_repo "$contrib_url")
+          same_owner=false
+          upstream_lc=$(printf '%s' "${upstream[0]}" | tr '[:upper:]' '[:lower:]')
+          contrib_lc=$(printf '%s' "${contrib[0]}" | tr '[:upper:]' '[:lower:]')
+          if [ "$upstream_lc" = "$contrib_lc" ]; then
+            same_owner=true
+          fi
+          {
+            echo "upstream_owner=${upstream[0]}"
+            echo "upstream_repo=${upstream[1]}"
+            echo "contrib_owner=${contrib[0]}"
+            echo "contrib_repo=${contrib[1]}"
+            echo "same_owner=${same_owner}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Mint contrib GitHub App token
         id: contrib-app
-        if: ${{ vars.UPLINK_CONTRIB_AUTH == 'app' }}
+        if: ${{ vars.UPLINK_CONTRIB_AUTH == 'app' && steps.queue.outputs.same_owner == 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.UPLINK_CONTRIB_APP_ID }}
           private-key: ${{ secrets.UPLINK_CONTRIB_APP_PRIVATE_KEY }}
-          owner: ${{ secrets.UPLINK_CONTRIB_OWNER || secrets.UPLINK_UPSTREAM_OWNER }}
-          repositories: ${{ secrets.UPLINK_CONTRIB_REPO }}
+          owner: ${{ steps.queue.outputs.contrib_owner }}
+          repositories: ${{ steps.queue.outputs.contrib_repo }}
           permission-contents: write
 
       - name: Mint upstream GitHub App token
         id: upstream-app
-        if: ${{ vars.UPLINK_UPSTREAM_AUTH == 'app' }}
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH == 'app' && steps.queue.outputs.same_owner == 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
           private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
-          owner: ${{ secrets.UPLINK_UPSTREAM_OWNER }}
-          repositories: ${{ secrets.UPLINK_UPSTREAM_REPO }}
+          owner: ${{ steps.queue.outputs.upstream_owner }}
+          repositories: ${{ steps.queue.outputs.upstream_repo }},${{ steps.queue.outputs.contrib_repo }}
           permission-contents: read
           permission-pull-requests: write
 
@@ -191,6 +235,27 @@ jobs:
 
           repo=$(jq -r '.gh.prCreate.repo // empty' <<<"$submit_json")
           head=$(jq -r '.gh.prCreate.head // empty' <<<"$submit_json")
+          if [ -n "$repo" ] && [ -n "$head" ]; then
+            parent_owner=${repo%%/*}
+            head_owner=${head%%:*}
+            parent_lc=$(printf '%s' "$parent_owner" | tr '[:upper:]' '[:lower:]')
+            head_lc=$(printf '%s' "$head_owner" | tr '[:upper:]' '[:lower:]')
+            if [ "$parent_lc" = "$head_lc" ]; then
+              account_type=$(gh api "users/${parent_owner}" --jq '.type // empty' || true)
+              if [ "$account_type" = "User" ]; then
+                echo "Upstream and the contribution fork cannot both be under a user account. Fork into the same organization, or use a different owner with a machine user classic PAT."
+                exit 1
+              fi
+            else
+              case "$GH_TOKEN" in
+                ghp_*) ;;
+                *)
+                  echo "Upstream and the contribution fork are different owners. Fine-grained PATs and GitHub App tokens cannot open this pull request. Use a machine user with a classic PAT."
+                  exit 1
+                  ;;
+              esac
+            fi
+          fi
           url=$(jq -r '.existingPr.url // empty' <<<"$submit_json")
           if [ -z "$url" ] && [ -n "$repo" ] && [ -n "$head" ]; then
             url=$(gh pr list -R "$repo" --head "$head" --state open --json url --jq '.[0].url')
