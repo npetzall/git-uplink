@@ -138,9 +138,9 @@ Install on `uplink-example-internal` only.
 
 ### Upstream
 
-Authenticated `git fetch` of the public parent (sync, resolve, transfer) and the public pull request (submit `gh pr create`, abandon `gh pr close`). Contents **read** and pull requests **write** on `uplink-example-upstream` only. No access to the fork.
+Authenticated `git fetch` of the public parent (sync, resolve, transfer) and the public pull request (submit `POST /repos/{parent}/pulls`, abandon `gh pr close`). Contents **read** and pull requests **write** on `uplink-example-upstream` only. No access to the fork.
 
-Submit opens that PR with `--no-maintainer-edit`. This token cannot read the fork, so GitHub cannot grant maintainers push access to the head branch. A maintainer commit on that branch would also sit outside the queue: there is no path to bring it back onto company `main`.
+Submit opens that PR with `maintainer_can_modify` false. `head` is `<contrib_org>:<branch>`. This token cannot read the fork, so GitHub cannot grant maintainers push access to the head branch. A maintainer commit on that branch would also sit outside the queue: there is no path to bring it back onto company `main`.
 
 Repository secrets. Do not copy them onto `to-upstream` or `abandon-contrib`. Those jobs already read repository secrets. An environment copy of `UPLINK_UPSTREAM_OWNER` would hide the org and mint the App against the fork owner.
 
@@ -176,7 +176,7 @@ Sync, resolve, and transfer mint this App with contents read only. Submit and ab
 
 ### Contrib
 
-Force-pushes `uplink/<id>` on the fork during submit, and deletes that branch during abandon. Contents write on `uplink-example-upstream-contrib` only. No pull-request permission, and no install on the parent. `git uplink submit` uses `UPLINK_CONTRIB_TOKEN`; `gh pr create` does not.
+Force-pushes `uplink/<id>` on the fork during submit, and deletes that branch during abandon. Contents write on `uplink-example-upstream-contrib` only. No pull-request permission, and no install on the parent. `git uplink submit` uses `UPLINK_CONTRIB_TOKEN`. The public pull request uses the upstream token.
 
 Environment secrets on **`to-upstream`** and a copy on **`abandon-contrib`**. GitHub environments do not share secrets. Do not also store these at repository or organization level (sync and import must not see the fork write credential).
 

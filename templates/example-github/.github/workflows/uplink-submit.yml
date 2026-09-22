@@ -4,8 +4,9 @@
 # to-upstream environment. Empty UPLINK_*_AUTH defaults to pat.
 # Origin reads and uplink/state fast-forwards use the Actions token
 # (UPLINK_INTERNAL_TOKEN). Contrib force-push mints UPLINK_CONTRIB_*.
-# gh pr create uses UPLINK_UPSTREAM_* (contents read, pull requests write
-# on the parent only) and passes --no-maintainer-edit.
+# The public pull request is POST /repos/{parent}/pulls with UPLINK_UPSTREAM_*
+# (contents read, pull requests write on the parent only) and
+# maintainer_can_modify false. head is <contrib_org>:<branch>.
 name: Uplink submit
 run-name: Uplink submit ${{ inputs.patch_id }}
 
@@ -195,11 +196,17 @@ jobs:
             url=$(gh pr list -R "$repo" --head "$head" --state open --json url --jq '.[0].url')
           fi
           if [ -z "$url" ]; then
-            url=$(gh pr create -R "$repo" \
-              --head "$head" \
-              --base "$(jq -r .gh.prCreate.base <<<"$submit_json")" \
-              --title "$(jq -r .gh.prCreate.title <<<"$submit_json")" \
-              --body-file "$(jq -r .gh.prCreate.bodyFile <<<"$submit_json")" \
-              --no-maintainer-edit)
+            title=$(jq -r .gh.prCreate.title <<<"$submit_json")
+            body_file=$(jq -r .gh.prCreate.bodyFile <<<"$submit_json")
+            base=$(jq -r .gh.prCreate.base <<<"$submit_json")
+            url=$(gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${repo}/pulls" \
+              -f title="$title" \
+              -F "body=@${body_file}" \
+              -f head="$head" \
+              -f base="$base" \
+              -F maintainer_can_modify=false \
+              --jq .html_url)
           fi
           git uplink submitted "$PATCH_ID" --pr-url "$url"

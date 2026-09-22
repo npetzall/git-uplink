@@ -19,7 +19,7 @@ Sync, resolve, and transfer mint the internal PAT or App and pass it to `actions
 
 PR checks (`uplink-pr.yml`), the gate job, and submit copy `secrets.GITHUB_TOKEN` into `UPLINK_INTERNAL_TOKEN`. That covers origin reads (init, assess, preflight) and fast-forwards of `uplink/state` (submit packet, finalize, and `git uplink submitted`). The binary does not read `GITHUB_TOKEN`; the workflow assigns it. The gate shell `git fetch` of the protected base uses that token as an `http.<server>/.extraheader` for one command. Checkout on PR checks, gate, import, and the submit job stays `persist-credentials: false`. Packet and finalize keep `persist-credentials: true` with the default Actions token so their shell `git push` of `uplink/state` can authenticate.
 
-Import keeps the internal PAT or App: `git uplink rebuild --push` force-pushes `main`, which can include workflow files. The submit job uses `UPLINK_CONTRIB_*` for the contrib force-push and `UPLINK_UPSTREAM_*` as `GH_TOKEN` for `gh pr create --no-maintainer-edit`. `GITHUB_TOKEN` is also `GH_TOKEN` for `gh` on the company repo (PR comments, dispatching the assessment hook). Company-repo `gh` that runs after `git uplink init` sets `GH_REPO` to the company repository, because init adds the `upstream` remote and `gh` would otherwise query that public parent. It cannot open the public pull request. Import, sync, resolve, and transfer mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write. Submit and abandon mint the contrib App (fork contents write) and the upstream App (contents read and pull requests write on the parent).
+Import keeps the internal PAT or App: `git uplink rebuild --push` force-pushes `main`, which can include workflow files. The submit job uses `UPLINK_CONTRIB_*` for the contrib force-push and `UPLINK_UPSTREAM_*` as `GH_TOKEN` for `POST /repos/{parent}/pulls` (`maintainer_can_modify` false; `head` is `<contrib_org>:<branch>`). `GITHUB_TOKEN` is also `GH_TOKEN` for `gh` on the company repo (PR comments, dispatching the assessment hook). Company-repo `gh` that runs after `git uplink init` sets `GH_REPO` to the company repository, because init adds the `upstream` remote and `gh` would otherwise query that public parent. It cannot open the public pull request. Import, sync, resolve, and transfer mint an App token when the matching `UPLINK_*_AUTH` is empty or `app`. The internal App or PAT needs **contents** and **workflows** write. Submit and abandon mint the contrib App (fork contents write) and the upstream App (contents read and pull requests write on the parent).
 
 ## Workflows
 
@@ -32,7 +32,7 @@ Import keeps the internal PAT or App: `git uplink rebuild --push` force-pushes `
 - **Transfer** (`uplink-transfer.yml`) — dispatch from `main` with a patch id and `to-upstream` / `to-internal`. `git uplink transfer` moves the patch immediately when apply, assess (for `--to-upstream`), and preflight pass. `--to-internal` refuses while another **active** patch still on `upstream[]` lists this id in `dependsOn` (move those dependents `--to-internal` first). If bytes must change, it pushes `uplink/transfer-to-*/<id>` plus `-work` and the workflow opens a PR (queue unchanged). Merging runs `--complete` (`pull_request_target`, YAML from the default branch). Closing the PR without merging deletes both branches. Successful `--to-internal` of a submitted patch dispatches **Uplink abandon contrib** and does not wait.
 - **Abandon contrib** (`uplink-abandon.yml`) — `workflow_dispatch` from `main`, Environment **`abandon-contrib`**. Closes the public PR with `UPLINK_UPSTREAM_*` and deletes `uplink/<id>` on the contrib fork with `UPLINK_CONTRIB_*`. No `uplink-mutate`. Until this environment is approved, company state is already internal-only while the public leftover remains.
 - **Gate** (`uplink-gate.yml`) — required check on PRs into the three protected bases (`pull_request_target`, YAML from the default branch). Fails if conflict markers remain, or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`). Product workflows (`ci.yml`, and so on) may still change. Transfer-to-upstream PRs also run export preflight / `UPLINK_PREFLIGHT`. These PRs are not imports to `main`.
-- **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`to-upstream` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits `assessment.md` (full contribution, or a delta-first packet when status is `amended`). Finalize optionally dispatches company `.github/workflows/uplink-assessment-hook.yml`, downloads artifact `uplink-packet-extra` from that run, and prepends those markdown files onto the packet. Environment reviewers then approve; the same run `git uplink approve` + `git uplink submit` (contrib git push) + `gh pr create --no-maintainer-edit` + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR. Do not edit this workflow to add company scans — add the assessment hook instead.
+- **Submit** (`uplink-submit.yml`) — IP / contribution approval via the **`to-upstream` GitHub Environment**. Dispatch with a patch id (operators, or automatically after resolve of a submitted patch). The packet job commits `assessment.md` (full contribution, or a delta-first packet when status is `amended`). Finalize optionally dispatches company `.github/workflows/uplink-assessment-hook.yml`, downloads artifact `uplink-packet-extra` from that run, and prepends those markdown files onto the packet. Environment reviewers then approve; the same run `git uplink approve` + `git uplink submit` (contrib git push) + `POST /repos/{parent}/pulls` with `maintainer_can_modify` false + `git uplink submitted` (records the PR and pushes `uplink/state`). If `upstream.pr_number` is already stored, the workflow reuses that URL and does not open a second PR. Preflight runs again; a failing build/test means no fork push and no public PR. Do not edit this workflow to add company scans — add the assessment hook instead.
 
 Repo variables:
 
@@ -62,7 +62,7 @@ This is the documented option. Use it instead of asking an operator to run `git 
 2. **Committed report** — `.uplink/reports/<id>/assessment.md` on `uplink/state`. The `to-upstream` deployment URL points at that file. Reports live on the orphan branch, so a later product rebuild does not drop them.
 3. **Environment review UI** — GitHub pauses the submit job until a required reviewer approves the `to-upstream` deployment. That click is the IP gate.
 
-After approval, the submit job writes `.uplink/reports/<id>/approval.md` (in-repo receipt), runs `git uplink approve`, `git uplink submit` (contrib git push), `gh pr create --no-maintainer-edit`, then `git uplink submitted` (records the PR and pushes `uplink/state` with `UPLINK_INTERNAL_TOKEN` set to `secrets.GITHUB_TOKEN`). This job mints the contrib App (fork push) and the upstream App (public PR). Maintainer edits stay off: the upstream credential has no read on the fork, and a maintainer commit on the fork branch would not come back onto the queue.
+After approval, the submit job writes `.uplink/reports/<id>/approval.md` (in-repo receipt), runs `git uplink approve`, `git uplink submit` (contrib git push), `POST /repos/{parent}/pulls` with `maintainer_can_modify` false, then `git uplink submitted` (records the PR and pushes `uplink/state` with `UPLINK_INTERNAL_TOKEN` set to `secrets.GITHUB_TOKEN`). This job mints the contrib App (fork push) and the upstream App (public PR). Maintainer edits stay off: the upstream credential has no read on the fork, and a maintainer commit on the fork branch would not come back onto the queue.
 
 ### Why the GitHub audit log is the source of truth
 
@@ -81,7 +81,7 @@ In the company product repo (private forge; GHEC EMU is one implementation):
 2. **Required reviewers** — add the IP/legal team (or named reviewers). Turn on **Prevent self-review**.
 3. **Deployment branches** — restrict to `main` so a dispatch from another ref cannot export.
 4. Optional wait timer if policy wants a cooling-off period.
-5. **Credentials** — three isolated roles. Workflows use a PAT (`UPLINK_*_TOKEN`) or mint an App installation token (`UPLINK_*_AUTH=app`). `gh pr create --no-maintainer-edit` uses the upstream TOKEN (repository secret). The contrib TOKEN only force-pushes the fork.
+5. **Credentials** — three isolated roles. Workflows use a PAT (`UPLINK_*_TOKEN`) or mint an App installation token (`UPLINK_*_AUTH=app`). `POST /repos/{parent}/pulls` with `maintainer_can_modify` false uses the upstream TOKEN (repository secret). The contrib TOKEN only force-pushes the fork.
 
 **Repository secrets** (sync/import/resolve must not wait on `to-upstream` or `from-upstream`):
 
@@ -89,7 +89,7 @@ In the company product repo (private forge; GHEC EMU is one implementation):
 | --- | --- |
 | `UPLINK_INTERNAL_TOKEN` | Product origin push (force-push `main`, conflict and transfer branches, workflow files) on import, sync, resolve, and transfer when `UPLINK_INTERNAL_AUTH=pat`. Needs contents + workflows write. PR checks, gate, and submit state writes use the Actions `GITHUB_TOKEN` instead |
 | `UPLINK_INTERNAL_APP_ID` / `UPLINK_INTERNAL_APP_PRIVATE_KEY` | When `UPLINK_INTERNAL_AUTH=app`. Install with contents + workflows write |
-| `UPLINK_UPSTREAM_TOKEN` | Authenticated `git fetch` of public upstream, and `GH_TOKEN` for `gh pr create --no-maintainer-edit` / `gh pr close`, when `UPLINK_UPSTREAM_AUTH=pat`. Contents read and pull requests write on the parent. No access to the fork |
+| `UPLINK_UPSTREAM_TOKEN` | Authenticated `git fetch` of public upstream, and `GH_TOKEN` for `POST /repos/{parent}/pulls` (`maintainer_can_modify` false) / `gh pr close`, when `UPLINK_UPSTREAM_AUTH=pat`. Contents read and pull requests write on the parent. No access to the fork |
 | `UPLINK_UPSTREAM_APP_ID` / `UPLINK_UPSTREAM_APP_PRIVATE_KEY` | When `UPLINK_UPSTREAM_AUTH=app`. Install on the parent with contents read and pull requests write. Fetch jobs mint contents read only; submit and abandon also request pull requests write |
 | `UPLINK_UPSTREAM_OWNER` | Account that owns the public parent (required for the upstream App mint). Do not copy this onto an environment: an environment value would hide the parent owner inside submit and abandon |
 | `UPLINK_UPSTREAM_REPO` | Public parent repository name (required for upstream `app` mint) |
@@ -100,7 +100,7 @@ Do not give the upstream role contents write, and do not give it access to the c
 
 | Secret | Purpose |
 | --- | --- |
-| `UPLINK_CONTRIB_TOKEN` | Contrib force-push when `UPLINK_CONTRIB_AUTH=pat`. Not used for `gh pr create` |
+| `UPLINK_CONTRIB_TOKEN` | Contrib force-push when `UPLINK_CONTRIB_AUTH=pat`. The public pull request uses the upstream token |
 | `UPLINK_CONTRIB_APP_ID` | GitHub App id (registered on public github.com) |
 | `UPLINK_CONTRIB_APP_PRIVATE_KEY` | App private key |
 | `UPLINK_CONTRIB_OWNER` | Account that owns the contribution fork. Omit when that account is `UPLINK_UPSTREAM_OWNER`; the workflow falls back |
@@ -108,7 +108,7 @@ Do not give the upstream role contents write, and do not give it access to the c
 
 The contrib App is installed on the contribution fork only (contents: write). Do not register that App from an EMU account if the App would then be enterprise-scoped and unable to see public github.com repositories.
 
-`uplink-sync.yml` fetches public `upstream` over git with `UPLINK_UPSTREAM_*` and classifies new commits against the queue (trailer / patch-id). Flow-back of our patches updates `uplink/upstream` immediately. Foreign commits wait on Environment **`from-upstream`** (review gate only; do not put `UPLINK_INTERNAL_*` there). It does **not** mint the contrib write App. If hourly sync later treats the GitHub PR as merged via the API, that call uses `UPLINK_UPSTREAM_TOKEN` (contents read and pull requests write on the public parent; the same token as authenticated `git fetch` and `gh pr create`).
+`uplink-sync.yml` fetches public `upstream` over git with `UPLINK_UPSTREAM_*` and classifies new commits against the queue (trailer / patch-id). Flow-back of our patches updates `uplink/upstream` immediately. Foreign commits wait on Environment **`from-upstream`** (review gate only; do not put `UPLINK_INTERNAL_*` there). It does **not** mint the contrib write App. If hourly sync later treats the GitHub PR as merged via the API, that call uses `UPLINK_UPSTREAM_TOKEN` (contents read and pull requests write on the public parent; the same token as authenticated `git fetch` and the public pull request).
 
 The company-repo `GITHUB_TOKEN` (on GHEC EMU, the enterprise token) is `GH_TOKEN` for `gh pr comment` on the company repo and for dispatching the assessment hook. PR checks, gate, and submit copy it into `UPLINK_INTERNAL_TOKEN` for origin reads and fast-forwards of `uplink/state`. Sync, resolve, and transfer shell origin git uses the persisted internal PAT or App. Packet and finalize persist `GITHUB_TOKEN` for their shell `git push` of `uplink/state`. Import and the submit job do not persist checkout credentials. The Actions token cannot open the public pull request. `git uplink` does not read `GITHUB_TOKEN` unless a workflow assigns it to `UPLINK_INTERNAL_TOKEN`.
 
@@ -144,7 +144,7 @@ submit job waits on environment to-upstream   ← IP/legal reviews packet
 approval.md committed; git uplink approve; git uplink submit
         │
         ▼
-gh pr create --no-maintainer-edit (or reuse existing URL); git uplink submitted
+POST /repos/{parent}/pulls with maintainer_can_modify false (or reuse existing URL); git uplink submitted
         │
         ▼
 fork branch + public PR (first bytes leaving the private forge)
@@ -161,7 +161,7 @@ Local equivalent when you are not on Actions (engine tests, a break-glass operat
 git uplink report upl_…
 git uplink approve upl_…
 git uplink submit upl_…
-gh pr create --no-maintainer-edit …   # from submit JSON
+gh api --method POST /repos/<parent>/pulls -f head='<contrib_org>:<branch>' -F maintainer_can_modify=false …
 git uplink submitted upl_… --pr-url <url>
 ```
 
