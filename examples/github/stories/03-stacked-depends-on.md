@@ -14,6 +14,8 @@ Work in the **internal** clone.
 
 ```bash
 git uplink reset
+git fetch origin --prune
+git uplink status
 ```
 
 ## Import Asha
@@ -21,7 +23,7 @@ git uplink reset
 Same as [story 1](01-solo-fix.md) through import (do not submit yet):
 
 ```bash
-git checkout -b feat/sha256
+git switch -C feat/sha256 main
 git apply "$KIT/patches/asha-sha256.diff"
 git add -A && git commit -m "Use SHA-256 for tokens"
 git push -u origin feat/sha256
@@ -57,7 +59,7 @@ Copy Asha’s `upl_…` id (the SHA-256 row, not the workflows patch).
 
 ```bash
 git uplink reset
-git checkout -b feat/ben-log-nodep
+git switch -C feat/ben-log-nodep main
 git apply "$KIT/patches/ben-log.diff"
 git add -A && git commit -m "Log token hashes"
 git push -u origin feat/ben-log-nodep
@@ -86,7 +88,7 @@ Uplink-Export-Author: Ben <ben@users.noreply.github.com>
 
 ```bash
 git uplink reset
-git checkout -b feat/ben-log
+git switch -C feat/ben-log main
 git apply "$KIT/patches/ben-log.diff"
 git add -A && git commit -m "Log token hashes"
 git push -u origin feat/ben-log

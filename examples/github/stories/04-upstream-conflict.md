@@ -12,12 +12,15 @@ export KIT=/path/to/git-uplink/examples/github
 
 ```bash
 git uplink reset
+git fetch origin --prune
+git uplink status
 ```
 
 In **upstream**:
 
 ```bash
-git fetch origin && git checkout main && git reset --hard origin/main
+git fetch origin --prune
+git switch -C main origin/main
 ```
 
 ## Import Ben’s TTL
@@ -25,7 +28,7 @@ git fetch origin && git checkout main && git reset --hard origin/main
 In **internal**:
 
 ```bash
-git checkout -b feat/ttl
+git switch -C feat/ttl main
 git apply "$KIT/patches/ben-ttl.diff"
 git add -A && git commit -m "Extend TTL"
 git push -u origin feat/ttl

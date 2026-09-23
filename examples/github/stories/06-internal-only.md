@@ -14,12 +14,14 @@ Work in the **internal** clone.
 
 ```bash
 git uplink reset
+git fetch origin --prune
+git uplink status
 ```
 
 ## Prepare fails without the label
 
 ```bash
-git checkout -b feat/telemetry-public
+git switch -C feat/telemetry-public main
 git apply "$KIT/patches/internal-telemetry.diff"
 git add -A && git commit -m "Vendor telemetry"
 git push -u origin feat/telemetry-public
@@ -50,7 +52,7 @@ Do **not** add `uplink:internal-only`.
 
 ```bash
 git uplink reset
-git checkout -b feat/telemetry
+git switch -C feat/telemetry main
 git apply "$KIT/patches/internal-telemetry.diff"
 git add -A && git commit -m "Vendor telemetry"
 git push -u origin feat/telemetry

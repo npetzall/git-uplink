@@ -16,6 +16,8 @@ Work in the **internal** clone.
 
 ```bash
 git uplink reset
+git fetch origin --prune
+git uplink status
 ```
 
 ## Import Asha and Ben (independent)
@@ -23,13 +25,12 @@ git uplink reset
 Same as [story 2](02-parallel-independent.md) through import. Both patches apply to seed `main`.
 
 ```bash
-git checkout -b feat/sha256
+git switch -C feat/sha256 main
 git apply "$KIT/patches/asha-sha256.diff"
 git add -A && git commit -m "Use SHA-256 for tokens"
 git push -u origin feat/sha256
 
-git checkout main
-git checkout -b feat/ttl
+git switch -C feat/ttl main
 git apply "$KIT/patches/ben-ttl.diff"
 git add -A && git commit -m "Extend TTL"
 git push -u origin feat/ttl
@@ -84,7 +85,7 @@ Copy `ASHA_ID` and `BEN_ID`. Company `main` has `sha256` and `ttl() == 7200`.
 
 ```bash
 git uplink reset
-git checkout -b feat/cam
+git switch -C feat/cam main
 git apply "$KIT/patches/cam-wire.diff"
 git add -A && git commit -m "Wire hash into a describe helper"
 git push -u origin feat/cam

@@ -275,12 +275,15 @@ Then in the clones:
 ```bash
 # internal
 git uplink reset
+git fetch origin --prune
+git uplink status
 
 # upstream (when the story touches it)
-git fetch origin
-git checkout main
-git reset --hard origin/main
+git fetch origin --prune
+git switch -C main origin/main
 ```
+
+Actions clears remotes; `git fetch origin --prune` drops stale remote-tracking branches, and `git switch -C <branch> main` recreates a clean local feature branch from company `main` (even if that branch name already exists from a previous story).
 
 ## Optional: branch protection
 

@@ -16,6 +16,8 @@ Work in the **internal** clone.
 
 ```bash
 git uplink reset
+git fetch origin --prune
+git uplink status
 ```
 
 Queue: only the internal-only tooling patch. Stories 01–06 stay pack-only; this file is not on seed.
@@ -25,7 +27,7 @@ Queue: only the internal-only tooling patch. Stories 01–06 stay pack-only; thi
 Merging a workflow file needs **workflows** write (example org owner).
 
 ```bash
-git checkout -b feat/assessment-hook
+git switch -C feat/assessment-hook main
 mkdir -p .github/workflows
 cp "$KIT/patches/uplink-assessment-hook.yml" .github/workflows/uplink-assessment-hook.yml
 git add .github/workflows/uplink-assessment-hook.yml
@@ -62,7 +64,7 @@ The hook patch is `queued` on the **internal** queue. Company `main` has `.githu
 ## Land Asha (upstream-bound)
 
 ```bash
-git checkout -b feat/sha256
+git switch -C feat/sha256 main
 git apply "$KIT/patches/asha-sha256.diff"
 git add -A
 git commit -m "Use SHA-256 for tokens"
