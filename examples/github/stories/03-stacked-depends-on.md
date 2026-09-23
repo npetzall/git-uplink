@@ -43,7 +43,7 @@ Replace SHA-1 in the default hasher with SHA-256.
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-1234
-Uplink-Export-Author: Asha <asha@users.noreply.github.com>
+Uplink-Export-Author: Asha <asha@example.com>
 ```
 
 Wait for checks. Merge.
@@ -79,7 +79,7 @@ Log the hasher path before returning a digest so operators can trace token hashi
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-2002
-Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+Uplink-Export-Author: Ben <ben@example.com>
 ```
 
 **Uplink upstream preflight** should fail and comment suggested `Uplink-Depends-On` lines. Do not merge. Close the PR in the GitHub UI.
@@ -108,7 +108,7 @@ Log the hasher path before returning a digest so operators can trace token hashi
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-2002
-Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+Uplink-Export-Author: Ben <ben@example.com>
 Uplink-Depends-On: REPLACE_WITH_ASHA_ID
 ```
 

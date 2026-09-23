@@ -66,7 +66,7 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   set_var UPLINK_PREFLIGHT "npm test"
   set_var UPLINK_REDACT_KEYWORDS "companyTelemetry,AcmeCorp"
   set_var UPLINK_INTERNAL_DOMAINS "acme.example"
-  set_var UPLINK_EXPORT_AUTHOR "Uplink Example <uplink@users.noreply.github.com>"
+  set_var UPLINK_EXPORT_AUTHOR "Uplink Example <uplink@example.com>"
   set_var UPLINK_SRC "$UPLINK_SRC"
   set_var UPLINK_REV "$UPLINK_REV"
   set_var UPLINK_INTERNAL_AUTH "$UPLINK_INTERNAL_AUTH"

@@ -52,7 +52,7 @@ Replace SHA-1 in the default hasher with SHA-256.
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-1234
-Uplink-Export-Author: Asha <asha@users.noreply.github.com>
+Uplink-Export-Author: Asha <asha@example.com>
 ```
 
 Ben — title:
@@ -69,7 +69,7 @@ Extend the default token TTL from one hour to two.
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-2001
-Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+Uplink-Export-Author: Ben <ben@example.com>
 ```
 
 Wait for checks. Merge both.
@@ -105,7 +105,7 @@ Expose a describeToken helper that reports TTL and the current hash so callers c
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-3001
-Uplink-Export-Author: Cam <cam@users.noreply.github.com>
+Uplink-Export-Author: Cam <cam@example.com>
 Uplink-Depends-On: REPLACE_WITH_ASHA_ID
 Uplink-Depends-On: REPLACE_WITH_BEN_ID
 ```
