@@ -1750,6 +1750,74 @@ fn rebuild_push_publishes_state_and_main() {
 }
 
 #[test]
+fn rebuild_push_replaces_remote_main_that_moved() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&a, &b], "Metrics", "upstream"),
+            adopt_group(&[&c], "Dashboards", "internal-only"),
+        ],
+    );
+    let origin = keep_dir();
+    git(
+        &origin,
+        &["init", "--bare", "-b", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &world.company,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    rebuild_with(
+        &world.company,
+        RebuildOpts {
+            push: true,
+            push_remote: Some("origin".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let replay = rev(&world.company);
+    git(
+        &world.company,
+        &["commit", "--allow-empty", "-m", "stray merge"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &world.company,
+        &["push", "--quiet", "origin", "HEAD:main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let moved = git_ok(&origin, &["rev-parse", "main"]).unwrap();
+    assert_ne!(moved, replay);
+    git(
+        &world.company,
+        &["reset", "--hard", "--quiet", &replay],
+        GitOpts::default(),
+    )
+    .unwrap();
+    rebuild_with(
+        &world.company,
+        RebuildOpts {
+            push: true,
+            push_remote: Some("origin".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let published = rev(&world.company);
+    assert_eq!(git_ok(&origin, &["rev-parse", "main"]).unwrap(), published);
+    assert_ne!(published, moved);
+}
+
+#[test]
 fn add_records_the_patch_and_rebuilds_upstream_under_internal() {
     let world = setup_world();
     let company = &world.company;
@@ -1856,6 +1924,107 @@ fn add_refuses_when_the_change_is_not_on_main() {
     .unwrap_err();
     assert!(err.to_string().contains("not on company main yet"), "{err}");
     assert!(status_snapshot(company).unwrap().queue.upstream.is_empty());
+}
+
+#[test]
+fn add_from_explicit_range_does_not_require_company_main() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let from = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let main_before = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let not_on_main = git(
+        company,
+        &["merge-base", "--is-ancestor", &head, "main"],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .unwrap();
+    assert_ne!(not_on_main.code, 0);
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some(from),
+            head_ref: Some(head),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        git_ok(company, &["rev-parse", "main"]).unwrap(),
+        main_before
+    );
+    assert!(
+        status_snapshot(company)
+            .unwrap()
+            .queue
+            .is_upstream(&patch.id)
+    );
+}
+
+#[test]
+fn internal_only_add_from_explicit_range_does_not_rebuild_main() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_all(company, "internal notes");
+    let from = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let main_before = git_ok(company, &["rev-parse", "main"]).unwrap();
+    let patch = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some(from),
+            head_ref: Some(head),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        git_ok(company, &["rev-parse", "main"]).unwrap(),
+        main_before
+    );
+    assert!(
+        status_snapshot(company)
+            .unwrap()
+            .queue
+            .is_internal(&patch.id)
+    );
 }
 
 #[test]
@@ -3556,7 +3725,7 @@ fn status_reports_ahead_after_local_add() {
     )
     .unwrap();
     let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.state.ahead, Some(2));
+    assert_eq!(snapshot.state.ahead, Some(1));
     assert_eq!(snapshot.state.behind, Some(0));
     assert!(
         snapshot.state.uncommitted.is_empty(),
@@ -3607,7 +3776,7 @@ fn status_reports_behind_when_origin_moved() {
         local_before
     );
     assert_eq!(snapshot.state.ahead, Some(0));
-    assert_eq!(snapshot.state.behind, Some(2));
+    assert_eq!(snapshot.state.behind, Some(1));
     assert!(
         snapshot.state.uncommitted.is_empty(),
         "{:?}",
@@ -4258,6 +4427,24 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     let company = &world.company;
     git(
         company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "seed-internal\n");
+    commit_all(company, "seed internal");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Seed internal".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
         &["checkout", "-b", "feat/hash"],
         GitOpts::default(),
     )
@@ -4287,10 +4474,10 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     assert!(patch.commit_message.contains("PROJ-9999"));
     assert!(patch.commit_message.contains(DEFAULT_CUTOFF));
 
-    let company_msg = git_ok(company, &["log", "-1", "--format=%B", "main"]).unwrap();
-    assert!(company_msg.contains("Use SHA-256 for tokens"));
-    assert!(company_msg.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
-    assert!(!company_msg.contains("wip: ignore this git log"));
+    let company_log = git_ok(company, &["log", "--format=%B", "main"]).unwrap();
+    assert!(company_log.contains("Use SHA-256 for tokens"));
+    assert!(company_log.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
+    assert!(!company_log.contains("wip: ignore this git log"));
 
     let stored =
         fs::read_to_string(company.join(format!(".uplink/patches/{}.patch", patch.id))).unwrap();
@@ -4319,6 +4506,24 @@ fn does_not_squash_git_commit_messages_on_import() {
     let company = &world.company;
     git(
         company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "seed-internal\n");
+    commit_all(company, "seed internal");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Seed internal".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
         &["checkout", "-b", "feat/hash"],
         GitOpts::default(),
     )
@@ -4344,9 +4549,9 @@ fn does_not_squash_git_commit_messages_on_import() {
         },
     )
     .unwrap();
-    let company_msg = git_ok(company, &["log", "-1", "--format=%B", "main"]).unwrap();
-    assert!(company_msg.contains("Use SHA-256 for tokens"));
-    assert!(!company_msg.contains("WIP second"));
+    let company_log = git_ok(company, &["log", "--format=%B", "main"]).unwrap();
+    assert!(company_log.contains("Use SHA-256 for tokens"));
+    assert!(!company_log.contains("WIP second"));
     assert_eq!(patch.commit_message, "Use SHA-256 for tokens");
 }
 

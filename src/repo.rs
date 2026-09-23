@@ -885,36 +885,16 @@ pub fn ensure_company_branch_ref(repo: &Path, remote: &str, branch: &str) -> Res
     Ok(sha)
 }
 
-/// Force-with-lease push of a local branch (preview or company main).
-pub fn push_branch_force_lease(repo: &Path, remote: &str, branch: &str) -> Result<()> {
-    let fetch_spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-    let fetched = git(
-        repo,
-        &["fetch", "--quiet", remote, &fetch_spec],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
+/// Force-push a local branch (preview or company main).
+/// The published commit is a queue replay, so this does not lease the remote tip
+/// and does not fetch the branch first.
+pub fn push_branch_force(repo: &Path, remote: &str, branch: &str) -> Result<()> {
     let dest = format!("refs/heads/{branch}:refs/heads/{branch}");
-    if fetched.code == 0 {
-        let expected = git_ok(
-            repo,
-            &["rev-parse", &format!("refs/remotes/{remote}/{branch}")],
-        )?;
-        let lease = format!("--force-with-lease=refs/heads/{branch}:{expected}");
-        git(
-            repo,
-            &["push", "--quiet", &lease, remote, &dest],
-            GitOpts::default(),
-        )?;
-    } else {
-        git(
-            repo,
-            &["push", "--quiet", remote, &dest],
-            GitOpts::default(),
-        )?;
-    }
+    git(
+        repo,
+        &["push", "--quiet", "--force", remote, &dest],
+        GitOpts::default(),
+    )?;
     Ok(())
 }
 
