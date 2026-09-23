@@ -90,7 +90,7 @@ ensure_contrib_repo() {
 
 git_bot() {
   git -c user.name="Uplink Example" \
-    -c user.email="uplink-example@users.noreply.github.com" \
+    -c user.email="uplink-example@example.com" \
     -c commit.gpgsign=false "$@"
 }
 

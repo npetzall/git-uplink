@@ -101,7 +101,7 @@ Settings → Secrets and variables → Actions → Variables. `bootstrap_interna
 | `UPLINK_PREFLIGHT` | `npm test` | Build/test command on the export tree |
 | `UPLINK_REDACT_KEYWORDS` | `companyTelemetry,AcmeCorp` | Words that must not appear in a contribution |
 | `UPLINK_INTERNAL_DOMAINS` | `acme.example` | Email domains flagged in the export diff |
-| `UPLINK_EXPORT_AUTHOR` | `Uplink Example <uplink@users.noreply.github.com>` | Public identity for contribution commits |
+| `UPLINK_EXPORT_AUTHOR` | `Uplink Example <uplink@example.com>` | Public identity for contribution commits |
 | `UPLINK_SRC` | `npetzall/git-uplink` | Repo the example runner builds `git-uplink` from |
 | `UPLINK_REV` | `main` | Git ref of `UPLINK_SRC` |
 | `UPLINK_INTERNAL_AUTH` | `pat` | `pat` or `app` for the internal bot |

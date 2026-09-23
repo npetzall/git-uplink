@@ -44,8 +44,9 @@ Replace SHA-1 in the default hasher with SHA-256.
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-1234
-Uplink-Export-Author: Asha <asha@users.noreply.github.com>
 ```
+
+This PR body omits `Uplink-Export-Author`. On submit, the public commit uses the repo default `UPLINK_EXPORT_AUTHOR` (`Uplink Example <uplink@example.com>` from [`SETUP.md`](../SETUP.md)) — not Asha's git identity.
 
 Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green. The first run compiles git-uplink and is slow.
 

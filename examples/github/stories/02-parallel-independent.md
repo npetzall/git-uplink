@@ -50,7 +50,7 @@ Replace SHA-1 in the default hasher with SHA-256.
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-1234
-Uplink-Export-Author: Asha <asha@users.noreply.github.com>
+Uplink-Export-Author: Asha <asha@example.com>
 ```
 
 Ben — title:
@@ -67,7 +67,7 @@ Extend the default token TTL from one hour to two.
 ----- Uplink: internal below this line -----
 
 Ticket: PROJ-2001
-Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+Uplink-Export-Author: Ben <ben@example.com>
 ```
 
 Wait for assess + preflight on both. Merge Asha first, then Ben (one after the other; import is serialized by `uplink-mutate`).
