@@ -31,7 +31,24 @@ git add -A && git commit -m "Extend TTL"
 git push -u origin feat/ttl
 ```
 
-Open the PR in the GitHub UI; paste [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md). Wait for checks. Merge.
+Open the PR in the GitHub UI. Title:
+
+```text
+Extend TTL
+```
+
+Body:
+
+```text
+Extend the default token TTL from one hour to two.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-2001
+Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+```
+
+Wait for checks. Merge.
 
 ```bash
 git uplink reset

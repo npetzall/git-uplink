@@ -27,7 +27,24 @@ git add -A && git commit -m "Use SHA-256 for tokens"
 git push -u origin feat/sha256
 ```
 
-Open the PR in the GitHub UI; paste [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md). Wait for checks. Merge.
+Open the PR in the GitHub UI. Title:
+
+```text
+Use SHA-256 for tokens
+```
+
+Body:
+
+```text
+Replace SHA-1 in the default hasher with SHA-256.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-1234
+Uplink-Export-Author: Asha <asha@users.noreply.github.com>
+```
+
+Wait for checks. Merge.
 
 ```bash
 git uplink reset
@@ -46,7 +63,22 @@ git add -A && git commit -m "Log token hashes"
 git push -u origin feat/ben-log-nodep
 ```
 
-Open a PR. Body: [`ben-log.pr.md`](../patches/ben-log.pr.md) **without** the `Uplink-Depends-On` line.
+Open a PR. Title:
+
+```text
+Log token hashes
+```
+
+Body (**without** the `Uplink-Depends-On` line):
+
+```text
+Log the hasher path before returning a digest so operators can trace token hashing.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-2002
+Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+```
 
 **Uplink upstream preflight** should fail and comment suggested `Uplink-Depends-On` lines. Do not merge. Close the PR in the GitHub UI.
 
@@ -60,7 +92,25 @@ git add -A && git commit -m "Log token hashes"
 git push -u origin feat/ben-log
 ```
 
-Open a PR. Body: [`ben-log.pr.md`](../patches/ben-log.pr.md) with `REPLACE_WITH_ASHA_ID` changed to Asha’s id. Wait for checks. Merge.
+Open a PR. Title:
+
+```text
+Log token hashes
+```
+
+Body (change `REPLACE_WITH_ASHA_ID` to Asha’s id):
+
+```text
+Log the hasher path before returning a digest so operators can trace token hashing.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-2002
+Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+Uplink-Depends-On: REPLACE_WITH_ASHA_ID
+```
+
+Wait for checks. Merge.
 
 ```bash
 git uplink reset

@@ -24,7 +24,7 @@ After bootstrap, the queue already has one **internal-only** patch (Uplink tooli
 
 **Git (your clones):** branch, `git apply`, commit, `git push`. After import or Actions reset: `git uplink reset`. `git uplink status` for the queue.
 
-**GitHub UI (not the file editor):** Compare & pull request, paste the matching [`patches/*.pr.md`](patches/) into the body, add labels (`uplink:internal-only` when needed), merge after checks, Actions (**Reset example**, **Uplink submit**, **Uplink sync**), Review deployments for `to-upstream` (export) and `from-upstream` (inbound foreign commits), merge the upstream PR.
+**GitHub UI (not the file editor):** Compare & pull request, copy the title and body code blocks from the story, add labels (`uplink:internal-only` when needed), merge after checks, Actions (**Reset example**, **Uplink submit**, **Uplink sync**), Review deployments for `to-upstream` (export) and `from-upstream` (inbound foreign commits), merge the upstream PR.
 
 ## Stories
 
@@ -49,7 +49,6 @@ examples/github/
   reset/                per-repo reset scripts (published on example-reset)
   upstream/             tokenkit
   patches/*.diff        git apply these
-  patches/*.pr.md       paste into the GitHub PR body
   patches/*.yml         copy into the internal clone (assessment hook)
   scripts/bootstrap_*.sh  seed upstream, then contrib fork, then internal
   stories/

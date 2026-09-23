@@ -33,7 +33,24 @@ git commit -m "Add Uplink assessment hook"
 git push -u origin feat/assessment-hook
 ```
 
-Open a PR. On the **Open pull request** page, add label `uplink:internal-only` **before** you click Create. Title `Add Uplink assessment hook`. Body: [`uplink-assessment-hook.pr.md`](../patches/uplink-assessment-hook.pr.md). Wait for checks. Merge.
+Open a PR. On the **Open pull request** page, add label `uplink:internal-only` **before** you click Create. Title:
+
+```text
+Add Uplink assessment hook
+```
+
+Body:
+
+```text
+Company assessment hook for the IP packet. Internal-only; never submitted upstream.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-HOOK
+<!-- Label this PR uplink:internal-only. Merging a workflow file needs workflows write. -->
+```
+
+Wait for checks. Merge.
 
 ```bash
 git uplink reset
@@ -52,7 +69,24 @@ git commit -m "Use SHA-256 for tokens"
 git push -u origin feat/sha256
 ```
 
-Open a PR. Title: `Use SHA-256 for tokens`. Body: [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md). Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green. Merge.
+Open a PR. Title:
+
+```text
+Use SHA-256 for tokens
+```
+
+Body:
+
+```text
+Replace SHA-1 in the default hasher with SHA-256.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-1234
+Uplink-Export-Author: Asha <asha@users.noreply.github.com>
+```
+
+Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green. Merge.
 
 ```bash
 git uplink reset

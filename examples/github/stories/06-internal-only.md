@@ -25,7 +25,24 @@ git add -A && git commit -m "Vendor telemetry"
 git push -u origin feat/telemetry-public
 ```
 
-Open a PR in the GitHub UI. Title `Vendor telemetry`. Body: [`internal-telemetry.pr.md`](../patches/internal-telemetry.pr.md). Do **not** add `uplink:internal-only`.
+Open a PR in the GitHub UI. Title:
+
+```text
+Vendor telemetry
+```
+
+Body:
+
+```text
+Call company telemetry from the hasher. This change is not for upstream.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-9001
+<!-- Label this PR uplink:internal-only. companyTelemetry is in UPLINK_REDACT_KEYWORDS. -->
+```
+
+Do **not** add `uplink:internal-only`.
 
 **Uplink upstream assess** should fail: the export surface contains `companyTelemetry`. Close this PR.
 
