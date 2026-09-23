@@ -70,6 +70,29 @@ pub struct InitOpts {
     pub interactive: Option<bool>,
 }
 
+/// Queue produced by `init`. `tooling_changed` is set only by `--upgrade` when
+/// the embedded pack's patch substance differed from the stored tooling patch.
+#[derive(Debug)]
+pub struct InitResult {
+    pub queue: QueueState,
+    pub tooling_changed: bool,
+}
+
+impl std::ops::Deref for InitResult {
+    type Target = QueueState;
+
+    fn deref(&self) -> &QueueState {
+        &self.queue
+    }
+}
+
+fn settled(queue: QueueState) -> InitResult {
+    InitResult {
+        queue,
+        tooling_changed: false,
+    }
+}
+
 impl InitOpts {
     pub fn has_args(&self) -> bool {
         self.upstream_url.is_some()
@@ -112,23 +135,23 @@ fn config_from_opts(opts: &InitOpts) -> QueueConfig {
 /// create the queue when state is missing, or sanity-check an existing queue.
 /// `--forge` is required when creating a queue. `--upgrade` amends the stored
 /// forge pack in place.
-pub fn init(repo: &Path, opts: InitOpts) -> Result<QueueState> {
+pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
     configure_repo(repo)?;
     if opts.upgrade {
         return init_upgrade(repo, &opts);
     }
     if !opts.has_args() && opts.forge.is_none() {
-        return hydrate_from_origin(repo);
+        return Ok(settled(hydrate_from_origin(repo)?));
     }
     try_replace_state_from_origin(repo)?;
     if state_exists(repo)? {
-        return init_existing(repo, &opts);
+        return Ok(settled(init_existing(repo, &opts)?));
     }
     let forge = opts.forge.ok_or_else(missing_forge_error)?;
     let mut config = config_from_opts(&opts);
     config.forge = Some(forge);
     init_repo(repo, config)?;
-    finish_first_init(repo, &opts)
+    Ok(settled(finish_first_init(repo, &opts)?))
 }
 
 fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
@@ -272,7 +295,7 @@ fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
     read_queue_file(repo)
 }
 
-fn init_upgrade(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
+fn init_upgrade(repo: &Path, opts: &InitOpts) -> Result<InitResult> {
     try_replace_state_from_origin(repo)?;
     if !state_exists(repo)? {
         return Err(Error::msg(
@@ -292,20 +315,24 @@ fn init_upgrade(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
         write_queue_file(repo, &queue)?;
         commit_queue(repo, "uplink: record forge")?;
     }
-    ensure_tooling_patch(repo)
+    let (queue, tooling_changed) = write_tooling_patch(repo, true)?;
+    Ok(InitResult {
+        queue,
+        tooling_changed,
+    })
 }
 
 fn ensure_tooling_patch(repo: &Path) -> Result<QueueState> {
-    write_tooling_patch(repo, true)
+    Ok(write_tooling_patch(repo, true)?.0)
 }
 
-fn write_tooling_patch(repo: &Path, rebuild_if_changed: bool) -> Result<QueueState> {
+fn write_tooling_patch(repo: &Path, rebuild_if_changed: bool) -> Result<(QueueState, bool)> {
     crate::lock::with_queue_lock(repo, || {
         let refresh = crate::tooling::refresh_tooling_patch(repo)?;
         if rebuild_if_changed && refresh.changed {
             rebuild_once(repo)?;
         }
-        read_queue_file(repo)
+        Ok((read_queue_file(repo)?, refresh.changed))
     })
 }
 

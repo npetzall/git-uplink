@@ -298,6 +298,7 @@ fn init_with_recorded_urls(world: &World) -> QueueState {
         },
     )
     .unwrap()
+    .queue
 }
 
 fn publish_origin(company: &Path) -> PathBuf {
@@ -1059,7 +1060,8 @@ fn init_updates_recorded_urls_on_an_existing_queue() {
             ..Default::default()
         },
     )
-    .unwrap();
+    .unwrap()
+    .queue;
     assert_eq!(
         queue.config.upstream_url.as_deref(),
         Some(new_upstream.to_str().unwrap())
@@ -1098,7 +1100,8 @@ fn init_example_github_includes_install_action_and_shared_pr_template() {
             ..Default::default()
         },
     )
-    .unwrap();
+    .unwrap()
+    .queue;
     assert_eq!(queue.config.forge, Some(Forge::ExampleGithub));
     assert!(
         world
@@ -1259,6 +1262,49 @@ fn init_upgrade_is_a_noop_when_the_pack_matches() {
     assert_eq!(before, after);
     assert_eq!(upgraded.patch_refs()[0].id, id);
     assert_eq!(upgraded.patch_refs()[0].patch_id_stable, stable);
+}
+
+#[test]
+fn init_upgrade_cli_reports_already_up_to_date() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["init", "--upgrade"])
+        .current_dir(&world.company)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "already up-to-date\n"
+    );
+    let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn init_upgrade_cli_reports_a_tooling_refresh() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    let id = queue.patch_refs()[0].id.clone();
+    fs::write(tooling_patch_path(&world.company, &id), "stale\n").unwrap();
+    git_uplink::commit_queue(&world.company, "uplink: stale tooling patch").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["init", "--upgrade"])
+        .current_dir(&world.company)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "tooling has been updated\n\
+Company main was rebuilt locally. Nothing was pushed.\n\
+Inspect with: git diff origin/main main\n\
+Publish state: git uplink push\n\
+Publish main: git uplink rebuild --push\n"
+    );
 }
 
 #[test]
@@ -1432,6 +1478,7 @@ fn init_adopt(world: &World, groups: Vec<AdoptGroup>) -> QueueState {
         },
     )
     .unwrap()
+    .queue
 }
 
 fn three_linear_ahead(company: &Path) -> [String; 3] {

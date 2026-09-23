@@ -581,6 +581,16 @@ fn submit_artifact(repo: &Path, queue: &QueueState, patch: &Patch, branch: &str,
     println!("{value}");
 }
 
+fn upgrade_next_steps(branch: &str) -> String {
+    format!(
+        "tooling has been updated\n\
+Company main was rebuilt locally. Nothing was pushed.\n\
+Inspect with: git diff origin/{branch} {branch}\n\
+Publish state: git uplink push\n\
+Publish main: git uplink rebuild --push"
+    )
+}
+
 fn run() -> Result<(), Error> {
     let cli = Cli::parse();
     let repo = env::current_dir()?;
@@ -614,7 +624,8 @@ fn run() -> Result<(), Error> {
                 interactive: None,
             };
             let hydrate = !opts.has_args() && opts.forge.is_none() && !opts.upgrade;
-            let queue = init(&repo, opts)?;
+            let result = init(&repo, opts)?;
+            let queue = &result.queue;
             if queue.all_patches().any(|p| {
                 p.source
                     .note
@@ -623,10 +634,16 @@ fn run() -> Result<(), Error> {
             }) {
                 eprintln!("{}", adopted_next_steps());
             }
-            if json {
+            if upgrade && !json {
+                if result.tooling_changed {
+                    println!("{}", upgrade_next_steps(&queue.config.internal_branch));
+                } else {
+                    println!("already up-to-date");
+                }
+            } else if json {
                 println!("{}", serde_json::to_string_pretty(&queue.config)?);
             } else if !hydrate {
-                println!("{}", serde_json::to_string_pretty(&queue)?);
+                println!("{}", serde_json::to_string_pretty(queue)?);
             }
         }
         Commands::Add {
