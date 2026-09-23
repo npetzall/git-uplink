@@ -9,7 +9,7 @@ on:
 
 concurrency:
   group: uplink-mutate
-  cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
@@ -71,8 +71,13 @@ jobs:
             fi
             exit "$code"
           fi
-          if [ "$INTERNAL_ONLY" = "true" ]; then
-            git uplink push
-          else
+          rebuild=false
+          if [ "$INTERNAL_ONLY" != "true" ]; then
+            active=$(jq '[.internal[]? | select(.status != "merged" and .status != "dropped")] | length' .uplink/queue.json)
+            if [ "$active" != "0" ]; then rebuild=true; fi
+          fi
+          if [ "$rebuild" = "true" ]; then
             git uplink rebuild --push
+          else
+            git uplink push
           fi
