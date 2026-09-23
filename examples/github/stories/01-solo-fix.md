@@ -14,6 +14,7 @@ On GitHub, **Actions → Reset example → Run workflow** on all three repos (an
 
 ```bash
 git uplink reset
+git fetch origin --prune
 git uplink status
 ```
 
@@ -22,7 +23,7 @@ Queue: only the internal-only tooling patch.
 ## Apply the patch and push
 
 ```bash
-git checkout -b feat/sha256
+git switch -C feat/sha256 main
 git apply "$KIT/patches/asha-sha256.diff"
 git add -A
 git commit -m "Use SHA-256 for tokens"
@@ -85,7 +86,8 @@ Asha’s patch is `merged` and is not applied internally anymore. Company `main`
 In the **upstream** clone:
 
 ```bash
-git fetch origin && git checkout main && git reset --hard origin/main
+git fetch origin --prune
+git switch -C main origin/main
 git apply "$KIT/patches/upstream-salt-hash.diff"
 git commit -am "follow-up: salt the hash"
 git push origin main

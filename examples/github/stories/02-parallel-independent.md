@@ -14,6 +14,8 @@ Work in the **internal** clone.
 
 ```bash
 git uplink reset
+git fetch origin --prune
+git uplink status
 ```
 
 ## Two branches from the same baseline
@@ -21,13 +23,12 @@ git uplink reset
 Both patches apply to seed `main`. Do **not** record `Uplink-Depends-On`.
 
 ```bash
-git checkout -b feat/sha256
+git switch -C feat/sha256 main
 git apply "$KIT/patches/asha-sha256.diff"
 git add -A && git commit -m "Use SHA-256 for tokens"
 git push -u origin feat/sha256
 
-git checkout main
-git checkout -b feat/ttl
+git switch -C feat/ttl main
 git apply "$KIT/patches/ben-ttl.diff"
 git add -A && git commit -m "Extend TTL"
 git push -u origin feat/ttl
