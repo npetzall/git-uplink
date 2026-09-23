@@ -35,7 +35,43 @@ git add -A && git commit -m "Extend TTL"
 git push -u origin feat/ttl
 ```
 
-Open both PRs in the GitHub UI. Paste [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md) and [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md). Wait for checks. Merge both.
+Open both PRs in the GitHub UI.
+
+Asha — title:
+
+```text
+Use SHA-256 for tokens
+```
+
+Body:
+
+```text
+Replace SHA-1 in the default hasher with SHA-256.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-1234
+Uplink-Export-Author: Asha <asha@users.noreply.github.com>
+```
+
+Ben — title:
+
+```text
+Extend TTL
+```
+
+Body:
+
+```text
+Extend the default token TTL from one hour to two.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-2001
+Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+```
+
+Wait for checks. Merge both.
 
 ```bash
 git uplink reset
@@ -54,7 +90,26 @@ git add -A && git commit -m "Wire hash into a describe helper"
 git push -u origin feat/cam
 ```
 
-Open the PR. Body: [`cam-wire.pr.md`](../patches/cam-wire.pr.md) with both `REPLACE_WITH_*` ids filled in. Wait for checks. Merge.
+Open the PR. Title:
+
+```text
+Wire hash into a describe helper
+```
+
+Body (fill in both `REPLACE_WITH_*` ids):
+
+```text
+Expose a describeToken helper that reports TTL and the current hash so callers can wire both APIs together.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-3001
+Uplink-Export-Author: Cam <cam@users.noreply.github.com>
+Uplink-Depends-On: REPLACE_WITH_ASHA_ID
+Uplink-Depends-On: REPLACE_WITH_BEN_ID
+```
+
+Wait for checks. Merge.
 
 ```bash
 git uplink reset

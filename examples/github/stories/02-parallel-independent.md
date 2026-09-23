@@ -33,7 +33,41 @@ git add -A && git commit -m "Extend TTL"
 git push -u origin feat/ttl
 ```
 
-Open two PRs in the GitHub UI (Compare & pull request). Titles `Use SHA-256 for tokens` and `Extend TTL`. Bodies: [`asha-sha256.pr.md`](../patches/asha-sha256.pr.md) and [`ben-ttl.pr.md`](../patches/ben-ttl.pr.md).
+Open two PRs in the GitHub UI (Compare & pull request).
+
+Asha — title:
+
+```text
+Use SHA-256 for tokens
+```
+
+Body:
+
+```text
+Replace SHA-1 in the default hasher with SHA-256.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-1234
+Uplink-Export-Author: Asha <asha@users.noreply.github.com>
+```
+
+Ben — title:
+
+```text
+Extend TTL
+```
+
+Body:
+
+```text
+Extend the default token TTL from one hour to two.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-2001
+Uplink-Export-Author: Ben <ben@users.noreply.github.com>
+```
 
 Wait for assess + preflight on both. Merge Asha first, then Ben (one after the other; import is serialized by `uplink-mutate`).
 

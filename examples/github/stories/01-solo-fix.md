@@ -29,7 +29,22 @@ git commit -m "Use SHA-256 for tokens"
 git push -u origin feat/sha256
 ```
 
-On GitHub, open **Compare & pull request** for `feat/sha256` into `main`. Title: `Use SHA-256 for tokens`. Body: paste [`patches/asha-sha256.pr.md`](../patches/asha-sha256.pr.md).
+On GitHub, open **Compare & pull request** for `feat/sha256` into `main`. Title:
+
+```text
+Use SHA-256 for tokens
+```
+
+Body:
+
+```text
+Replace SHA-1 in the default hasher with SHA-256.
+
+----- Uplink: internal below this line -----
+
+Ticket: PROJ-1234
+Uplink-Export-Author: Asha <asha@users.noreply.github.com>
+```
 
 Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green. The first run compiles git-uplink and is slow.
 
