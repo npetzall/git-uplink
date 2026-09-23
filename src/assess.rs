@@ -197,14 +197,18 @@ fn find_domain_hits(haystack: &str, domains: &[String]) -> Vec<String> {
     hits
 }
 
-fn with_trailers(message: &str, patch: &Patch) -> String {
+pub(crate) fn append_patch_id_trailer(message: &str, id: &str) -> String {
     let mut body = message.trim_end().to_string();
     if !body.is_empty() {
         body.push('\n');
     }
     body.push('\n');
-    body.push_str(&format!("Uplink-Patch-Id: {}\n", patch.id));
+    body.push_str(&format!("Uplink-Patch-Id: {id}\n"));
     body
+}
+
+fn with_trailers(message: &str, patch: &Patch) -> String {
+    append_patch_id_trailer(message, &patch.id)
 }
 
 fn public_subject_and_body(patch: &Patch) -> (String, String) {

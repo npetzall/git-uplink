@@ -287,7 +287,7 @@ pub fn apply_patch_file(
 
 /// Patch text with the mbox `From <sha>` line and the `Date:` header removed.
 /// Those two fields change on every replay even when the patch itself does not.
-fn patch_substance(text: &str) -> String {
+pub(crate) fn patch_substance(text: &str) -> String {
     let mut lines = text.lines();
     let mut out = String::new();
     if let Some(first) = lines.next()

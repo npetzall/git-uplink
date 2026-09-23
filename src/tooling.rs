@@ -3,15 +3,14 @@ use std::path::Path;
 
 use rust_embed::RustEmbed;
 
-use crate::assess::assess_from_message;
+use crate::assess::{append_patch_id_trailer, assess_from_message, strip_html_comments};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::queue::{
-    add_event, get_patch, patch_path, read_queue as read_queue_file,
-    write_queue as write_queue_file,
+    add_event, patch_path, read_queue as read_queue_file, write_queue as write_queue_file,
 };
 use crate::repo::{
-    commit_queue, ensure_uplink_dirs, ensure_upstream_ref, has_ref, new_patch_id,
+    commit_queue, ensure_uplink_dirs, ensure_upstream_ref, has_ref, new_patch_id, patch_substance,
     stable_patch_id_from_contents, stamp,
 };
 use crate::types::{
@@ -57,32 +56,33 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
     }
 
     let existing_id = find_tooling_patch(&queue, repo)?;
-    let SynthesizedPatch {
-        formatted,
-        from_sha,
-        head_sha,
-    } = synthesize_pack_patch(repo, &files)?;
-    let new_stable = stable_patch_id_from_contents(repo, &formatted)?;
-
-    if let Some(id) = &existing_id {
-        let current = get_patch(&queue, id)?;
-        if current.patch_id_stable.as_deref() == Some(new_stable.as_str()) {
-            return Ok(ToolingRefresh { changed: false });
-        }
-    }
-
-    ensure_uplink_dirs(repo)?;
-    let mut queue = read_queue_file(repo)?;
     let (id, created) = if let Some(id) = existing_id {
         (id, false)
     } else {
         (new_patch_id(), true)
     };
+    let message = tooling_commit_message();
+    let file_message = append_patch_id_trailer(&strip_html_comments(&message), &id);
+    let SynthesizedPatch {
+        formatted,
+        from_sha,
+        head_sha,
+    } = synthesize_pack_patch(repo, &files, &file_message)?;
 
+    if !created {
+        let patch_rel = patch_path(&id)?;
+        let stored = fs::read_to_string(repo.join(&patch_rel)).unwrap_or_default();
+        if patch_substance(&stored) == patch_substance(&formatted) {
+            return Ok(ToolingRefresh { changed: false });
+        }
+    }
+
+    let new_stable = stable_patch_id_from_contents(repo, &formatted)?;
+    ensure_uplink_dirs(repo)?;
+    let mut queue = read_queue_file(repo)?;
     let patch_rel = patch_path(&id)?;
     fs::write(repo.join(&patch_rel), &formatted)?;
 
-    let message = tooling_commit_message();
     let assess = assess_from_message(
         repo,
         &queue,
@@ -226,7 +226,11 @@ struct SynthesizedPatch {
     head_sha: String,
 }
 
-fn synthesize_pack_patch(repo: &Path, files: &[(String, Vec<u8>)]) -> Result<SynthesizedPatch> {
+fn synthesize_pack_patch(
+    repo: &Path,
+    files: &[(String, Vec<u8>)],
+    message: &str,
+) -> Result<SynthesizedPatch> {
     let original = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let original_sha = git_ok(repo, &["rev-parse", "HEAD"])?;
     let synthesized = (|| -> Result<SynthesizedPatch> {
@@ -257,11 +261,7 @@ fn synthesize_pack_patch(repo: &Path, files: &[(String, Vec<u8>)]) -> Result<Syn
                 "forge pack produced no product changes against uplink/upstream",
             ));
         }
-        git(
-            repo,
-            &["commit", "-m", &tooling_commit_message()],
-            GitOpts::default(),
-        )?;
+        git(repo, &["commit", "-m", message], GitOpts::default())?;
         let head_sha = git_ok(repo, &["rev-parse", "HEAD"])?;
         let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;
         let formatted = if formatted.ends_with('\n') {
