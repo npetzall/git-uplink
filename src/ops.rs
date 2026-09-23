@@ -29,11 +29,11 @@ use crate::repo::{
     conflicted_files, copy_dir, ensure_company_branch_ref, ensure_configured_remotes, ensure_revs,
     ensure_state_worktree, ensure_upstream_ref, fetch_state_tracking, fetch_tracking_sha,
     fetch_upstream, fetch_upstream_remote, has_ref, is_ancestor, merge_base, new_patch_id,
-    patch_already_applied_on, path_exists_at, point_branch_at, promote_upstream,
-    push_branch_force_lease, push_state_branch, queue_at, refresh_company_branch,
-    refresh_upstream_ref, replace_state_from_origin, restore_paths_from, rev_parse,
-    set_state_branch, stable_patch_id, stable_patch_id_from_contents, stamp, state_branch,
-    state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
+    patch_already_applied_on, path_exists_at, point_branch_at, promote_upstream, push_branch_force,
+    push_state_branch, queue_at, refresh_company_branch, refresh_upstream_ref,
+    replace_state_from_origin, restore_paths_from, rev_parse, set_state_branch, stable_patch_id,
+    stable_patch_id_from_contents, stamp, state_branch, state_exists,
+    try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
 use crate::types::{
     AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict,
@@ -447,9 +447,7 @@ fn add_patch_attempt(
             .all_patches()
             .find(|p| p.source.internal_pr_number == Some(pr))
     {
-        let id = existing.id.clone();
-        apply_new_patch_on_company(repo, &id, false)?;
-        return Ok(get_patch(&read_queue_file(repo)?, &id)?.clone());
+        return Ok(existing.clone());
     }
     add_patch_once(repo, &mut queue, opts, from_sha, head_sha)
 }
@@ -567,20 +565,23 @@ fn add_patch_once(
         }
     }
 
-    if let Err(err) =
-        assert_change_already_on_company(repo, queue, &candidate_abs, &opts.title, head_sha)
+    let explicit_range = opts.from_ref.is_some() && opts.head_ref.is_some();
+    if !explicit_range
+        && let Err(err) =
+            assert_change_already_on_company(repo, queue, &candidate_abs, &opts.title, head_sha)
     {
         let _ = fs::remove_file(&candidate_abs);
         return Err(err);
     }
 
+    let rebuild = !opts.internal_only && queue.internal.iter().any(is_active);
     queue.push_patch(patch, opts.internal_only);
     write_queue_file(repo, queue)?;
     commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
-    if opts.internal_only {
-        apply_new_patch_on_company(repo, &id, true)?;
-    } else {
+    if rebuild {
         rebuild_once(repo)?;
+    } else {
+        mark_empty_if_already_upstream(repo, &id)?;
     }
     Ok(get_patch(&read_queue_file(repo)?, &id)?.clone())
 }
@@ -847,52 +848,37 @@ fn looks_like_sha(value: &str) -> bool {
         && !value.chars().all(|c| c == '0')
 }
 
-fn apply_new_patch_on_company(repo: &Path, id: &str, mark_empty_merged: bool) -> Result<()> {
+fn mark_empty_if_already_upstream(repo: &Path, id: &str) -> Result<()> {
     ensure_upstream_ref(repo)?;
     let mut queue = read_queue_file(repo)?;
-    let company_branch = queue.config.internal_branch.clone();
-    let patch = get_patch(&queue, id)?.clone();
-    let patch_file = repo.join(patch_path(id)?);
-
-    if mark_empty_merged
-        && queue.is_upstream(id)
-        && has_ref(repo, "uplink/upstream")?
-        && patch_already_applied_on(repo, "uplink/upstream", &patch_file)?
-    {
-        let current = get_patch_mut(&mut queue, id)?;
-        current.status = "merged".into();
-        current.merged = Some(PatchMerged {
-            via: MergeVia::EmptyRebase,
-            at: stamp(),
-            upstream_sha: Some(rev_parse(repo, "uplink/upstream")?),
-        });
-        add_event(
-            current,
-            "merged",
-            "Became empty on import; treating as already present upstream",
-        );
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: empty apply {id}"))?;
-        git(
-            repo,
-            &["checkout", "-f", "--quiet", &company_branch],
-            GitOpts::default(),
-        )?;
+    if !queue.is_upstream(id) || !has_ref(repo, "uplink/upstream")? {
         return Ok(());
     }
-
+    let patch_file = repo.join(patch_path(id)?);
+    if !patch_already_applied_on(repo, "uplink/upstream", &patch_file)? {
+        return Ok(());
+    }
+    let company_branch = queue.config.internal_branch.clone();
+    let current = get_patch_mut(&mut queue, id)?;
+    current.status = "merged".into();
+    current.merged = Some(PatchMerged {
+        via: MergeVia::EmptyRebase,
+        at: stamp(),
+        upstream_sha: Some(rev_parse(repo, "uplink/upstream")?),
+    });
+    add_event(
+        current,
+        "merged",
+        "Became empty on import; treating as already present upstream",
+    );
+    write_queue_file(repo, &queue)?;
+    commit_queue(repo, &format!("uplink: empty apply {id}"))?;
     git(
         repo,
         &["checkout", "-f", "--quiet", &company_branch],
         GitOpts::default(),
     )?;
-    if patch_already_applied_on(repo, &company_branch, &patch_file)? {
-        return Ok(());
-    }
-    Err(Error::msg(format!(
-        "\"{}\" is not on company {company_branch} yet. Merge the internal PR first, then import.",
-        patch.title
-    )))
+    Ok(())
 }
 
 pub fn approve_patch(repo: &Path, id: &str) -> Result<Patch> {
@@ -1606,7 +1592,7 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
         };
         if opts.push {
             let remote = opts.push_remote.as_deref().unwrap_or("origin");
-            push_branch_force_lease(repo, remote, &target)?;
+            push_branch_force(repo, remote, &target)?;
             push_state_branch(repo, remote, &state_branch)?;
         }
         Ok(RebuildResult {

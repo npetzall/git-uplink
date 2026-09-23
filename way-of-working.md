@@ -160,9 +160,9 @@ Asha and Ben start from the same company `main`. Their changes are independent (
 
 1. Both branch from `origin/main`, open two internal PRs.
 2. Review can overlap. GitHub serializes the merges. Import is serialized:
-   - Actions group `uplink-mutate` (import / sync inspect and apply / submit packet and finalize; they do not cancel each other). Environment waits (`to-upstream`, `from-upstream`) do not take this group.
+   - Actions group `uplink-mutate` with `queue: max` (import / sync inspect and apply / submit packet and finalize; up to 100 pending runs stay queued). Environment waits (`to-upstream`, `from-upstream`) do not take this group.
    - `.git/uplink.lock` in one checkout.
-   - Each job isolates **that PR’s** `base.sha..head.sha`, then refreshes latest `main` and `uplink/state`, appends the patch on the state branch, and fast-forward pushes `uplink/state`. If the other import landed first, the push fails and the job retries. The same internal PR number is imported at most once.
+   - Each job takes **that PR’s** `base.sha..head.sha` from the pull request event. It does not require the change to still be on company `main`, because an earlier import may already have rewritten `main`. It appends the patch on `uplink/state` and fast-forward pushes that branch. If the other import landed first, the push fails and the job retries. The same internal PR number is imported at most once.
 3. Asha’s PR is merged and imported first. Queue: `[upl_asha]`. Company `main` already includes Asha.
 4. Ben’s PR is merged onto that `main`, then imported. His diff is still *his* unique delta against the base he branched from, not a replay of live `main`. It is appended on `uplink/state`. Queue: `[upl_asha, upl_ben]`. Both are `queued`. Neither has been IP-approved.
 

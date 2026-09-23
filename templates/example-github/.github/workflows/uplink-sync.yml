@@ -23,7 +23,7 @@ jobs:
       pull-requests: write
     concurrency:
       group: uplink-mutate
-      cancel-in-progress: false
+      queue: max
     outputs:
       needs_approval: ${{ steps.sync.outputs.needs_approval }}
     steps:
@@ -128,7 +128,7 @@ jobs:
 
           main_after=$(git rev-parse HEAD)
           if [ "$main_after" != "$main_before" ]; then
-            git push origin HEAD:main --force-with-lease
+            git push origin HEAD:main --force
           fi
 
           if jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
@@ -186,7 +186,7 @@ jobs:
       pull-requests: write
     concurrency:
       group: uplink-mutate
-      cancel-in-progress: false
+      queue: max
     steps:
       - name: Mint internal GitHub App token
         id: internal-app
@@ -283,7 +283,7 @@ jobs:
 
           main_after=$(git rev-parse HEAD)
           if [ "$main_after" != "$main_before" ]; then
-            git push origin HEAD:main --force-with-lease
+            git push origin HEAD:main --force
           fi
 
           if ! jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then

@@ -14,7 +14,7 @@ on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is
 
 concurrency:
   group: uplink-mutate
-  cancel-in-progress: false
+  queue: max
 
 permissions: {}
 
@@ -136,7 +136,7 @@ jobs:
           git push origin uplink/state
           main_after=$(git rev-parse HEAD)
           if [ "$main_after" != "$main_before" ]; then
-            git push origin main --force-with-lease
+            git push origin main --force
           fi
 
           status=$(jq -r '.status // empty' <<<"$resolve_json")
