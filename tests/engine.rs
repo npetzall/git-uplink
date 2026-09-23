@@ -1226,6 +1226,18 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
     );
     assert!(prepare.contains("git uplink preflight"), "{prepare}");
     assert!(!prepare.trim().eq("stale"));
+    let patch_file = fs::read_to_string(tooling_patch_path(&world.company, &id)).unwrap();
+    assert!(
+        patch_file.contains(&format!("Uplink-Patch-Id: {id}")),
+        "{patch_file}"
+    );
+    assert!(
+        !upgraded.patch_refs()[0]
+            .commit_message
+            .contains("Uplink-Patch-Id"),
+        "{}",
+        upgraded.patch_refs()[0].commit_message
+    );
 }
 
 #[test]
@@ -1247,6 +1259,136 @@ fn init_upgrade_is_a_noop_when_the_pack_matches() {
     assert_eq!(before, after);
     assert_eq!(upgraded.patch_refs()[0].id, id);
     assert_eq!(upgraded.patch_refs()[0].patch_id_stable, stable);
+}
+
+#[test]
+fn init_stamps_tooling_patch_id_and_rebuild_leaves_it() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    let patch = &queue.patch_refs()[0];
+    let path = tooling_patch_path(&world.company, &patch.id);
+    let before = fs::read_to_string(&path).unwrap();
+    let trailer = format!("Uplink-Patch-Id: {}", patch.id);
+    assert_eq!(before.matches(&trailer).count(), 1, "{before}");
+    assert!(
+        !patch.commit_message.contains("Uplink-Patch-Id"),
+        "{}",
+        patch.commit_message
+    );
+    rebuild(&world.company).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+}
+
+#[test]
+fn init_upgrade_stamps_a_missing_tooling_patch_id_once() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    let id = queue.patch_refs()[0].id.clone();
+    let path = tooling_patch_path(&world.company, &id);
+    let stripped = strip_patch_id_trailer(&fs::read_to_string(&path).unwrap());
+    assert!(!stripped.contains("Uplink-Patch-Id:"));
+    fs::write(&path, &stripped).unwrap();
+    git_uplink::commit_queue(&world.company, "uplink: drop tooling trailer").unwrap();
+
+    let upgraded = init(
+        &world.company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(upgraded.patch_refs()[0].id, id);
+    let stamped = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        stamped.matches(&format!("Uplink-Patch-Id: {id}")).count(),
+        1,
+        "{stamped}"
+    );
+    let before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let again = init(
+        &world.company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    assert_eq!(before, after);
+    assert_eq!(again.patch_refs()[0].id, id);
+    assert_eq!(fs::read_to_string(&path).unwrap(), stamped);
+}
+
+#[test]
+fn init_upgrade_ignores_tooling_from_and_date_headers() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    let id = queue.patch_refs()[0].id.clone();
+    let path = tooling_patch_path(&world.company, &id);
+    let rewritten = rewrite_mbox_from_and_date(&fs::read_to_string(&path).unwrap());
+    assert_ne!(rewritten, fs::read_to_string(&path).unwrap());
+    fs::write(&path, &rewritten).unwrap();
+    git_uplink::commit_queue(&world.company, "uplink: rewrite tooling mbox headers").unwrap();
+    let before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+
+    let upgraded = init(
+        &world.company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
+    assert_eq!(before, after);
+    assert_eq!(upgraded.patch_refs()[0].id, id);
+    assert_eq!(fs::read_to_string(&path).unwrap(), rewritten);
+}
+
+fn tooling_patch_path(repo: &Path, id: &str) -> PathBuf {
+    repo.join(format!(".uplink/patches/{id}.patch"))
+}
+
+fn strip_patch_id_trailer(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.starts_with("Uplink-Patch-Id:") {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn rewrite_mbox_from_and_date(text: &str) -> String {
+    let mut out = String::new();
+    let mut headers = true;
+    let mut first = true;
+    for line in text.lines() {
+        if first {
+            first = false;
+            out.push_str(
+                "From 0123456789abcdef0123456789abcdef01234567 Mon Sep 17 00:00:00 2001\n",
+            );
+            continue;
+        }
+        if headers {
+            if line.is_empty() {
+                headers = false;
+                out.push('\n');
+                continue;
+            }
+            if line.starts_with("Date:") {
+                out.push_str("Date: Thu, 1 Jan 1970 00:00:00 +0000\n");
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 #[test]
