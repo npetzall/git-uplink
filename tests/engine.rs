@@ -2923,6 +2923,90 @@ fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
 }
 
 #[test]
+fn command_output_does_not_write_github_step_summary() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let summary_file = company.join("step-summary.txt");
+    fs::write(&summary_file, "").unwrap();
+    let bin = env!("CARGO_BIN_EXE_git-uplink");
+    let run = |args: &[&str]| {
+        let output = Command::new(bin)
+            .args(args)
+            .current_dir(company)
+            .env("GITHUB_STEP_SUMMARY", &summary_file)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let written = fs::read_to_string(&summary_file).unwrap();
+        assert!(
+            written.is_empty(),
+            "{} wrote the step summary file:\n{written}",
+            args.join(" ")
+        );
+        output
+    };
+
+    let report = run(&["report", &patch.id]);
+    let packet = String::from_utf8(report.stdout).unwrap();
+    assert!(packet.contains("# Contribution packet"), "{packet}");
+
+    let approved = run(&["approve", &patch.id]);
+    let receipt = String::from_utf8(approved.stdout).unwrap();
+    assert!(receipt.contains("environment approval"), "{receipt}");
+    assert!(
+        String::from_utf8_lossy(&approved.stderr).contains("approved"),
+        "{}",
+        String::from_utf8_lossy(&approved.stderr)
+    );
+
+    write(upstream, "CHANGELOG.md", "upstream note\n");
+    commit_all(upstream, "release notes");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let sync_out = run(&["sync"]);
+    let sync_json: serde_json::Value =
+        serde_json::from_str(std::str::from_utf8(&sync_out.stdout).unwrap().trim())
+            .expect("sync stdout is json");
+    let summary = sync_json["summary"].as_str().unwrap_or("");
+    assert!(summary.contains("Incoming upstream"), "{sync_json}");
+
+    let accepted = run(&["accept-upstream"]);
+    let accepted_json: serde_json::Value =
+        serde_json::from_str(std::str::from_utf8(&accepted.stdout).unwrap().trim())
+            .expect("accept-upstream stdout is json");
+    let receipt = accepted_json["summary"].as_str().unwrap_or("");
+    assert!(receipt.contains("environment approval"), "{accepted_json}");
+}
+
+#[test]
 fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
     let world = setup_world();
     let company = &world.company;

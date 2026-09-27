@@ -124,6 +124,10 @@ jobs:
 
           needs_approval=$(jq -r '.needsApproval // false' <<<"$sync_json")
           echo "needs_approval=${needs_approval}" >> "$GITHUB_OUTPUT"
+          summary=$(jq -r '.summary // empty' <<<"$sync_json")
+          if [ -n "$summary" ]; then
+            printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           git push origin uplink/state
           if [ "$needs_approval" = "true" ]; then
@@ -279,6 +283,10 @@ jobs:
           main_before=$(git rev-parse HEAD)
 
           sync_json=$(git uplink accept-upstream)
+          summary=$(jq -r '.summary // empty' <<<"$sync_json")
+          if [ -n "$summary" ]; then
+            printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           git push origin uplink/state
           git push origin uplink/upstream --force || true

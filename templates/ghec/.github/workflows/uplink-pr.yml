@@ -73,6 +73,7 @@ jobs:
             --head "$HEAD_SHA" > /tmp/uplink-assess.md
           code=$?
           set -e
+          printf '%s\n' "$(cat /tmp/uplink-assess.md)" >> "$GITHUB_STEP_SUMMARY"
           gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-assess.md
           exit "$code"
 

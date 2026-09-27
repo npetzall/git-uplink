@@ -231,7 +231,7 @@ Hourly sync must not silently take unrelated upstream commits onto company `main
 The **Uplink sync** workflow:
 
 1. **Inspect job** (no environment). Runs `git uplink sync`, which fetches public `main` without moving `uplink/upstream`. Commits that match a company patch (`Uplink-Patch-Id` trailer or `git patch-id --stable`) apply immediately: promote `uplink/upstream`, mark those patches `merged`, rebuild company `main`. If every new commit is ours (or nothing moved), that is the whole run.
-2. If any commit does not match a company patch, inspect writes `.uplink/reports/from-upstream/incoming.md` (foreign `git show`, plus which patches flowed back), appends `GITHUB_STEP_SUMMARY`, and fast-forwards `uplink/state` only. It does not push `uplink/upstream` or `main`.
+2. If any commit does not match a company patch, inspect writes `.uplink/reports/from-upstream/incoming.md` (foreign `git show`, plus which patches flowed back) and fast-forwards `uplink/state` only. The workflow appends the command `summary` to `GITHUB_STEP_SUMMARY`. It does not push `uplink/upstream` or `main`.
 3. **Wait job** (`environment: from-upstream`, no `uplink-mutate`). GitHub holds this job until a required reviewer approves the deployment. The deployment URL points at `incoming.md` on `uplink/state`.
 4. **Apply job** (`uplink-mutate`, no environment). After approval the same run writes `approval.md` and runs `git uplink accept-upstream`, then pushes `uplink/upstream` and rebuilds `main`. Patch apply conflicts are recorded the same way as an auto-apply (conflict branch + issue).
 
