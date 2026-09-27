@@ -1,13 +1,9 @@
 name: zizmor
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-
-concurrency:
-  group: zizmor-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
+  schedule:
+    - cron: "27 3 * * 1"
 
 permissions: {}
 

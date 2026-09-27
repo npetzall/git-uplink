@@ -1,0 +1,278 @@
+name: Product
+
+on:
+  workflow_call:
+    inputs:
+      all-targets:
+        description: Build every release target
+        type: boolean
+        default: false
+      version:
+        description: Cargo version, X.Y.Z or X.Y.Z-pr.N.N.N
+        type: string
+        required: true
+    secrets:
+      SOCKET_SECURITY_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  PRODUCT_VERSION: ${{ inputs.version }}
+
+jobs:
+  vuln-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.98.1
+      - uses: SocketDev/action@2d3f25590c6ed6ba11a9a14c064d962a3a04698f # v1.3.1
+        with:
+          mode: firewall-free
+          job-summary: errors
+      - name: npm audit web
+        working-directory: web
+        run: sfw npm audit --package-lock-only
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check bans licenses sources
+
+  codeql:
+    uses: $/.github/workflows/codeql.yml
+    with:
+      scope: product
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+
+  zizmor:
+    uses: $/.github/workflows/zizmor.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+  socket:
+    uses: $/.github/workflows/socket.yml
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+    permissions:
+      issues: write
+      contents: read
+      pull-requests: write
+
+  web-dist:
+    needs: vuln-check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: SocketDev/action@2d3f25590c6ed6ba11a9a14c064d962a3a04698f # v1.3.1
+        with:
+          mode: firewall-free
+          job-summary: errors
+      - name: Apply npm version
+        run: sfw npm version "$PRODUCT_VERSION" --no-git-tag-version --allow-same-version
+      - run: sfw npm ci
+      - run: sfw npm run typecheck
+      - run: sfw npm run build
+      - name: Stage web dist
+        working-directory: .
+        run: |
+          set -euo pipefail
+          test -f web/dist/index.html
+          rm -rf ci-web-dist
+          mkdir -p ci-web-dist
+          cp -R web/dist/. ci-web-dist/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-dist
+          path: ci-web-dist
+          if-no-files-found: error
+
+  sbom:
+    needs: vuln-check
+    name: Generate SBOMs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.98.1
+      - uses: SocketDev/action@2d3f25590c6ed6ba11a9a14c064d962a3a04698f # v1.3.1
+        with:
+          mode: firewall-free
+          job-summary: errors
+      - name: Apply version
+        run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        id: syft
+        with:
+          syft-version: v1.52.0
+      - name: Generate CycloneDX and SPDX SBOMs
+        env:
+          SYFT_CMD: ${{ steps.syft.outputs.cmd }}
+        run: |
+          set -euo pipefail
+          version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          "$SYFT_CMD" dir:. --source-version "$version"
+          mkdir -p sbom-out
+          mv git-uplink.cdx.json git-uplink.spdx.json sbom-out/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: sbom-out/
+          if-no-files-found: error
+
+  test:
+    needs: web-dist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.98.1
+      - uses: SocketDev/action@2d3f25590c6ed6ba11a9a14c064d962a3a04698f # v1.3.1
+        with:
+          mode: firewall-free
+          job-summary: errors
+      - name: Apply version
+        run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
+      - name: Test
+        env:
+          GIT_UPLINK_SKIP_WEB_BUILD: "1"
+        run: |
+          set -euo pipefail
+          test -f web/dist/index.html
+          sfw cargo test --locked
+
+  build:
+    needs: web-dist
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs['all-targets'] && '[{"os":"macos-latest","target":"aarch64-apple-darwin","cross":false},{"os":"ubuntu-latest","target":"aarch64-unknown-linux-musl","cross":true},{"os":"ubuntu-latest","target":"x86_64-unknown-linux-musl","cross":true},{"os":"windows-latest","target":"x86_64-pc-windows-msvc","cross":false}]' || '[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-musl","cross":true}]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+      - uses: SocketDev/action@2d3f25590c6ed6ba11a9a14c064d962a3a04698f # v1.3.1
+        with:
+          mode: firewall-free
+          job-summary: errors
+      - name: Apply version
+        run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.cross
+        id: cross-cache
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-49cd054de9b832dfc11a4895c72b0aef533b5c6a-${{ runner.os }}
+      - name: Install cross
+        if: matrix.cross && steps.cross-cache.outputs.cache-hit != 'true'
+        run: sfw cargo install cross --locked --git https://github.com/cross-rs/cross --rev 49cd054de9b832dfc11a4895c72b0aef533b5c6a
+      - name: Build release binary
+        env:
+          GIT_UPLINK_SKIP_WEB_BUILD: "1"
+          TARGET: ${{ matrix.target }}
+          USE_CROSS: ${{ matrix.cross && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          test -f web/dist/index.html
+          if [[ "$USE_CROSS" == "true" ]]; then
+            cross build --release --locked --target "$TARGET"
+          else
+            sfw cargo build --release --locked --target "$TARGET"
+          fi
+          suffix=""
+          case "$TARGET" in
+            *windows*) suffix=".exe" ;;
+          esac
+          mkdir -p release-bin
+          cp "target/${TARGET}/release/git-uplink${suffix}" "release-bin/git-uplink-${TARGET}${suffix}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-${{ matrix.target }}
+          path: release-bin/
+          if-no-files-found: error
+
+  pre-commit:
+    needs: web-dist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: ".pre-commit-config.yaml"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - uses: SocketDev/action@2d3f25590c6ed6ba11a9a14c064d962a3a04698f # v1.3.1
+        with:
+          mode: firewall-free
+          job-summary: errors
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-3.12-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Apply version
+        run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
+      - name: pre-commit
+        env:
+          GIT_UPLINK_SKIP_WEB_BUILD: "1"
+        run: |
+          set -euo pipefail
+          test -f web/dist/index.html
+          uvx --with pre-commit-uv pre-commit run --all-files --show-diff-on-failure
