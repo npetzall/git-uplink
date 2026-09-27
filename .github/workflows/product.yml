@@ -6,7 +6,7 @@ on:
       all-targets:
         description: Build every release target
         type: boolean
-        default: false
+        default: true
       version:
         description: Cargo version, X.Y.Z or X.Y.Z-pr.N.N.N
         type: string
@@ -177,7 +177,7 @@ jobs:
           sfw cargo test --locked
 
   build:
-    needs: web-dist
+    needs: [web-dist, socket]
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     defaults:
@@ -199,10 +199,6 @@ jobs:
         with:
           toolchain: 1.98.1
           targets: ${{ matrix.target }}
-      - uses: SocketDev/action@2d3f25590c6ed6ba11a9a14c064d962a3a04698f # v1.3.1
-        with:
-          mode: firewall-free
-          job-summary: errors
       - name: Apply version
         run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -225,7 +221,7 @@ jobs:
           if [[ "$USE_CROSS" == "true" ]]; then
             cross build --release --locked --target "$TARGET"
           else
-            sfw cargo build --release --locked --target "$TARGET"
+            cargo build --release --locked --target "$TARGET"
           fi
           suffix=""
           case "$TARGET" in
