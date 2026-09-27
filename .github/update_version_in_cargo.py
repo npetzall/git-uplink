@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_NAME = "git-uplink"
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\Z")
-TOML_VERSION_RE = re.compile(r'^version = "[^"]*"$', re.MULTILINE)
+TOML_VERSION_RE = re.compile(r'^version = "[^"]*"\r?$', re.MULTILINE)
 LOCK_NAME_RE = re.compile(r'^name = "([^"]*)"[ \t]*$')
 LOCK_VERSION_RE = re.compile(r'^version = "[^"]*"[ \t]*$')
 
@@ -34,7 +34,8 @@ def update_cargo_toml(text: str, version: str) -> str:
             f"Cargo.toml: expected one package version line, found {len(matches)}"
         )
     match = matches[0]
-    return text[: match.start()] + f'version = "{version}"' + text[match.end() :]
+    ending = "\r" if match.group(0).endswith("\r") else ""
+    return text[: match.start()] + f'version = "{version}"{ending}' + text[match.end() :]
 
 
 def update_cargo_lock(text: str, version: str) -> str:
