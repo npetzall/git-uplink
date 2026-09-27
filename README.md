@@ -16,7 +16,7 @@ git uplink status
 git uplink web-ui
 ```
 
-`git uplink web-ui` serves the local queue UI from files **embedded in the binary**. `build.rs` runs `npm ci` and `npm run build` in `web/`; the dist is compiled in with `rust-embed`. The command opens a browser (pass `--no-open` to skip).
+`git uplink web-ui` serves the local queue UI from files **embedded in the binary**. `build.rs` runs `npm ci` and `npm run build` in `web/`; the dist is compiled in with `rust-embed`. Set `GIT_UPLINK_SKIP_WEB_BUILD=1` to embed an existing `web/dist` instead of running npm. The command opens a browser (pass `--no-open` to skip).
 
 Use `git-uplink -h` or `git uplink -h`. Plain `git uplink --help` goes through Git’s man-page path, not clap.
 
@@ -81,9 +81,9 @@ git-uplink shells out to `git`, but it does **not** use the operator’s commit 
 
 ## Website and operator UI
 
-The public site (playbook, collaboration notes, [way-of-working.md](way-of-working.md), install, forge setup, GitHub example, and the live lab) is GitHub Pages: [https://npetzall.github.io/git-uplink/](https://npetzall.github.io/git-uplink/). Sources live in `site/` (Vite + React + Tailwind). Do not commit `site/dist`. Enable **Settings → Pages → Source: GitHub Actions**. `.github/workflows/pages.yml` builds `site/`, uploads the Pages artifact, and deploys on push to `main`.
+The public site (playbook, collaboration notes, [way-of-working.md](way-of-working.md), install, forge setup, GitHub example, and the live lab) is GitHub Pages: [https://npetzall.github.io/git-uplink/](https://npetzall.github.io/git-uplink/). Sources live in `site/` (Vite + React + Tailwind). Do not commit `site/dist`. Enable **Settings → Pages → Source: GitHub Actions**. `.github/workflows/site.yml` runs the audit, typecheck, and tests in parallel with site CodeQL and zizmor on site pull requests and on push to `main` when `site/` changes. A separate build job runs after the check job. The Pages artifact is uploaded, and deploy runs, only on `main`, after that build, site CodeQL, and zizmor succeed. `npm` runs under Socket Firewall (`sfw`). A push that only changes `site/` does not run the product release.
 
-`git uplink web-ui` is the local operator UI for **this checkout**: it reads `.uplink/queue.json` from `uplink/state` in the directory you started in, and can also inspect `origin/uplink/state` after a fetch. Frontend sources live in `web/` (Vite + React + Tailwind). Do not commit `web/dist`; cargo rebuilds it.
+`git uplink web-ui` is the local operator UI for **this checkout**: it reads `.uplink/queue.json` from `uplink/state` in the directory you started in, and can also inspect `origin/uplink/state` after a fetch. Frontend sources live in `web/` (Vite + React + Tailwind). Do not commit `web/dist`; cargo rebuilds it unless `GIT_UPLINK_SKIP_WEB_BUILD=1` is set.
 
 ## Tests
 
@@ -97,9 +97,11 @@ The suite drives real git (temp repos): stacked patches, drop-on-merge, conflict
 
 Live lab scenario tests live in `site/` (`npm test --prefix site`): drop-on-merge, internal-only staying off the fork, queued work staying off the fork until to-upstream approval, and every lab step completing. Typecheck is `npm run typecheck --prefix site` and `npm run typecheck --prefix web`.
 
-CI is in `.github/workflows/ci.yml`: `cargo test --locked` and `cargo build --release`, a `web/` job (`npm ci`, typecheck), a `site/` job (`npm ci`, typecheck, vitest, build), `cargo deny` (RustSec advisories plus licenses, bans, and sources), and a `pre-commit` job (`uvx pre-commit`, rustfmt, clippy, [zizmor](https://zizmor.sh/)). zizmor audits GitHub Actions YAML in this repo and the forge templates as a pre-commit fail-gate; `.github/workflows/zizmor.yml` still publishes SARIF to code scanning and passes a GitHub token so online audits can call the REST API.
+Product pull requests run `.github/workflows/pr.yml` when they change `src/`, `web/`, `templates/`, the Rust manifests, `build.rs`, `Cross.toml`, `rust-toolchain.toml`, or the product workflows. That workflow calculates the next version and calls `.github/workflows/product.yml` with a pre-release suffix `-pr.<number>.<run>.<attempt>` (pull request number, workflow run id, and run attempt). `cargo deny` and the `web/` `npm audit` (`npm audit --package-lock-only`) run first. After they succeed, the workflow builds `web/` once (`sfw npm ci`, typecheck, production build) and generates CycloneDX and SPDX SBOMs. CodeQL for Rust and `web/`, zizmor, and Socket start immediately and do not gate that build. Test, the musl Linux binary, and pre-commit (rustfmt, clippy, [zizmor](https://zizmor.sh/)) then run in parallel with `GIT_UPLINK_SKIP_WEB_BUILD=1`. Each job that compiles or scans the crate writes the version into `Cargo.toml` and `Cargo.lock`. SBOMs are always uploaded as an artifact. Site changes run `.github/workflows/site.yml` instead (`sfw npm audit`, typecheck, and vitest in parallel with site CodeQL and zizmor, then a separate build; upload and deploy only on `main`, after that build, site CodeQL, and zizmor succeed). A Monday schedule runs CodeQL for Rust, `web/`, and `site/`, plus zizmor and Socket.
 
-Distribution SBOMs (CycloneDX JSON and SPDX JSON) cover the Rust crate and the embedded `web/` UI. `site/` is excluded because it is GitHub Pages only, not part of the shipped binary. Generate both files locally with [Syft](https://github.com/anchore/syft): `syft dir:.` reads `.syft.yaml`. `.github/workflows/sbom.yml` uploads them as workflow artifacts on push/PR and attaches `git-uplink-<tag>.cdx.json` / `git-uplink-<tag>.spdx.json` when a GitHub Release is published.
+Pushes to `main` that match the same product path filter run `.github/workflows/release.yml`. The version comes from the latest `vX.Y.Z` tag and the conventional commits since that tag (no tag starts at `0.0.0`). The workflow calls `product.yml` with that version and every release target. Each build job writes that version into `Cargo.toml` and `Cargo.lock` with `python3 .github/update_version_in_cargo.py "${PRODUCT_VERSION}"`. It publishes a GitHub Release only after that job succeeds. `gh release create --generate-notes` creates the release when the calculated tag is new. When that tag is already the current tag, `gh release upload --clobber` refreshes the assets. Assets are the Apple Silicon, Linux musl (amd64 and arm64), and Windows binaries, `SHA256SUMS`, and `git-uplink-<version>.cdx.json` / `git-uplink-<version>.spdx.json`, downloaded from the workflow artifacts.
+
+Distribution SBOMs (CycloneDX JSON and SPDX JSON) cover the Rust crate and the embedded `web/` UI. `site/` is excluded because it is GitHub Pages only, not part of the shipped binary. Generate both files locally with [Syft](https://github.com/anchore/syft): `syft dir:.` reads `.syft.yaml`.
 
 ## Product-repo workflows
 

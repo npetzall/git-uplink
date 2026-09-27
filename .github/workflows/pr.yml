@@ -1,0 +1,49 @@
+name: PR
+
+on:
+  pull_request:
+    paths:
+      - src/**
+      - web/**
+      - templates/**
+      - Cargo.toml
+      - Cargo.lock
+      - build.rs
+      - Cross.toml
+      - rust-toolchain.toml
+      - .github/calculate-version.sh
+      - .github/workflows/pr.yml
+      - .github/workflows/product.yml
+      - .github/workflows/version.yml
+      - .github/workflows/codeql.yml
+      - .github/workflows/zizmor.yml
+      - .github/workflows/socket.yml
+      - .github/codeql/web.yml
+
+permissions: {}
+
+concurrency:
+  group: pr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    uses: $/.github/workflows/version.yml
+    permissions:
+      contents: read
+
+  product:
+    name: "Product version: ${{ needs.version.outputs.next_version }}-pr.${{ github.event.pull_request.number }}.${{ github.run_id }}.${{ github.run_attempt }}"
+    needs: version
+    uses: $/.github/workflows/product.yml
+    with:
+      version: ${{ needs.version.outputs.next_version }}-pr.${{ github.event.pull_request.number }}.${{ github.run_id }}.${{ github.run_attempt }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+      actions: read
+      issues: write
+      pull-requests: write

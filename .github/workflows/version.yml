@@ -1,0 +1,41 @@
+name: Version
+
+on:
+  workflow_call:
+    outputs:
+      current_tag:
+        description: Latest vX.Y.Z tag, or empty when none exists
+        value: ${{ jobs.calculate.outputs.current_tag }}
+      current_version:
+        description: Version of the latest tag, or 0.0.0
+        value: ${{ jobs.calculate.outputs.current_version }}
+      next_tag:
+        description: Tag for the calculated version
+        value: ${{ jobs.calculate.outputs.next_tag }}
+      next_version:
+        description: Calculated version without a v prefix
+        value: ${{ jobs.calculate.outputs.next_version }}
+
+permissions: {}
+
+jobs:
+  calculate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      current_tag: ${{ steps.calc.outputs.current_tag }}
+      current_version: ${{ steps.calc.outputs.current_version }}
+      next_tag: ${{ steps.calc.outputs.next_tag }}
+      next_version: ${{ steps.calc.outputs.next_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Check version rules
+        run: bash .github/calculate-version.sh --self-check
+      - name: Calculate version
+        id: calc
+        run: set -o pipefail; bash .github/calculate-version.sh | tee -a "$GITHUB_OUTPUT"

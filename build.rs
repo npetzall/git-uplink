@@ -15,6 +15,17 @@ fn main() {
     println!("cargo:rerun-if-changed=templates/github");
     println!("cargo:rerun-if-changed=templates/ghec");
     println!("cargo:rerun-if-changed=templates/example-github");
+    println!("cargo:rerun-if-env-changed=GIT_UPLINK_SKIP_WEB_BUILD");
+
+    if env::var("GIT_UPLINK_SKIP_WEB_BUILD").ok().as_deref() == Some("1") {
+        if !dist.join("index.html").is_file() {
+            panic!(
+                "GIT_UPLINK_SKIP_WEB_BUILD=1 but {} is missing",
+                dist.join("index.html").display()
+            );
+        }
+        return;
+    }
 
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     run(npm, &["ci", "--no-fund", "--no-audit"], &web);

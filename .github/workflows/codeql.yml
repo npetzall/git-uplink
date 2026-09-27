@@ -1,16 +1,52 @@
 name: CodeQL
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
+    inputs:
+      scope:
+        description: product, site, or all
+        type: string
+        required: true
   schedule:
     - cron: "27 3 * * 1"
 
+permissions: {}
+
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        env:
+          SCOPE: ${{ github.event_name == 'schedule' && 'all' || inputs.scope }}
+        run: |
+          set -euo pipefail
+          web='{"name":"javascript-typescript-web","language":"javascript-typescript","build-mode":"none","config":"./.github/codeql/web.yml","category":"/language:javascript-typescript-web"}'
+          site='{"name":"javascript-typescript-site","language":"javascript-typescript","build-mode":"none","config":"./.github/codeql/site.yml","category":"/language:javascript-typescript-site"}'
+          rust='{"name":"rust","language":"rust","build-mode":"none","config":"","category":"/language:rust"}'
+          case "$SCOPE" in
+            product)
+              echo "matrix=[$web,$rust]" >>"$GITHUB_OUTPUT"
+              ;;
+            site)
+              echo "matrix=[$site]" >>"$GITHUB_OUTPUT"
+              ;;
+            all)
+              echo "matrix=[$web,$site,$rust]" >>"$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "unknown scope: $SCOPE" >&2
+              exit 1
+              ;;
+          esac
+
   analyze:
-    name: Analyze (${{ matrix.language }})
+    name: Analyze (${{ matrix.name }})
+    needs: plan
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -20,11 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - language: javascript-typescript
-            build-mode: none
-          - language: rust
-            build-mode: none
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,15 +73,15 @@ jobs:
           toolchain: 1.98.1
 
       - name: Initialize CodeQL
-        if: matrix.language == 'javascript-typescript'
+        if: matrix.config != ''
         uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          config-file: ./.github/codeql/javascript.yml
+          config-file: ${{ matrix.config }}
 
       - name: Initialize CodeQL
-        if: matrix.language == 'rust'
+        if: matrix.config == ''
         uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           languages: ${{ matrix.language }}
@@ -58,4 +90,4 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
-          category: /language:${{ matrix.language }}
+          category: ${{ matrix.category }}
