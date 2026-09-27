@@ -6,7 +6,7 @@ on:
       all-targets:
         description: Build every release target
         type: boolean
-        default: true
+        default: false
       version:
         description: Cargo version, X.Y.Z or X.Y.Z-pr.N.N.N
         type: string
