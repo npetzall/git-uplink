@@ -8,7 +8,7 @@ It is for a company on a private forge that must build on a public project, keep
 public upstream/main  +  tooling  +  active upstream[]  +  active internal[]
 ```
 
-`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. On GitHub Enterprise Cloud, dispatch the **to-upstream** Environment workflow (resolve of a submitted patch does this for you); `git uplink report` writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and `GITHUB_STEP_SUMMARY`.
+`add` is the internal product gate (status `queued`). `approve` / `submit` are the IP gate. After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. On GitHub Enterprise Cloud, dispatch the **to-upstream** Environment workflow (resolve of a submitted patch does this for you); `git uplink report` writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`.
 
 ```bash
 cargo install --path .

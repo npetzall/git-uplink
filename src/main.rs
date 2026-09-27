@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -242,22 +242,6 @@ fn read_commit_message(
     Ok(message.unwrap_or_else(|| fallback.to_string()))
 }
 
-fn append_step_summary(markdown: &str) {
-    let Ok(path) = env::var("GITHUB_STEP_SUMMARY") else {
-        return;
-    };
-    let mut body = markdown.to_string();
-    if !body.ends_with('\n') {
-        body.push('\n');
-    }
-    body.push('\n');
-    let _ = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut f| f.write_all(body.as_bytes()));
-}
-
 fn write_markdown_file(repo: &Path, file: &Path, markdown: &str) -> PathBuf {
     let abs = if file.is_absolute() {
         file.to_path_buf()
@@ -383,9 +367,13 @@ fn conflict_pr_create_artifact(
     })
 }
 
-fn print_sync_artifact(repo: &Path, result: &SyncResult) {
+fn print_sync_artifact(repo: &Path, result: &SyncResult, summary: Option<&str>) {
     let queue = &result.queue;
     let conflict = queue.all_patches().find(|p| p.status == "conflict");
+    let summary = summary
+        .filter(|text| !text.is_empty())
+        .map(|text| serde_json::Value::String(text.to_string()))
+        .unwrap_or(serde_json::Value::Null);
     let mut value = serde_json::json!({
         "lastSync": queue.last_sync,
         "needsApproval": result.needs_approval,
@@ -393,6 +381,7 @@ fn print_sync_artifact(repo: &Path, result: &SyncResult) {
         "flowedBack": result.flowed_back,
         "foreignCommits": result.foreign_commits,
         "reportPath": result.report_path,
+        "summary": summary,
     });
     if let Some(patch) = conflict {
         value["conflict"] = serde_json::json!({
@@ -467,11 +456,8 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
     println!("{value}");
 }
 
-fn finish_sync(repo: &Path, result: SyncResult) -> Result<(), Error> {
-    if let Some(report) = &result.report {
-        append_step_summary(report);
-    }
-    print_sync_artifact(repo, &result);
+fn finish_sync(repo: &Path, result: SyncResult, summary: Option<&str>) -> Result<(), Error> {
+    print_sync_artifact(repo, &result, summary);
     if let Some(conflict) = result.queue.all_patches().find(|p| p.status == "conflict") {
         eprintln!(
             "CONFLICT {} on {}",
@@ -740,7 +726,6 @@ fn run() -> Result<(), Error> {
             )?;
             let markdown = format_assess_markdown(&report);
             println!("{markdown}");
-            append_step_summary(&markdown);
             if !report.ok {
                 return Err(Error::msg("assess failed"));
             }
@@ -756,7 +741,6 @@ fn run() -> Result<(), Error> {
             let default_out = report_paths(&id)?.1;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &packet);
-            append_step_summary(&packet);
             commit_queue(&repo, &format!("uplink: contribution packet {id}"))?;
             println!("{packet}");
             eprintln!("Wrote {}", dest.display());
@@ -836,10 +820,10 @@ fn run() -> Result<(), Error> {
             let default_out = report_paths(&id)?.2;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
             write_markdown_file(&repo, &dest, &receipt);
-            append_step_summary(&receipt);
             let patch = approve_patch_at(&repo, &id, Some(&sha), Some(&run_url))?;
             commit_queue(&repo, &format!("uplink: to-upstream approval receipt {id}"))?;
-            println!("{} approved", patch.id);
+            println!("{receipt}");
+            eprintln!("{} approved", patch.id);
             eprintln!("Wrote {}", dest.display());
         }
         Commands::Submit { id } => {
@@ -881,7 +865,9 @@ fn run() -> Result<(), Error> {
             println!("{} submitted as {pr_url}", patch.id);
         }
         Commands::Sync => {
-            finish_sync(&repo, sync(&repo)?)?;
+            let result = sync(&repo)?;
+            let summary = result.report.clone();
+            finish_sync(&repo, result, summary.as_deref())?;
         }
         Commands::AcceptUpstream => {
             let queue = read_queue(&repo)?;
@@ -911,8 +897,7 @@ fn run() -> Result<(), Error> {
             });
             let dest = PathBuf::from(from_upstream_report_paths().2);
             write_markdown_file(&repo, &dest, &receipt);
-            append_step_summary(&receipt);
-            finish_sync(&repo, accept_upstream(&repo)?)?;
+            finish_sync(&repo, accept_upstream(&repo)?, Some(&receipt))?;
         }
         Commands::Gated {
             id,

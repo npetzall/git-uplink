@@ -47,7 +47,8 @@ jobs:
           PATCH_ID: ${{ inputs.patch_id }}
         run: |
           git uplink init
-          git uplink report "$PATCH_ID"
+          packet=$(git uplink report "$PATCH_ID")
+          printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
           git push origin uplink/state
 
   finalize:
@@ -124,7 +125,8 @@ jobs:
           set -euo pipefail
           git uplink init
           if [ -d "$EXTRA_DIR" ] && find "$EXTRA_DIR" -name '*.md' -type f | grep -q .; then
-            git uplink report "$PATCH_ID" --extra-dir "$EXTRA_DIR"
+            packet=$(git uplink report "$PATCH_ID" --extra-dir "$EXTRA_DIR")
+            printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
             git push origin uplink/state
           else
             packet=$(git show "uplink/state:.uplink/reports/${PATCH_ID}/assessment.md")
@@ -210,7 +212,8 @@ jobs:
           PATCH_ID: ${{ inputs.patch_id }}
           HEAD_REPO: ${{ steps.queue.outputs.contrib_owner }}/${{ steps.queue.outputs.contrib_repo }}
         run: |
-          git uplink approve "$PATCH_ID"
+          receipt=$(git uplink approve "$PATCH_ID")
+          printf '%s\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
           submit_json=$(git uplink submit "$PATCH_ID")
 
           repo=$(jq -r '.gh.prCreate.repo // empty' <<<"$submit_json")
