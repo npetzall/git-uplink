@@ -47,3 +47,17 @@ jobs:
       actions: read
       issues: write
       pull-requests: write
+
+  merge-gate:
+    name: Merge gate
+    needs: [version, product]
+    if: |
+      !cancelled() &&
+      needs.version.result == 'success' &&
+      needs.product.result == 'success'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Ok to merge
+        run: |
+          echo "OK to merge"
