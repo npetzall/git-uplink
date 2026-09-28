@@ -112,17 +112,69 @@ pub fn with_queue_lock<T>(repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<
     }
 }
 
+/// Push rejections caused by the remote ref moving concurrently. Auth, hook,
+/// and other push failures are not retried.
+const PUSH_RACE_REJECTIONS: &[&str] = &[
+    "stale info",
+    "non-fast-forward",
+    "fetch first",
+    "cannot lock ref",
+];
+
 pub fn is_push_lease_rejected(err: &Error) -> bool {
-    let text = err.to_string().to_lowercase();
-    text.contains("stale info")
-        || text.contains("failed to push some refs")
-        || text.contains("lease")
-        || text.contains("non-fast-forward")
+    let Error::Git(git_err) = err else {
+        return false;
+    };
+    if git_err.args.first().map(String::as_str) != Some("push") {
+        return false;
+    }
+    let stderr = git_err.result.stderr.to_lowercase();
+    PUSH_RACE_REJECTIONS
+        .iter()
+        .any(|reason| stderr.contains(reason))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::{GitError, GitResult};
+
+    fn git_failure(args: &[&str], stderr: &str) -> Error {
+        Error::Git(GitError::new(
+            args,
+            GitResult {
+                stdout: String::new(),
+                stderr: stderr.into(),
+                code: 1,
+            },
+        ))
+    }
+
+    #[test]
+    fn only_push_race_rejections_are_retried() {
+        let push = ["push", "origin", "refs/heads/uplink/state"];
+        assert!(is_push_lease_rejected(&git_failure(
+            &push,
+            " ! [rejected] uplink/state -> uplink/state (stale info)\nerror: failed to push some refs",
+        )));
+        assert!(is_push_lease_rejected(&git_failure(
+            &push,
+            " ! [rejected] uplink/state -> uplink/state (fetch first)\nerror: failed to push some refs",
+        )));
+        assert!(!is_push_lease_rejected(&git_failure(
+            &push,
+            "remote: Permission denied\nerror: failed to push some refs",
+        )));
+        assert!(!is_push_lease_rejected(&git_failure(
+            &push,
+            " ! [remote rejected] uplink/state -> uplink/state (pre-receive hook declined)\nerror: failed to push some refs",
+        )));
+        assert!(!is_push_lease_rejected(&git_failure(
+            &["fetch", "origin"],
+            "non-fast-forward",
+        )));
+        assert!(!is_push_lease_rejected(&Error::msg("lease stale info")));
+    }
 
     #[test]
     fn lock_is_released_when_closure_panics() {

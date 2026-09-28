@@ -55,7 +55,7 @@ pub struct GitError {
 }
 
 impl GitError {
-    fn new(args: &[&str], result: GitResult) -> Self {
+    pub(crate) fn new(args: &[&str], result: GitResult) -> Self {
         let message = format!(
             "git {} failed ({}): {}",
             args.join(" "),
