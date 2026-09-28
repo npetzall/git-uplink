@@ -10,7 +10,8 @@ use crate::git::{GitOpts, git, git_ok};
 use crate::queue::now_iso;
 use crate::repo::{ensure_revs, has_ref, show_at, state_branch};
 use crate::types::{
-    AssessCheck, AssessReport, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR, Patch, QueueState,
+    AssessCheck, AssessReport, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR, Patch,
+    PatchStatus, QueueState,
 };
 
 pub const TO_UPSTREAM_ENVIRONMENT: &str = "to-upstream";
@@ -382,7 +383,7 @@ pub fn format_contribution_packet_with_extras(
     patch: &Patch,
     extra_dir: Option<&Path>,
 ) -> Result<String> {
-    let packet = if patch.status == "amended" {
+    let packet = if patch.status == PatchStatus::Amended {
         format_delta_approver_packet(repo, patch)?
     } else {
         format_approver_packet(patch)

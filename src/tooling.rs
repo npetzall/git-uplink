@@ -14,8 +14,8 @@ use crate::repo::{
     stable_patch_id_from_contents, stamp,
 };
 use crate::types::{
-    DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchSource, QueueState, TOOLING_PATCH_KIND,
-    TOOLING_PATCH_TITLE,
+    DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchSource, PatchStatus, QueueState,
+    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
 };
 
 #[derive(RustEmbed)]
@@ -99,7 +99,7 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
             id: id.clone(),
             title: TOOLING_PATCH_TITLE.into(),
             commit_message: String::new(),
-            status: "queued".into(),
+            status: PatchStatus::Queued,
             depends_on: Vec::new(),
             created_at: created_at.clone(),
             updated_at: created_at,
@@ -135,7 +135,7 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
         }
         if let Some(patch) = queue.tooling.as_mut() {
             patch.kind = Some(TOOLING_PATCH_KIND.into());
-            patch.status = "queued".into();
+            patch.status = PatchStatus::Queued;
             patch.conflict = None;
             patch.patch_id_stable = Some(new_stable);
             patch.assess = Some(assess.clone());

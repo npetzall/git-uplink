@@ -15,7 +15,42 @@ fn default_state_branch() -> String {
 pub const DEFAULT_EXPORT_AUTHOR: (&str, &str) =
     ("Uplink Contributor", "uplink@users.noreply.github.com");
 
-pub type PatchStatus = String;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PatchStatus {
+    Queued,
+    Approved,
+    Submitted,
+    Amended,
+    Merged,
+    Dropped,
+    Conflict,
+}
+
+impl PatchStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Approved => "approved",
+            Self::Submitted => "submitted",
+            Self::Amended => "amended",
+            Self::Merged => "merged",
+            Self::Dropped => "dropped",
+            Self::Conflict => "conflict",
+        }
+    }
+
+    /// Still carried on the company branch (not merged upstream or dropped).
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::Merged | Self::Dropped)
+    }
+}
+
+impl std::fmt::Display for PatchStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatchLayer {
@@ -273,7 +308,7 @@ pub struct Patch {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub commit_message: String,
-    pub status: String,
+    pub status: PatchStatus,
     pub depends_on: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -494,5 +529,23 @@ impl QueueStateWire {
             upstream: self.upstream,
             internal: self.internal,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PatchStatus;
+
+    #[test]
+    fn patch_status_keeps_lowercase_json() {
+        assert_eq!(
+            serde_json::to_string(&PatchStatus::Approved).unwrap(),
+            "\"approved\""
+        );
+        assert_eq!(
+            serde_json::from_str::<PatchStatus>("\"conflict\"").unwrap(),
+            PatchStatus::Conflict
+        );
+        assert!(serde_json::from_str::<PatchStatus>("\"bogus\"").is_err());
     }
 }

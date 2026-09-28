@@ -42,8 +42,8 @@ use crate::repo::{
 };
 use crate::types::{
     AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict,
-    PatchMerged, PatchSource, PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig, QueueState,
-    STATE_BRANCH, TransferDirection,
+    PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig,
+    QueueState, STATE_BRANCH, TransferDirection,
 };
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
@@ -703,7 +703,7 @@ fn add_patch_once(
         id: id.clone(),
         title: opts.title.clone(),
         commit_message: String::new(),
-        status: "queued".into(),
+        status: PatchStatus::Queued,
         depends_on,
         created_at: created_at.clone(),
         updated_at: created_at,
@@ -1086,7 +1086,7 @@ fn mark_empty_if_already_upstream(repo: &Path, id: &str) -> Result<()> {
     }
     let company_branch = queue.config.internal_branch.clone();
     let current = get_patch_mut(&mut queue, id)?;
-    current.status = "merged".into();
+    current.status = PatchStatus::Merged;
     current.merged = Some(PatchMerged {
         via: MergeVia::EmptyRebase,
         at: stamp(),
@@ -1131,11 +1131,13 @@ pub fn approve_patch_at(
                     "{id} is not ready for contribution. Fix assess-for-upstream findings first."
                 )));
             }
-            let kind = if patch.status == "queued" {
+            let kind = if patch.status == PatchStatus::Queued {
                 "initial"
-            } else if patch.status == "amended" {
+            } else if patch.status == PatchStatus::Amended {
                 "delta"
-            } else if patch.status == "approved" || patch.status == "submitted" {
+            } else if patch.status == PatchStatus::Approved
+                || patch.status == PatchStatus::Submitted
+            {
                 return Ok(patch.clone());
             } else {
                 return Err(Error::msg(format!(
@@ -1143,7 +1145,7 @@ pub fn approve_patch_at(
                     patch.status
                 )));
             };
-            patch.status = "approved".into();
+            patch.status = PatchStatus::Approved;
             let sha = match sha {
                 Some(value) if !value.is_empty() => value.to_string(),
                 _ => rev_parse(repo, &state_branch(repo))?,
@@ -1191,7 +1193,7 @@ pub fn drop_patch(repo: &Path, id: &str, reason: &str) -> Result<Patch> {
         let mut queue = read_queue_file(repo)?;
         {
             let patch = get_patch_mut(&mut queue, id)?;
-            patch.status = "dropped".into();
+            patch.status = PatchStatus::Dropped;
             patch.conflict = None;
             add_event(patch, "dropped", reason);
         }
@@ -1212,7 +1214,7 @@ pub fn mark_merged(
         let mut queue = read_queue_file(repo)?;
         {
             let patch = get_patch_mut(&mut queue, id)?;
-            patch.status = "merged".into();
+            patch.status = PatchStatus::Merged;
             patch.conflict = None;
             patch.merged = Some(PatchMerged {
                 via: via.clone(),
@@ -1231,7 +1233,7 @@ const STATE_PATCH_PUSH_ATTEMPTS: u32 = 8;
 fn origin_amended_after_local(local: &Patch, origin: &Patch) -> bool {
     let local_had_amend = local.events.iter().any(|e| e.kind == "amended");
     let origin_amended =
-        origin.status == "amended" || origin.events.iter().any(|e| e.kind == "amended");
+        origin.status == PatchStatus::Amended || origin.events.iter().any(|e| e.kind == "amended");
     origin_amended && !local_had_amend
 }
 
@@ -1241,12 +1243,12 @@ fn replay_recorded_patch_onto_origin(repo: &Path, id: &str, from_sha: &str) -> R
     let mut queue = read_queue_file(repo)?;
     {
         let dest = get_patch_mut(&mut queue, id)?;
-        if dest.status == "conflict" && src.status != "conflict" {
+        if dest.status == PatchStatus::Conflict && src.status != PatchStatus::Conflict {
             return Err(Error::msg(format!(
                 "{id} is conflict on origin; not recording the pull request"
             )));
         }
-        if dest.status == "dropped" {
+        if dest.status == PatchStatus::Dropped {
             return Err(Error::msg(format!(
                 "{id} is dropped on origin; not recording the pull request"
             )));
@@ -1256,7 +1258,7 @@ fn replay_recorded_patch_onto_origin(repo: &Path, id: &str, from_sha: &str) -> R
                 "{id} was amended on origin after this recording; not clobbering with a stale PR"
             )));
         }
-        dest.status = src.status.clone();
+        dest.status = src.status;
         dest.upstream = src.upstream.clone();
         dest.approvals = src.approvals.clone();
         if let Some(src_conflict) = src.conflict {
@@ -1349,7 +1351,7 @@ pub fn record_pull_request(
         if let Some(existing) = patch.upstream.as_ref() {
             if existing.pr_number == Some(number)
                 && existing.pr_url.as_deref() == Some(url)
-                && patch.status == "submitted"
+                && patch.status == PatchStatus::Submitted
             {
                 let message = format!("uplink: submit {id} as PR {number}");
                 push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
@@ -1369,7 +1371,7 @@ pub fn record_pull_request(
         }
         {
             let patch = get_patch_mut(&mut queue, id)?;
-            patch.status = "submitted".into();
+            patch.status = PatchStatus::Submitted;
             patch.upstream = Some(PatchUpstream {
                 contrib_branch: branch.into(),
                 pr_number: Some(number),
@@ -1397,7 +1399,7 @@ pub fn record_gated_pr(
         let mut queue = read_queue_file(repo)?;
         let state_branch = queue.config.state_branch.clone();
         let patch = get_patch(&queue, id)?.clone();
-        if patch.status != "conflict" {
+        if patch.status != PatchStatus::Conflict {
             return Err(Error::msg(format!("{id} is not in conflict")));
         }
         let Some(conflict) = patch.conflict.clone() else {
@@ -1499,7 +1501,7 @@ impl IncomingClassification {
 }
 
 fn eligible_for_flow_back(queue: &QueueState, patch: &Patch) -> bool {
-    patch.status != "merged" && patch.status != "dropped" && queue.is_upstream(&patch.id)
+    patch.status.is_active() && queue.is_upstream(&patch.id)
 }
 
 fn commit_stable_patch_id(repo: &Path, sha: &str) -> Result<Option<String>> {
@@ -1640,7 +1642,7 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
             Some(p) => p.clone(),
             None => continue,
         };
-        if patch.status == "merged" || patch.status == "dropped" || !live.is_upstream(&id) {
+        if !patch.status.is_active() || !live.is_upstream(&id) {
             continue;
         }
         let grep = format!("Uplink-Patch-Id: {}", patch.id);
@@ -1742,7 +1744,7 @@ fn persist_apply_conflict(
     );
     {
         let current = get_patch_mut(queue, &patch.id)?;
-        current.status = "conflict".into();
+        current.status = PatchStatus::Conflict;
         current.conflict = Some(PatchConflict {
             branch: branch.clone(),
             work_branch: Some(work),
@@ -1887,7 +1889,7 @@ fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
             GitOpts::default(),
         )?;
         for patch in topological_active(&queue)? {
-            if patch.status == "conflict" {
+            if patch.status == PatchStatus::Conflict {
                 return Err(Error::msg(format!(
                     "Queue is blocked on conflict in {}",
                     patch.id
@@ -1952,7 +1954,7 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
             GitOpts::default(),
         )?;
         for patch in topological_active(&queue)? {
-            if patch.status == "conflict" {
+            if patch.status == PatchStatus::Conflict {
                 restore_company_branch(repo, &company_branch)?;
                 return Err(Error::Conflict(ConflictError::new(
                     format!("Queue is blocked on conflict in {}", patch.id),
@@ -1966,7 +1968,7 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
                 let is_upstream = queue.is_upstream(&patch.id);
                 let current = get_patch_mut(&mut queue, &patch.id)?;
                 if is_upstream {
-                    current.status = "merged".into();
+                    current.status = PatchStatus::Merged;
                     current.merged = Some(PatchMerged {
                         via: MergeVia::EmptyRebase,
                         at: stamp(),
@@ -1996,18 +1998,17 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
             let contents = fs::read_to_string(&patch_file)?;
             let current = get_patch_mut(&mut queue, &patch.id)?;
             current.patch_id_stable = Some(stable_patch_id_from_contents(repo, &contents)?);
-            if current.status == "conflict" {
+            if current.status == PatchStatus::Conflict {
                 current.status = if current
                     .upstream
                     .as_ref()
                     .and_then(|u| u.pr_number)
                     .is_some()
                 {
-                    "submitted"
+                    PatchStatus::Submitted
                 } else {
-                    "queued"
-                }
-                .into();
+                    PatchStatus::Queued
+                };
             }
             current.conflict = None;
         }
@@ -2211,7 +2212,7 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         }
         let mut queue = read_queue_file(repo)?;
         let patch = get_patch(&queue, id)?.clone();
-        if patch.status != "conflict" {
+        if patch.status != PatchStatus::Conflict {
             return Err(Error::msg(format!("{id} is not in conflict")));
         }
         assert_resolution_clean(repo)?;
@@ -2227,11 +2228,10 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         {
             let patch = get_patch_mut(&mut queue, id)?;
             patch.status = if patch.upstream.is_some() {
-                "amended"
+                PatchStatus::Amended
             } else {
-                "queued"
-            }
-            .into();
+                PatchStatus::Queued
+            };
             patch.conflict = None;
             let rel = patch_path(id)?.to_string_lossy().into_owned();
             patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
@@ -2300,14 +2300,14 @@ fn validate_transfer(queue: &QueueState, id: &str, direction: TransferDirection)
         )));
     }
     let patch = get_patch(queue, id)?.clone();
-    match patch.status.as_str() {
-        "merged" | "dropped" | "conflict" => {
-            return Err(Error::msg(format!(
-                "{id} cannot be transferred while status is {}",
-                patch.status
-            )));
-        }
-        _ => {}
+    if matches!(
+        patch.status,
+        PatchStatus::Merged | PatchStatus::Dropped | PatchStatus::Conflict
+    ) {
+        return Err(Error::msg(format!(
+            "{id} cannot be transferred while status is {}",
+            patch.status
+        )));
     }
 
     if direction.to_internal() {
@@ -2402,7 +2402,7 @@ fn start_transfer(repo: &Path, id: &str, direction: TransferDirection) -> Result
         let mut target_onto = None;
         let mut target_after = None;
         for item in topological_active(&preview)? {
-            if item.status == "conflict" {
+            if item.status == PatchStatus::Conflict {
                 return Err(Error::msg(format!(
                     "Queue is blocked on conflict in {}",
                     item.id
@@ -2551,7 +2551,7 @@ fn finish_successful_transfer(
     move_patch(&mut queue, id, direction.to_internal())?;
     {
         let patch = get_patch_mut(&mut queue, id)?;
-        patch.status = "queued".into();
+        patch.status = PatchStatus::Queued;
         patch.conflict = None;
         if direction.to_internal() {
             patch.upstream = None;
@@ -2652,7 +2652,7 @@ fn complete_transfer(
     move_patch(&mut queue, id, direction.to_internal())?;
     {
         let current = get_patch_mut(&mut queue, id)?;
-        current.status = "queued".into();
+        current.status = PatchStatus::Queued;
         current.conflict = None;
         current.patch_id_stable = Some(stable);
         if direction.to_internal() {
@@ -2723,7 +2723,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
         if !queue.is_upstream(id) {
             return Err(Error::msg(format!("{id} is internal-only")));
         }
-        if patch.status != "approved" && patch.status != "submitted" {
+        if patch.status != PatchStatus::Approved && patch.status != PatchStatus::Submitted {
             return Err(Error::msg(format!(
                 "{id} must be approved before submit (currently {})",
                 patch.status
@@ -2731,7 +2731,10 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
         }
         for dep_id in &patch.depends_on {
             let dep = get_patch(&queue, dep_id)?;
-            if queue.is_upstream(dep_id) && dep.status != "merged" && dep.status != "submitted" {
+            if queue.is_upstream(dep_id)
+                && dep.status != PatchStatus::Merged
+                && dep.status != PatchStatus::Submitted
+            {
                 return Err(Error::msg(format!("Submit {dep_id} before {id}")));
             }
         }
@@ -2824,7 +2827,7 @@ fn submit_base(repo: &Path, queue: &QueueState, patch: &Patch) -> Result<String>
         .depends_on
         .iter()
         .filter_map(|id| queue.all_patches().find(|p| p.id == *id))
-        .filter(|dep| queue.is_upstream(&dep.id) && dep.status == "submitted")
+        .filter(|dep| queue.is_upstream(&dep.id) && dep.status == PatchStatus::Submitted)
         .collect();
     if let Some(last) = submitted_deps.last()
         && let Some(branch) = last.upstream.as_ref().map(|u| u.contrib_branch.as_str())
@@ -3043,20 +3046,19 @@ pub fn summarize_queue(queue: &QueueState) -> QueueCounts {
         internal_only: 0,
     };
     for patch in queue.all_patches() {
-        match patch.status.as_str() {
-            "queued" => counts.queued += 1,
-            "approved" => counts.approved += 1,
-            "submitted" => counts.submitted += 1,
-            "amended" => counts.amended += 1,
-            "merged" => counts.merged += 1,
-            "dropped" => counts.dropped += 1,
-            "conflict" => counts.conflict += 1,
-            _ => {}
+        match patch.status {
+            PatchStatus::Queued => counts.queued += 1,
+            PatchStatus::Approved => counts.approved += 1,
+            PatchStatus::Submitted => counts.submitted += 1,
+            PatchStatus::Amended => counts.amended += 1,
+            PatchStatus::Merged => counts.merged += 1,
+            PatchStatus::Dropped => counts.dropped += 1,
+            PatchStatus::Conflict => counts.conflict += 1,
         }
-        if queue.is_tooling(&patch.id) && patch.status != "dropped" {
+        if queue.is_tooling(&patch.id) && patch.status != PatchStatus::Dropped {
             counts.tooling += 1;
         }
-        if queue.is_internal(&patch.id) && patch.status != "dropped" {
+        if queue.is_internal(&patch.id) && patch.status != PatchStatus::Dropped {
             counts.internal += 1;
             counts.internal_only += 1;
         }
