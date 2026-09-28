@@ -31,6 +31,12 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
 
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Validate gated work
         env:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}

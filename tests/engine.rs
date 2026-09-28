@@ -420,7 +420,7 @@ fn init_records_remote_urls_and_internal_branch() {
             .is_file()
     );
     assert!(
-        !world
+        world
             .company
             .join(".github/actions/install-git-uplink/action.yml")
             .is_file()

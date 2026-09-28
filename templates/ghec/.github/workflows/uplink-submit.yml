@@ -41,6 +41,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Write approver packet
         env:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -68,6 +74,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Dispatch company packet hooks
         id: hooks
@@ -149,6 +161,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: main
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Read upstream and contrib from the queue
         id: queue
         env:

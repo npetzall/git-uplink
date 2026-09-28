@@ -1,5 +1,5 @@
 # ghec forge pack (`git uplink init --forge ghec`).
-# Requires `git-uplink` on PATH (cargo install this crate on the runner).
+# Installs git-uplink from a GitHub release.
 # Empty UPLINK_*_AUTH defaults to app.
 name: Uplink import
 
@@ -25,6 +25,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mint internal GitHub App token
         id: internal-app

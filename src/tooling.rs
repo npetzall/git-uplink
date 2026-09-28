@@ -326,7 +326,7 @@ mod embed_tests {
             "{paths:?}"
         );
         assert!(
-            !paths.iter().any(|p| p.contains("install-git-uplink")),
+            paths.contains(&".github/actions/install-git-uplink/action.yml"),
             "{paths:?}"
         );
     }

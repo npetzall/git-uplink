@@ -27,7 +27,7 @@ ensure_contrib_repo
 echo "Upstream clone: $UPSTREAM_DIR  ($UPSTREAM)"
 echo "Contrib clone:  $CONTRIB_DIR   ($CONTRIB)"
 echo "Internal clone: $INTERNAL_DIR  ($INTERNAL)"
-echo "Uplink source:  $UPLINK_SRC@$UPLINK_REV"
+echo "Uplink release: $UPLINK_SRC@$UPLINK_VERSION"
 
 echo "Initializing $INTERNAL"
 ensure_remote "$INTERNAL_DIR" origin "$INTERNAL_URL"
@@ -68,7 +68,7 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   set_var UPLINK_INTERNAL_DOMAINS "acme.example"
   set_var UPLINK_EXPORT_AUTHOR "Uplink Example <uplink@example.com>"
   set_var UPLINK_SRC "$UPLINK_SRC"
-  set_var UPLINK_REV "$UPLINK_REV"
+  set_var UPLINK_VERSION "$UPLINK_VERSION"
   set_var UPLINK_INTERNAL_AUTH "$UPLINK_INTERNAL_AUTH"
   set_var UPLINK_CONTRIB_AUTH "$UPLINK_CONTRIB_AUTH"
   set_var UPLINK_UPSTREAM_AUTH "$UPLINK_UPSTREAM_AUTH"

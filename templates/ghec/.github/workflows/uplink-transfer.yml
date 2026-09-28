@@ -1,5 +1,5 @@
 # ghec forge pack (`git uplink init --forge ghec`).
-# Requires `git-uplink` on PATH.
+# Installs git-uplink from a GitHub release.
 # Empty UPLINK_*_AUTH defaults to app.
 #
 # Dispatch starts a transfer. If apply+assess+preflight pass, the queue is
@@ -48,6 +48,12 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
@@ -183,6 +189,12 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}

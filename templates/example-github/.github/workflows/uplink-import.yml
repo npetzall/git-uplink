@@ -1,5 +1,5 @@
 # example-github forge pack (`git uplink init --forge example-github`).
-# Installs git-uplink on the runner.
+# Installs git-uplink from a GitHub release.
 # Empty UPLINK_*_AUTH defaults to pat.
 name: Uplink import
 
@@ -27,8 +27,9 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
       - uses: $/.github/actions/install-git-uplink
         with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mint internal GitHub App token
         id: internal-app

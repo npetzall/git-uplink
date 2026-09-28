@@ -31,8 +31,9 @@ jobs:
           ref: ${{ github.sha }}
       - uses: $/.github/actions/install-git-uplink
         with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

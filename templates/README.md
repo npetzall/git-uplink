@@ -4,14 +4,14 @@
 
 | `--forge` | Workflows | Notes |
 | --- | --- | --- |
-| `ghec` | `templates/ghec/.github/workflows/` | GitHub Enterprise Cloud. `git-uplink` on `PATH`. Empty `UPLINK_*_AUTH` defaults to `app`. |
-| `example-github` | `templates/example-github/.github/` | Worked example. Includes `install-git-uplink`. Empty `UPLINK_*_AUTH` defaults to `pat`. |
+| `ghec` | `templates/ghec/.github/workflows/` | GitHub Enterprise Cloud. Downloads `git-uplink` from a release. Empty `UPLINK_*_AUTH` defaults to `app`. |
+| `example-github` | `templates/example-github/.github/` | Worked example. Same release install. Empty `UPLINK_*_AUTH` defaults to `pat`. |
 
 Both are GitHub-family forges. They share one pull request template: `templates/github/pull_request_template.md` → `.github/pull_request_template.md`. Do not copy YAML by hand.
 
 The PR template is the commit message. Title + body become one stored message (HTML comments stripped). Keep the cutoff line; company `main` includes it, contrib export does not.
 
-The `ghec` pack needs the `git-uplink` binary on `PATH`. Install this crate on the runner (`cargo install --path vendor/git-uplink` or a release binary). `example-github` builds it on the runner from `UPLINK_SRC` / `UPLINK_REV`.
+Both packs install `git-uplink` on each job from a GitHub release (`UPLINK_SRC` / `UPLINK_VERSION`) via `gh release download`, passing `secrets.GITHUB_TOKEN` to `install-git-uplink`. Set repository variables `UPLINK_SRC` (owner/name) and `UPLINK_VERSION` (`latest`, or a tag such as `v0.1.0`). A private release repository must allow Actions in this repository to read its releases.
 
 Each job’s first `git uplink` command is `git uplink init`, which fetches `origin` `uplink/state`, `uplink/upstream`, and the configured company branch, materializes that local ref without checking it out, and adds the `upstream` and `contrib` remotes from URLs stored in `.uplink/queue.json`. That hydrate path does not rewrite workflows. First-time setup is `git uplink init --upstream <url> --contrib <url> --forge ghec` in the product clone (then push `main` and `uplink/state`). Pushing `.github/workflows` needs **workflows** write, not `GITHUB_TOKEN`.
 
