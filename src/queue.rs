@@ -89,48 +89,27 @@ pub fn add_event(patch: &mut Patch, kind: &str, detail: impl Into<String>) {
     patch.updated_at = at;
 }
 
+/// Tooling, then upstream, then internal: the order patches apply on company main.
 pub fn apply_order_active(queue: &QueueState) -> Result<Vec<Patch>> {
-    let mut ordered = Vec::new();
-    if let Some(tooling) = &queue.tooling
-        && is_active(tooling)
-    {
-        ordered.push(tooling.clone());
-    }
-    ordered.extend(topological_layer(
-        queue
-            .upstream
-            .iter()
-            .filter(|p| is_active(p))
-            .cloned()
-            .collect(),
-    )?);
-    ordered.extend(topological_layer(
-        queue
-            .internal
-            .iter()
-            .filter(|p| is_active(p))
-            .cloned()
-            .collect(),
-    )?);
+    let mut ordered = apply_order_upstream_layer(queue)?;
+    ordered.extend(topological_layer(active_in(&queue.internal))?);
     Ok(ordered)
 }
 
+/// Tooling, then upstream: what exports on top of public upstream.
 pub fn apply_order_upstream_layer(queue: &QueueState) -> Result<Vec<Patch>> {
-    let mut ordered = Vec::new();
-    if let Some(tooling) = &queue.tooling
-        && is_active(tooling)
-    {
-        ordered.push(tooling.clone());
-    }
-    ordered.extend(topological_layer(
-        queue
-            .upstream
-            .iter()
-            .filter(|p| is_active(p))
-            .cloned()
-            .collect(),
-    )?);
+    let mut ordered: Vec<Patch> = queue
+        .tooling
+        .iter()
+        .filter(|p| is_active(p))
+        .cloned()
+        .collect();
+    ordered.extend(topological_layer(active_in(&queue.upstream))?);
     Ok(ordered)
+}
+
+fn active_in(layer: &[Patch]) -> Vec<Patch> {
+    layer.iter().filter(|p| is_active(p)).cloned().collect()
 }
 
 pub fn layer_label(queue: &QueueState, id: &str) -> &'static str {
