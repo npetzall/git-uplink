@@ -11,7 +11,7 @@ use crate::queue::{
     active_upstream, apply_order_upstream_layer, get_patch, patch_path, read_queue,
 };
 use crate::repo::{ensure_revs, ensure_upstream_ref, has_ref, rev_parse, write_product_patch};
-use crate::types::{Patch, QueueState};
+use crate::types::{Patch, PatchStatus, QueueState};
 
 fn run_shell(command: &str, cwd: &Path) -> (i32, String) {
     let output = Command::new("sh")
@@ -360,7 +360,7 @@ pub fn run_preflight_command_in(queue: &QueueState, cwd: &Path) -> Result<()> {
 pub fn assert_upstream_layer_applies(repo: &Path, queue: &QueueState) -> Result<()> {
     with_upstream_worktree(repo, |dir| {
         for patch in apply_order_upstream_layer(queue)? {
-            if patch.status == "conflict" {
+            if patch.status == PatchStatus::Conflict {
                 return Err(Error::msg(format!(
                     "Queue is blocked on conflict in {}; cannot preflight the upstream layer.",
                     patch.id
@@ -391,7 +391,7 @@ pub fn assert_upstream_layer_preflight(
 ) -> Result<()> {
     with_upstream_worktree(repo, |dir| {
         for patch in apply_order_upstream_layer(queue)? {
-            if patch.status == "conflict" {
+            if patch.status == PatchStatus::Conflict {
                 return Err(Error::msg(format!(
                     "Queue is blocked on conflict in {}; cannot preflight the upstream layer.",
                     patch.id
@@ -441,7 +441,7 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
     let patch = Patch {
         id: id.clone(),
         title: opts.title.clone(),
-        status: "queued".into(),
+        status: PatchStatus::Queued,
         depends_on,
         created_at: String::new(),
         updated_at: String::new(),

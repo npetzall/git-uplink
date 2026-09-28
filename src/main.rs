@@ -17,7 +17,7 @@ use git_uplink::{
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
     resolve_conflict, status_report, status_snapshot, submit_patch, sync, transfer_patch,
 };
-use git_uplink::{Patch, QueueState, SyncResult, TransferDirection, TransferResult};
+use git_uplink::{Patch, PatchStatus, QueueState, SyncResult, TransferDirection, TransferResult};
 
 #[derive(Parser)]
 #[command(
@@ -371,7 +371,9 @@ fn conflict_pr_create_artifact(
 
 fn print_sync_artifact(repo: &Path, result: &SyncResult, summary: Option<&str>) {
     let queue = &result.queue;
-    let conflict = queue.all_patches().find(|p| p.status == "conflict");
+    let conflict = queue
+        .all_patches()
+        .find(|p| p.status == PatchStatus::Conflict);
     let summary = summary
         .filter(|text| !text.is_empty())
         .map(|text| serde_json::Value::String(text.to_string()))
@@ -460,7 +462,11 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
 
 fn finish_sync(repo: &Path, result: SyncResult, summary: Option<&str>) -> Result<(), Error> {
     print_sync_artifact(repo, &result, summary);
-    if let Some(conflict) = result.queue.all_patches().find(|p| p.status == "conflict") {
+    if let Some(conflict) = result
+        .queue
+        .all_patches()
+        .find(|p| p.status == PatchStatus::Conflict)
+    {
         eprintln!(
             "CONFLICT {} on {}",
             conflict.id,
@@ -481,7 +487,9 @@ fn print_resolve_artifact(
     follow_on_conflict: bool,
 ) {
     let mut gh = serde_json::Map::new();
-    let conflict = queue.all_patches().find(|p| p.status == "conflict");
+    let conflict = queue
+        .all_patches()
+        .find(|p| p.status == PatchStatus::Conflict);
     if follow_on_conflict && let Some(patch) = conflict {
         gh.insert(
             "prCreate".into(),
@@ -991,7 +999,10 @@ fn run() -> Result<(), Error> {
             Err(Error::Conflict(_)) => {
                 let queue = read_queue(&repo)?;
                 print_resolve_artifact(&repo, &id, &queue, true);
-                if let Some(conflict) = queue.all_patches().find(|p| p.status == "conflict") {
+                if let Some(conflict) = queue
+                    .all_patches()
+                    .find(|p| p.status == PatchStatus::Conflict)
+                {
                     eprintln!(
                         "CONFLICT {} on {}",
                         conflict.id,

@@ -5,8 +5,8 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
-    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, ProgressMode, PushOpts, QueueConfig,
-    QueueState, RebuildOpts, Result, STATE_BRANCH, StepOutcome, TOOLING_PATCH_KIND,
+    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PatchStatus, ProgressMode, PushOpts,
+    QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH, StepOutcome, TOOLING_PATCH_KIND,
     TOOLING_PATCH_TITLE, TransferDirection, accept_upstream, add_patch, approve_patch,
     configure_repo, doctor, drop_patch, format_approval_receipt, format_approver_packet,
     format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
@@ -2745,7 +2745,7 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
         .all_patches()
         .find(|p| p.id == hash_patch.id)
         .unwrap();
-    assert_eq!(merged.status, "merged");
+    assert_eq!(merged.status, PatchStatus::Merged);
     assert_eq!(merged.merged.as_ref().unwrap().via, MergeVia::Trailer);
     let tokens = snapshot.product_files.get("src/tokens.js").unwrap();
     assert!(tokens.contains("saltedSha256"));
@@ -2814,7 +2814,7 @@ fn sync_applies_flowed_back_commits_without_approval() {
         .all_patches()
         .find(|p| p.id == hash_patch.id)
         .unwrap();
-    assert_eq!(merged.status, "merged");
+    assert_eq!(merged.status, PatchStatus::Merged);
     let upstream_tokens = git_ok(company, &["show", "uplink/upstream:src/tokens.js"]).unwrap();
     assert!(upstream_tokens.contains("sha256"));
 }
@@ -2916,10 +2916,10 @@ fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
     let result = sync(company).unwrap();
     assert!(result.needs_approval);
     assert!(result.flowed_back.iter().any(|id| id == &hash_patch.id));
-    assert_eq!(result.queue.patch_refs()[0].status, "queued");
+    assert_eq!(result.queue.patch_refs()[0].status, PatchStatus::Queued);
     accept_upstream(company).unwrap();
     let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.queue.patch_refs()[0].status, "merged");
+    assert_eq!(snapshot.queue.patch_refs()[0].status, PatchStatus::Merged);
     let changelog = snapshot.product_files.get("CHANGELOG.md").unwrap();
     assert!(changelog.contains("release note"));
 }
@@ -3072,7 +3072,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
         after_sync
     };
     let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
-    assert_eq!(conflicted.status, "conflict");
+    assert_eq!(conflicted.status, PatchStatus::Conflict);
     let conflict_branch = conflicted
         .conflict
         .as_ref()
@@ -3111,7 +3111,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
     resolve_conflict(company, &ttl_patch.id).unwrap();
 
     let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.queue.patch_refs()[0].status, "queued");
+    assert_eq!(snapshot.queue.patch_refs()[0].status, PatchStatus::Queued);
     let tokens = snapshot.product_files.get("src/tokens.js").unwrap();
     assert!(tokens.contains("return 7200;"));
     assert!(!tokens.contains("return 1800;"));
@@ -3155,7 +3155,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     )
     .unwrap();
     let noop = approve_patch(company, &ttl_patch.id).unwrap();
-    assert_eq!(noop.status, "submitted");
+    assert_eq!(noop.status, PatchStatus::Submitted);
     assert_eq!(noop.approvals.len(), 1);
 
     write(
@@ -3172,7 +3172,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     .unwrap();
     let queued = sync_apply(company);
     let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
-    assert_eq!(conflicted.status, "conflict");
+    assert_eq!(conflicted.status, PatchStatus::Conflict);
     let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
     git(
         company,
@@ -3194,7 +3194,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         .all_patches()
         .find(|p| p.id == ttl_patch.id)
         .unwrap();
-    assert_eq!(amended.status, "amended");
+    assert_eq!(amended.status, PatchStatus::Amended);
     assert_eq!(summarize_queue(&after_resolve.queue).amended, 1);
     let fork_after_resolve =
         git_ok(company, &["rev-parse", &format!("uplink/{}", ttl_patch.id)]).unwrap();
@@ -3219,7 +3219,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     .unwrap();
 
     let second = approve_patch(company, &ttl_patch.id).unwrap();
-    assert_eq!(second.status, "approved");
+    assert_eq!(second.status, PatchStatus::Approved);
     assert_eq!(second.approvals.len(), 2);
     assert_eq!(second.approvals[1].kind, "delta");
     assert_ne!(second.approvals[0].sha, second.approvals[1].sha);
@@ -3234,7 +3234,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         None,
     )
     .unwrap();
-    assert_eq!(recorded.status, "submitted");
+    assert_eq!(recorded.status, PatchStatus::Submitted);
     assert_eq!(recorded.upstream.as_ref().unwrap().pr_number, Some(99));
     assert_eq!(
         recorded.upstream.as_ref().unwrap().pr_url.as_deref(),
@@ -3262,7 +3262,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     .unwrap();
     let again = sync_apply(company);
     let conflicted = again.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
-    assert_eq!(conflicted.status, "conflict");
+    assert_eq!(conflicted.status, PatchStatus::Conflict);
     let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
     git(
         company,
@@ -3283,7 +3283,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         .all_patches()
         .find(|p| p.id == ttl_patch.id)
         .unwrap();
-    assert_eq!(amended.status, "amended");
+    assert_eq!(amended.status, PatchStatus::Amended);
     let packet = format_contribution_packet(company, amended).unwrap();
     assert!(packet.contains("Already approved (initial)"));
     assert!(packet.contains("Already approved (delta)"));
@@ -3354,14 +3354,14 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
 
     let queued = git_uplink::read_queue(company).unwrap();
     let asha_conflicted = queued.all_patches().find(|p| p.id == asha.id).unwrap();
-    assert_eq!(asha_conflicted.status, "conflict");
+    assert_eq!(asha_conflicted.status, PatchStatus::Conflict);
     assert_eq!(
         queued
             .all_patches()
             .find(|p| p.id == ben.id)
             .unwrap()
             .status,
-        "queued"
+        PatchStatus::Queued
     );
     let asha_branch = asha_conflicted
         .conflict
@@ -3413,8 +3413,8 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
         .all_patches()
         .find(|p| p.id == ben.id)
         .unwrap();
-    assert_ne!(asha_after.status, "conflict");
-    assert_eq!(ben_after.status, "conflict");
+    assert_ne!(asha_after.status, PatchStatus::Conflict);
+    assert_eq!(ben_after.status, PatchStatus::Conflict);
     let ben_branch = ben_after
         .conflict
         .as_ref()
@@ -3519,7 +3519,7 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
             .find(|p| p.id == hash_patch.id)
             .unwrap()
             .status,
-        "merged"
+        PatchStatus::Merged
     );
     assert!(
         after
@@ -3565,7 +3565,7 @@ fn can_drop_an_internal_only_patch_from_the_company_build() {
             .unwrap()
             .contains("vendor")
     );
-    assert_eq!(snapshot.queue.patch_refs()[0].status, "dropped");
+    assert_eq!(snapshot.queue.patch_refs()[0].status, PatchStatus::Dropped);
 }
 
 #[test]
@@ -3594,7 +3594,7 @@ fn imports_as_queued_not_contribution_approved() {
         },
     )
     .unwrap();
-    assert_eq!(patch.status, "queued");
+    assert_eq!(patch.status, PatchStatus::Queued);
     let err = submit_patch(company, &patch.id).unwrap_err();
     assert!(err.to_string().contains("must be approved"));
     let again = add_landed_patch(
@@ -3655,14 +3655,14 @@ fn merge_then_import_stays_queued_and_approvable() {
         },
     )
     .unwrap();
-    assert_eq!(patch.status, "queued");
+    assert_eq!(patch.status, PatchStatus::Queued);
     let upstream_tokens = git_ok(company, &["show", "uplink/upstream:src/tokens.js"]).unwrap();
     assert!(upstream_tokens.contains("return sha1(value);"));
     assert!(!upstream_tokens.contains("return sha256(value);"));
     approve_patch(company, &patch.id).unwrap();
     assert_eq!(
         status_snapshot(company).unwrap().queue.patch_refs()[0].status,
-        "approved"
+        PatchStatus::Approved
     );
 }
 
@@ -3709,7 +3709,7 @@ fn import_marks_merged_when_already_on_upstream() {
         },
     )
     .unwrap();
-    assert_eq!(patch.status, "merged");
+    assert_eq!(patch.status, PatchStatus::Merged);
     assert_eq!(
         git_ok(company, &["rev-parse", "main"]).unwrap(),
         main_before
@@ -4495,7 +4495,7 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
     )
     .unwrap();
     assert_eq!(imported.depends_on, vec![hash_patch.id]);
-    assert_eq!(imported.status, "queued");
+    assert_eq!(imported.status, PatchStatus::Queued);
 }
 
 #[test]
@@ -4686,7 +4686,7 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     assert!(matches!(err, Err(Error::Preflight(_))));
 
     let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.queue.patch_refs()[0].status, "approved");
+    assert_eq!(snapshot.queue.patch_refs()[0].status, PatchStatus::Approved);
     assert!(
         snapshot.queue.patch_refs()[0]
             .upstream
@@ -5118,7 +5118,10 @@ fn submit_does_not_commit_queue_until_submitted() {
     approve_patch(company, &patch.id).unwrap();
     let exported = submit_patch(company, &patch.id).unwrap();
     let after_submit = status_snapshot(company).unwrap();
-    assert_eq!(after_submit.queue.patch_refs()[0].status, "approved");
+    assert_eq!(
+        after_submit.queue.patch_refs()[0].status,
+        PatchStatus::Approved
+    );
     assert!(
         after_submit.queue.patch_refs()[0]
             .upstream
@@ -5129,7 +5132,7 @@ fn submit_does_not_commit_queue_until_submitted() {
 
     let url = "https://github.com/upstream/tokenkit/pull/7";
     let recorded = record_pull_request(company, &patch.id, 7, url, &exported.branch, None).unwrap();
-    assert_eq!(recorded.status, "submitted");
+    assert_eq!(recorded.status, PatchStatus::Submitted);
     assert_eq!(recorded.upstream.as_ref().unwrap().pr_number, Some(7));
     assert_eq!(
         recorded.upstream.as_ref().unwrap().pr_url.as_deref(),
@@ -5137,7 +5140,7 @@ fn submit_does_not_commit_queue_until_submitted() {
     );
 
     let again = record_pull_request(company, &patch.id, 7, url, &exported.branch, None).unwrap();
-    assert_eq!(again.status, "submitted");
+    assert_eq!(again.status, PatchStatus::Submitted);
     let submitted_events = again
         .events
         .iter()
@@ -5217,7 +5220,7 @@ fn submitted_push_replays_pr_fields_when_origin_state_moved() {
     let (_check_keep, check) = clone_company_from(&origin, &upstream);
     let queue = status_snapshot(&check).unwrap().queue;
     let recorded = queue.all_patches().find(|p| p.id == asha_patch.id).unwrap();
-    assert_eq!(recorded.status, "submitted");
+    assert_eq!(recorded.status, PatchStatus::Submitted);
     assert_eq!(recorded.upstream.as_ref().unwrap().pr_number, Some(7));
     assert_eq!(
         recorded.upstream.as_ref().unwrap().pr_url.as_deref(),
@@ -5265,7 +5268,7 @@ fn gated_records_the_conflict_pr_on_the_patch() {
     .unwrap();
     let queued = sync_apply(company);
     let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
-    assert_eq!(conflicted.status, "conflict");
+    assert_eq!(conflicted.status, PatchStatus::Conflict);
 
     let url = "https://github.com/acme/product/pull/12";
     let recorded = record_gated_pr(company, &ttl_patch.id, 12, url, None).unwrap();
@@ -5513,7 +5516,7 @@ fn rebuild_empty_apply_merges_upstream_only() {
         },
     )
     .unwrap();
-    assert_eq!(upstream.status, "merged");
+    assert_eq!(upstream.status, PatchStatus::Merged);
 
     git(
         company,
@@ -5542,7 +5545,7 @@ fn rebuild_empty_apply_merges_upstream_only() {
         },
     )
     .unwrap();
-    assert_eq!(internal.status, "queued");
+    assert_eq!(internal.status, PatchStatus::Queued);
     rebuild(company).unwrap();
     let after = status_snapshot(company).unwrap();
     assert_eq!(
@@ -5552,7 +5555,7 @@ fn rebuild_empty_apply_merges_upstream_only() {
             .find(|p| p.id == internal.id)
             .unwrap()
             .status,
-        "queued"
+        PatchStatus::Queued
     );
     assert_eq!(
         after
@@ -5561,7 +5564,7 @@ fn rebuild_empty_apply_merges_upstream_only() {
             .find(|p| p.id == upstream.id)
             .unwrap()
             .status,
-        "merged"
+        PatchStatus::Merged
     );
 }
 
@@ -5858,7 +5861,7 @@ fn transfer_to_upstream_gates_on_preflight_failure_without_writing_queue() {
             .find(|p| p.id == patch.id)
             .unwrap()
             .status,
-        "queued"
+        PatchStatus::Queued
     );
 }
 
@@ -6009,7 +6012,7 @@ fn transfer_to_internal_of_submitted_clears_upstream() {
     let after = git_uplink::read_queue(company).unwrap();
     let moved = after.all_patches().find(|p| p.id == patch.id).unwrap();
     assert!(after.is_internal(&patch.id));
-    assert_eq!(moved.status, "queued");
+    assert_eq!(moved.status, PatchStatus::Queued);
     assert!(moved.upstream.is_none());
     assert!(moved.approvals.is_empty());
 }

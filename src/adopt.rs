@@ -15,7 +15,7 @@ use crate::queue::{
 use crate::repo::{
     commit_queue, has_ref, new_patch_id, rev_parse, stable_patch_id, stamp, write_product_patch,
 };
-use crate::types::{Patch, PatchSource, QueueState};
+use crate::types::{Patch, PatchSource, PatchStatus, QueueState};
 
 pub const ADOPT_FROM_REF: &str = "uplink/adopt-from";
 const ADOPT_NOTE_PREFIX: &str = "adopted from ";
@@ -426,7 +426,7 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
                 id: id.clone(),
                 title: group.title.clone(),
                 commit_message: String::new(),
-                status: "queued".into(),
+                status: PatchStatus::Queued,
                 depends_on,
                 created_at: created_at.clone(),
                 updated_at: created_at,

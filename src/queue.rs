@@ -3,7 +3,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::types::{PATCH_DIR, Patch, PatchEvent, PatchLayer, QUEUE_PATH, QueueConfig, QueueState};
+use crate::types::{
+    PATCH_DIR, Patch, PatchEvent, PatchLayer, PatchStatus, QUEUE_PATH, QueueConfig, QueueState,
+};
 
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -29,7 +31,7 @@ pub fn empty_queue(config: QueueConfig) -> QueueState {
 }
 
 pub fn is_active(patch: &Patch) -> bool {
-    patch.status != "merged" && patch.status != "dropped"
+    patch.status.is_active()
 }
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
@@ -65,7 +67,7 @@ pub fn active_upstream(queue: &QueueState) -> Vec<&Patch> {
     queue
         .upstream
         .iter()
-        .filter(|p| is_active(p) && p.status != "conflict")
+        .filter(|p| is_active(p) && p.status != PatchStatus::Conflict)
         .collect()
 }
 
