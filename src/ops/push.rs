@@ -164,6 +164,7 @@ pub(super) fn restack_local_patches(
     };
     let carry_tooling = local_queue
         .tooling
+        .clone()
         .filter(|p| remote_queue.tooling.is_none() && should_carry(p));
     let carry_upstream: Vec<Patch> = local_queue
         .upstream
@@ -183,8 +184,10 @@ pub(super) fn restack_local_patches(
         .chain(carry_upstream.iter().cloned())
         .chain(carry_internal.iter().cloned())
         .collect();
+    let replay =
+        locally_changed_shared_patches(repo, &local_queue, local_sha, &remote_queue, remote_sha)?;
 
-    if carry.is_empty() {
+    if carry.is_empty() && replay.is_empty() {
         set_state_branch(repo, branch, remote_sha)?;
         return Ok("fast-forwarded".into());
     }
@@ -200,11 +203,17 @@ pub(super) fn restack_local_patches(
         }
         paths.push(path);
     }
+    for (patch, _) in &replay {
+        paths.extend(patch_state_paths(repo, local_sha, &patch.id)?);
+    }
 
     let outcome = (|| -> Result<()> {
         set_state_branch(repo, branch, remote_sha)?;
         restore_paths_from(repo, local_sha, &paths)?;
         let mut queue = read_queue_file(repo)?;
+        for (patch, layer) in &replay {
+            replace_patch(&mut queue, patch.clone(), *layer);
+        }
         if queue.tooling.is_none() {
             queue.tooling = carry_tooling.clone();
         }
@@ -219,6 +228,108 @@ pub(super) fn restack_local_patches(
         return Err(err);
     }
     Ok("restacked".into())
+}
+
+/// Patches on both sides that local changed since the merge base (a drop,
+/// approve, merged, transfer or refreshed patch file). Refuses when origin
+/// changed the same patch too, rather than picking one side.
+fn locally_changed_shared_patches(
+    repo: &Path,
+    local: &QueueState,
+    local_sha: &str,
+    remote: &QueueState,
+    remote_sha: &str,
+) -> Result<Vec<(Patch, PatchLayer)>> {
+    let Some(base_sha) = merge_base(repo, local_sha, remote_sha)? else {
+        return Ok(Vec::new());
+    };
+    let base = queue_at(repo, &base_sha)?;
+    let mut replay = Vec::new();
+    for patch in local.all_patches() {
+        let id = patch.id.as_str();
+        let (Some(layer), Some(_)) = (local.layer_of(id), remote.layer_of(id)) else {
+            continue;
+        };
+        if base.layer_of(id).is_none() {
+            continue;
+        }
+        if !patch_side_changed(repo, &base, &base_sha, local, local_sha, id)? {
+            continue;
+        }
+        if patch_side_changed(repo, local, local_sha, remote, remote_sha, id)?
+            && patch_side_changed(repo, &base, &base_sha, remote, remote_sha, id)?
+        {
+            return Err(Error::msg(format!(
+                "{id} changed both locally and on origin; run `git uplink reset` and redo the local change"
+            )));
+        }
+        replay.push((patch.clone(), layer));
+    }
+    Ok(replay)
+}
+
+/// True when `id` differs between two `uplink/state` commits: its queue
+/// layer, its queue entry, its patch file or its reports.
+fn patch_side_changed(
+    repo: &Path,
+    before: &QueueState,
+    before_sha: &str,
+    after: &QueueState,
+    after_sha: &str,
+    id: &str,
+) -> Result<bool> {
+    if before.layer_of(id) != after.layer_of(id) {
+        return Ok(true);
+    }
+    let old = before.all_patches().find(|p| p.id == id);
+    let new = after.all_patches().find(|p| p.id == id);
+    if serde_json::to_value(old)? != serde_json::to_value(new)? {
+        return Ok(true);
+    }
+    let file = patch_path(id)?.to_string_lossy().into_owned();
+    let (reports, _, _) = report_paths(id)?;
+    Ok(!git_succeeds(
+        repo,
+        &[
+            "diff", "--quiet", before_sha, after_sha, "--", &file, &reports,
+        ],
+    )?)
+}
+
+/// Patch file and report files for `id` as they exist at `sha`.
+fn patch_state_paths(repo: &Path, sha: &str, id: &str) -> Result<Vec<String>> {
+    let file = patch_path(id)?.to_string_lossy().into_owned();
+    let (reports, _, _) = report_paths(id)?;
+    let listed = git_ok(
+        repo,
+        &["ls-tree", "-r", "--name-only", sha, "--", &file, &reports],
+    )?;
+    Ok(listed
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Puts `patch` in `layer`, in place when it is already there, otherwise
+/// removed from its old layer and appended.
+fn replace_patch(queue: &mut QueueState, patch: Patch, layer: PatchLayer) {
+    if queue.layer_of(&patch.id) == Some(layer) {
+        if let Some(slot) = queue.all_patches_mut().find(|p| p.id == patch.id) {
+            *slot = patch;
+        }
+        return;
+    }
+    if queue.tooling.as_ref().is_some_and(|p| p.id == patch.id) {
+        queue.tooling = None;
+    }
+    queue.upstream.retain(|p| p.id != patch.id);
+    queue.internal.retain(|p| p.id != patch.id);
+    match layer {
+        PatchLayer::Tooling => queue.tooling = Some(patch),
+        PatchLayer::Upstream => queue.upstream.push(patch),
+        PatchLayer::Internal => queue.internal.push(patch),
+    }
 }
 
 pub(super) fn assert_change_already_on_company(
