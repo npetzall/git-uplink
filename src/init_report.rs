@@ -1,4 +1,4 @@
-use crate::types::AssessCheck;
+use crate::types::{AssessCheck, CheckStatus};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -9,7 +9,7 @@ pub struct InitReport {
 
 impl InitReport {
     pub fn from_checks(checks: Vec<AssessCheck>) -> Self {
-        let ok = !checks.iter().any(|c| c.status == "fail");
+        let ok = !checks.iter().any(|c| c.status == CheckStatus::Fail);
         Self { ok, checks }
     }
 
@@ -21,7 +21,10 @@ impl InitReport {
     }
 
     pub fn failed_count(&self) -> usize {
-        self.checks.iter().filter(|c| c.status == "fail").count()
+        self.checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Fail)
+            .count()
     }
 }
 

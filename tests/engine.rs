@@ -4,17 +4,17 @@ use std::process::Command;
 use std::thread;
 
 use git_uplink::{
-    AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
-    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PatchStatus, ProgressMode, PushOpts,
-    QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH, StepOutcome, TOOLING_PATCH_KIND,
-    TOOLING_PATCH_TITLE, TransferDirection, accept_upstream, add_patch, approve_patch,
-    configure_repo, doctor, drop_patch, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
-    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
-    parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
-    transfer_patch, write_queue,
+    AddPatchOpts, AdoptGroup, ApprovalReceipt, CheckStatus, ConflictError, DEFAULT_CUTOFF, Error,
+    Forge, GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PatchStatus, ProgressMode,
+    PushOpts, QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH, StepOutcome,
+    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream, add_patch,
+    approve_patch, configure_repo, doctor, drop_patch, format_approval_receipt,
+    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
+    format_step_line, from_upstream_report_paths, git, git_ok, init, init_repo,
+    load_extra_markdown, mark_merged, parse_depends_on, preflight_incoming_change, push_queue,
+    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
+    reset_from_origin, resolve_conflict, status_snapshot, strip_html_comments, submit_patch,
+    summarize_queue, sync, transfer_patch, write_queue,
 };
 use tempfile::TempDir;
 
@@ -5753,7 +5753,8 @@ fn transfer_to_upstream_moves_immediately_when_apply_and_preflight_pass() {
         .find(|c| c.id == "affiliation-leak")
         .unwrap();
     assert_ne!(
-        leak.status, "skip",
+        leak.status,
+        CheckStatus::Skip,
         "to-upstream must re-assess; leak was {}",
         leak.status
     );
@@ -5803,7 +5804,7 @@ fn transfer_to_upstream_gates_on_assess_failure_without_writing_queue() {
         .iter()
         .find(|c| c.id == "affiliation-leak")
         .unwrap();
-    assert_eq!(leak.status, "skip", "{leak:?}");
+    assert_eq!(leak.status, CheckStatus::Skip, "{leak:?}");
 
     let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
     assert!(result.gated, "{result:?}");
@@ -5928,7 +5929,7 @@ fn transfer_complete_applies_work_and_moves_the_patch() {
         .iter()
         .find(|c| c.id == "affiliation-leak")
         .unwrap();
-    assert_ne!(leak.status, "skip", "{leak:?}");
+    assert_ne!(leak.status, CheckStatus::Skip, "{leak:?}");
 }
 
 #[test]
@@ -6216,7 +6217,7 @@ fn doctor_passes_on_initialized_local_world() {
         report
             .checks
             .iter()
-            .any(|check| check.id == "initialized" && check.status == "pass")
+            .any(|check| check.id == "initialized" && check.status == CheckStatus::Pass)
     );
 }
 
@@ -6229,7 +6230,7 @@ fn doctor_fails_when_queue_is_missing() {
         report
             .checks
             .iter()
-            .any(|check| check.id == "initialized" && check.status == "fail")
+            .any(|check| check.id == "initialized" && check.status == CheckStatus::Fail)
     );
 }
 

@@ -144,10 +144,36 @@ pub struct PatchEvent {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckStatus {
+    Pass,
+    Fail,
+    Warn,
+    Skip,
+}
+
+impl CheckStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Warn => "warn",
+            Self::Skip => "skip",
+        }
+    }
+}
+
+impl std::fmt::Display for CheckStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssessCheck {
     pub id: String,
-    pub status: String,
+    pub status: CheckStatus,
     pub detail: String,
 }
 
@@ -534,7 +560,19 @@ impl QueueStateWire {
 
 #[cfg(test)]
 mod tests {
-    use super::PatchStatus;
+    use super::{CheckStatus, PatchStatus};
+
+    #[test]
+    fn check_status_keeps_lowercase_json() {
+        assert_eq!(
+            serde_json::to_string(&CheckStatus::Fail).unwrap(),
+            "\"fail\""
+        );
+        assert_eq!(
+            serde_json::from_str::<CheckStatus>("\"warn\"").unwrap(),
+            CheckStatus::Warn
+        );
+    }
 
     #[test]
     fn patch_status_keeps_lowercase_json() {
