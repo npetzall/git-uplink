@@ -837,7 +837,8 @@ pub fn assess_from_message(
             ":!.uplink",
         ],
     )?;
-    let export_surface = format!("{subject}\n{body}\n{diff}");
+    // The export author lands in the public commit, so it is scanned too.
+    let export_surface = format!("{} <{}>\n{subject}\n{body}\n{diff}", author.0, author.1);
     let keys = keywords_for(queue);
     let domains = internal_domains(queue);
     let key_hits = find_keyword_hits(&export_surface, &keys);
