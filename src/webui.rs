@@ -126,6 +126,39 @@ struct ErrorBody {
     error: String,
 }
 
+/// JSON `{"error": …}` response with a status code.
+struct ApiError {
+    status: StatusCode,
+    error: String,
+}
+
+impl ApiError {
+    fn new(status: StatusCode, error: impl Into<String>) -> Self {
+        Self {
+            status,
+            error: error.into(),
+        }
+    }
+
+    fn bad_request(err: impl std::fmt::Display) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, err.to_string())
+    }
+
+    fn not_found(err: impl std::fmt::Display) -> Self {
+        Self::new(StatusCode::NOT_FOUND, err.to_string())
+    }
+
+    fn internal(err: impl std::fmt::Display) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, Json(ErrorBody { error: self.error })).into_response()
+    }
+}
+
 pub fn has_embedded_index() -> bool {
     Assets::get("index.html").is_some()
 }
@@ -175,13 +208,11 @@ fn is_local_request(headers: &HeaderMap) -> bool {
 
 async fn loopback_only(request: Request, next: Next) -> Response {
     if !is_local_request(request.headers()) {
-        return (
+        return ApiError::new(
             StatusCode::FORBIDDEN,
-            Json(ErrorBody {
-                error: "web-ui only serves requests from 127.0.0.1".into(),
-            }),
+            "web-ui only serves requests from 127.0.0.1",
         )
-            .into_response();
+        .into_response();
     }
     next.run(request).await
 }
@@ -493,36 +524,13 @@ async fn status(
     )
 }
 
-async fn refresh(State(state): State<Arc<AppState>>) -> Response {
-    let repo = match trusted_repo(&state.repo) {
-        Ok(repo) => repo,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorBody {
-                    error: err.to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
-    match tokio::task::spawn_blocking(move || refresh_from_origin(&repo)).await {
-        Ok(Ok(result)) => Json(result).into_response(),
-        Ok(Err(err)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody {
-                error: err.to_string(),
-            }),
-        )
-            .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody {
-                error: format!("refresh worker: {err}"),
-            }),
-        )
-            .into_response(),
-    }
+async fn refresh(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
+    let repo = trusted_repo(&state.repo).map_err(ApiError::bad_request)?;
+    let result = tokio::task::spawn_blocking(move || refresh_from_origin(&repo))
+        .await
+        .map_err(|err| ApiError::internal(format!("refresh worker: {err}")))?
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(result).into_response())
 }
 
 fn missing_patch(source: QueueSource, error: String) -> PatchResponse {
@@ -577,57 +585,27 @@ async fn patch_detail(
     }
 }
 
-async fn file_at(State(state): State<Arc<AppState>>, Query(query): Query<FileQuery>) -> Response {
-    let repo = match trusted_repo(&state.repo) {
-        Ok(repo) => repo,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorBody {
-                    error: err.to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
+async fn file_at(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FileQuery>,
+) -> Result<Json<FileResponse>, ApiError> {
+    let repo = trusted_repo(&state.repo).map_err(ApiError::bad_request)?;
     if query.sha.as_deref().is_some_and(|sha| !is_valid_sha(sha)) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody {
-                error: "invalid sha".into(),
-            }),
-        )
-            .into_response();
+        return Err(ApiError::bad_request("invalid sha"));
     }
     let source = QueueSource::parse(query.source.as_deref());
     let sha = query.sha.clone();
     let path = query.path.clone();
-    match tokio::task::spawn_blocking(move || {
-        read_uplink_file(&repo, source, sha.as_deref(), &path)
-    })
-    .await
-    {
-        Ok(Ok(content)) => Json(FileResponse {
-            path: query.path,
-            sha: query.sha,
-            content,
-        })
-        .into_response(),
-        Ok(Err(err)) => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorBody {
-                error: err.to_string(),
-            }),
-        )
-            .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody {
-                error: format!("file worker: {err}"),
-            }),
-        )
-            .into_response(),
-    }
+    let content =
+        tokio::task::spawn_blocking(move || read_uplink_file(&repo, source, sha.as_deref(), &path))
+            .await
+            .map_err(|err| ApiError::internal(format!("file worker: {err}")))?
+            .map_err(ApiError::not_found)?;
+    Ok(Json(FileResponse {
+        path: query.path,
+        sha: query.sha,
+        content,
+    }))
 }
 
 async fn static_file(uri: Uri) -> Response {
