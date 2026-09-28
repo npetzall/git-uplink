@@ -346,11 +346,11 @@ fn normalize_remote_url(url: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn urls_match(a: &str, b: &str) -> bool {
+pub(crate) fn urls_match(a: &str, b: &str) -> bool {
     normalize_remote_url(a) == normalize_remote_url(b)
 }
 
-fn remote_get_url(cwd: &Path, name: &str, opts: &GitOpts<'_>) -> Option<String> {
+pub(crate) fn remote_get_url(cwd: &Path, name: &str, opts: &GitOpts<'_>) -> Option<String> {
     let looked_up = git_inner(
         cwd,
         &["remote", "get-url", name],
