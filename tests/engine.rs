@@ -8,13 +8,13 @@ use git_uplink::{
     Forge, GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PatchStatus, ProgressMode,
     PushOpts, QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH, StepOutcome,
     TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream, add_patch,
-    approve_patch, configure_repo, doctor, drop_patch, format_approval_receipt,
-    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
-    format_step_line, from_upstream_report_paths, git, git_ok, init, init_repo,
-    load_extra_markdown, mark_merged, parse_depends_on, preflight_incoming_change, push_queue,
-    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
-    reset_from_origin, resolve_conflict, status_snapshot, strip_html_comments, submit_patch,
-    summarize_queue, sync, transfer_patch, write_queue,
+    approve_patch, doctor, drop_patch, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
+    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
+    parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
+    resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
+    transfer_patch, write_queue,
 };
 use tempfile::TempDir;
 
@@ -108,7 +108,6 @@ fn setup_uninitialized() -> World {
     let upstream_keep = temp_dir();
     let upstream = upstream_keep.path().to_path_buf();
     git(&upstream, &["init", "-b", "main"], GitOpts::default()).unwrap();
-    configure_repo(&upstream).unwrap();
     write(&upstream, "src/tokens.js", TOKENS);
     write(&upstream, "README.md", "tokenkit\n");
     commit_all(&upstream, "initial tokens");
@@ -118,7 +117,6 @@ fn setup_uninitialized() -> World {
     let company_keep = temp_dir();
     let company = company_keep.path().to_path_buf();
     git(&company, &["init", "-b", "main"], GitOpts::default()).unwrap();
-    configure_repo(&company).unwrap();
     git(
         &company,
         &["remote", "add", "upstream", upstream.to_str().unwrap()],
@@ -330,7 +328,6 @@ fn clone_company_from(origin: &Path, upstream: &Path) -> (TempDir, PathBuf) {
         GitOpts::default(),
     )
     .unwrap();
-    configure_repo(&dir).unwrap();
     git(
         &dir,
         &[
@@ -637,7 +634,6 @@ fn reset_from_origin_matches_moved_refs_and_discards_local_work() {
     )
     .unwrap();
     let clone = clone_parent.join("product");
-    configure_repo(&clone).unwrap();
 
     git(
         &world.company,
@@ -772,7 +768,6 @@ fn refresh_from_origin_updates_tracking_without_moving_local() {
     )
     .unwrap();
     let clone = clone_parent.join("product");
-    configure_repo(&clone).unwrap();
     git(
         &clone,
         &["fetch", "--quiet", "origin", "uplink/state:uplink/state"],
@@ -2233,7 +2228,6 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
         GitOpts::default(),
     )
     .unwrap();
-    configure_repo(&clone).unwrap();
     let _ = git(
         &clone,
         &["branch", "-D", "uplink/upstream"],
@@ -2386,7 +2380,6 @@ fn preflight_fetches_missing_from_and_head_from_origin() {
         GitOpts::default(),
     )
     .unwrap();
-    configure_repo(&clone).unwrap();
     assert!(
         !has_git_object(&clone, &head),
         "single-branch clone of main should not have the PR head SHA"

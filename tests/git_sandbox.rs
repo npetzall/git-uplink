@@ -7,7 +7,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use git_uplink::{GitOpts, QueueConfig, configure_repo, git, git_ok, init_repo};
+use git_uplink::{GitOpts, QueueConfig, git, git_ok, init_repo};
 use tempfile::TempDir;
 
 fn temp_dir() -> TempDir {
@@ -122,11 +122,10 @@ fn commits_stay_unsigned_when_global_gpgsign_is_true() {
 }
 
 #[test]
-fn configure_repo_does_not_write_identity_into_local_config() {
+fn init_does_not_write_identity_into_local_config() {
     let keep = temp_dir();
     let repo = keep.path();
     git(repo, &["init", "-b", "main"], GitOpts::default()).unwrap();
-    configure_repo(repo).unwrap();
     init_repo(repo, QueueConfig::default()).unwrap();
 
     let name = git(

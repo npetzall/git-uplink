@@ -3,9 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::types::{
-    PATCH_DIR, Patch, PatchEvent, PatchLayer, PatchStatus, QUEUE_PATH, QueueConfig, QueueState,
-};
+use crate::types::{PATCH_DIR, Patch, PatchEvent, PatchLayer, PatchStatus, QUEUE_PATH, QueueState};
 
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -24,10 +22,6 @@ pub fn patch_file_name(id: &str) -> Result<String> {
 
 pub fn patch_path(id: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(PATCH_DIR).join(patch_file_name(id)?))
-}
-
-pub fn empty_queue(config: QueueConfig) -> QueueState {
-    QueueState::empty(config)
 }
 
 pub fn is_active(patch: &Patch) -> bool {
@@ -137,10 +131,6 @@ pub fn apply_order_upstream_layer(queue: &QueueState) -> Result<Vec<Patch>> {
             .collect(),
     )?);
     Ok(ordered)
-}
-
-pub fn topological_active(queue: &QueueState) -> Result<Vec<Patch>> {
-    apply_order_active(queue)
 }
 
 pub fn layer_label(queue: &QueueState, id: &str) -> &'static str {
