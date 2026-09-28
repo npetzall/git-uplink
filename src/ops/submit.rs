@@ -68,6 +68,7 @@ fn export_onto(
 ) -> Result<String> {
     let id = &patch.id;
     let company_branch = &queue.config.internal_branch;
+    ensure_clean_worktree(repo, "submit")?;
     let snapshot = snapshot_uplink(repo)?;
     let applied = (|| -> Result<&'static str> {
         git(

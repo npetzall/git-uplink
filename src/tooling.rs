@@ -10,8 +10,8 @@ use crate::queue::{
     add_event, patch_path, read_queue as read_queue_file, write_queue as write_queue_file,
 };
 use crate::repo::{
-    commit_queue, ensure_uplink_dirs, ensure_upstream_ref, has_ref, new_patch_id, patch_substance,
-    stable_patch_id_from_contents, stamp,
+    TempWorktree, commit_queue, ensure_uplink_dirs, ensure_upstream_ref, has_ref, new_patch_id,
+    patch_substance, stable_patch_id_from_contents, stamp,
 };
 use crate::types::{
     DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchSource, PatchStatus, QueueState,
@@ -231,57 +231,35 @@ fn synthesize_pack_patch(
     files: &[(String, Vec<u8>)],
     message: &str,
 ) -> Result<SynthesizedPatch> {
-    let original = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    let original_sha = git_ok(repo, &["rev-parse", "HEAD"])?;
-    let synthesized = (|| -> Result<SynthesizedPatch> {
-        git(
-            repo,
-            &["checkout", "--quiet", "--detach", "uplink/upstream"],
-            GitOpts::default(),
-        )?;
-        let from_sha = git_ok(repo, &["rev-parse", "HEAD"])?;
-        for (rel, bytes) in files {
-            let dest = repo.join(rel);
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&dest, bytes)?;
-            git(repo, &["add", "-f", "--", rel], GitOpts::default())?;
+    let worktree = TempWorktree::add(repo, "uplink-tooling", "uplink/upstream")?;
+    let dir = worktree.dir.as_path();
+    let from_sha = git_ok(dir, &["rev-parse", "HEAD"])?;
+    for (rel, bytes) in files {
+        let dest = dir.join(rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
         }
-        if git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
-            return Err(Error::msg(
-                "forge pack produced no product changes against uplink/upstream",
-            ));
-        }
-        git(repo, &["commit", "-m", message], GitOpts::default())?;
-        let head_sha = git_ok(repo, &["rev-parse", "HEAD"])?;
-        let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;
-        let formatted = if formatted.ends_with('\n') {
-            formatted
-        } else {
-            format!("{formatted}\n")
-        };
-        Ok(SynthesizedPatch {
-            formatted,
-            from_sha,
-            head_sha,
-        })
-    })();
-
-    if original != "HEAD" {
-        git(
-            repo,
-            &["checkout", "-f", "--quiet", &original],
-            GitOpts::default(),
-        )?;
-    } else {
-        git(
-            repo,
-            &["checkout", "-f", "--quiet", &original_sha],
-            GitOpts::default(),
-        )?;
+        fs::write(&dest, bytes)?;
+        git(dir, &["add", "-f", "--", rel], GitOpts::default())?;
     }
-    synthesized
+    if git_succeeds(dir, &["diff", "--cached", "--quiet"])? {
+        return Err(Error::msg(
+            "forge pack produced no product changes against uplink/upstream",
+        ));
+    }
+    git(dir, &["commit", "-m", message], GitOpts::default())?;
+    let head_sha = git_ok(dir, &["rev-parse", "HEAD"])?;
+    let formatted = git_ok(dir, &["format-patch", "--full-index", "-1", "--stdout"])?;
+    let formatted = if formatted.ends_with('\n') {
+        formatted
+    } else {
+        format!("{formatted}\n")
+    };
+    Ok(SynthesizedPatch {
+        formatted,
+        from_sha,
+        head_sha,
+    })
 }
 
 #[cfg(test)]

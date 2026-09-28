@@ -151,6 +151,7 @@ pub(super) fn start_transfer(
     } else {
         company_branch.as_str()
     };
+    ensure_clean_worktree(repo, "a transfer")?;
     let (original, original_sha) = checkout_identity(repo)?;
     let snapshot = snapshot_uplink(repo)?;
     let outcome = (|| -> Result<TransferResult> {

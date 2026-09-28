@@ -13,7 +13,8 @@ use crate::assess::{
 };
 use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
-    assert_resolution_clean, commit_resolution, cut_gated_work, format_patch_at_head, recover_onto,
+    assert_resolution_clean, commit_resolution, cut_gated_work, ensure_clean_worktree,
+    format_patch_at_head, recover_onto,
 };
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::init_report::InitReport;

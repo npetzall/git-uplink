@@ -9,7 +9,7 @@ use regex::{Regex, RegexSet};
 use crate::error::{AssessError, Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::now_iso;
-use crate::repo::{ensure_revs, has_ref, show_at, state_branch};
+use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at, state_branch};
 use crate::types::{
     AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR,
     Patch, PatchStatus, QueueState,
@@ -619,24 +619,6 @@ struct RemoveOnDrop(PathBuf);
 impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Removes a `git worktree add` checkout when dropped.
-struct TempWorktree<'a> {
-    repo: &'a Path,
-    dir: PathBuf,
-}
-
-impl Drop for TempWorktree<'_> {
-    fn drop(&mut self) {
-        if let Some(dir) = self.dir.to_str() {
-            let _ = git(
-                self.repo,
-                &["worktree", "remove", "--force", dir],
-                GitOpts::allow_fail(),
-            );
-        }
     }
 }
 

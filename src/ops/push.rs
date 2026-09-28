@@ -310,6 +310,7 @@ pub(super) fn mark_empty_if_already_upstream(repo: &Path, id: &str) -> Result<()
         return Ok(());
     }
     let company_branch = queue.config.internal_branch.clone();
+    ensure_clean_worktree(repo, "an empty import")?;
     let current = get_patch_mut(&mut queue, id)?;
     current.status = PatchStatus::Merged;
     current.merged = Some(PatchMerged {

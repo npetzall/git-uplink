@@ -6224,3 +6224,51 @@ fn format_step_line_plain_uses_tags() {
     );
     assert!(line.starts_with("[ok  ]"));
 }
+
+#[test]
+fn preflight_keeps_uncommitted_work_and_rebuild_refuses_it() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    write(company, "README.md", "MY UNSAVED WORK\n");
+
+    preflight_incoming_change(
+        company,
+        IncomingPreflight {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: "main".into(),
+            head_ref: "HEAD".into(),
+            depends_on: Vec::new(),
+            message: None,
+            preflight_command: None,
+            internal_only: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(company.join("README.md")).unwrap(),
+        "MY UNSAVED WORK\n"
+    );
+
+    let err = rebuild(company).unwrap_err().to_string();
+    assert!(err.contains("Uncommitted changes"), "{err}");
+    assert_eq!(
+        fs::read_to_string(company.join("README.md")).unwrap(),
+        "MY UNSAVED WORK\n"
+    );
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "feat/hash"
+    );
+}
