@@ -16,10 +16,15 @@ use crate::gate::{
     assert_resolution_clean, commit_resolution, cut_gated_work, format_patch_at_head, recover_onto,
 };
 use crate::git::{GitOpts, configure_repo, git, git_ok};
+use crate::init_report::InitReport;
+use crate::inspect::{
+    check_forge_tooling, check_remotes_configured, check_upstream_ref, check_urls_recorded,
+};
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
 use crate::preflight::{
     assert_export_preflight, assert_upstream_layer_applies, run_preflight_command_in,
 };
+use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
     add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut, is_active, move_patch,
     patch_path, read_queue as read_queue_file, topological_active, write_queue as write_queue_file,
@@ -68,6 +73,7 @@ pub struct InitOpts {
     pub adopt_groups: Option<Vec<AdoptGroup>>,
     /// `None` detects a TTY. Tests set `Some(false)` so adopt never opens the TUI.
     pub interactive: Option<bool>,
+    pub progress: ProgressMode,
 }
 
 /// Queue produced by `init`. `tooling_changed` is set only by `--upgrade` when
@@ -76,6 +82,7 @@ pub struct InitOpts {
 pub struct InitResult {
     pub queue: QueueState,
     pub tooling_changed: bool,
+    pub report: InitReport,
 }
 
 impl std::ops::Deref for InitResult {
@@ -86,10 +93,11 @@ impl std::ops::Deref for InitResult {
     }
 }
 
-fn settled(queue: QueueState) -> InitResult {
+fn settled(queue: QueueState, progress: &StepProgress) -> InitResult {
     InitResult {
         queue,
         tooling_changed: false,
+        report: InitReport::from_checks(progress.checks().to_vec()),
     }
 }
 
@@ -137,21 +145,32 @@ fn config_from_opts(opts: &InitOpts) -> QueueConfig {
 /// forge pack in place.
 pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
     configure_repo(repo)?;
+    let mut progress = StepProgress::from_mode(opts.progress);
     if opts.upgrade {
-        return init_upgrade(repo, &opts);
+        return init_upgrade(repo, &opts, &mut progress);
     }
     if !opts.has_args() && opts.forge.is_none() {
-        return Ok(settled(hydrate_from_origin(repo)?));
+        return Ok(settled(hydrate_from_origin(repo)?, &progress));
     }
-    try_replace_state_from_origin(repo)?;
+    progress.run_step("sync-origin-state", "Sync state from origin", || {
+        try_replace_state_from_origin(repo)?;
+        Ok((
+            (),
+            StepOutcome::pass("origin uplink/state synced when present"),
+        ))
+    })?;
     if state_exists(repo)? {
-        return Ok(settled(init_existing(repo, &opts)?));
+        let queue = init_existing(repo, &opts, &mut progress)?;
+        append_init_health_checks(repo, &queue, &mut progress);
+        return Ok(settled(queue, &progress));
     }
     let forge = opts.forge.ok_or_else(missing_forge_error)?;
     let mut config = config_from_opts(&opts);
     config.forge = Some(forge);
-    init_repo(repo, config)?;
-    Ok(settled(finish_first_init(repo, &opts)?))
+    init_repo_with_progress(repo, config, &mut progress)?;
+    let queue = finish_first_init(repo, &opts, &mut progress)?;
+    append_init_health_checks(repo, &queue, &mut progress);
+    Ok(settled(queue, &progress))
 }
 
 fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
@@ -228,7 +247,93 @@ fn check_name(out: &mut Vec<String>, field: &str, requested: Option<&str>, store
     }
 }
 
-fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
+fn append_init_health_checks(repo: &Path, queue: &QueueState, progress: &mut StepProgress) {
+    if !progress.enabled() {
+        return;
+    }
+    let ids: std::collections::HashSet<String> =
+        progress.checks().iter().map(|c| c.id.clone()).collect();
+    if !ids.contains("urls-recorded") {
+        progress.run_check("urls-recorded", "URLs recorded", || {
+            check_urls_recorded(queue)
+        });
+    }
+    if !ids.contains("remotes-configured") {
+        progress.run_check("remotes-configured", "Remotes configured", || {
+            check_remotes_configured(repo, queue)
+        });
+    }
+    if !ids.contains("upstream-ref") {
+        progress.run_check("upstream-ref", "uplink/upstream ref", || {
+            check_upstream_ref(repo).unwrap_or_else(|err| StepOutcome::fail(err.to_string()))
+        });
+    }
+    if !ids.contains("forge-tooling") && queue.config.forge.is_some() {
+        progress.run_check("forge-tooling", "Forge tooling patch", || {
+            check_forge_tooling(repo, queue)
+        });
+    }
+}
+
+fn init_needs_upstream_seed(repo: &Path) -> Result<bool> {
+    Ok(!has_ref(repo, UPSTREAM_REF)?)
+}
+
+fn init_needs_tooling(queue: &QueueState) -> bool {
+    queue.config.forge.is_some() && queue.tooling.is_none()
+}
+
+fn resume_incomplete_init(
+    repo: &Path,
+    opts: &InitOpts,
+    progress: &mut StepProgress,
+) -> Result<Option<QueueState>> {
+    if adopt::has_adopt_from(repo)? {
+        progress.run_step("resume-adopt", "Resume adoption", || {
+            let queue = finish_adopt(repo, opts)?;
+            Ok((queue, StepOutcome::pass("adoption resumed")))
+        })?;
+        return Ok(None);
+    }
+
+    let needs_upstream = init_needs_upstream_seed(repo)?;
+    let queue = read_queue_file(repo)?;
+    let needs_tooling = init_needs_tooling(&queue);
+    if !needs_upstream && !needs_tooling {
+        return Ok(None);
+    }
+
+    if needs_upstream {
+        progress.run_step("resume-upstream-seed", "Seed uplink/upstream", || {
+            let queue = read_queue_file(repo)?;
+            if queue
+                .config
+                .upstream_url
+                .as_deref()
+                .is_none_or(|url| url.is_empty())
+            {
+                return Ok(((), StepOutcome::skip("no upstream URL recorded yet")));
+            }
+            ensure_configured_remotes(repo, &queue.config)?;
+            let queue = read_queue_file(repo)?;
+            let sha = fetch_upstream(repo, &queue)?;
+            Ok((
+                (),
+                StepOutcome::pass(format!("uplink/upstream at {}", short_sha(&sha))),
+            ))
+        })?;
+    }
+
+    let queue = read_queue_file(repo)?;
+    if init_needs_tooling(&queue) {
+        finish_first_init(repo, opts, progress)?;
+        return Ok(None);
+    }
+
+    Ok(None)
+}
+
+fn init_existing(repo: &Path, opts: &InitOpts, progress: &mut StepProgress) -> Result<QueueState> {
     ensure_state_worktree(repo)?;
     let mut queue = read_queue_file(repo)?;
     let mut mismatches = Vec::new();
@@ -284,25 +389,46 @@ fn init_existing(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
         urls_changed = true;
     }
     if urls_changed {
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, "uplink: update remote urls")?;
+        progress.run_step("update-urls", "Update recorded remote URLs", || {
+            write_queue_file(repo, &queue)?;
+            commit_queue(repo, "uplink: update remote urls")?;
+            Ok(((), StepOutcome::pass("queue.json updated")))
+        })?;
+        queue = read_queue_file(repo)?;
     }
-    ensure_configured_remotes(repo, &queue.config)?;
-    refresh_upstream_ref(repo, COMPANY_REMOTE)?;
-    if adopt::has_adopt_from(repo)? {
-        return finish_adopt(repo, opts);
-    }
+    progress.run_step("remotes-configured", "Configure remotes", || {
+        ensure_configured_remotes(repo, &queue.config)?;
+        Ok(((), check_remotes_configured(repo, &queue)))
+    })?;
+    progress.run_step(
+        "refresh-origin-upstream",
+        "Refresh origin/uplink/upstream",
+        || {
+            refresh_upstream_ref(repo, COMPANY_REMOTE)?;
+            Ok((
+                (),
+                StepOutcome::pass("origin tracking ref refreshed when present"),
+            ))
+        },
+    )?;
+    resume_incomplete_init(repo, opts, progress)?;
     read_queue_file(repo)
 }
 
-fn init_upgrade(repo: &Path, opts: &InitOpts) -> Result<InitResult> {
-    try_replace_state_from_origin(repo)?;
+fn init_upgrade(repo: &Path, opts: &InitOpts, progress: &mut StepProgress) -> Result<InitResult> {
+    progress.run_step("sync-origin-state", "Sync state from origin", || {
+        try_replace_state_from_origin(repo)?;
+        Ok((
+            (),
+            StepOutcome::pass("origin uplink/state synced when present"),
+        ))
+    })?;
     if !state_exists(repo)? {
         return Err(Error::msg(
             "not initialized; run `git uplink init --upstream <url> --contrib <url> --forge <forge>` first",
         ));
     }
-    init_existing(repo, opts)?;
+    init_existing(repo, opts, progress)?;
     let mut queue = read_queue_file(repo)?;
     if queue.config.forge.is_none() {
         let forge = opts.forge.ok_or_else(|| {
@@ -311,14 +437,28 @@ fn init_upgrade(repo: &Path, opts: &InitOpts) -> Result<InitResult> {
 (or --forge example-github) to record it.",
             )
         })?;
-        queue.config.forge = Some(forge);
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, "uplink: record forge")?;
+        progress.run_step("record-forge", "Record forge in queue", || {
+            queue.config.forge = Some(forge);
+            write_queue_file(repo, &queue)?;
+            commit_queue(repo, "uplink: record forge")?;
+            Ok(((), StepOutcome::pass(format!("forge {forge} recorded"))))
+        })?;
     }
-    let (queue, tooling_changed) = write_tooling_patch(repo, true)?;
+    let (queue, tooling_changed) =
+        progress.run_step("upgrade-tooling", "Refresh forge tooling", || {
+            let (queue, changed) = write_tooling_patch(repo, true)?;
+            let detail = if changed {
+                "embedded forge pack updated"
+            } else {
+                "already up-to-date"
+            };
+            Ok(((queue, changed), StepOutcome::pass(detail)))
+        })?;
+    append_init_health_checks(repo, &queue, progress);
     Ok(InitResult {
         queue,
         tooling_changed,
+        report: InitReport::from_checks(progress.checks().to_vec()),
     })
 }
 
@@ -336,16 +476,40 @@ fn write_tooling_patch(repo: &Path, rebuild_if_changed: bool) -> Result<(QueueSt
     })
 }
 
-fn finish_first_init(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
-    let analysis = adopt::analyze_ahead(repo)?;
-    if analysis.behind {
-        return Err(adopt::behind_error(&analysis));
-    }
+fn finish_first_init(
+    repo: &Path,
+    opts: &InitOpts,
+    progress: &mut StepProgress,
+) -> Result<QueueState> {
+    let analysis = progress.run_step(
+        "adopt-analysis",
+        "Analyze internal vs uplink/upstream",
+        || {
+            let analysis = adopt::analyze_ahead(repo)?;
+            if analysis.behind {
+                return Err(adopt::behind_error(&analysis));
+            }
+            let detail = if analysis.commits.is_empty() {
+                "internal matches uplink/upstream".into()
+            } else {
+                format!("internal is {} commit(s) ahead", analysis.commits.len())
+            };
+            Ok((analysis, StepOutcome::pass(detail)))
+        },
+    )?;
     if analysis.commits.is_empty() {
-        return ensure_tooling_patch(repo);
+        return progress.run_step("forge-tooling", "Install forge tooling", || {
+            let queue = ensure_tooling_patch(repo)?;
+            Ok((queue, StepOutcome::pass("forge tooling installed")))
+        });
     }
     adopt::save_adopt_from(repo)?;
     write_tooling_patch(repo, false)?;
+    progress.run_step(
+        "forge-tooling",
+        "Stage forge tooling before adoption",
+        || Ok(((), StepOutcome::pass("forge tooling staged"))),
+    )?;
     finish_adopt(repo, opts)
 }
 
@@ -391,43 +555,78 @@ or re-run git uplink init in a terminal to group commits",
 }
 
 pub fn init_repo(repo: &Path, config: QueueConfig) -> Result<QueueState> {
+    let mut progress = StepProgress::from_mode(ProgressMode::Disabled);
+    init_repo_with_progress(repo, config, &mut progress)
+}
+
+pub fn init_repo_with_progress(
+    repo: &Path,
+    config: QueueConfig,
+    progress: &mut StepProgress,
+) -> Result<QueueState> {
     configure_repo(repo)?;
-    crate::repo::ensure_uplink_dirs(repo)?;
-    let queue = empty_queue(config);
-    write_queue_file(repo, &queue)?;
-    commit_queue(repo, "uplink: initialize patch queue")?;
-    ensure_state_worktree(repo)?;
-    ensure_configured_remotes(repo, &queue.config)?;
-    let has_head = git(
-        repo,
-        &["rev-parse", "--verify", "HEAD"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    let remotes = git_ok(repo, &["remote"]).unwrap_or_default();
-    if remotes
-        .split('\n')
-        .any(|r| r == queue.config.upstream_remote)
-    {
-        fetch_upstream(repo, &queue)?;
-    } else if has_head.code == 0 {
-        let parent = git(
+    let queue = progress.run_step("queue-created", "Create uplink queue", || {
+        crate::repo::ensure_uplink_dirs(repo)?;
+        let queue = empty_queue(config);
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, "uplink: initialize patch queue")?;
+        ensure_state_worktree(repo)?;
+        let sha = git_ok(repo, &["rev-parse", "--short", STATE_BRANCH])?;
+        Ok((queue, StepOutcome::pass(format!("uplink/state at {sha}"))))
+    })?;
+    progress.run_step("remotes-configured", "Configure remotes", || {
+        ensure_configured_remotes(repo, &queue.config)?;
+        Ok(((), check_remotes_configured(repo, &queue)))
+    })?;
+    progress.run_step("upstream-seeded", "Seed uplink/upstream", || {
+        let has_head = git(
             repo,
-            &["rev-parse", "--verify", "HEAD~1"],
+            &["rev-parse", "--verify", "HEAD"],
             GitOpts {
                 allow_fail: true,
                 ..GitOpts::default()
             },
         )?;
-        let target = if parent.code == 0 { "HEAD~1" } else { "HEAD" };
-        git(
-            repo,
-            &["branch", "-f", "uplink/upstream", target],
-            GitOpts::default(),
-        )?;
-    }
+        let remotes = git_ok(repo, &["remote"]).unwrap_or_default();
+        if remotes
+            .split('\n')
+            .any(|r| r == queue.config.upstream_remote)
+        {
+            let sha = fetch_upstream(repo, &queue)?;
+            Ok((
+                (),
+                StepOutcome::pass(format!(
+                    "fetched {} at {}",
+                    queue.config.upstream_branch,
+                    short_sha(&sha)
+                )),
+            ))
+        } else if has_head.code == 0 {
+            let parent = git(
+                repo,
+                &["rev-parse", "--verify", "HEAD~1"],
+                GitOpts {
+                    allow_fail: true,
+                    ..GitOpts::default()
+                },
+            )?;
+            let target = if parent.code == 0 { "HEAD~1" } else { "HEAD" };
+            git(
+                repo,
+                &["branch", "-f", "uplink/upstream", target],
+                GitOpts::default(),
+            )?;
+            Ok((
+                (),
+                StepOutcome::pass(format!("seeded uplink/upstream from {target}")),
+            ))
+        } else {
+            Ok((
+                (),
+                StepOutcome::skip("no upstream remote or local commits to seed from"),
+            ))
+        }
+    })?;
     Ok(queue)
 }
 
