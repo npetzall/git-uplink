@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
-use regex::Regex;
+use regex::{Regex, RegexSet};
 
 use crate::error::{AssessError, Error, Result};
 use crate::git::{GitOpts, git, git_ok};
@@ -13,6 +14,23 @@ use crate::types::{
     AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR,
     Patch, PatchStatus, QueueState,
 };
+
+static HTML_COMMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").expect("html comment regex"));
+static BLANK_LINES: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\n[ \t]*\n(?:[ \t]*\n)+").expect("blank-line regex"));
+static DEPENDS_ON_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^Uplink-Depends-On:\s*(.+)$").expect("depends-on header regex")
+});
+static PATCH_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^upl_[0-9a-f]{10}$").expect("patch id regex"));
+static PERSON: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.*)\s+<([^>]+)>$").expect("person regex"));
+static EXPORT_AUTHOR_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^Uplink-Export-Author:\s*(.+)$").expect("export-author header regex")
+});
+static TICKET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[A-Z]{2,10}-\d+\b").expect("ticket regex"));
 
 pub const TO_UPSTREAM_ENVIRONMENT: &str = "to-upstream";
 pub const FROM_UPSTREAM_ENVIRONMENT: &str = "from-upstream";
@@ -29,10 +47,11 @@ pub fn cutoff_marker(queue: &QueueState) -> String {
 }
 
 pub fn strip_html_comments(raw: &str) -> String {
-    let comments = Regex::new(r"(?s)<!--.*?-->").expect("html comment regex");
-    let stripped = comments.replace_all(raw, "");
-    let blanks = Regex::new(r"\n[ \t]*\n(?:[ \t]*\n)+").expect("blank-line regex");
-    blanks.replace_all(&stripped, "\n\n").trim().to_string()
+    let stripped = HTML_COMMENT.replace_all(raw, "");
+    BLANK_LINES
+        .replace_all(&stripped, "\n\n")
+        .trim()
+        .to_string()
 }
 
 pub fn split_internal_message(raw: &str, marker: &str) -> (String, String) {
@@ -51,13 +70,11 @@ pub fn split_internal_message(raw: &str, marker: &str) -> (String, String) {
 /// Only `upl_` plus 10 hex digits match (`new_patch_id`); placeholders and prose do not.
 pub fn parse_depends_on(message: &str) -> Vec<String> {
     let stripped = strip_html_comments(message);
-    let header = Regex::new(r"(?im)^Uplink-Depends-On:\s*(.+)$").expect("depends-on header");
-    let id = Regex::new(r"(?i)^upl_[0-9a-f]{10}$").expect("patch id");
     let mut ids = Vec::new();
-    for caps in header.captures_iter(&stripped) {
+    for caps in DEPENDS_ON_HEADER.captures_iter(&stripped) {
         for token in caps[1].split(|c: char| c.is_whitespace() || c == ',') {
             let token = token.trim();
-            if token.is_empty() || !id.is_match(token) {
+            if token.is_empty() || !PATCH_ID.is_match(token) {
                 continue;
             }
             let token = token.to_ascii_lowercase();
@@ -88,8 +105,7 @@ pub fn parse_person(value: Option<&str>) -> Option<(String, String)> {
     if value.is_empty() {
         return None;
     }
-    let re = Regex::new(r"^(.*)\s+<([^>]+)>$").ok()?;
-    if let Some(caps) = re.captures(value) {
+    if let Some(caps) = PERSON.captures(value) {
         return Some((caps[1].trim().to_string(), caps[2].trim().to_string()));
     }
     if value.contains('@') && !value.contains(' ') {
@@ -131,8 +147,7 @@ fn internal_domains(queue: &QueueState) -> Vec<String> {
 }
 
 fn resolve_export_author(queue: &QueueState, internal_text: &str) -> (String, String) {
-    let re = Regex::new(r"(?im)^Uplink-Export-Author:\s*(.+)$").unwrap();
-    if let Some(caps) = re.captures(internal_text)
+    if let Some(caps) = EXPORT_AUTHOR_HEADER.captures(internal_text)
         && let Some(person) = parse_person(Some(&caps[1]))
     {
         return person;
@@ -186,12 +201,19 @@ fn find_keyword_hits(haystack: &str, keywords: &[String]) -> Vec<String> {
     hits
 }
 
+/// Configured domains are dynamic, so they compile once per call as one set.
 fn find_domain_hits(haystack: &str, domains: &[String]) -> Vec<String> {
+    let set = RegexSet::new(
+        domains
+            .iter()
+            .map(|domain| format!(r"(?i)@{}\b", regex::escape(domain))),
+    )
+    .expect("escaped domain regex");
+    let matched = set.matches(haystack);
     let mut hits = Vec::new();
-    for domain in domains {
+    for (index, domain) in domains.iter().enumerate() {
         let needle = format!("@{domain}");
-        let re = Regex::new(&format!(r"(?i)@{}\b", regex::escape(domain))).unwrap();
-        if re.is_match(haystack) && !hits.contains(&needle) {
+        if matched.matched(index) && !hits.contains(&needle) {
             hits.push(needle);
         }
     }
@@ -874,11 +896,7 @@ pub fn assess_from_message(
     let domains = internal_domains(queue);
     let key_hits = find_keyword_hits(&export_surface, &keys);
     let domain_hits = find_domain_hits(&export_surface, &domains);
-    let ticket_re = Regex::new(r"\b[A-Z]{2,10}-\d+\b").unwrap();
-    let tickets: Vec<&str> = ticket_re
-        .find_iter(&public_text)
-        .map(|m| m.as_str())
-        .collect();
+    let tickets: Vec<&str> = TICKET.find_iter(&public_text).map(|m| m.as_str()).collect();
 
     let mut checks = vec![
         AssessCheck {
@@ -996,7 +1014,7 @@ pub fn assert_assess_ok(report: &AssessReport, label: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::find_domain_hits;
+    use super::*;
 
     #[test]
     fn domain_hits_ignore_case() {
@@ -1006,5 +1024,21 @@ mod tests {
             vec!["@acme.com"]
         );
         assert!(find_domain_hits("jane@acme.company", &domains).is_empty());
+        assert!(find_domain_hits("jane@acme.com", &[]).is_empty());
+    }
+
+    #[test]
+    fn static_patterns_compile() {
+        for re in [
+            &HTML_COMMENT,
+            &BLANK_LINES,
+            &DEPENDS_ON_HEADER,
+            &PATCH_ID,
+            &PERSON,
+            &EXPORT_AUTHOR_HEADER,
+            &TICKET,
+        ] {
+            std::sync::LazyLock::force(re);
+        }
     }
 }
