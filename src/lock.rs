@@ -10,6 +10,18 @@ thread_local! {
     static LOCK_OWNER: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Releases the queue lock on drop, including when the locked closure panics.
+struct LockGuard {
+    path: PathBuf,
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        LOCK_OWNER.with(|owner| *owner.borrow_mut() = None);
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 pub fn with_queue_lock<T>(repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let key = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
     if LOCK_OWNER.with(|owner| owner.borrow().as_ref() == Some(&key)) {
@@ -26,12 +38,12 @@ pub fn with_queue_lock<T>(repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<
             .open(&lock_path)
         {
             Ok(mut file) => {
+                let _guard = LockGuard {
+                    path: lock_path.clone(),
+                };
                 let _ = writeln!(file, "{} {}", std::process::id(), crate::queue::now_iso());
                 LOCK_OWNER.with(|owner| *owner.borrow_mut() = Some(key.clone()));
-                let result = f();
-                LOCK_OWNER.with(|owner| *owner.borrow_mut() = None);
-                let _ = fs::remove_file(&lock_path);
-                return result;
+                return f();
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 if Instant::now() > deadline {
@@ -52,4 +64,21 @@ pub fn is_push_lease_rejected(err: &Error) -> bool {
         || text.contains("failed to push some refs")
         || text.contains("lease")
         || text.contains("non-fast-forward")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_is_released_when_closure_panics() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let panicked =
+            std::panic::catch_unwind(|| with_queue_lock(repo, || -> Result<()> { panic!("boom") }));
+        assert!(panicked.is_err());
+        assert!(!repo.join(".git/uplink.lock").exists());
+        assert!(LOCK_OWNER.with(|owner| owner.borrow().is_none()));
+        with_queue_lock(repo, || Ok(())).unwrap();
+    }
 }
