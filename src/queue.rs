@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -119,45 +120,49 @@ pub fn layer_label(queue: &QueueState, id: &str) -> &'static str {
         .unwrap_or("unknown")
 }
 
+/// Orders one layer so every patch follows the dependencies it lists in that
+/// layer. Keeps queue order otherwise; dependencies outside the layer are ignored.
 fn topological_layer(active: Vec<Patch>) -> Result<Vec<Patch>> {
     if active.iter().all(|p| p.depends_on.is_empty()) {
         return Ok(active);
     }
 
-    let ids: Vec<String> = active.iter().map(|p| p.id.clone()).collect();
-    let mut visiting = Vec::new();
-    let mut visited = Vec::new();
-    let mut ordered = Vec::new();
+    struct Walk<'a> {
+        by_id: HashMap<&'a str, &'a Patch>,
+        visiting: HashSet<&'a str>,
+        visited: HashSet<&'a str>,
+        ordered: Vec<Patch>,
+    }
 
-    fn visit(
-        id: &str,
-        active: &[Patch],
-        visiting: &mut Vec<String>,
-        visited: &mut Vec<String>,
-        ordered: &mut Vec<Patch>,
-    ) -> Result<()> {
-        if visited.iter().any(|x| x == id) || !active.iter().any(|p| p.id == id) {
+    fn visit<'a>(walk: &mut Walk<'a>, id: &'a str) -> Result<()> {
+        let Some(patch) = walk.by_id.get(id).copied() else {
+            return Ok(());
+        };
+        if walk.visited.contains(id) {
             return Ok(());
         }
-        if visiting.iter().any(|x| x == id) {
+        if !walk.visiting.insert(id) {
             return Err(Error::msg(format!("Dependency cycle at {id}")));
         }
-        visiting.push(id.into());
-        if let Some(patch) = active.iter().find(|p| p.id == id) {
-            for dep in &patch.depends_on {
-                visit(dep, active, visiting, visited, ordered)?;
-            }
-            ordered.push(patch.clone());
+        for dep in &patch.depends_on {
+            visit(walk, dep)?;
         }
-        visiting.retain(|x| x != id);
-        visited.push(id.into());
+        walk.ordered.push(patch.clone());
+        walk.visiting.remove(id);
+        walk.visited.insert(id);
         Ok(())
     }
 
-    for id in ids {
-        visit(&id, &active, &mut visiting, &mut visited, &mut ordered)?;
+    let mut walk = Walk {
+        by_id: active.iter().map(|p| (p.id.as_str(), p)).collect(),
+        visiting: HashSet::new(),
+        visited: HashSet::new(),
+        ordered: Vec::with_capacity(active.len()),
+    };
+    for patch in &active {
+        visit(&mut walk, &patch.id)?;
     }
-    Ok(ordered)
+    Ok(walk.ordered)
 }
 
 pub fn take_patch(queue: &mut QueueState, id: &str) -> Result<Patch> {
@@ -238,6 +243,30 @@ mod tests {
             .map(|p| p.id)
             .collect();
         assert_eq!(order, vec!["upl_up", "upl_int"]);
+    }
+
+    #[test]
+    fn layer_topo_puts_dependencies_first() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch_deps("upl_c", &["upl_b"]));
+        queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
+        queue.upstream.push(patch("upl_a"));
+        queue.upstream.push(patch("upl_d"));
+        let order: Vec<_> = apply_order_active(&queue)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(order, vec!["upl_a", "upl_b", "upl_c", "upl_d"]);
+    }
+
+    #[test]
+    fn layer_topo_rejects_cycles() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch_deps("upl_a", &["upl_b"]));
+        queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
+        let err = apply_order_active(&queue).unwrap_err();
+        assert!(err.to_string().contains("Dependency cycle"), "{err}");
     }
 
     #[test]
