@@ -295,6 +295,13 @@ fn read_worktree_uplink_file(repo: &Path, path: &str) -> crate::error::Result<St
         .map_err(|err| crate::error::Error::msg(format!("{path}: {err}")))
 }
 
+/// `worktree` or a full commit id (SHA-1 or SHA-256), as listed in `revisions`.
+fn is_valid_sha(sha: &str) -> bool {
+    sha == "worktree"
+        || (matches!(sha.len(), 40 | 64)
+            && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+}
+
 fn read_uplink_file(
     repo: &Path,
     source: QueueSource,
@@ -303,6 +310,9 @@ fn read_uplink_file(
 ) -> crate::error::Result<String> {
     if !is_uplink_path(path) {
         return Err(crate::error::Error::msg("path must be under .uplink/"));
+    }
+    if sha.is_some_and(|sha| !is_valid_sha(sha)) {
+        return Err(crate::error::Error::msg("invalid sha"));
     }
     let use_worktree = match sha {
         Some("worktree") => true,
@@ -557,6 +567,15 @@ async fn file_at(State(state): State<Arc<AppState>>, Query(query): Query<FileQue
                 .into_response();
         }
     };
+    if query.sha.as_deref().is_some_and(|sha| !is_valid_sha(sha)) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorBody {
+                error: "invalid sha".into(),
+            }),
+        )
+            .into_response();
+    }
     let source = QueueSource::parse(query.source.as_deref());
     let sha = query.sha.clone();
     let path = query.path.clone();
@@ -633,6 +652,34 @@ mod tests {
         assert!(!is_uplink_path(".uplink/../Cargo.toml"));
         assert!(!is_uplink_path("Cargo.toml"));
         assert!(!is_uplink_path("/etc/passwd"));
+    }
+
+    #[test]
+    fn is_valid_sha_accepts_only_full_ids() {
+        assert!(is_valid_sha("worktree"));
+        assert!(is_valid_sha(&"a".repeat(40)));
+        assert!(is_valid_sha(&"0".repeat(64)));
+        assert!(!is_valid_sha("--output=x"));
+        assert!(!is_valid_sha("HEAD"));
+        assert!(!is_valid_sha(&"A".repeat(40)));
+        assert!(!is_valid_sha(&"a".repeat(39)));
+    }
+
+    #[tokio::test]
+    async fn file_at_rejects_option_like_sha() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = test_app(dir.path().to_path_buf());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/file?path=.uplink/queue.json&sha=--output=x")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(!dir.path().join("x:.uplink").exists());
     }
 
     #[tokio::test]
