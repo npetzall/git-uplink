@@ -49,7 +49,7 @@ export PATH="$PWD/target/release:$PATH"`}</pre>
           </p>
           <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`git uplink web-ui
 git uplink web-ui --no-open
-git uplink web-ui --port 43721 --bind 127.0.0.1`}</pre>
+git uplink web-ui --port 43721`}</pre>
         </section>
 
         <Card>
@@ -85,7 +85,7 @@ git uplink drop <id> [--reason <text>]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
 git uplink resolve <id>
 git uplink transfer <id> --to-upstream|--to-internal [--complete]
-git uplink web-ui [--port 43721] [--bind 127.0.0.1] [--no-open]`}</pre>
+git uplink web-ui [--port 43721] [--no-open]`}</pre>
           </CardContent>
         </Card>
 

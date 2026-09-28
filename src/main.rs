@@ -210,14 +210,11 @@ enum Commands {
         #[arg(long, help = "Finish a gated transfer after the work PR is merged")]
         complete: bool,
     },
-    /// Start the embedded operator dashboard and open a browser.
+    /// Start the embedded operator dashboard on 127.0.0.1 and open a browser.
     #[command(name = "web-ui")]
     WebUi {
         #[arg(long, default_value_t = 43721)]
         port: u16,
-        /// Bind address. Use 0.0.0.0 to reach the UI from another host.
-        #[arg(long, default_value = "127.0.0.1")]
-        bind: String,
         /// Do not launch a browser.
         #[arg(long)]
         no_open: bool,
@@ -1031,14 +1028,8 @@ fn run() -> Result<(), Error> {
                 );
             }
         }
-        Commands::WebUi {
-            port,
-            bind,
-            no_open,
-        } => {
-            let addr: std::net::SocketAddr = format!("{bind}:{port}")
-                .parse()
-                .map_err(|err| Error::msg(format!("invalid --bind/--port: {err}")))?;
+        Commands::WebUi { port, no_open } => {
+            let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -1058,5 +1049,16 @@ fn main() -> ExitCode {
             eprintln!("{err}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_ui_has_no_bind_option() {
+        assert!(Cli::try_parse_from(["git-uplink", "web-ui", "--bind", "0.0.0.0"]).is_err());
+        assert!(Cli::try_parse_from(["git-uplink", "web-ui", "--port", "1", "--no-open"]).is_ok());
     }
 }
