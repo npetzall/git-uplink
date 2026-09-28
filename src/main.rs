@@ -412,11 +412,39 @@ fn conflict_pr_create_artifact(
     })
 }
 
+/// The patch the queue is currently stopped on, if any.
+fn find_conflict(queue: &QueueState) -> Option<&Patch> {
+    queue
+        .all_patches()
+        .find(|p| p.status == PatchStatus::Conflict)
+}
+
+/// The `conflict` object in sync and resolve JSON.
+fn conflict_json(patch: &Patch) -> serde_json::Value {
+    let conflict = patch.conflict.as_ref();
+    serde_json::json!({
+        "id": patch.id,
+        "branch": conflict.map(|c| &c.branch),
+        "workBranch": conflict.and_then(|c| c.work_branch.clone()),
+        "onto": conflict.and_then(|c| c.onto.clone()),
+    })
+}
+
+fn eprint_conflict(patch: &Patch) {
+    eprintln!(
+        "CONFLICT {} on {}",
+        patch.id,
+        patch
+            .conflict
+            .as_ref()
+            .map(|c| c.branch.as_str())
+            .unwrap_or("")
+    );
+}
+
 fn print_sync_artifact(repo: &Path, result: &SyncResult, summary: Option<&str>) {
     let queue = &result.queue;
-    let conflict = queue
-        .all_patches()
-        .find(|p| p.status == PatchStatus::Conflict);
+    let conflict = find_conflict(queue);
     let summary = summary
         .filter(|text| !text.is_empty())
         .map(|text| serde_json::Value::String(text.to_string()))
@@ -431,12 +459,7 @@ fn print_sync_artifact(repo: &Path, result: &SyncResult, summary: Option<&str>) 
         "summary": summary,
     });
     if let Some(patch) = conflict {
-        value["conflict"] = serde_json::json!({
-            "id": patch.id,
-            "branch": patch.conflict.as_ref().map(|c| &c.branch),
-            "workBranch": patch.conflict.as_ref().and_then(|c| c.work_branch.clone()),
-            "onto": patch.conflict.as_ref().and_then(|c| c.onto.clone()),
-        });
+        value["conflict"] = conflict_json(patch);
         value["gh"] = serde_json::json!({
             "prCreate": conflict_pr_create_artifact(repo, patch, None),
         });
@@ -505,20 +528,8 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
 
 fn finish_sync(repo: &Path, result: SyncResult, summary: Option<&str>) -> Result<(), Error> {
     print_sync_artifact(repo, &result, summary);
-    if let Some(conflict) = result
-        .queue
-        .all_patches()
-        .find(|p| p.status == PatchStatus::Conflict)
-    {
-        eprintln!(
-            "CONFLICT {} on {}",
-            conflict.id,
-            conflict
-                .conflict
-                .as_ref()
-                .map(|c| c.branch.as_str())
-                .unwrap_or("")
-        );
+    if let Some(conflict) = find_conflict(&result.queue) {
+        eprint_conflict(conflict);
     }
     Ok(())
 }
@@ -530,9 +541,7 @@ fn print_resolve_artifact(
     follow_on_conflict: bool,
 ) {
     let mut gh = serde_json::Map::new();
-    let conflict = queue
-        .all_patches()
-        .find(|p| p.status == PatchStatus::Conflict);
+    let conflict = find_conflict(queue);
     if follow_on_conflict && let Some(patch) = conflict {
         gh.insert(
             "prCreate".into(),
@@ -549,12 +558,7 @@ fn print_resolve_artifact(
         "status": status,
     });
     if let Some(patch) = conflict.filter(|_| follow_on_conflict) {
-        value["conflict"] = serde_json::json!({
-            "id": patch.id,
-            "branch": patch.conflict.as_ref().map(|c| &c.branch),
-            "workBranch": patch.conflict.as_ref().and_then(|c| c.work_branch.clone()),
-            "onto": patch.conflict.as_ref().and_then(|c| c.onto.clone()),
-        });
+        value["conflict"] = conflict_json(patch);
     }
     if !gh.is_empty() {
         value["gh"] = serde_json::Value::Object(gh);
@@ -1007,19 +1011,8 @@ fn run() -> Result<(), Error> {
             Err(Error::Conflict(_)) => {
                 let queue = read_queue(&repo)?;
                 print_resolve_artifact(&repo, &id, &queue, true);
-                if let Some(conflict) = queue
-                    .all_patches()
-                    .find(|p| p.status == PatchStatus::Conflict)
-                {
-                    eprintln!(
-                        "CONFLICT {} on {}",
-                        conflict.id,
-                        conflict
-                            .conflict
-                            .as_ref()
-                            .map(|c| c.branch.as_str())
-                            .unwrap_or("")
-                    );
+                if let Some(conflict) = find_conflict(&queue) {
+                    eprint_conflict(conflict);
                 }
             }
             Err(err) => return Err(err),
@@ -1086,6 +1079,37 @@ mod tests {
             Commands::Merged { via, .. } => Some(via),
             _ => None,
         }
+    }
+
+    #[test]
+    fn conflict_json_keeps_camel_case_keys() {
+        let patch: Patch = serde_json::from_value(serde_json::json!({
+            "id": "upl_x",
+            "title": "x",
+            "status": "conflict",
+            "dependsOn": [],
+            "createdAt": "t",
+            "updatedAt": "t",
+            "source": {},
+            "events": [],
+            "conflict": {
+                "branch": "uplink/conflict/upl_x",
+                "workBranch": "uplink/conflict/upl_x-work",
+                "files": [],
+                "message": "m",
+                "onto": "abc"
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            conflict_json(&patch),
+            serde_json::json!({
+                "id": "upl_x",
+                "branch": "uplink/conflict/upl_x",
+                "workBranch": "uplink/conflict/upl_x-work",
+                "onto": "abc",
+            })
+        );
     }
 
     #[test]
