@@ -201,11 +201,16 @@ enum Commands {
         id: String,
     },
     /// Move a patch between the internal and upstream queues.
+    #[command(group(
+        clap::ArgGroup::new("direction")
+            .required(true)
+            .args(["to_upstream", "to_internal"])
+    ))]
     Transfer {
         id: String,
-        #[arg(long = "to-upstream", conflicts_with = "to_internal")]
+        #[arg(long = "to-upstream")]
         to_upstream: bool,
-        #[arg(long = "to-internal", conflicts_with = "to_upstream")]
+        #[arg(long = "to-internal")]
         to_internal: bool,
         #[arg(long, help = "Finish a gated transfer after the work PR is merged")]
         complete: bool,
@@ -1018,15 +1023,14 @@ fn run() -> Result<(), Error> {
         Commands::Transfer {
             id,
             to_upstream,
-            to_internal,
+            to_internal: _,
             complete,
         } => {
+            // clap requires exactly one of --to-upstream / --to-internal.
             let direction = if to_upstream {
                 TransferDirection::ToUpstream
-            } else if to_internal {
-                TransferDirection::ToInternal
             } else {
-                return Err(Error::msg("specify --to-upstream or --to-internal"));
+                TransferDirection::ToInternal
             };
             let result = transfer_patch(&repo, &id, direction, complete)?;
             print_transfer_artifact(&repo, &result);
@@ -1078,6 +1082,19 @@ mod tests {
             Commands::Merged { via, .. } => Some(via),
             _ => None,
         }
+    }
+
+    #[test]
+    fn transfer_requires_exactly_one_direction() {
+        let parse = |args: &[&str]| {
+            let argv = ["git-uplink", "transfer", "upl_x"].iter().chain(args);
+            Cli::try_parse_from(argv).is_ok()
+        };
+        assert!(!parse(&[]));
+        assert!(!parse(&["--complete"]));
+        assert!(!parse(&["--to-upstream", "--to-internal"]));
+        assert!(parse(&["--to-upstream"]));
+        assert!(parse(&["--to-internal", "--complete"]));
     }
 
     #[test]
