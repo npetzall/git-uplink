@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -40,11 +41,24 @@ pub fn read_queue(repo: &Path) -> Result<QueueState> {
     Ok(queue)
 }
 
+/// Temp file for [`write_queue`]; `commit_queue` never stages `*.tmp`.
+const QUEUE_TMP_PATH: &str = ".uplink/queue.json.tmp";
+
+/// Writes `queue.json` via a temp file and rename so a crash never leaves it truncated.
 pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
     fs::create_dir_all(repo.join(PATCH_DIR))?;
     let body = format!("{}\n", serde_json::to_string_pretty(queue)?);
-    fs::write(repo.join(QUEUE_PATH), body)?;
-    Ok(())
+    let tmp = repo.join(QUEUE_TMP_PATH);
+    let written = (|| -> std::io::Result<()> {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(body.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&tmp, repo.join(QUEUE_PATH))
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    Ok(written?)
 }
 
 pub fn active_upstream(queue: &QueueState) -> Vec<&Patch> {
@@ -266,6 +280,21 @@ mod tests {
         assert!(!cannot_depend_on(&queue, false, "upl_up"));
         assert!(!cannot_depend_on(&queue, true, "upl_up"));
         assert!(cannot_depend_on(&queue, true, "upl_tool"));
+    }
+
+    #[test]
+    fn write_queue_replaces_file_without_leaving_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let mut queue = QueueState::empty(QueueConfig::default());
+        write_queue(repo, &queue).unwrap();
+        queue.upstream.push(patch("upl_one"));
+        write_queue(repo, &queue).unwrap();
+
+        let raw = fs::read_to_string(repo.join(QUEUE_PATH)).unwrap();
+        let read: QueueState = serde_json::from_str(&raw).unwrap();
+        assert_eq!(read.upstream.len(), 1);
+        assert!(!repo.join(QUEUE_TMP_PATH).exists());
     }
 
     #[test]
