@@ -1,0 +1,67 @@
+name: Install git-uplink
+description: Download a git-uplink release binary and put it on PATH for this runner.
+inputs:
+  repo:
+    description: GitHub repository (owner/name) that publishes git-uplink releases
+    required: true
+  version:
+    description: Release tag (vX.Y.Z), version (X.Y.Z), or latest
+    required: true
+  token:
+    description: Token for gh release download. Workflows pass secrets.GITHUB_TOKEN.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install git-uplink
+      shell: bash
+      env:
+        REPO: ${{ inputs.repo }}
+        VERSION: ${{ inputs.version }}
+        TOKEN: ${{ inputs.token }}
+      run: | # zizmor: ignore[github-env] constant PATH entry for release binary
+        set -euo pipefail
+        if [[ "$VERSION" != "latest" ]]; then
+          tag="$VERSION"
+          if [[ "$tag" != v* ]]; then
+            tag="v$tag"
+          fi
+        fi
+        download_release() {
+          if [[ "$VERSION" == "latest" ]]; then
+            gh release download --repo "$REPO" "$@"
+          else
+            gh release download "$tag" --repo "$REPO" "$@"
+          fi
+        }
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64) target="x86_64-unknown-linux-musl"; suffix="" ;;
+          Linux-ARM64) target="aarch64-unknown-linux-musl"; suffix="" ;;
+          macOS-ARM64) target="aarch64-apple-darwin"; suffix="" ;;
+          Windows-X64) target="x86_64-pc-windows-msvc"; suffix=".exe" ;;
+          *)
+            echo "unsupported runner: ${RUNNER_OS}-${RUNNER_ARCH}" >&2
+            exit 1
+            ;;
+        esac
+        if [[ -n "$TOKEN" ]]; then
+          export GH_TOKEN="$TOKEN"
+        fi
+        rm -rf _git-uplink-dl
+        mkdir -p _git-uplink-dl "$HOME/.local/bin"
+        download_release --pattern "git-uplink-${target}*" --dir _git-uplink-dl
+        download_release --pattern SHA256SUMS --dir _git-uplink-dl
+        (
+          cd _git-uplink-dl
+          sha256sum -c SHA256SUMS --ignore-missing
+        )
+        bin=$(find _git-uplink-dl -maxdepth 1 -name "git-uplink-${target}*" -type f | head -n 1)
+        if [[ -z "$bin" ]]; then
+          echo "release asset git-uplink-${target}* not found" >&2
+          exit 1
+        fi
+        install -m 755 "$bin" "$HOME/.local/bin/git-uplink"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        rm -rf _git-uplink-dl
+        git-uplink -h >/dev/null

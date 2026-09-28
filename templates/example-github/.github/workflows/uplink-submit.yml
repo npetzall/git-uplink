@@ -38,8 +38,9 @@ jobs:
           persist-credentials: true
       - uses: $/.github/actions/install-git-uplink
         with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Write approver packet
         env:
@@ -70,8 +71,9 @@ jobs:
           persist-credentials: true
       - uses: $/.github/actions/install-git-uplink
         with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Dispatch company packet hooks
         id: hooks
@@ -155,8 +157,9 @@ jobs:
           ref: main
       - uses: $/.github/actions/install-git-uplink
         with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Read upstream and contrib from the queue
         id: queue
         env:

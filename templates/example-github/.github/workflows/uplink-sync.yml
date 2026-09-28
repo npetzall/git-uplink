@@ -27,6 +27,12 @@ jobs:
     outputs:
       needs_approval: ${{ steps.sync.outputs.needs_approval }}
     steps:
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
@@ -98,10 +104,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-      - uses: $/.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
 
       - name: Sync with upstream
         id: sync
@@ -192,6 +194,12 @@ jobs:
       group: uplink-mutate
       queue: max
     steps:
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
@@ -264,10 +272,6 @@ jobs:
           persist-credentials: true
           ref: main
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-      - uses: $/.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
 
       - name: Accept pending upstream
         env:

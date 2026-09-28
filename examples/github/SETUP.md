@@ -64,7 +64,7 @@ git clone https://github.com/YOUR_ORG/uplink-example-internal.git
 export INTERNAL_DIR=/path/to/uplink-example-internal
 # optional:
 # export UPLINK_SRC=npetzall/git-uplink
-# export UPLINK_REV=main
+# export UPLINK_VERSION=latest
 # export UPLINK_INTERNAL_AUTH=pat
 # export UPLINK_CONTRIB_AUTH=pat
 # export UPLINK_UPSTREAM_AUTH=pat
@@ -102,8 +102,8 @@ Settings → Secrets and variables → Actions → Variables. `bootstrap_interna
 | `UPLINK_REDACT_KEYWORDS` | `companyTelemetry,AcmeCorp` | Words that must not appear in a contribution |
 | `UPLINK_INTERNAL_DOMAINS` | `acme.example` | Email domains flagged in the export diff |
 | `UPLINK_EXPORT_AUTHOR` | `Uplink Example <uplink@example.com>` | Public identity for contribution commits |
-| `UPLINK_SRC` | `npetzall/git-uplink` | Repo the example runner builds `git-uplink` from |
-| `UPLINK_REV` | `main` | Git ref of `UPLINK_SRC` |
+| `UPLINK_SRC` | `npetzall/git-uplink` | Repo that publishes `git-uplink` releases |
+| `UPLINK_VERSION` | `latest` | Release to download (`latest`, or a tag `vX.Y.Z` / `X.Y.Z`) |
 | `UPLINK_INTERNAL_AUTH` | `pat` | `pat` or `app` for the internal bot |
 | `UPLINK_UPSTREAM_AUTH` | `pat` | `pat` or `app` for the upstream bot |
 | `UPLINK_CONTRIB_AUTH` | `pat` | `pat` or `app` for the contrib bot |

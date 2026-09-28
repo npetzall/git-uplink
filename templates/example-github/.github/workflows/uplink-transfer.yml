@@ -48,6 +48,12 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
@@ -120,10 +126,6 @@ jobs:
           persist-credentials: true
           ref: main
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
-      - uses: $/.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
 
       - name: Transfer patch
         env:
@@ -187,6 +189,12 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Mint internal GitHub App token
         id: internal-app
         if: ${{ vars.UPLINK_INTERNAL_AUTH == 'app' }}
@@ -257,10 +265,6 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: $/.github/actions/install-git-uplink
-        with:
-          src: ${{ vars.UPLINK_SRC }}
-          rev: ${{ vars.UPLINK_REV }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

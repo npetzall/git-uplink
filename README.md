@@ -105,7 +105,7 @@ Distribution SBOMs (CycloneDX JSON and SPDX JSON) cover the Rust crate and the e
 
 ## Product-repo workflows
 
-`git uplink init --upstream <url> --contrib <url> --forge ghec` writes the GHEC pack from `templates/ghec/` plus `templates/github/pull_request_template.md`. Those jobs assume `git-uplink` is on `PATH`. Re-run `git uplink init --upgrade` after upgrading the binary to refresh the same internal-only tooling patch. The example walkthrough uses `--forge example-github`.
+`git uplink init --upstream <url> --contrib <url> --forge ghec` writes the GHEC pack from `templates/ghec/` plus shared `templates/github/` assets (pull request template and `install-git-uplink`). Workflow jobs download a pinned release binary (`UPLINK_SRC` / `UPLINK_VERSION`). Re-run `git uplink init --upgrade` after upgrading the binary to refresh the same internal-only tooling patch. The example walkthrough uses `--forge example-github`.
 
 | Workflow | When |
 | --- | --- |
