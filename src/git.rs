@@ -149,7 +149,7 @@ fn is_explicit_url(spec: &str) -> bool {
     spec.contains("://") || spec.starts_with("git@")
 }
 
-fn is_local_transport(url: &str) -> bool {
+pub(crate) fn is_local_transport(url: &str) -> bool {
     let url = url.trim();
     if url.starts_with("file://") {
         return true;

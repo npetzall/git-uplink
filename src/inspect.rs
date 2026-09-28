@@ -4,8 +4,8 @@ use crate::adopt;
 use crate::error::Result;
 use crate::git::{
     GitOpts, contrib_auth_help, git, git_ok, has_contrib_credentials, has_internal_credentials,
-    has_upstream_credentials, internal_auth_help, is_https_url, remote_get_url, upstream_auth_help,
-    urls_match,
+    has_upstream_credentials, internal_auth_help, is_https_url, is_local_transport, remote_get_url,
+    upstream_auth_help, urls_match,
 };
 use crate::progress::StepOutcome;
 use crate::queue::{patch_path, read_queue as read_queue_file};
@@ -195,7 +195,7 @@ pub fn check_credentials_upstream(queue: &QueueState) -> StepOutcome {
         .config
         .upstream_url
         .as_deref()
-        .is_some_and(is_local_url)
+        .is_some_and(is_local_transport)
     {
         return StepOutcome::skip("upstream URL is local; credentials not required");
     }
@@ -219,7 +219,7 @@ pub fn check_credentials_contrib(queue: &QueueState) -> StepOutcome {
         .config
         .contrib_url
         .as_deref()
-        .is_some_and(is_local_url)
+        .is_some_and(is_local_transport)
     {
         return StepOutcome::skip("contrib URL is local; credentials not required");
     }
@@ -279,11 +279,7 @@ pub fn read_queue_if_initialized(repo: &Path) -> Option<QueueState> {
 fn remote_is_local(repo: &Path, name: &str) -> bool {
     remote_get_url(repo, name, &GitOpts::default())
         .as_deref()
-        .is_some_and(is_local_url)
-}
-
-fn is_local_url(url: &str) -> bool {
-    url.starts_with("file://") || url.starts_with('/')
+        .is_some_and(is_local_transport)
 }
 
 #[cfg(test)]
@@ -316,6 +312,18 @@ mod tests {
             crate::types::CheckStatus::Pass,
             "{}",
             outcome.detail
+        );
+    }
+
+    #[test]
+    fn relative_path_contrib_needs_no_credentials() {
+        let queue = QueueState::empty(QueueConfig {
+            contrib_url: Some("../contrib.git".into()),
+            ..QueueConfig::default()
+        });
+        assert_eq!(
+            check_credentials_contrib(&queue).status,
+            crate::types::CheckStatus::Skip
         );
     }
 }
