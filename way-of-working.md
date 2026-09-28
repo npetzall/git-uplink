@@ -44,7 +44,7 @@ Public `main` can move for reasons that are not a company contribution flowing b
 
 Create a repository Environment named **`from-upstream`**. Required reviewers are inbound/security (not the `to-upstream` IP reviewers unless you want the same people). Do not put origin-push or contrib secrets on it.
 
-1. **Inspect job** (no environment). `git uplink sync` fetches public `main` but does not move `uplink/upstream`. Commits that match a company patch (trailer / `patch-id`) apply immediately. Unchanged public `main` is a no-op.
+1. **Inspect job** (no environment). `git uplink sync` fetches public `main` but does not move `uplink/upstream`. Commits whose diff matches a company patch (`patch-id`; the trailer alone is not enough) apply immediately. Merge commits always count as foreign. Unchanged public `main` is a no-op.
 2. **Wait job** (`environment: from-upstream`, no `uplink-mutate`). Only scheduled when inspect found unmatched commits. GitHub holds this job until a reviewer approves. The packet is `.uplink/reports/from-upstream/incoming.md` on `uplink/state` (and `GITHUB_STEP_SUMMARY`).
 3. **Apply job** (`uplink-mutate`, no environment). After approval, `git uplink accept-upstream` promotes the frozen SHA, marks flowed-back patches `merged`, and rebuilds. Apply conflicts still open `uplink/conflict/<id>` — after this gate, not instead of it.
 
@@ -144,7 +144,7 @@ Asha needs to change token hashing. Nobody else is in her way.
 
 7. **Upstream review.** Maintainers review a normal GitHub PR. If they want changes, Asha amends the **same** internal patch (fix the files, import again or `git uplink resolve` after a conflict). If the patch was already submitted, it becomes `amended` and IP approves the delta before submit force-pushes the same fork branch. She still does not grow a second branch.
 
-8. **Flow back.** Upstream squash-merges the PR. Hourly sync (or `git uplink sync`) classifies new public commits. If the only new commits match Asha (trailer / `patch-id`), it skips **`from-upstream`** approval, marks `upl_asha` `merged`, and is **never applied again**. If public `main` also has commits that are not ours, inspect writes `.uplink/reports/from-upstream/incoming.md` and waits on Environment **`from-upstream`** before `uplink/upstream` moves.
+8. **Flow back.** Upstream squash-merges the PR. Hourly sync (or `git uplink sync`) classifies new public commits. If the only new commits match Asha (`patch-id`, with or without the trailer), it skips **`from-upstream`** approval, marks `upl_asha` `merged`, and is **never applied again**. If public `main` also has commits that are not ours, inspect writes `.uplink/reports/from-upstream/incoming.md` and waits on Environment **`from-upstream`** before `uplink/upstream` moves.
 
 9. **Rebuild.** After auto-apply or `from-upstream` approval, company `main` becomes upstream (now containing Asha’s change, including any maintainer follow-up on those lines) plus remaining patches. The internal copy is gone, so a later upstream salt-the-hash fix is not reverted by re-applying Asha’s old delta. That follow-up is a foreign commit: it goes through `from-upstream` first.
 

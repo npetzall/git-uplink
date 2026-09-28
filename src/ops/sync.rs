@@ -92,17 +92,23 @@ pub(super) fn match_commit_to_patch(
     queue: &QueueState,
     sha: &str,
 ) -> Result<Option<(String, MergeVia)>> {
+    // Patch ids are public, so a trailer alone proves nothing: it counts only
+    // when the diff is also ours. Anything else goes to from-upstream review.
     let message = git_ok(repo, &["log", "-1", "--format=%B", sha]).unwrap_or_default();
+    let commit_stable = commit_stable_patch_id(repo, sha)?;
     for patch in queue
         .all_patches()
         .filter(|p| eligible_for_flow_back(queue, p))
     {
         let trailer = format!("{}: {}", queue.config.trailer_key, patch.id);
-        if message.lines().any(|line| line.trim() == trailer) {
+        if message.lines().any(|line| line.trim() == trailer)
+            && commit_stable.is_some()
+            && patch.patch_id_stable == commit_stable
+        {
             return Ok(Some((patch.id.clone(), MergeVia::Trailer)));
         }
     }
-    if let Some(stable) = commit_stable_patch_id(repo, sha)? {
+    if let Some(stable) = commit_stable {
         for patch in queue
             .all_patches()
             .filter(|p| eligible_for_flow_back(queue, p))
@@ -125,12 +131,7 @@ pub(super) fn classify_incoming(
     if let Some(from) = from_sha {
         let list = git_ok(
             repo,
-            &[
-                "rev-list",
-                "--no-merges",
-                "--reverse",
-                &format!("{from}..{pending_sha}"),
-            ],
+            &["rev-list", "--reverse", &format!("{from}..{pending_sha}")],
         )?;
         range = list
             .lines()
