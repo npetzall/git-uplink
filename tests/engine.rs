@@ -5,10 +5,11 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, ConflictError, DEFAULT_CUTOFF, Error, Forge,
-    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PushOpts, QueueConfig, QueueState,
-    RebuildOpts, Result, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
-    accept_upstream, add_patch, approve_patch, configure_repo, drop_patch, format_approval_receipt,
-    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
+    GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, ProgressMode, PushOpts, QueueConfig,
+    QueueState, RebuildOpts, Result, STATE_BRANCH, StepOutcome, TOOLING_PATCH_KIND,
+    TOOLING_PATCH_TITLE, TransferDirection, accept_upstream, add_patch, approve_patch,
+    configure_repo, doctor, drop_patch, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
     from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
     parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
@@ -1277,7 +1278,7 @@ fn init_upgrade_cli_reports_already_up_to_date() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "already up-to-date\n"
+        "Uplink init: ready\nalready up-to-date\n"
     );
     let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
     assert_eq!(before, after);
@@ -1299,7 +1300,8 @@ fn init_upgrade_cli_reports_a_tooling_refresh() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "tooling has been updated\n\
+        "Uplink init: ready\n\
+tooling has been updated\n\
 Company main was rebuilt locally. Nothing was pushed.\n\
 Inspect with: git diff origin/main main\n\
 Publish state: git uplink push\n\
@@ -6154,4 +6156,108 @@ fn transfer_to_upstream_allows_internal_dependents() {
     let after = git_uplink::read_queue(company).unwrap();
     assert!(after.is_upstream(&hash_patch.id));
     assert!(after.is_internal(&notes.id));
+}
+
+fn has_local_ref(repo: &Path, git_ref: &str) -> bool {
+    git(
+        repo,
+        &["rev-parse", "--verify", "--quiet", git_ref],
+        GitOpts {
+            allow_fail: true,
+            ..GitOpts::default()
+        },
+    )
+    .map(|result| result.code == 0)
+    .unwrap_or(false)
+}
+
+#[test]
+fn init_resumes_after_partial_upstream_seed_failure() {
+    let world = setup_uninitialized();
+    let contrib = remote_get_url(&world.company, "contrib");
+    let partial = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some("https://example.invalid/repo.git".into()),
+            contrib_url: Some(contrib.clone()),
+            forge: Some(Forge::Ghec),
+            ..Default::default()
+        },
+    );
+    assert!(partial.is_err(), "expected upstream fetch to fail");
+    assert!(has_local_ref(&world.company, STATE_BRANCH));
+    assert!(!has_local_ref(&world.company, "uplink/upstream"));
+
+    let result = init(
+        &world.company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(contrib),
+            forge: Some(Forge::Ghec),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(result.report.ok, "{:?}", result.report.checks);
+    assert!(has_local_ref(&world.company, "uplink/upstream"));
+    assert!(result.queue.tooling.is_some());
+}
+
+#[test]
+fn doctor_passes_on_initialized_local_world() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let report = doctor(&world.company, ProgressMode::Disabled).unwrap();
+    assert!(report.ok, "{:?}", report.checks);
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.id == "initialized" && check.status == "pass")
+    );
+}
+
+#[test]
+fn doctor_fails_when_queue_is_missing() {
+    let world = setup_uninitialized();
+    let report = doctor(&world.company, ProgressMode::Disabled).unwrap();
+    assert!(!report.ok);
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.id == "initialized" && check.status == "fail")
+    );
+}
+
+#[test]
+fn init_prints_summary_not_full_queue_json() {
+    let world = setup_uninitialized();
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args([
+            "init",
+            "--upstream",
+            world.upstream.to_str().unwrap(),
+            "--contrib",
+            &remote_get_url(&world.company, "contrib"),
+            "--forge",
+            "ghec",
+        ])
+        .current_dir(&world.company)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Uplink init: ready"), "{stdout}");
+    assert!(!stdout.contains("\"version\""), "{stdout}");
+}
+
+#[test]
+fn format_step_line_plain_uses_tags() {
+    let line = format_step_line(
+        false,
+        "Seed uplink/upstream",
+        &StepOutcome::pass("fetched main"),
+    );
+    assert!(line.starts_with("[ok  ]"));
 }

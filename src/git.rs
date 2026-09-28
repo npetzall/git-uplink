@@ -540,6 +540,34 @@ pub fn configure_repo(_cwd: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn has_internal_credentials(opts: &GitOpts<'_>) -> bool {
+    has_role_credentials(AuthRole::Internal, opts)
+}
+
+pub fn has_contrib_credentials(opts: &GitOpts<'_>) -> bool {
+    has_role_credentials(AuthRole::Contrib, opts)
+}
+
+pub fn has_upstream_credentials(opts: &GitOpts<'_>) -> bool {
+    has_role_credentials(AuthRole::Upstream, opts)
+}
+
+pub fn internal_auth_help() -> String {
+    AuthRole::Internal.help()
+}
+
+pub fn contrib_auth_help() -> String {
+    AuthRole::Contrib.help()
+}
+
+pub fn upstream_auth_help() -> String {
+    AuthRole::Upstream.help()
+}
+
+fn has_role_credentials(role: AuthRole, opts: &GitOpts<'_>) -> bool {
+    env_lookup(opts, role.key_env()).is_some() || env_lookup(opts, role.token_env()).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

@@ -7,11 +7,12 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use git_uplink::{
     AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight,
-    InitOpts, MergeVia, PreflightError, PushOpts, RebuildOpts, STATE_BRANCH,
+    InitOpts, MergeVia, PreflightError, ProgressMode, PushOpts, RebuildOpts, STATE_BRANCH,
     TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch, adopted_next_steps, approve_patch_at,
-    assess_from_message, commit_queue, drop_patch, format_approval_receipt, format_assess_markdown,
-    format_contribution_packet_with_extras, format_status_table, from_upstream_report_paths,
-    git_ok, init, load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
+    assess_from_message, commit_queue, doctor, drop_patch, format_approval_receipt,
+    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
+    format_init_summary, format_status_table, from_upstream_report_paths, git_ok, init,
+    load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
     resolve_conflict, status_report, status_snapshot, submit_patch, sync, transfer_patch,
@@ -135,6 +136,10 @@ enum Commands {
     },
     Status {
         #[arg(long)]
+        json: bool,
+    },
+    Doctor {
+        #[arg(long, help = "Print doctor report as JSON")]
         json: bool,
     },
     Approve {
@@ -597,6 +602,15 @@ fn run() -> Result<(), Error> {
                 Some(path) => Some(load_groups_file(&path)?),
                 None => None,
             };
+            let hydrate = !upstream.is_some()
+                && !contrib.is_some()
+                && upstream_remote_name.is_none()
+                && upstream_branch.is_none()
+                && contrib_remote_name.is_none()
+                && internal_branch.is_none()
+                && adopt_groups.is_none()
+                && forge.is_none()
+                && !upgrade;
             let opts = InitOpts {
                 upstream_url: upstream,
                 contrib_url: contrib,
@@ -608,8 +622,12 @@ fn run() -> Result<(), Error> {
                 upgrade,
                 adopt_groups,
                 interactive: None,
+                progress: if hydrate {
+                    ProgressMode::Disabled
+                } else {
+                    ProgressMode::Auto
+                },
             };
-            let hydrate = !opts.has_args() && opts.forge.is_none() && !opts.upgrade;
             let result = init(&repo, opts)?;
             let queue = &result.queue;
             if queue.all_patches().any(|p| {
@@ -620,16 +638,31 @@ fn run() -> Result<(), Error> {
             }) {
                 eprintln!("{}", adopted_next_steps());
             }
-            if upgrade && !json {
-                if result.tooling_changed {
-                    println!("{}", upgrade_next_steps(&queue.config.internal_branch));
-                } else {
-                    println!("already up-to-date");
-                }
-            } else if json {
+            if json {
                 println!("{}", serde_json::to_string_pretty(&queue.config)?);
             } else if !hydrate {
-                println!("{}", serde_json::to_string_pretty(queue)?);
+                println!("{}", format_init_summary(&result.report));
+                if upgrade {
+                    if result.tooling_changed {
+                        println!("{}", upgrade_next_steps(&queue.config.internal_branch));
+                    } else {
+                        println!("already up-to-date");
+                    }
+                }
+            }
+            if !result.report.ok {
+                return Err(Error::msg(format_init_summary(&result.report)));
+            }
+        }
+        Commands::Doctor { json } => {
+            let report = doctor(&repo, ProgressMode::Auto)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", format_doctor_summary(&report));
+            }
+            if !report.ok {
+                return Err(Error::msg(format_doctor_summary(&report)));
             }
         }
         Commands::Add {
