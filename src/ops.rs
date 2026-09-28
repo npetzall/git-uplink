@@ -1343,13 +1343,13 @@ pub fn record_pull_request(
                 push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
                 return Ok(patch);
             }
-            if existing.pr_number.is_some()
-                && (existing.pr_number != Some(number) || existing.pr_url.as_deref() != Some(url))
+            if let Some(recorded_number) = existing.pr_number
+                && (recorded_number != number || existing.pr_url.as_deref() != Some(url))
             {
                 let recorded = existing
                     .pr_url
                     .clone()
-                    .unwrap_or_else(|| format!("#{}", existing.pr_number.unwrap()));
+                    .unwrap_or_else(|| format!("#{recorded_number}"));
                 return Err(Error::msg(format!(
                     "{id} is already submitted as {recorded}; will not retarget to {url}"
                 )));
@@ -1396,12 +1396,12 @@ pub fn record_gated_pr(
             push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
             return Ok(patch);
         }
-        if conflict.pr_number.is_some()
-            && (conflict.pr_number != Some(number) || conflict.pr_url.as_deref() != Some(url))
+        if let Some(recorded_number) = conflict.pr_number
+            && (recorded_number != number || conflict.pr_url.as_deref() != Some(url))
         {
             let recorded = conflict
                 .pr_url
-                .unwrap_or_else(|| format!("#{}", conflict.pr_number.unwrap()));
+                .unwrap_or_else(|| format!("#{recorded_number}"));
             return Err(Error::msg(format!(
                 "{id} already has conflict PR {recorded}; will not retarget to {url}"
             )));
