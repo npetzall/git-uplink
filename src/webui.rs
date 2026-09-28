@@ -3,8 +3,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Path as PathParam, Query, State};
-use axum::http::{StatusCode, Uri, header};
+use axum::extract::{Path as PathParam, Query, Request, State};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -136,7 +137,53 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/patches/{id}", get(patch_detail))
         .route("/api/file", get(file_at))
         .fallback(static_file)
+        .layer(middleware::from_fn(loopback_only))
         .with_state(state)
+}
+
+/// Host part of `host[:port]` or `[v6]:port`.
+fn authority_host(authority: &str) -> &str {
+    if authority.starts_with('[') {
+        authority
+            .find(']')
+            .map_or(authority, |end| &authority[..=end])
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    host == "127.0.0.1" || host == "[::1]" || host.eq_ignore_ascii_case("localhost")
+}
+
+/// Blocks DNS rebinding (foreign `Host`) and cross-site requests (foreign `Origin`).
+fn is_local_request(headers: &HeaderMap) -> bool {
+    let host_ok = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|host| is_loopback_host(authority_host(host)));
+    let origin_ok = match headers.get(header::ORIGIN) {
+        None => true,
+        Some(value) => value
+            .to_str()
+            .ok()
+            .and_then(|origin| origin.strip_prefix("http://"))
+            .is_some_and(|rest| is_loopback_host(authority_host(rest))),
+    };
+    host_ok && origin_ok
+}
+
+async fn loopback_only(request: Request, next: Next) -> Response {
+    if !is_local_request(request.headers()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorBody {
+                error: "web-ui only serves requests from 127.0.0.1".into(),
+            }),
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 pub async fn serve(repo: PathBuf, addr: SocketAddr, open_browser: bool) -> std::io::Result<()> {
@@ -639,6 +686,89 @@ mod tests {
         router(Arc::new(AppState { repo }))
     }
 
+    fn local_request(uri: &str) -> Request<Body> {
+        Request::builder()
+            .uri(uri)
+            .header(header::HOST, "127.0.0.1:43721")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn local_request_requires_loopback_host_and_origin() {
+        let headers = |pairs: &[(header::HeaderName, &str)]| {
+            let mut map = HeaderMap::new();
+            for (name, value) in pairs {
+                map.insert(name.clone(), value.parse().unwrap());
+            }
+            map
+        };
+        assert!(is_local_request(&headers(&[(
+            header::HOST,
+            "127.0.0.1:43721"
+        )])));
+        assert!(is_local_request(&headers(&[(
+            header::HOST,
+            "localhost:43721"
+        )])));
+        assert!(is_local_request(&headers(&[(header::HOST, "[::1]:43721")])));
+        assert!(is_local_request(&headers(&[
+            (header::HOST, "127.0.0.1:43721"),
+            (header::ORIGIN, "http://127.0.0.1:43721"),
+        ])));
+        assert!(!is_local_request(&headers(&[])));
+        assert!(!is_local_request(&headers(&[(
+            header::HOST,
+            "evil.example"
+        )])));
+        assert!(!is_local_request(&headers(&[(
+            header::HOST,
+            "127.0.0.1.evil.example:43721"
+        )])));
+        assert!(!is_local_request(&headers(&[
+            (header::HOST, "127.0.0.1:43721"),
+            (header::ORIGIN, "http://evil.example"),
+        ])));
+        assert!(!is_local_request(&headers(&[
+            (header::HOST, "127.0.0.1:43721"),
+            (header::ORIGIN, "null"),
+        ])));
+    }
+
+    #[tokio::test]
+    async fn foreign_host_is_forbidden() {
+        let app = test_app(PathBuf::from("/tmp"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status?fetch=0")
+                    .header(header::HOST, "evil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn cross_origin_refresh_is_forbidden() {
+        let app = test_app(PathBuf::from("/tmp"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/refresh")
+                    .header(header::HOST, "127.0.0.1:43721")
+                    .header(header::ORIGIN, "http://evil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
     async fn json_body(response: Response) -> serde_json::Value {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
@@ -670,12 +800,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = test_app(dir.path().to_path_buf());
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/file?path=.uplink/queue.json&sha=--output=x")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(local_request(
+                "/api/file?path=.uplink/queue.json&sha=--output=x",
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -686,12 +813,7 @@ mod tests {
     async fn patch_detail_route_captures_id() {
         let app = test_app(PathBuf::from("/tmp"));
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/patches/not-a-real-patch")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(local_request("/api/patches/not-a-real-patch"))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -712,12 +834,7 @@ mod tests {
     async fn patch_detail_rejects_parent_segments() {
         let app = test_app(PathBuf::from("/tmp"));
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/patches/..%2Fetc")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(local_request("/api/patches/..%2Fetc"))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -744,11 +861,7 @@ mod tests {
             "/api/file?path=../Cargo.toml",
             "/api/file?path=.uplink/../Cargo.toml",
         ] {
-            let response = app
-                .clone()
-                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
+            let response = app.clone().oneshot(local_request(uri)).await.unwrap();
             assert_ne!(response.status(), StatusCode::OK, "{uri}");
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             let text = String::from_utf8_lossy(&body);
@@ -759,12 +872,7 @@ mod tests {
         }
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/file?path=.uplink/queue.json")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(local_request("/api/file?path=.uplink/queue.json"))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
