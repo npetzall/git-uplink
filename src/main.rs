@@ -311,6 +311,12 @@ fn build_receipt(repo: &Path, subject: &str, env_var: &str, default_env: &str) -
     Receipt { sha, run_url, text }
 }
 
+/// `--pr` when given, otherwise the number parsed from `--pr-url`.
+fn pr_number(pr: Option<u64>, pr_url: &str) -> Result<u64, Error> {
+    pr.or_else(|| parse_pull_request_url(pr_url))
+        .ok_or_else(|| Error::msg(format!("could not parse pull request number from {pr_url}")))
+}
+
 fn remote_url(repo: &Path, name: &str) -> Option<String> {
     git_ok(repo, &["remote", "get-url", name]).ok()
 }
@@ -910,11 +916,7 @@ fn run() -> Result<(), Error> {
             pr,
             push_remote,
         } => {
-            let number = pr
-                .or_else(|| parse_pull_request_url(&pr_url))
-                .ok_or_else(|| {
-                    Error::msg(format!("could not parse pull request number from {pr_url}"))
-                })?;
+            let number = pr_number(pr, &pr_url)?;
             let branch = format!("uplink/{id}");
             let patch = record_pull_request(
                 &repo,
@@ -954,11 +956,7 @@ fn run() -> Result<(), Error> {
             pr,
             push_remote,
         } => {
-            let number = pr
-                .or_else(|| parse_pull_request_url(&pr_url))
-                .ok_or_else(|| {
-                    Error::msg(format!("could not parse pull request number from {pr_url}"))
-                })?;
+            let number = pr_number(pr, &pr_url)?;
             let patch = record_gated_pr(&repo, &id, number, &pr_url, Some(push_remote.as_str()))?;
             println!("{} conflict PR {pr_url}", patch.id);
         }
@@ -1088,6 +1086,18 @@ mod tests {
             Commands::Merged { via, .. } => Some(via),
             _ => None,
         }
+    }
+
+    #[test]
+    fn pr_number_prefers_flag_then_url() {
+        let url = "https://github.com/acme/app/pull/42";
+        assert_eq!(pr_number(Some(7), url).unwrap(), 7);
+        assert_eq!(pr_number(None, url).unwrap(), 42);
+        let err = pr_number(None, "https://github.com/acme/app").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("could not parse pull request number")
+        );
     }
 
     #[test]
