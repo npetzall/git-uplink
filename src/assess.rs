@@ -549,10 +549,7 @@ fn patch_file_diff(repo: &Path, old_patch: &str, new_patch: &str) -> String {
             old_file.to_str().unwrap_or(""),
             new_file.to_str().unwrap_or(""),
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     );
     let _ = fs::remove_dir_all(&dir);
     match result {
@@ -578,10 +575,7 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
     let added_old = git(
         repo,
         &["worktree", "add", "--detach", old_dir.to_str()?, base],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .ok()?;
     if added_old.code != 0 {
@@ -591,10 +585,7 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
     let added_new = git(
         repo,
         &["worktree", "add", "--detach", new_dir.to_str()?, base],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .ok()?;
     if added_new.code != 0 {
@@ -606,10 +597,7 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
                 "--force",
                 old_dir.to_str().unwrap_or(""),
             ],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
+            GitOpts::allow_fail(),
         );
         let _ = fs::remove_dir_all(&root);
         return None;
@@ -617,19 +605,13 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
     let applied_old = git(
         &old_dir,
         &["apply", old_file.to_str().unwrap_or("")],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .ok();
     let applied_new = git(
         &new_dir,
         &["apply", new_file.to_str().unwrap_or("")],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .ok();
     let diff =
@@ -637,17 +619,12 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
             let old_tree = write_worktree_tree(&old_dir);
             let new_tree = write_worktree_tree(&new_dir);
             match (old_tree, new_tree) {
-                (Some(old_tree), Some(new_tree)) => git(
-                    repo,
-                    &["diff", &old_tree, &new_tree],
-                    GitOpts {
-                        allow_fail: true,
-                        ..GitOpts::default()
-                    },
-                )
-                .ok()
-                .map(|out| out.stdout)
-                .filter(|s| !s.trim().is_empty()),
+                (Some(old_tree), Some(new_tree)) => {
+                    git(repo, &["diff", &old_tree, &new_tree], GitOpts::allow_fail())
+                        .ok()
+                        .map(|out| out.stdout)
+                        .filter(|s| !s.trim().is_empty())
+                }
                 _ => None,
             }
         } else {
@@ -661,10 +638,7 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
             "--force",
             old_dir.to_str().unwrap_or(""),
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     );
     let _ = git(
         repo,
@@ -674,10 +648,7 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
             "--force",
             new_dir.to_str().unwrap_or(""),
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     );
     let _ = fs::remove_dir_all(&root);
     diff
@@ -820,10 +791,7 @@ pub fn format_incoming_packet(
             let shown = git(
                 repo,
                 &["show", "--pretty=fuller", sha],
-                GitOpts {
-                    allow_fail: true,
-                    ..GitOpts::default()
-                },
+                GitOpts::allow_fail(),
             )?;
             let body = if shown.stdout.trim().is_empty() {
                 format!("(no `git show` output for `{sha}`)\n")
@@ -883,10 +851,7 @@ pub fn assess_from_message(
     let original = git(
         repo,
         &["log", "-1", "--format=%an%x00%ae", head_ref],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )?;
     let mut orig = original.stdout.split('\u{0}');
     let original_author = orig.next().filter(|s| !s.is_empty()).map(str::to_string);

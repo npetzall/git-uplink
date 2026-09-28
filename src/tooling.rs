@@ -5,7 +5,7 @@ use rust_embed::RustEmbed;
 
 use crate::assess::{append_patch_id_trailer, assess_from_message, strip_html_comments};
 use crate::error::{Error, Result};
-use crate::git::{GitOpts, git, git_ok};
+use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{
     add_event, patch_path, read_queue as read_queue_file, write_queue as write_queue_file,
 };
@@ -248,15 +248,7 @@ fn synthesize_pack_patch(
             fs::write(&dest, bytes)?;
             git(repo, &["add", "-f", "--", rel], GitOpts::default())?;
         }
-        let staged = git(
-            repo,
-            &["diff", "--cached", "--quiet"],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
-        )?;
-        if staged.code == 0 {
+        if git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
             return Err(Error::msg(
                 "forge pack produced no product changes against uplink/upstream",
             ));

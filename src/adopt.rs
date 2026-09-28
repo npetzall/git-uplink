@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::assess::{assert_assess_ok, assess_from_message, company_commit_message};
 use crate::error::{Error, Result};
-use crate::git::{GitOpts, git, git_ok};
+use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::lock::with_queue_lock;
 use crate::queue::{
     add_event, cannot_depend_on, get_patch, patch_path, read_queue as read_queue_file,
@@ -86,10 +86,7 @@ pub fn analyze_ahead(repo: &Path) -> Result<AheadAnalysis> {
     let merge_base = git(
         repo,
         &["merge-base", "uplink/upstream", tip],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )?;
     let behind = merge_base.code != 0 || merge_base.stdout != upstream_sha;
     if behind {
@@ -224,7 +221,7 @@ fn describe_commit(repo: &Path, sha: &str) -> Result<Option<AdoptCommit>> {
 }
 
 fn product_diff_empty(repo: &Path, from: &str, head: &str) -> Result<bool> {
-    let diff = git(
+    git_succeeds(
         repo,
         &[
             "diff",
@@ -236,12 +233,7 @@ fn product_diff_empty(repo: &Path, from: &str, head: &str) -> Result<bool> {
             ".",
             ":!.uplink",
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    Ok(diff.code == 0)
+    )
 }
 
 fn resolve_sha<'a>(commits: &'a [AdoptCommit], spec: &str) -> Result<&'a AdoptCommit> {
