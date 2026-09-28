@@ -249,21 +249,20 @@ fn read_commit_message(
     Ok(message.unwrap_or_else(|| fallback.to_string()))
 }
 
-fn write_markdown_file(repo: &Path, file: &Path, markdown: &str) -> PathBuf {
+fn write_markdown_file(repo: &Path, file: &Path, markdown: &str) -> Result<(), Error> {
     let abs = if file.is_absolute() {
         file.to_path_buf()
     } else {
         repo.join(file)
     };
-    if let Some(parent) = abs.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     let mut body = markdown.to_string();
     if !body.ends_with('\n') {
         body.push('\n');
     }
-    let _ = fs::write(&abs, body);
-    file.to_path_buf()
+    abs.parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| fs::write(&abs, body))
+        .map_err(|err| Error::msg(format!("could not write {}: {err}", abs.display())))
 }
 
 fn github_run_url() -> String {
@@ -389,7 +388,7 @@ fn conflict_pr_create_artifact(
     repo: &Path,
     patch: &Patch,
     resolved_from: Option<&str>,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, Error> {
     let conflict = patch.conflict.as_ref();
     let base = conflict.map(|c| c.branch.as_str()).unwrap_or("");
     let work = conflict
@@ -400,16 +399,16 @@ fn conflict_pr_create_artifact(
     let body = conflict_body(&patch.id, work, onto, resolved_from);
     let body_file = match report_paths(&patch.id) {
         Ok((dir, _, _)) => format!("{dir}/conflict.md"),
-        Err(_) => return serde_json::json!({"error": "invalid patch id"}),
+        Err(_) => return Ok(serde_json::json!({"error": "invalid patch id"})),
     };
-    write_markdown_file(repo, Path::new(&body_file), &body);
-    serde_json::json!({
+    write_markdown_file(repo, Path::new(&body_file), &body)?;
+    Ok(serde_json::json!({
         "title": format!("Uplink conflict: {}", patch.id),
         "bodyFile": body_file,
         "head": work,
         "base": base,
         "labels": ["uplink:conflict"]
-    })
+    }))
 }
 
 /// The patch the queue is currently stopped on, if any.
@@ -442,7 +441,11 @@ fn eprint_conflict(patch: &Patch) {
     );
 }
 
-fn print_sync_artifact(repo: &Path, result: &SyncResult, summary: Option<&str>) {
+fn print_sync_artifact(
+    repo: &Path,
+    result: &SyncResult,
+    summary: Option<&str>,
+) -> Result<(), Error> {
     let queue = &result.queue;
     let conflict = find_conflict(queue);
     let summary = summary
@@ -461,13 +464,14 @@ fn print_sync_artifact(repo: &Path, result: &SyncResult, summary: Option<&str>) 
     if let Some(patch) = conflict {
         value["conflict"] = conflict_json(patch);
         value["gh"] = serde_json::json!({
-            "prCreate": conflict_pr_create_artifact(repo, patch, None),
+            "prCreate": conflict_pr_create_artifact(repo, patch, None)?,
         });
     }
     println!("{value}");
+    Ok(())
 }
 
-fn print_transfer_artifact(repo: &Path, result: &TransferResult) {
+fn print_transfer_artifact(repo: &Path, result: &TransferResult) -> Result<(), Error> {
     let mut value = serde_json::json!({
         "id": result.id,
         "direction": result.direction.as_str(),
@@ -490,7 +494,7 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
             Ok((dir, _, _)) => format!("{dir}/transfer.md"),
             Err(_) => "transfer.md".into(),
         };
-        write_markdown_file(repo, Path::new(&body_file), &body);
+        write_markdown_file(repo, Path::new(&body_file), &body)?;
         value["gh"] = serde_json::json!({
             "prCreate": {
                 "title": format!("Uplink transfer {}: {}", result.direction.as_str(), result.id),
@@ -524,10 +528,11 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
         value["gh"] = serde_json::json!({ "prClose": pr_close });
     }
     println!("{value}");
+    Ok(())
 }
 
 fn finish_sync(repo: &Path, result: SyncResult, summary: Option<&str>) -> Result<(), Error> {
-    print_sync_artifact(repo, &result, summary);
+    print_sync_artifact(repo, &result, summary)?;
     if let Some(conflict) = find_conflict(&result.queue) {
         eprint_conflict(conflict);
     }
@@ -539,13 +544,13 @@ fn print_resolve_artifact(
     resolved_id: &str,
     queue: &QueueState,
     follow_on_conflict: bool,
-) {
+) -> Result<(), Error> {
     let mut gh = serde_json::Map::new();
     let conflict = find_conflict(queue);
     if follow_on_conflict && let Some(patch) = conflict {
         gh.insert(
             "prCreate".into(),
-            conflict_pr_create_artifact(repo, patch, Some(resolved_id)),
+            conflict_pr_create_artifact(repo, patch, Some(resolved_id))?,
         );
     }
     let status = queue
@@ -564,18 +569,25 @@ fn print_resolve_artifact(
         value["gh"] = serde_json::Value::Object(gh);
     }
     println!("{value}");
+    Ok(())
 }
 
-fn submit_artifact(repo: &Path, queue: &QueueState, patch: &Patch, branch: &str, sha: &str) {
+fn submit_artifact(
+    repo: &Path,
+    queue: &QueueState,
+    patch: &Patch,
+    branch: &str,
+    sha: &str,
+) -> Result<(), Error> {
     let body = format!(
         "Company contribution exported by Uplink.\n\nUplink-Patch-Id: {}\n",
         patch.id
     );
     let body_file = match report_paths(&patch.id) {
         Ok((dir, _, _)) => format!("{dir}/pr.md"),
-        Err(_) => return,
+        Err(_) => return Ok(()),
     };
-    write_markdown_file(repo, Path::new(&body_file), &body);
+    write_markdown_file(repo, Path::new(&body_file), &body)?;
     let existing = patch.upstream.as_ref().and_then(|u| {
         u.pr_url.as_ref().map(|url| {
             serde_json::json!({
@@ -622,6 +634,7 @@ fn submit_artifact(repo: &Path, queue: &QueueState, patch: &Patch, branch: &str,
         value["gh"] = serde_json::Value::Object(gh);
     }
     println!("{value}");
+    Ok(())
 }
 
 fn upgrade_next_steps(branch: &str) -> String {
@@ -825,7 +838,7 @@ fn run() -> Result<(), Error> {
                 format_contribution_packet_with_extras(&repo, patch, extra_dir.as_deref())?;
             let default_out = report_paths(&id)?.1;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
-            write_markdown_file(&repo, &dest, &packet);
+            write_markdown_file(&repo, &dest, &packet)?;
             commit_queue(&repo, &format!("uplink: contribution packet {id}"))?;
             println!("{packet}");
             eprintln!("Wrote {}", dest.display());
@@ -891,7 +904,7 @@ fn run() -> Result<(), Error> {
             );
             let default_out = report_paths(&id)?.2;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
-            write_markdown_file(&repo, &dest, &receipt.text);
+            write_markdown_file(&repo, &dest, &receipt.text)?;
             let patch = approve_patch_at(&repo, &id, Some(&receipt.sha), Some(&receipt.run_url))?;
             commit_queue(&repo, &format!("uplink: to-upstream approval receipt {id}"))?;
             println!("{}", receipt.text);
@@ -912,7 +925,7 @@ fn run() -> Result<(), Error> {
                     return Err(err);
                 }
             };
-            submit_artifact(&repo, &queue, &patch, &exported.branch, &exported.sha);
+            submit_artifact(&repo, &queue, &patch, &exported.branch, &exported.sha)?;
         }
         Commands::Submitted {
             id,
@@ -951,7 +964,7 @@ fn run() -> Result<(), Error> {
                 FROM_UPSTREAM_ENVIRONMENT,
             );
             let dest = PathBuf::from(from_upstream_report_paths().2);
-            write_markdown_file(&repo, &dest, &receipt.text);
+            write_markdown_file(&repo, &dest, &receipt.text)?;
             finish_sync(&repo, accept_upstream(&repo)?, Some(&receipt.text))?;
         }
         Commands::Gated {
@@ -1006,11 +1019,11 @@ fn run() -> Result<(), Error> {
         }
         Commands::Resolve { id } => match resolve_conflict(&repo, &id) {
             Ok(queue) => {
-                print_resolve_artifact(&repo, &id, &queue, false);
+                print_resolve_artifact(&repo, &id, &queue, false)?;
             }
             Err(Error::Conflict(_)) => {
                 let queue = read_queue(&repo)?;
-                print_resolve_artifact(&repo, &id, &queue, true);
+                print_resolve_artifact(&repo, &id, &queue, true)?;
                 if let Some(conflict) = find_conflict(&queue) {
                     eprint_conflict(conflict);
                 }
@@ -1030,7 +1043,7 @@ fn run() -> Result<(), Error> {
                 TransferDirection::ToInternal
             };
             let result = transfer_patch(&repo, &id, direction, complete)?;
-            print_transfer_artifact(&repo, &result);
+            print_transfer_artifact(&repo, &result)?;
             if result.gated {
                 eprintln!(
                     "TRANSFER {} needs work on {}",
@@ -1079,6 +1092,20 @@ mod tests {
             Commands::Merged { via, .. } => Some(via),
             _ => None,
         }
+    }
+
+    #[test]
+    fn write_markdown_file_reports_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        write_markdown_file(repo, Path::new("out/report.md"), "# hi").unwrap();
+        assert_eq!(
+            fs::read_to_string(repo.join("out/report.md")).unwrap(),
+            "# hi\n"
+        );
+        // A regular file where a directory is needed cannot be written through.
+        let err = write_markdown_file(repo, Path::new("out/report.md/x.md"), "x").unwrap_err();
+        assert!(err.to_string().contains("could not write"), "{err}");
     }
 
     #[test]
