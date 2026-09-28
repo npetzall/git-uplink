@@ -97,6 +97,9 @@ struct Transport {
     http_origin: Option<String>,
     ssh_command: Option<String>,
     isolate_gitconfig: bool,
+    /// Public HTTPS upstream: blank credential helpers and checkout extraheader
+    /// without sending an `Authorization` header.
+    clear_http_auth: bool,
 }
 
 fn strip_nl(s: String) -> String {
@@ -185,9 +188,14 @@ fn ssh_to_https(url: &str) -> Option<String> {
 fn http_origin(url: &str) -> Option<String> {
     let url = url.trim();
     let (scheme, rest) = url.split_once("://")?;
-    if scheme != "http" && scheme != "https" {
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
         return None;
     }
+    let scheme = if scheme.eq_ignore_ascii_case("https") {
+        "https"
+    } else {
+        "http"
+    };
     let authority = rest
         .split(['/', '?', '#'])
         .next()
@@ -404,6 +412,14 @@ fn ssh_command_for_key(key: &str) -> String {
     )
 }
 
+pub fn is_https_url(url: &str) -> bool {
+    let url = url.trim();
+    let Some((scheme, _)) = url.split_once("://") else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("https")
+}
+
 fn transport_from_role(url: &str, role: AuthRole, opts: &GitOpts<'_>) -> Result<Transport> {
     if let Some(key) = env_lookup(opts, role.key_env()) {
         return Ok(Transport {
@@ -418,11 +434,37 @@ fn transport_from_role(url: &str, role: AuthRole, opts: &GitOpts<'_>) -> Result<
             http_origin: http_origin(&remote_url),
             remote_url: Some(remote_url),
             extra_header: Some(git_http_extra_header(&token)),
-            ssh_command: None,
             isolate_gitconfig: true,
+            ..Transport::default()
+        });
+    }
+    if role == AuthRole::Upstream && is_https_url(url) {
+        return Ok(Transport {
+            http_origin: http_origin(url),
+            isolate_gitconfig: true,
+            clear_http_auth: true,
+            ..Transport::default()
         });
     }
     Err(Error::msg(role.help()))
+}
+
+/// `-c` values that drop ambient HTTP auth. A token replaces the checkout
+/// extraheader; anonymous HTTPS upstream only blanks it.
+fn http_auth_config_args(transport: &Transport) -> Vec<String> {
+    if transport.extra_header.is_none() && !transport.clear_http_auth {
+        return Vec::new();
+    }
+    let mut args = vec!["credential.helper=".to_string()];
+    if let Some(origin) = &transport.http_origin {
+        args.push(format!("http.{origin}/.extraheader="));
+        if let Some(header) = &transport.extra_header {
+            args.push(format!("http.{origin}/.extraheader={header}"));
+        }
+    } else if let Some(header) = &transport.extra_header {
+        args.push(format!("http.extraHeader={header}"));
+    }
+    args
 }
 
 fn transport_for(cwd: &Path, args: &[&str], opts: &GitOpts<'_>) -> Result<Transport> {
@@ -463,20 +505,14 @@ fn git_inner(
     for (key, value) in IDENTITY_CONFIG {
         cmd.arg("-c").arg(format!("{key}={value}"));
     }
-    if let Some(header) = &transport.extra_header {
-        cmd.arg("-c").arg("credential.helper=");
-        // actions/checkout persist-credentials writes http.<origin>/.extraheader
-        // (GITHUB_TOKEN). Empty `-c` overrides that multi-value; a following `-c`
-        // on the same key supplies UPLINK_INTERNAL_TOKEN / UPLINK_CONTRIB_TOKEN /
-        // UPLINK_UPSTREAM_TOKEN. Generic http.extraHeader is shadowed once the
-        // URL-specific key exists.
-        if let Some(origin) = &transport.http_origin {
-            cmd.arg("-c").arg(format!("http.{origin}/.extraheader="));
-            cmd.arg("-c")
-                .arg(format!("http.{origin}/.extraheader={header}"));
-        } else {
-            cmd.arg("-c").arg(format!("http.extraHeader={header}"));
-        }
+    // actions/checkout persist-credentials writes http.<origin>/.extraheader
+    // (GITHUB_TOKEN). Empty `-c` overrides that multi-value; a following `-c`
+    // on the same key supplies UPLINK_INTERNAL_TOKEN / UPLINK_CONTRIB_TOKEN /
+    // UPLINK_UPSTREAM_TOKEN. Anonymous HTTPS upstream blanks the key and does
+    // not write a replacement. Generic http.extraHeader is shadowed once the
+    // URL-specific key exists.
+    for value in http_auth_config_args(&transport) {
+        cmd.arg("-c").arg(value);
     }
     if transport.isolate_gitconfig {
         cmd.arg("-c").arg("safe.directory=*");
@@ -571,8 +607,9 @@ fn has_role_credentials(role: AuthRole, opts: &GitOpts<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthRole, GitOpts, git_http_extra_header, http_origin, is_local_transport, named_auth_role,
-        network_remote_index, ssh_to_https, transport_from_role, urls_match,
+        AuthRole, GitOpts, git_http_extra_header, http_auth_config_args, http_origin,
+        is_local_transport, named_auth_role, network_remote_index, ssh_to_https,
+        transport_from_role, urls_match,
     };
 
     #[test]
@@ -759,11 +796,81 @@ mod tests {
     #[test]
     fn missing_role_creds_name_that_role() {
         let opts = GitOpts::default();
-        let err = transport_from_role("https://github.com/acme/app.git", AuthRole::Upstream, &opts)
-            .unwrap_err();
+        let err = transport_from_role(
+            "ssh://git@github.com/acme/app.git",
+            AuthRole::Upstream,
+            &opts,
+        )
+        .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("UPLINK_UPSTREAM_KEY"));
         assert!(message.contains("UPLINK_UPSTREAM_TOKEN"));
         assert!(!message.contains("UPLINK_CONTRIB_TOKEN"));
+    }
+
+    #[test]
+    fn https_upstream_without_creds_is_anonymous() {
+        let transport = transport_from_role(
+            "HTTPS://GitHub.com/acme/app.git",
+            AuthRole::Upstream,
+            &GitOpts::default(),
+        )
+        .unwrap();
+        assert!(transport.extra_header.is_none());
+        assert!(transport.ssh_command.is_none());
+        assert!(transport.remote_url.is_none());
+        assert!(transport.isolate_gitconfig);
+        assert!(transport.clear_http_auth);
+        assert_eq!(transport.http_origin.as_deref(), Some("https://GitHub.com"));
+        let args = http_auth_config_args(&transport);
+        assert!(args.iter().any(|arg| arg == "credential.helper="));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "http.https://GitHub.com/.extraheader=")
+        );
+        assert!(!args.iter().any(|arg| arg.contains("Authorization")));
+    }
+
+    #[test]
+    fn https_upstream_token_is_used() {
+        let opts = GitOpts {
+            extra_env: vec![("UPLINK_UPSTREAM_TOKEN".into(), "pat-token".into())],
+            ..GitOpts::default()
+        };
+        let transport =
+            transport_from_role("https://github.com/acme/app.git", AuthRole::Upstream, &opts)
+                .unwrap();
+        assert!(
+            transport
+                .extra_header
+                .as_deref()
+                .is_some_and(|header| header.starts_with("Authorization: Basic "))
+        );
+        assert!(transport.remote_url.is_some());
+        assert!(!transport.clear_http_auth);
+        let args = http_auth_config_args(&transport);
+        assert!(args.iter().any(|arg| arg.contains("Authorization: Basic ")));
+    }
+
+    #[test]
+    fn http_upstream_without_creds_fails_closed() {
+        let err = transport_from_role(
+            "http://github.com/acme/app.git",
+            AuthRole::Upstream,
+            &GitOpts::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("UPLINK_UPSTREAM_TOKEN"));
+    }
+
+    #[test]
+    fn https_origin_without_creds_fails_closed() {
+        let err = transport_from_role(
+            "https://github.com/acme/app.git",
+            AuthRole::Internal,
+            &GitOpts::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("UPLINK_INTERNAL_TOKEN"));
     }
 }

@@ -229,6 +229,32 @@ fn ssh_remote_without_token_or_key_fails_closed() {
     );
 }
 
+#[test]
+fn https_upstream_without_token_does_not_require_credentials() {
+    let keep = temp_dir();
+    let repo = keep.path();
+    git(repo, &["init", "-b", "main"], GitOpts::default()).unwrap();
+    git(
+        repo,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://example.invalid/org/repo.git",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let err = git(repo, &["fetch", "upstream"], no_operator_creds())
+        .expect_err("fetch fails at the network, not the credential gate");
+    let message = err.to_string();
+    assert!(
+        !message.contains("UPLINK_UPSTREAM_TOKEN") && !message.contains("UPLINK_UPSTREAM_KEY"),
+        "anonymous https upstream asked for credentials: {message}"
+    );
+}
+
 fn spawn_header_capture() -> (u16, mpsc::Receiver<String>, Arc<AtomicBool>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     listener

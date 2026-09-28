@@ -4,7 +4,7 @@ use crate::adopt;
 use crate::error::Result;
 use crate::git::{
     GitOpts, contrib_auth_help, git, git_ok, has_contrib_credentials, has_internal_credentials,
-    has_upstream_credentials, internal_auth_help, upstream_auth_help,
+    has_upstream_credentials, internal_auth_help, is_https_url, upstream_auth_help,
 };
 use crate::progress::StepOutcome;
 use crate::queue::{patch_path, read_queue as read_queue_file};
@@ -201,6 +201,13 @@ pub fn check_credentials_upstream(queue: &QueueState) -> StepOutcome {
     let opts = GitOpts::default();
     if has_upstream_credentials(&opts) {
         StepOutcome::pass("UPLINK_UPSTREAM_KEY or UPLINK_UPSTREAM_TOKEN set")
+    } else if queue
+        .config
+        .upstream_url
+        .as_deref()
+        .is_some_and(is_https_url)
+    {
+        StepOutcome::skip("public https upstream; credentials not required")
     } else {
         StepOutcome::fail(upstream_auth_help())
     }
