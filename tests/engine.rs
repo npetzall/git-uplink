@@ -178,10 +178,7 @@ fn tree_has_uplink(repo: &Path, git_ref: &str) -> bool {
     git(
         repo,
         &["cat-file", "-e", &format!("{git_ref}:.uplink")],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap()
     .code
@@ -192,26 +189,16 @@ fn has_git_ref(repo: &Path, git_ref: &str) -> bool {
     let result = git(
         repo,
         &["rev-parse", "--verify", "--quiet", git_ref],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap();
     result.code == 0 && !result.stdout.is_empty()
 }
 
 fn has_git_object(repo: &Path, git_ref: &str) -> bool {
-    git(
-        repo,
-        &["cat-file", "-e", git_ref],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )
-    .unwrap()
-    .code
+    git(repo, &["cat-file", "-e", git_ref], GitOpts::allow_fail())
+        .unwrap()
+        .code
         == 0
 }
 
@@ -225,10 +212,7 @@ fn land_on_main(repo: &Path, head_sha: &str) {
     let ff = git(
         repo,
         &["merge", "--ff-only", "--quiet", head_sha],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap();
     if ff.code != 0 {
@@ -1574,10 +1558,7 @@ fn rebuild_preview_branch_leaves_main_and_queue_alone() {
             ".",
             ":!.github",
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap();
     assert_eq!(diff.code, 0, "{}", diff.stderr);
@@ -2145,10 +2126,7 @@ fn add_from_explicit_range_does_not_require_company_main() {
     let not_on_main = git(
         company,
         &["merge-base", "--is-ancestor", &head, "main"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap();
     assert_ne!(not_on_main.code, 0);
@@ -2259,10 +2237,7 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
     let _ = git(
         &clone,
         &["branch", "-D", "uplink/upstream"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     );
     assert!(
         !has_git_ref(&clone, "uplink/upstream"),
@@ -4978,10 +4953,7 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
     let on_main = git(
         company,
         &["cat-file", "-e", "main:.uplink"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap();
     assert_ne!(on_main.code, 0, ".uplink must not live on main");
@@ -5718,10 +5690,7 @@ fn ref_exists(repo: &Path, name: &str) -> bool {
             "--quiet",
             &format!("refs/heads/{name}"),
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap()
     .code
@@ -6166,10 +6135,7 @@ fn has_local_ref(repo: &Path, git_ref: &str) -> bool {
     git(
         repo,
         &["rev-parse", "--verify", "--quiet", git_ref],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .map(|result| result.code == 0)
     .unwrap_or(false)

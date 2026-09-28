@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::assess::{depends_on_from_message, export_commit_message};
 use crate::error::{Error, PreflightError, Result};
-use crate::git::{GitOpts, git};
+use crate::git::{GitOpts, git, git_succeeds};
 use crate::queue::{
     active_upstream, apply_order_upstream_layer, get_patch, patch_path, read_queue,
 };
@@ -30,7 +30,7 @@ fn run_shell(command: &str, cwd: &Path) -> (i32, String) {
 }
 
 fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<&'static str> {
-    let apply = git(
+    if !git_succeeds(
         dir,
         &[
             "apply",
@@ -38,23 +38,10 @@ fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<&'static str
             "--index",
             patch_abs.to_str().unwrap_or(""),
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if apply.code != 0 {
+    )? {
         return Ok("conflict");
     }
-    let staged = git(
-        dir,
-        &["diff", "--cached", "--quiet"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if staged.code == 0 {
+    if git_succeeds(dir, &["diff", "--cached", "--quiet"])? {
         return Ok("empty");
     }
     git(dir, &["commit", "-m", message], GitOpts::default())?;
@@ -85,10 +72,7 @@ fn with_upstream_worktree<T>(repo: &Path, f: impl FnOnce(&Path) -> Result<T>) ->
     let _ = git(
         repo,
         &["worktree", "remove", "--force", dir.to_str().unwrap_or("")],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     );
     let _ = fs::remove_dir_all(&dir);
     result

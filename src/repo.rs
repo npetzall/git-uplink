@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::assess::{company_commit_message, export_commit_message};
 use crate::error::{Error, Result};
-use crate::git::{GitOpts, git, git_ok};
+use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{now_iso, patch_path};
 use crate::types::{PATCH_DIR, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH};
 
@@ -25,24 +25,13 @@ pub fn has_ref(repo: &Path, git_ref: &str) -> Result<bool> {
     let result = git(
         repo,
         &["rev-parse", "--verify", "--quiet", git_ref],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )?;
     Ok(result.code == 0 && !result.stdout.is_empty())
 }
 
 fn has_object(repo: &Path, git_ref: &str) -> Result<bool> {
-    let result = git(
-        repo,
-        &["cat-file", "-e", git_ref],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    Ok(result.code == 0)
+    git_succeeds(repo, &["cat-file", "-e", git_ref])
 }
 
 /// Resolve git refs to SHAs, fetching any missing objects from origin.
@@ -63,14 +52,7 @@ pub fn ensure_revs(repo: &Path, refs: &[&str]) -> Result<Vec<String>> {
     } else {
         let mut args = vec!["fetch", "--quiet", COMPANY_REMOTE];
         args.extend(missing.iter().copied());
-        let fetched = git(
-            repo,
-            &args,
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
-        )?;
+        let fetched = git(repo, &args, GitOpts::allow_fail())?;
         if fetched.code != 0 {
             Some(if fetched.stderr.is_empty() {
                 fetched.stdout
@@ -208,7 +190,7 @@ pub fn apply_patch_file(
     patch_file_abs: &Path,
     export_identity: bool,
 ) -> Result<&'static str> {
-    let reverse = git(
+    if git_succeeds(
         repo,
         &[
             "apply",
@@ -216,16 +198,11 @@ pub fn apply_patch_file(
             "--check",
             patch_file_abs.to_str().unwrap_or(""),
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if reverse.code == 0 {
+    )? {
         return Ok("empty");
     }
 
-    let apply = git(
+    if !git_succeeds(
         repo,
         &[
             "apply",
@@ -233,24 +210,11 @@ pub fn apply_patch_file(
             "--index",
             patch_file_abs.to_str().unwrap_or(""),
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if apply.code != 0 {
+    )? {
         return Ok("conflict");
     }
 
-    let staged = git(
-        repo,
-        &["diff", "--cached", "--quiet"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if staged.code == 0 {
+    if git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
         return Ok("empty");
     }
 
@@ -505,15 +469,7 @@ pub fn ensure_upstream_ref(repo: &Path) -> Result<()> {
         return Ok(());
     }
     let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/heads/{UPSTREAM_REF}");
-    let fetched = git(
-        repo,
-        &["fetch", "--quiet", COMPANY_REMOTE, &spec],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if fetched.code != 0 {
+    if !git_succeeds(repo, &["fetch", "--quiet", COMPANY_REMOTE, &spec])? {
         return Ok(());
     }
     Ok(())
@@ -523,15 +479,7 @@ pub fn ensure_upstream_ref(repo: &Path) -> Result<()> {
 /// Does not talk to the public `upstream` remote (`fetch_upstream` is sync).
 pub fn refresh_upstream_ref(repo: &Path, remote: &str) -> Result<()> {
     let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/remotes/{remote}/{UPSTREAM_REF}");
-    let fetched = git(
-        repo,
-        &["fetch", "--quiet", "--prune", remote, &spec],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if fetched.code != 0 {
+    if !git_succeeds(repo, &["fetch", "--quiet", "--prune", remote, &spec])? {
         return Ok(());
     }
     let sha = git_ok(repo, &["rev-parse", &format!("{remote}/{UPSTREAM_REF}")])?;
@@ -688,15 +636,7 @@ Run `git uplink init --upstream <url> --contrib <url>` to create a queue."
         )));
     }
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-    let fetched = git(
-        repo,
-        &["fetch", "--quiet", "--prune", remote, &spec],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if fetched.code != 0 {
+    if !git_succeeds(repo, &["fetch", "--quiet", "--prune", remote, &spec])? {
         if branch == STATE_BRANCH {
             return Err(not_initialized_error());
         }
@@ -727,15 +667,7 @@ pub fn apply_state_sha(repo: &Path, branch: &str, sha: &str) -> Result<()> {
 /// Fetch `uplink/state` into a remote-tracking ref without moving the local branch.
 pub fn fetch_state_tracking(repo: &Path, remote: &str, branch: &str) -> Result<Option<String>> {
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-    let fetched = git(
-        repo,
-        &["fetch", "--quiet", "--prune", remote, &spec],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if fetched.code != 0 {
+    if !git_succeeds(repo, &["fetch", "--quiet", "--prune", remote, &spec])? {
         return Ok(None);
     }
     Ok(Some(git_ok(
@@ -745,26 +677,11 @@ pub fn fetch_state_tracking(repo: &Path, remote: &str, branch: &str) -> Result<O
 }
 
 pub fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
-    let result = git(
-        repo,
-        &["merge-base", "--is-ancestor", ancestor, descendant],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    Ok(result.code == 0)
+    git_succeeds(repo, &["merge-base", "--is-ancestor", ancestor, descendant])
 }
 
 pub fn merge_base(repo: &Path, a: &str, b: &str) -> Result<Option<String>> {
-    let result = git(
-        repo,
-        &["merge-base", a, b],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
+    let result = git(repo, &["merge-base", a, b], GitOpts::allow_fail())?;
     if result.code != 0 || result.stdout.is_empty() {
         return Ok(None);
     }
@@ -833,10 +750,7 @@ pub fn file_history(repo: &Path, git_ref: &str, path: &str) -> Result<Vec<FileRe
             "--",
             path,
         ],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )?;
     if result.code != 0 {
         return Ok(Vec::new());
@@ -861,10 +775,7 @@ pub fn patch_state_commit(repo: &Path, id: &str) -> Result<String> {
     let result = git(
         repo,
         &["log", "-1", "--format=%H", &branch, "--", &path],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )?;
     if result.code == 0 && !result.stdout.is_empty() {
         return Ok(result.stdout);

@@ -34,7 +34,7 @@ pub use assess::{
 };
 pub use doctor::{DoctorReport, doctor, format_doctor_summary};
 pub use error::{AssessError, ConflictError, Error, PreflightError, Result};
-pub use git::{GitError, GitOpts, GitResult, configure_repo, git, git_ok};
+pub use git::{GitError, GitOpts, GitResult, configure_repo, git, git_ok, git_succeeds};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use init_report::{InitReport, format_init_summary};
 pub use ops::{

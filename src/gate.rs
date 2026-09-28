@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::Result;
-use crate::git::{GitOpts, git, git_ok};
+use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::repo::{conflicted_files, rev_parse};
 use crate::types::GateKind;
 
@@ -26,15 +26,7 @@ pub fn cut_gated_work(
             GitOpts::default(),
         )?;
         git(repo, &["add", "-A"], GitOpts::default())?;
-        let staged = git(
-            repo,
-            &["diff", "--cached", "--quiet"],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
-        )?;
-        if staged.code != 0 {
+        if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
             git(repo, &["commit", "-m", message], GitOpts::default())?;
         }
     } else {
@@ -54,10 +46,7 @@ pub fn assert_resolution_clean(repo: &Path) -> Result<()> {
     let markers = git(
         repo,
         &["grep", "-I", "-l", "^<<<<<<<", "--", ".", ":!.uplink"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )?;
     if markers.code == 0 && !markers.stdout.trim().is_empty() {
         return Err(crate::error::Error::msg(format!(
@@ -78,10 +67,7 @@ pub fn recover_onto(repo: &Path, kind: GateKind, id: &str, head: &str) -> Result
         let parent = git(
             repo,
             &["rev-parse", "--verify", "HEAD^"],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
+            GitOpts::allow_fail(),
         )?;
         if parent.code == 0 {
             return Ok(parent.stdout.trim().to_string());
@@ -95,27 +81,11 @@ pub fn recover_onto(repo: &Path, kind: GateKind, id: &str, head: &str) -> Result
 
 pub fn commit_resolution(repo: &Path, onto: &str, message: &str) -> Result<()> {
     git(repo, &["add", "-A"], GitOpts::default())?;
-    let staged = git(
-        repo,
-        &["diff", "--cached", "--quiet"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if staged.code != 0 {
+    if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
         git(repo, &["commit", "-m", message], GitOpts::default())?;
     }
     git(repo, &["reset", "--soft", onto], GitOpts::default())?;
-    let staged = git(
-        repo,
-        &["diff", "--cached", "--quiet"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if staged.code != 0 {
+    if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
         git(repo, &["commit", "-m", message], GitOpts::default())?;
     }
     Ok(())
@@ -131,26 +101,10 @@ pub fn format_patch_at_head(repo: &Path) -> Result<String> {
 }
 
 fn worktree_dirty(repo: &Path) -> Result<bool> {
-    let staged = git(
-        repo,
-        &["diff", "--cached", "--quiet"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if staged.code != 0 {
+    if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
         return Ok(true);
     }
-    let unstaged = git(
-        repo,
-        &["diff", "--quiet"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
-    if unstaged.code != 0 {
+    if !git_succeeds(repo, &["diff", "--quiet"])? {
         return Ok(true);
     }
     let untracked = git_ok(repo, &["ls-files", "--others", "--exclude-standard"])?;

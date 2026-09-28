@@ -89,6 +89,16 @@ pub struct GitOpts<'a> {
     pub extra_env: Vec<(String, String)>,
 }
 
+impl GitOpts<'_> {
+    /// Return a non-zero exit as a [`GitResult`] instead of an error.
+    pub fn allow_fail() -> Self {
+        Self {
+            allow_fail: true,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Default, Debug)]
 struct Transport {
     remote_url: Option<String>,
@@ -570,6 +580,11 @@ pub fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(git(cwd, args, GitOpts::default())?.stdout)
 }
 
+/// Whether git exits 0. Spawn failures are still errors.
+pub fn git_succeeds(cwd: &Path, args: &[&str]) -> Result<bool> {
+    Ok(git(cwd, args, GitOpts::allow_fail())?.code == 0)
+}
+
 /// Identity, signing, and detached-HEAD advice are process-scoped in [`git`].
 /// This stays for callers and tests; it does not write those values into the repo.
 pub fn configure_repo(_cwd: &Path) -> Result<()> {
@@ -611,6 +626,17 @@ mod tests {
         is_local_transport, named_auth_role, network_remote_index, ssh_to_https,
         transport_from_role, urls_match,
     };
+
+    #[test]
+    fn git_succeeds_reports_exit_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        super::git_ok(repo, &["init", "-q"]).unwrap();
+        let has_head = |repo| super::git_succeeds(repo, &["rev-parse", "--verify", "-q", "HEAD"]);
+        assert!(!has_head(repo).unwrap());
+        super::git_ok(repo, &["commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+        assert!(has_head(repo).unwrap());
+    }
 
     #[test]
     fn git_http_header_is_basic_x_access_token() {

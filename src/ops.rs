@@ -15,7 +15,7 @@ use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
     assert_resolution_clean, commit_resolution, cut_gated_work, format_patch_at_head, recover_onto,
 };
-use crate::git::{GitOpts, configure_repo, git, git_ok};
+use crate::git::{GitOpts, configure_repo, git, git_ok, git_succeeds};
 use crate::init_report::InitReport;
 use crate::inspect::{
     check_forge_tooling, check_remotes_configured, check_upstream_ref, check_urls_recorded,
@@ -579,14 +579,7 @@ pub fn init_repo_with_progress(
         Ok(((), check_remotes_configured(repo, &queue)))
     })?;
     progress.run_step("upstream-seeded", "Seed uplink/upstream", || {
-        let has_head = git(
-            repo,
-            &["rev-parse", "--verify", "HEAD"],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
-        )?;
+        let has_head = git_succeeds(repo, &["rev-parse", "--verify", "HEAD"])?;
         let remotes = git_ok(repo, &["remote"]).unwrap_or_default();
         if remotes
             .split('\n')
@@ -601,16 +594,12 @@ pub fn init_repo_with_progress(
                     short_sha(&sha)
                 )),
             ))
-        } else if has_head.code == 0 {
-            let parent = git(
-                repo,
-                &["rev-parse", "--verify", "HEAD~1"],
-                GitOpts {
-                    allow_fail: true,
-                    ..GitOpts::default()
-                },
-            )?;
-            let target = if parent.code == 0 { "HEAD~1" } else { "HEAD" };
+        } else if has_head {
+            let target = if git_succeeds(repo, &["rev-parse", "--verify", "HEAD~1"])? {
+                "HEAD~1"
+            } else {
+                "HEAD"
+            };
             git(
                 repo,
                 &["branch", "-f", "uplink/upstream", target],
@@ -1505,14 +1494,7 @@ fn eligible_for_flow_back(queue: &QueueState, patch: &Patch) -> bool {
 }
 
 fn commit_stable_patch_id(repo: &Path, sha: &str) -> Result<Option<String>> {
-    let shown = git(
-        repo,
-        &["show", "--binary", sha],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
-    )?;
+    let shown = git(repo, &["show", "--binary", sha], GitOpts::allow_fail())?;
     if shown.code != 0 || shown.stdout.trim().is_empty() {
         return Ok(None);
     }
@@ -1656,10 +1638,7 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
                 "--format=%H",
                 "-1",
             ],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
+            GitOpts::allow_fail(),
         )?;
         if !trailer.stdout.trim().is_empty() {
             mark_merged(
@@ -1682,14 +1661,7 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
                 ],
             )?;
             for sha in commits.lines().filter(|s| !s.is_empty()) {
-                let shown = git(
-                    repo,
-                    &["show", "--binary", sha],
-                    GitOpts {
-                        allow_fail: true,
-                        ..GitOpts::default()
-                    },
-                )?;
+                let shown = git(repo, &["show", "--binary", sha], GitOpts::allow_fail())?;
                 let ident = git(
                     repo,
                     &["patch-id", "--stable"],
@@ -2014,15 +1986,7 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
         }
 
         git(repo, &["add", "-A"], GitOpts::default())?;
-        let still = git(
-            repo,
-            &["diff", "--cached", "--quiet"],
-            GitOpts {
-                allow_fail: true,
-                ..GitOpts::default()
-            },
-        )?;
-        if still.code != 0 {
+        if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
             git(
                 repo,
                 &[

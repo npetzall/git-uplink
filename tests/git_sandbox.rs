@@ -132,10 +132,7 @@ fn configure_repo_does_not_write_identity_into_local_config() {
     let name = git(
         repo,
         &["config", "--local", "--get", "user.name"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap();
     assert_ne!(
@@ -147,10 +144,7 @@ fn configure_repo_does_not_write_identity_into_local_config() {
     let gpgsign = git(
         repo,
         &["config", "--local", "--get", "commit.gpgsign"],
-        GitOpts {
-            allow_fail: true,
-            ..GitOpts::default()
-        },
+        GitOpts::allow_fail(),
     )
     .unwrap();
     assert_eq!(gpgsign.code, 1);
