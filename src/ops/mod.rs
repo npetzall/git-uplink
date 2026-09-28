@@ -79,3 +79,23 @@ pub(super) fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
     copy_dir(&repo.join(".uplink"), &dir.join(".uplink"))?;
     Ok(dir)
 }
+
+/// Resets the `.uplink` worktree to the committed uplink/state, when it exists.
+pub(super) fn restore_uplink_from_state(repo: &Path) -> Result<()> {
+    let queue_ref = state_branch(repo);
+    if has_ref(repo, &queue_ref)? {
+        git(
+            repo,
+            &[
+                "restore",
+                "--source",
+                &queue_ref,
+                "--worktree",
+                "--",
+                ".uplink",
+            ],
+            GitOpts::default(),
+        )?;
+    }
+    Ok(())
+}
