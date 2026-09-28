@@ -189,7 +189,7 @@ fn find_domain_hits(haystack: &str, domains: &[String]) -> Vec<String> {
     let mut hits = Vec::new();
     for domain in domains {
         let needle = format!("@{domain}");
-        let re = Regex::new(&format!(r"@{}\b", regex::escape(domain))).unwrap();
+        let re = Regex::new(&format!(r"(?i)@{}\b", regex::escape(domain))).unwrap();
         if re.is_match(haystack) && !hits.contains(&needle) {
             hits.push(needle);
         }
@@ -1022,4 +1022,19 @@ pub fn assert_assess_ok(report: &AssessReport, label: &str) -> Result<()> {
         ),
         report.clone(),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_domain_hits;
+
+    #[test]
+    fn domain_hits_ignore_case() {
+        let domains = vec!["acme.com".to_string()];
+        assert_eq!(
+            find_domain_hits("Signed-off-by: Jane <jane@Acme.COM>", &domains),
+            vec!["@acme.com"]
+        );
+        assert!(find_domain_hits("jane@acme.company", &domains).is_empty());
+    }
 }
