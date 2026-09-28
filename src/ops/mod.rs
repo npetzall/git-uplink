@@ -1,0 +1,81 @@
+use std::collections::HashSet;
+use std::fmt::Write as _;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
+
+use crate::adopt::{self, AdoptGroup};
+use crate::assess::{
+    IncomingFlowedBack, assert_assess_ok, assess_from_message, company_commit_message,
+    depends_on_from_message, format_incoming_packet, from_upstream_report_paths, report_paths,
+    stored_commit_message,
+};
+use crate::error::{ConflictError, Error, Result};
+use crate::gate::{
+    assert_resolution_clean, commit_resolution, cut_gated_work, format_patch_at_head, recover_onto,
+};
+use crate::git::{GitOpts, git, git_ok, git_succeeds};
+use crate::init_report::InitReport;
+use crate::inspect::{
+    check_forge_tooling, check_remotes_configured, check_upstream_ref, check_urls_recorded,
+};
+use crate::lock::{is_push_lease_rejected, with_queue_lock};
+use crate::preflight::{
+    assert_export_preflight, assert_upstream_layer_applies, run_preflight_command_in,
+};
+use crate::progress::{ProgressMode, StepOutcome, StepProgress};
+use crate::queue::{
+    add_event, apply_order_active, cannot_depend_on, get_patch, get_patch_mut, is_active,
+    move_patch, patch_path, read_queue as read_queue_file, write_queue as write_queue_file,
+};
+use crate::repo::{
+    COMPANY_REMOTE, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha, commit_queue,
+    conflicted_files, copy_dir, ensure_company_branch_ref, ensure_configured_remotes, ensure_revs,
+    ensure_state_worktree, ensure_upstream_ref, fetch_state_tracking, fetch_tracking_sha,
+    fetch_upstream, fetch_upstream_remote, has_ref, is_ancestor, merge_base, new_patch_id,
+    patch_already_applied_on, path_exists_at, point_branch_at, promote_upstream, push_branch_force,
+    push_state_branch, queue_at, refresh_company_branch, refresh_upstream_ref,
+    replace_state_from_origin, restore_paths_from, rev_parse, set_state_branch, stable_patch_id,
+    stable_patch_id_from_contents, stamp, state_branch, state_exists,
+    try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
+};
+use crate::types::{
+    AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict,
+    PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingUpstream, QueueConfig, QueueState,
+    STATE_BRANCH, TransferDirection,
+};
+
+mod add;
+mod init;
+mod lifecycle;
+mod push;
+mod rebuild;
+mod status;
+mod submit;
+mod sync;
+mod transfer;
+
+pub use add::*;
+pub use init::*;
+pub use lifecycle::*;
+pub use push::*;
+pub use rebuild::*;
+pub use status::*;
+pub use submit::*;
+pub use sync::*;
+pub use transfer::*;
+
+pub fn read_queue(repo: &Path) -> Result<QueueState> {
+    read_queue_file(repo)
+}
+
+pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
+    write_queue_file(repo, queue)
+}
+
+pub(super) fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join(format!("uplink-{}", uuid::Uuid::new_v4()));
+    copy_dir(&repo.join(".uplink"), &dir.join(".uplink"))?;
+    Ok(dir)
+}
