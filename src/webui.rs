@@ -251,16 +251,6 @@ fn launch_browser(url: &str) {
     }
 }
 
-fn trusted_repo(path: &Path) -> crate::error::Result<PathBuf> {
-    let s = path
-        .to_str()
-        .ok_or_else(|| crate::error::Error::msg("repo path is not utf-8"))?;
-    if s.contains("..") {
-        return Err(crate::error::Error::msg("invalid repo path"));
-    }
-    Ok(PathBuf::from(s))
-}
-
 fn wants_fetch(value: Option<&str>) -> bool {
     match value.map(str::trim) {
         None => true,
@@ -506,16 +496,7 @@ async fn status(
 ) -> Json<StatusResponse> {
     let source = QueueSource::parse(query.source.as_deref());
     let fetch = wants_fetch(query.fetch.as_deref());
-    let repo = match trusted_repo(&state.repo) {
-        Ok(repo) => repo,
-        Err(err) => {
-            return Json(missing_status(
-                state.repo.display().to_string(),
-                source,
-                err.to_string(),
-            ));
-        }
-    };
+    let repo = state.repo.clone();
     let cwd = repo.display().to_string();
     Json(
         tokio::task::spawn_blocking(move || build_status(&repo, source, fetch))
@@ -525,7 +506,7 @@ async fn status(
 }
 
 async fn refresh(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
-    let repo = trusted_repo(&state.repo).map_err(ApiError::bad_request)?;
+    let repo = state.repo.clone();
     let result = tokio::task::spawn_blocking(move || refresh_from_origin(&repo))
         .await
         .map_err(|err| ApiError::internal(format!("refresh worker: {err}")))?
@@ -558,16 +539,7 @@ async fn patch_detail(
         )
             .into_response();
     }
-    let repo = match trusted_repo(&state.repo) {
-        Ok(repo) => repo,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(missing_patch(source, err.to_string())),
-            )
-                .into_response();
-        }
-    };
+    let repo = state.repo.clone();
     match tokio::task::spawn_blocking(move || build_patch(&repo, &id, source)).await {
         Ok(body) => {
             let status = if body.present {
@@ -589,7 +561,7 @@ async fn file_at(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FileQuery>,
 ) -> Result<Json<FileResponse>, ApiError> {
-    let repo = trusted_repo(&state.repo).map_err(ApiError::bad_request)?;
+    let repo = state.repo.clone();
     if query.sha.as_deref().is_some_and(|sha| !is_valid_sha(sha)) {
         return Err(ApiError::bad_request("invalid sha"));
     }
@@ -747,6 +719,19 @@ mod tests {
         assert!(!is_valid_sha("HEAD"));
         assert!(!is_valid_sha(&"A".repeat(40)));
         assert!(!is_valid_sha(&"a".repeat(39)));
+    }
+
+    #[tokio::test]
+    async fn repo_path_with_double_dot_is_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("release..v2");
+        std::fs::create_dir_all(repo.join(".uplink")).unwrap();
+        std::fs::write(repo.join(".uplink/queue.json"), "{}\n").unwrap();
+        let response = test_app(repo)
+            .oneshot(local_request("/api/file?path=.uplink/queue.json"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
