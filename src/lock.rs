@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,54 @@ impl Drop for LockGuard {
     }
 }
 
+/// A lock file without a readable PID is only treated as abandoned after this long.
+const UNREADABLE_LOCK_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    // `ps -p` also sees processes owned by other users, unlike `kill -0`.
+    Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_or(true, |status| status.success())
+}
+
+#[cfg(not(unix))]
+fn process_alive(_pid: u32) -> bool {
+    true
+}
+
+fn lock_is_stale(lock_path: &Path, contents: &str) -> bool {
+    match contents
+        .split_whitespace()
+        .next()
+        .and_then(|pid| pid.parse::<u32>().ok())
+    {
+        Some(pid) => !process_alive(pid),
+        None => fs::metadata(lock_path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > UNREADABLE_LOCK_MAX_AGE),
+    }
+}
+
+/// Removes a lock left by a process that no longer runs. Re-reads the file
+/// first so a lock another waiter just took over is left alone.
+fn remove_if_stale(lock_path: &Path) {
+    let Ok(contents) = fs::read_to_string(lock_path) else {
+        return;
+    };
+    if lock_is_stale(lock_path, &contents)
+        && fs::read_to_string(lock_path).is_ok_and(|now| now == contents)
+    {
+        let _ = fs::remove_file(lock_path);
+    }
+}
+
 pub fn with_queue_lock<T>(repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let key = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
     if LOCK_OWNER.with(|owner| owner.borrow().as_ref() == Some(&key)) {
@@ -31,6 +80,7 @@ pub fn with_queue_lock<T>(repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<
     fs::create_dir_all(repo.join(".git"))?;
     let lock_path = repo.join(".git/uplink.lock");
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut next_stale_check = Instant::now();
     loop {
         match OpenOptions::new()
             .write(true)
@@ -46,6 +96,10 @@ pub fn with_queue_lock<T>(repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<
                 return f();
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                if Instant::now() >= next_stale_check {
+                    remove_if_stale(&lock_path);
+                    next_stale_check = Instant::now() + Duration::from_secs(1);
+                }
                 if Instant::now() > deadline {
                     return Err(Error::msg(
                         "Timed out waiting for the Uplink queue lock. Another import or sync is still running.",
@@ -80,5 +134,38 @@ mod tests {
         assert!(!repo.join(".git/uplink.lock").exists());
         assert!(LOCK_OWNER.with(|owner| owner.borrow().is_none()));
         with_queue_lock(repo, || Ok(())).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_from_dead_process_is_taken_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let mut child = Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::write(
+            repo.join(".git/uplink.lock"),
+            format!("{dead_pid} 2026-01-01T00:00:00.000Z\n"),
+        )
+        .unwrap();
+
+        let started = Instant::now();
+        with_queue_lock(repo, || Ok(())).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(!repo.join(".git/uplink.lock").exists());
+    }
+
+    #[test]
+    fn lock_from_live_process_is_not_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("uplink.lock");
+        let contents = format!("{} 2026-01-01T00:00:00.000Z\n", std::process::id());
+        fs::write(&lock, &contents).unwrap();
+        assert!(!lock_is_stale(&lock, &contents));
+        // A fresh lock whose PID is not written yet is not stale either.
+        fs::write(&lock, "").unwrap();
+        assert!(!lock_is_stale(&lock, ""));
     }
 }
