@@ -2827,6 +2827,96 @@ fn sync_holds_foreign_commits_until_accept_upstream() {
     assert!(changelog.contains("upstream 1.2"));
 }
 
+fn world_with_hash_patch() -> (World, Patch) {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    (world, hash_patch)
+}
+
+fn commit_with_trailer(repo: &Path, contents: &str, id: &str) -> String {
+    write(repo, "src/tokens.js", contents);
+    git(repo, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        repo,
+        &[
+            "commit",
+            "-m",
+            &format!("Use SHA-256 for tokens\n\nUplink-Patch-Id: {id}\n"),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    rev(repo)
+}
+
+#[test]
+fn sync_sends_a_trailer_with_a_different_diff_to_review() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let altered = commit_with_trailer(
+        &world.upstream,
+        &TOKENS.replace("return sha1(value);", "return sha512(value);"),
+        &hash_patch.id,
+    );
+
+    let result = sync(&world.company).unwrap();
+    assert!(result.needs_approval);
+    assert!(result.flowed_back.is_empty(), "{:?}", result.flowed_back);
+    assert_eq!(result.foreign_commits, [altered]);
+    assert_eq!(result.queue.patch_refs()[0].status, PatchStatus::Queued);
+}
+
+#[test]
+fn sync_sends_merge_commits_to_review() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let upstream = &world.upstream;
+    git(upstream, &["checkout", "-b", "pr"], GitOpts::default()).unwrap();
+    commit_with_trailer(
+        upstream,
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+        &hash_patch.id,
+    );
+    git(upstream, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        upstream,
+        &["merge", "--no-ff", "--quiet", "-m", "Merge pr", "pr"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let merge = rev(upstream);
+
+    let result = sync(&world.company).unwrap();
+    assert!(result.needs_approval);
+    assert!(result.flowed_back.iter().any(|id| id == &hash_patch.id));
+    assert_eq!(result.foreign_commits, [merge]);
+}
+
 #[test]
 fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
     let world = setup_world();

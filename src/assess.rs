@@ -758,7 +758,7 @@ pub fn format_incoming_packet(
         for sha in foreign_shas {
             let shown = git(
                 repo,
-                &["show", "--pretty=fuller", sha],
+                &["show", "--pretty=fuller", "--diff-merges=first-parent", sha],
                 GitOpts::allow_fail(),
             )?;
             let body = if shown.stdout.trim().is_empty() {
@@ -779,7 +779,7 @@ These commits on public main are not matched to any company patch. Review this p
 | Flowed back | {flowed_n} |\n\
 | Foreign commits | {foreign_n} |\n\n\
 ## Flowed back (no extra review)\n\n\
-These commits match a company patch (`{trailer}` trailer or `git patch-id --stable`). They will be marked `merged` when you approve.\n\n\
+These commits match a company patch by `git patch-id --stable` (with or without the `{trailer}` trailer). A trailer alone is not enough; a commit whose diff differs is listed as foreign. They will be marked `merged` when you approve.\n\n\
 {flowed_list}\n\
 ## Foreign commits\n\n\
 {foreign}\
