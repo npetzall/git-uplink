@@ -437,29 +437,13 @@ fn build_patch(repo: &Path, id: &str, source: QueueSource) -> PatchResponse {
     let queue = match queue_for_source(repo, source) {
         Ok(queue) => queue,
         Err(err) => {
-            return PatchResponse {
-                present: false,
-                source: source.as_str().into(),
-                error: Some(err.to_string()),
-                layer: None,
-                patch: None,
-                revisions: Vec::new(),
-                patch_file: None,
-            };
+            return missing_patch(source, err.to_string());
         }
     };
     let patch = match get_patch(&queue, id) {
         Ok(patch) => patch.clone(),
         Err(err) => {
-            return PatchResponse {
-                present: false,
-                source: source.as_str().into(),
-                error: Some(err.to_string()),
-                layer: None,
-                patch: None,
-                revisions: Vec::new(),
-                patch_file: None,
-            };
+            return missing_patch(source, err.to_string());
         }
     };
     let uncommitted = state_status_at(repo, false)
@@ -469,15 +453,7 @@ fn build_patch(repo: &Path, id: &str, source: QueueSource) -> PatchResponse {
     let path = match patch_path(id) {
         Ok(path) => path.to_string_lossy().into_owned(),
         Err(err) => {
-            return PatchResponse {
-                present: false,
-                source: source.as_str().into(),
-                error: Some(err.to_string()),
-                layer: None,
-                patch: None,
-                revisions: Vec::new(),
-                patch_file: None,
-            };
+            return missing_patch(source, err.to_string());
         }
     };
     let default_sha = revisions.first().map(|r| r.sha.as_str());
