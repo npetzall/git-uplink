@@ -803,7 +803,10 @@ pub fn push_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> 
 }
 
 pub fn show_at(repo: &Path, sha: &str, path: &str) -> Result<String> {
-    git_ok(repo, &["show", &format!("{sha}:{path}")])
+    git_ok(
+        repo,
+        &["show", "--end-of-options", &format!("{sha}:{path}")],
+    )
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -818,7 +821,14 @@ pub struct FileRevision {
 pub fn file_history(repo: &Path, git_ref: &str, path: &str) -> Result<Vec<FileRevision>> {
     let result = git(
         repo,
-        &["log", "--format=%H%x09%cI%x09%s", git_ref, "--", path],
+        &[
+            "log",
+            "--format=%H%x09%cI%x09%s",
+            "--end-of-options",
+            git_ref,
+            "--",
+            path,
+        ],
         GitOpts {
             allow_fail: true,
             ..GitOpts::default()
@@ -923,7 +933,31 @@ pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::patch_substance;
+    use super::{file_history, patch_substance, show_at};
+    use crate::git::git_ok;
+
+    #[test]
+    fn option_like_refs_are_not_parsed_as_git_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git_ok(repo, &["init", "-q"]).unwrap();
+        std::fs::create_dir_all(repo.join(".uplink")).unwrap();
+        std::fs::write(repo.join(".uplink/queue.json"), "{}\n").unwrap();
+        git_ok(repo, &["add", "."]).unwrap();
+        git_ok(repo, &["commit", "-q", "-m", "init"]).unwrap();
+        // Without --end-of-options, git show would write the output here.
+        std::fs::create_dir_all(repo.join("out:.uplink")).unwrap();
+
+        assert!(show_at(repo, "--output=out", ".uplink/queue.json").is_err());
+        assert!(!repo.join("out:.uplink/queue.json").exists());
+        assert!(
+            file_history(repo, "--output=log.txt", ".uplink/queue.json")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!repo.join("log.txt").exists());
+        assert_eq!(show_at(repo, "HEAD", ".uplink/queue.json").unwrap(), "{}");
+    }
 
     const SHA_A: &str = "d075809c4498552bd4e080010af34999967d68f7";
     const SHA_B: &str = "5529448d17e1f2eb9c08b4396ed7b22b55ccb83d";
