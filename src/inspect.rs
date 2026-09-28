@@ -4,7 +4,8 @@ use crate::adopt;
 use crate::error::Result;
 use crate::git::{
     GitOpts, contrib_auth_help, git, git_ok, has_contrib_credentials, has_internal_credentials,
-    has_upstream_credentials, internal_auth_help, is_https_url, upstream_auth_help,
+    has_upstream_credentials, internal_auth_help, is_https_url, remote_get_url, upstream_auth_help,
+    urls_match,
 };
 use crate::progress::StepOutcome;
 use crate::queue::{patch_path, read_queue as read_queue_file};
@@ -285,30 +286,36 @@ fn is_local_url(url: &str) -> bool {
     url.starts_with("file://") || url.starts_with('/')
 }
 
-fn urls_match(a: &str, b: &str) -> bool {
-    normalize_remote_url(a) == normalize_remote_url(b)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::QueueConfig;
 
-fn normalize_remote_url(url: &str) -> String {
-    let url = url.trim_end_matches('/');
-    let url = url.strip_suffix(".git").unwrap_or(url);
-    url.to_ascii_lowercase()
-}
-
-pub fn remote_get_url(repo: &Path, name: &str, opts: &GitOpts<'_>) -> Option<String> {
-    let looked_up = git(
-        repo,
-        &["remote", "get-url", name],
-        GitOpts {
-            allow_fail: true,
-            extra_env: opts.extra_env.clone(),
-            ..GitOpts::default()
-        },
-    );
-    match looked_up {
-        Ok(result) if result.code == 0 && !result.stdout.is_empty() => {
-            Some(result.stdout.trim().to_string())
-        }
-        _ => None,
+    #[test]
+    fn remotes_configured_matches_ssh_and_https_forms() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git_ok(repo, &["init", "-q"]).unwrap();
+        git_ok(
+            repo,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                "https://github.com/acme/app.git",
+            ],
+        )
+        .unwrap();
+        let queue = QueueState::empty(QueueConfig {
+            upstream_url: Some("git@github.com:acme/app.git".into()),
+            ..QueueConfig::default()
+        });
+        let outcome = check_remotes_configured(repo, &queue);
+        assert_eq!(
+            outcome.status,
+            crate::types::CheckStatus::Pass,
+            "{}",
+            outcome.detail
+        );
     }
 }
