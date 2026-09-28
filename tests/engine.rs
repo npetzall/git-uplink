@@ -4153,6 +4153,92 @@ fn push_appends_local_only_patches_when_origin_moved() {
     drop((asha_keep, ben_keep));
 }
 
+fn world_with_shared_patch() -> (World, PathBuf, Patch) {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "README.md", "shared\n");
+    commit_all(company, "shared readme");
+    let shared = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Shared readme".into(),
+            from_ref: Some("main".into()),
+            internal_pr_number: Some(301),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let origin = publish_origin(company);
+    (world, origin, shared)
+}
+
+fn add_notes_patch(repo: &Path) {
+    git(repo, &["checkout", "-b", "feat/notes"], GitOpts::default()).unwrap();
+    write(repo, "NOTES.md", "from-ben\n");
+    commit_all(repo, "notes from ben");
+    add_landed_patch(
+        repo,
+        AddPatchOpts {
+            title: "Notes from Ben".into(),
+            from_ref: Some("main".into()),
+            internal_pr_number: Some(302),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+fn push_origin(repo: &Path) -> Result<git_uplink::PushResult> {
+    push_queue(
+        repo,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+}
+
+#[test]
+fn push_keeps_a_local_drop_of_a_patch_that_is_also_on_origin() {
+    let (world, origin, shared) = world_with_shared_patch();
+    let (asha_keep, asha) = clone_company_from(&origin, &world.upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &world.upstream);
+
+    drop_patch(&asha, &shared.id, "no longer needed").unwrap();
+    add_notes_patch(&ben);
+    push_origin(&ben).unwrap();
+
+    let result = push_origin(&asha).unwrap();
+    assert_eq!(result.action, "restacked");
+
+    let (_integrated_keep, integrated) = clone_company_from(&origin, &world.upstream);
+    let queue = status_snapshot(&integrated).unwrap().queue;
+    let shared_now = queue.all_patches().find(|p| p.id == shared.id).unwrap();
+    assert_eq!(shared_now.status, PatchStatus::Dropped);
+    assert!(queue.all_patches().any(|p| p.title == "Notes from Ben"));
+    drop((asha_keep, ben_keep));
+}
+
+#[test]
+fn push_refuses_when_origin_changed_the_same_patch() {
+    let (world, origin, shared) = world_with_shared_patch();
+    let (asha_keep, asha) = clone_company_from(&origin, &world.upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &world.upstream);
+
+    drop_patch(&asha, &shared.id, "no longer needed").unwrap();
+    approve_patch(&ben, &shared.id).unwrap();
+    push_origin(&ben).unwrap();
+
+    let err = push_origin(&asha).unwrap_err().to_string();
+    assert!(err.contains("changed both locally and on origin"), "{err}");
+    drop((asha_keep, ben_keep));
+}
+
 #[test]
 fn push_fast_forwards_when_local_is_behind() {
     let world = setup_world();
