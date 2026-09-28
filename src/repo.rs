@@ -606,7 +606,11 @@ fn uplink_worktree_tree(repo: &Path, branch: &str) -> Result<String> {
         } else {
             git(repo, &["read-tree", "--empty"], index_opts.clone())?;
         }
-        git(repo, &["add", "-f", "--", ".uplink"], index_opts.clone())?;
+        git(
+            repo,
+            &["add", "-f", "--", ".uplink", ":(exclude).uplink/*.tmp"],
+            index_opts.clone(),
+        )?;
         Ok(git(repo, &["write-tree"], index_opts.clone())?.stdout)
     })();
     let _ = fs::remove_file(&index);
