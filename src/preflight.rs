@@ -13,12 +13,23 @@ use crate::queue::{
 use crate::repo::{ensure_revs, ensure_upstream_ref, has_ref, rev_parse, write_product_patch};
 use crate::types::{Patch, PatchStatus, QueueState};
 
+/// Credentials the import, transfer and submit workflows put in the same step
+/// as preflight. The product's build and tests must not be able to read them.
+fn is_credential_env(name: &str) -> bool {
+    name == "GITHUB_TOKEN"
+        || name == "GH_TOKEN"
+        || (name.starts_with("UPLINK_") && (name.ends_with("_TOKEN") || name.ends_with("_KEY")))
+}
+
 fn run_shell(command: &str, cwd: &Path) -> (i32, String) {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(cwd)
-        .output();
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(command).current_dir(cwd);
+    for (name, _) in env::vars_os() {
+        if name.to_str().is_some_and(is_credential_env) {
+            cmd.env_remove(name);
+        }
+    }
+    let output = cmd.output();
     match output {
         Ok(output) => {
             let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -456,4 +467,33 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
     })();
     let _ = fs::remove_file(&candidate_abs);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_credential_env;
+
+    #[test]
+    fn credential_env_names() {
+        for name in [
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "UPLINK_INTERNAL_TOKEN",
+            "UPLINK_UPSTREAM_TOKEN",
+            "UPLINK_CONTRIB_TOKEN",
+            "UPLINK_INTERNAL_KEY",
+            "UPLINK_CONTRIB_KEY",
+        ] {
+            assert!(is_credential_env(name), "{name}");
+        }
+        for name in [
+            "UPLINK_PREFLIGHT",
+            "UPLINK_EXPORT_AUTHOR",
+            "PATH",
+            "HOME",
+            "MY_TOKEN",
+        ] {
+            assert!(!is_credential_env(name), "{name}");
+        }
+    }
 }

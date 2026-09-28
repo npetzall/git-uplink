@@ -4841,6 +4841,54 @@ fn does_not_submit_or_push_when_export_tests_fail() {
 }
 
 #[test]
+fn preflight_command_does_not_see_uplink_credentials() {
+    let world = setup_world();
+    let company = &world.company;
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.preflight_command =
+        Some(r#"test -z "$UPLINK_CONTRIB_TOKEN$UPLINK_INTERNAL_KEY$GITHUB_TOKEN""#.into());
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: preflight command").unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args([
+            "preflight",
+            "--from",
+            "main",
+            "--head",
+            "HEAD",
+            "--title",
+            "Use SHA-256 for tokens",
+        ])
+        .current_dir(company)
+        .env_remove("UPLINK_PREFLIGHT")
+        .env("UPLINK_CONTRIB_TOKEN", "contrib-secret")
+        .env("UPLINK_INTERNAL_KEY", "internal-secret")
+        .env("GITHUB_TOKEN", "github-secret")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn strips_the_internal_commit_section_and_rewrites_export_author() {
     let world = setup_world();
     let company = &world.company;
