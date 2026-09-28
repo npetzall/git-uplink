@@ -176,8 +176,8 @@ enum Commands {
     },
     Merged {
         id: String,
-        #[arg(long, default_value = "manual")]
-        via: String,
+        #[arg(long, value_enum, default_value_t = MergeVia::Manual)]
+        via: MergeVia,
         #[arg(long)]
         sha: Option<String>,
     },
@@ -952,8 +952,7 @@ fn run() -> Result<(), Error> {
             println!("{} conflict PR {pr_url}", patch.id);
         }
         Commands::Merged { id, via, sha } => {
-            let via = MergeVia::parse(&via).ok_or_else(|| Error::msg("invalid --via"))?;
-            mark_merged(&repo, &id, via.clone(), sha.as_deref())?;
+            mark_merged(&repo, &id, via, sha.as_deref())?;
             rebuild_with(&repo, RebuildOpts::default())?;
             println!("{id} marked merged via {}", via.as_str());
         }
@@ -1071,5 +1070,24 @@ mod tests {
     fn web_ui_has_no_bind_option() {
         assert!(Cli::try_parse_from(["git-uplink", "web-ui", "--bind", "0.0.0.0"]).is_err());
         assert!(Cli::try_parse_from(["git-uplink", "web-ui", "--port", "1", "--no-open"]).is_ok());
+    }
+
+    fn merged_via(args: &[&str]) -> Option<MergeVia> {
+        let argv = ["git-uplink", "merged", "upl_x"].iter().chain(args);
+        match Cli::try_parse_from(argv).ok()?.command {
+            Commands::Merged { via, .. } => Some(via),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn merged_via_is_parsed_by_clap() {
+        assert_eq!(merged_via(&["--via", "patch-id"]), Some(MergeVia::PatchId));
+        assert_eq!(
+            merged_via(&["--via", "empty-rebase"]),
+            Some(MergeVia::EmptyRebase)
+        );
+        assert_eq!(merged_via(&[]), Some(MergeVia::Manual));
+        assert_eq!(merged_via(&["--via", "bogus"]), None);
     }
 }

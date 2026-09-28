@@ -101,8 +101,9 @@ pub enum ForgeFamily {
     Github,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
+#[value(rename_all = "kebab-case")]
 pub enum MergeVia {
     Pr,
     Trailer,
@@ -123,16 +124,11 @@ impl MergeVia {
             Self::Manual => "manual",
         }
     }
+}
 
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "pr" => Some(Self::Pr),
-            "trailer" => Some(Self::Trailer),
-            "patch-id" => Some(Self::PatchId),
-            "empty-rebase" => Some(Self::EmptyRebase),
-            "manual" => Some(Self::Manual),
-            _ => None,
-        }
+impl std::fmt::Display for MergeVia {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

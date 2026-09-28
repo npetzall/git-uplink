@@ -1217,7 +1217,7 @@ pub fn mark_merged(
             patch.status = PatchStatus::Merged;
             patch.conflict = None;
             patch.merged = Some(PatchMerged {
-                via: via.clone(),
+                via,
                 at: stamp(),
                 upstream_sha: upstream_sha.map(str::to_string),
             });
