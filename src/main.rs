@@ -279,6 +279,38 @@ fn github_run_url() -> String {
     }
 }
 
+/// Commit the approval is recorded against: uplink/state, else `GITHUB_SHA`, else HEAD.
+fn state_sha(repo: &Path) -> String {
+    git_ok(repo, &["rev-parse", STATE_BRANCH]).unwrap_or_else(|_| {
+        env::var("GITHUB_SHA")
+            .unwrap_or_else(|_| git_ok(repo, &["rev-parse", "HEAD"]).unwrap_or_default())
+    })
+}
+
+struct Receipt {
+    sha: String,
+    run_url: String,
+    text: String,
+}
+
+/// Approval receipt for `subject`; the environment name comes from `env_var`
+/// or `default_env`.
+fn build_receipt(repo: &Path, subject: &str, env_var: &str, default_env: &str) -> Receipt {
+    let sha = state_sha(repo);
+    let run_url = github_run_url();
+    let environment = env::var(env_var).ok();
+    let actor = env::var("GITHUB_ACTOR").ok();
+    let text = format_approval_receipt(ApprovalReceipt {
+        patch_id: subject,
+        environment: environment.as_deref().unwrap_or(default_env),
+        actor: actor.as_deref().unwrap_or("local operator"),
+        run_url: &run_url,
+        sha: &sha,
+        at: None,
+    });
+    Receipt { sha, run_url, text }
+}
+
 fn remote_url(repo: &Path, name: &str) -> Option<String> {
     git_ok(repo, &["remote", "get-url", name]).ok()
 }
@@ -841,31 +873,18 @@ fn run() -> Result<(), Error> {
             if !queue.all_patches().any(|p| p.id == id) {
                 return Err(Error::msg(format!("unknown patch {id}")));
             }
-            let sha = git_ok(&repo, &["rev-parse", STATE_BRANCH]).unwrap_or_else(|_| {
-                env::var("GITHUB_SHA")
-                    .unwrap_or_else(|_| git_ok(&repo, &["rev-parse", "HEAD"]).unwrap_or_default())
-            });
-            let run_url = github_run_url();
-            let receipt = format_approval_receipt(ApprovalReceipt {
-                patch_id: &id,
-                environment: env::var("UPLINK_TO_UPSTREAM_ENVIRONMENT")
-                    .ok()
-                    .as_deref()
-                    .unwrap_or(TO_UPSTREAM_ENVIRONMENT),
-                actor: env::var("GITHUB_ACTOR")
-                    .ok()
-                    .as_deref()
-                    .unwrap_or("local operator"),
-                run_url: &run_url,
-                sha: &sha,
-                at: None,
-            });
+            let receipt = build_receipt(
+                &repo,
+                &id,
+                "UPLINK_TO_UPSTREAM_ENVIRONMENT",
+                TO_UPSTREAM_ENVIRONMENT,
+            );
             let default_out = report_paths(&id)?.2;
             let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
-            write_markdown_file(&repo, &dest, &receipt);
-            let patch = approve_patch_at(&repo, &id, Some(&sha), Some(&run_url))?;
+            write_markdown_file(&repo, &dest, &receipt.text);
+            let patch = approve_patch_at(&repo, &id, Some(&receipt.sha), Some(&receipt.run_url))?;
             commit_queue(&repo, &format!("uplink: to-upstream approval receipt {id}"))?;
-            println!("{receipt}");
+            println!("{}", receipt.text);
             eprintln!("{} approved", patch.id);
             eprintln!("Wrote {}", dest.display());
         }
@@ -919,28 +938,15 @@ fn run() -> Result<(), Error> {
                     "No pending upstream to accept. Run `git uplink sync` first.",
                 ));
             }
-            let sha = git_ok(&repo, &["rev-parse", STATE_BRANCH]).unwrap_or_else(|_| {
-                env::var("GITHUB_SHA")
-                    .unwrap_or_else(|_| git_ok(&repo, &["rev-parse", "HEAD"]).unwrap_or_default())
-            });
-            let run_url = github_run_url();
-            let receipt = format_approval_receipt(ApprovalReceipt {
-                patch_id: "incoming",
-                environment: env::var("UPLINK_FROM_UPSTREAM_ENVIRONMENT")
-                    .ok()
-                    .as_deref()
-                    .unwrap_or(FROM_UPSTREAM_ENVIRONMENT),
-                actor: env::var("GITHUB_ACTOR")
-                    .ok()
-                    .as_deref()
-                    .unwrap_or("local operator"),
-                run_url: &run_url,
-                sha: &sha,
-                at: None,
-            });
+            let receipt = build_receipt(
+                &repo,
+                "incoming",
+                "UPLINK_FROM_UPSTREAM_ENVIRONMENT",
+                FROM_UPSTREAM_ENVIRONMENT,
+            );
             let dest = PathBuf::from(from_upstream_report_paths().2);
-            write_markdown_file(&repo, &dest, &receipt);
-            finish_sync(&repo, accept_upstream(&repo)?, Some(&receipt))?;
+            write_markdown_file(&repo, &dest, &receipt.text);
+            finish_sync(&repo, accept_upstream(&repo)?, Some(&receipt.text))?;
         }
         Commands::Gated {
             id,
