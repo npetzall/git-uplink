@@ -585,12 +585,6 @@ pub fn git_succeeds(cwd: &Path, args: &[&str]) -> Result<bool> {
     Ok(git(cwd, args, GitOpts::allow_fail())?.code == 0)
 }
 
-/// Identity, signing, and detached-HEAD advice are process-scoped in [`git`].
-/// This stays for callers and tests; it does not write those values into the repo.
-pub fn configure_repo(_cwd: &Path) -> Result<()> {
-    Ok(())
-}
-
 pub fn has_internal_credentials(opts: &GitOpts<'_>) -> bool {
     has_role_credentials(AuthRole::Internal, opts)
 }

@@ -15,7 +15,7 @@ use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
     assert_resolution_clean, commit_resolution, cut_gated_work, format_patch_at_head, recover_onto,
 };
-use crate::git::{GitOpts, configure_repo, git, git_ok, git_succeeds};
+use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::init_report::InitReport;
 use crate::inspect::{
     check_forge_tooling, check_remotes_configured, check_upstream_ref, check_urls_recorded,
@@ -26,8 +26,8 @@ use crate::preflight::{
 };
 use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
-    add_event, cannot_depend_on, empty_queue, get_patch, get_patch_mut, is_active, move_patch,
-    patch_path, read_queue as read_queue_file, topological_active, write_queue as write_queue_file,
+    add_event, apply_order_active, cannot_depend_on, get_patch, get_patch_mut, is_active,
+    move_patch, patch_path, read_queue as read_queue_file, write_queue as write_queue_file,
 };
 use crate::repo::{
     COMPANY_REMOTE, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha, commit_queue,
@@ -42,8 +42,8 @@ use crate::repo::{
 };
 use crate::types::{
     AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict,
-    PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingUpstream, QUEUE_PATH, QueueConfig,
-    QueueState, STATE_BRANCH, TransferDirection,
+    PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingUpstream, QueueConfig, QueueState,
+    STATE_BRANCH, TransferDirection,
 };
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
@@ -144,7 +144,6 @@ fn config_from_opts(opts: &InitOpts) -> QueueConfig {
 /// `--forge` is required when creating a queue. `--upgrade` amends the stored
 /// forge pack in place.
 pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
-    configure_repo(repo)?;
     let mut progress = StepProgress::from_mode(opts.progress);
     if opts.upgrade {
         return init_upgrade(repo, &opts, &mut progress);
@@ -197,7 +196,6 @@ pub type RefreshResult = ResetResult;
 /// Fetch origin tracking refs for company main, `uplink/state`, and `uplink/upstream`.
 /// Does not move local branches or restore `.uplink/`.
 pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
-    configure_repo(repo)?;
     let state_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
     let upstream_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, UPSTREAM_REF)?;
     let queue = queue_at(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?;
@@ -564,10 +562,9 @@ pub fn init_repo_with_progress(
     config: QueueConfig,
     progress: &mut StepProgress,
 ) -> Result<QueueState> {
-    configure_repo(repo)?;
     let queue = progress.run_step("queue-created", "Create uplink queue", || {
         crate::repo::ensure_uplink_dirs(repo)?;
-        let queue = empty_queue(config);
+        let queue = QueueState::empty(config);
         write_queue_file(repo, &queue)?;
         commit_queue(repo, "uplink: initialize patch queue")?;
         ensure_state_worktree(repo)?;
@@ -1860,7 +1857,7 @@ fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
             &["branch", "-f", branch, &last_good],
             GitOpts::default(),
         )?;
-        for patch in topological_active(&queue)? {
+        for patch in apply_order_active(&queue)? {
             if patch.status == PatchStatus::Conflict {
                 return Err(Error::msg(format!(
                     "Queue is blocked on conflict in {}",
@@ -1925,7 +1922,7 @@ fn rebuild_once(repo: &Path) -> Result<QueueState> {
             &["checkout", "-f", "--quiet", "--detach", upstream_ref],
             GitOpts::default(),
         )?;
-        for patch in topological_active(&queue)? {
+        for patch in apply_order_active(&queue)? {
             if patch.status == PatchStatus::Conflict {
                 restore_company_branch(repo, &company_branch)?;
                 return Err(Error::Conflict(ConflictError::new(
@@ -2365,7 +2362,7 @@ fn start_transfer(repo: &Path, id: &str, direction: TransferDirection) -> Result
         )?;
         let mut target_onto = None;
         let mut target_after = None;
-        for item in topological_active(&preview)? {
+        for item in apply_order_active(&preview)? {
             if item.status == PatchStatus::Conflict {
                 return Err(Error::msg(format!(
                     "Queue is blocked on conflict in {}",
@@ -3028,8 +3025,4 @@ pub fn summarize_queue(queue: &QueueState) -> QueueCounts {
         }
     }
     counts
-}
-
-pub fn _queue_path() -> &'static str {
-    QUEUE_PATH
 }
