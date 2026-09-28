@@ -10,8 +10,8 @@ use crate::git::{GitOpts, git, git_ok};
 use crate::queue::now_iso;
 use crate::repo::{ensure_revs, has_ref, show_at, state_branch};
 use crate::types::{
-    AssessCheck, AssessReport, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR, Patch,
-    PatchStatus, QueueState,
+    AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR,
+    Patch, PatchStatus, QueueState,
 };
 
 pub const TO_UPSTREAM_ENVIRONMENT: &str = "to-upstream";
@@ -269,9 +269,9 @@ pub fn format_assess_markdown(report: &AssessReport) -> String {
         .checks
         .iter()
         .map(|check| {
-            let icon = match check.status.as_str() {
-                "fail" => "FAIL",
-                other => other,
+            let icon = match check.status {
+                CheckStatus::Fail => "FAIL",
+                other => other.as_str(),
             };
             format!("- **{}** ({icon}): {}", check.id, check.detail)
         })
@@ -918,7 +918,7 @@ pub fn assess_from_message(
     let mut checks = vec![
         AssessCheck {
             id: "message-scrubbed".into(),
-            status: "pass".into(),
+            status: CheckStatus::Pass,
             detail: if !internal_text.is_empty() {
                 "Internal section removed. Public body is what upstream will see.".into()
             } else {
@@ -928,11 +928,11 @@ pub fn assess_from_message(
         AssessCheck {
             id: "cutoff-used".into(),
             status: if !internal_text.is_empty() {
-                "pass".into()
+                CheckStatus::Pass
             } else if !tickets.is_empty() {
-                "warn".into()
+                CheckStatus::Warn
             } else {
-                "skip".into()
+                CheckStatus::Skip
             },
             detail: if !internal_text.is_empty() {
                 format!("Cutoff “{marker}” found.")
@@ -949,7 +949,7 @@ pub fn assess_from_message(
         },
         AssessCheck {
             id: "author-rewrite".into(),
-            status: "pass".into(),
+            status: CheckStatus::Pass,
             detail: format!(
                 "Export author {} <{}> (was {} <{}>). Company main still records the Uplink bot.",
                 author.0,
@@ -963,13 +963,13 @@ pub fn assess_from_message(
     if intent == "internal-only" {
         checks.push(AssessCheck {
             id: "affiliation-leak".into(),
-            status: "skip".into(),
+            status: CheckStatus::Skip,
             detail: "internal-only patches are not exported; keyword scan skipped.".into(),
         });
     } else if keys.is_empty() && domains.is_empty() {
         checks.push(AssessCheck {
             id: "affiliation-leak".into(),
-            status: "warn".into(),
+            status: CheckStatus::Warn,
             detail: "No redactKeywords / internalEmailDomains configured. Set them (or UPLINK_REDACT_KEYWORDS) so tests cannot mention the company.".into(),
         });
     } else {
@@ -977,7 +977,11 @@ pub fn assess_from_message(
         hits.extend(domain_hits);
         checks.push(AssessCheck {
             id: "affiliation-leak".into(),
-            status: if hits.is_empty() { "pass" } else { "fail" }.into(),
+            status: if hits.is_empty() {
+                CheckStatus::Pass
+            } else {
+                CheckStatus::Fail
+            },
             detail: if hits.is_empty() {
                 "No configured company keywords or internal email domains in the export surface.".into()
             } else {
@@ -989,7 +993,7 @@ pub fn assess_from_message(
         });
     }
 
-    let ok = checks.iter().all(|c| c.status != "fail");
+    let ok = checks.iter().all(|c| c.status != CheckStatus::Fail);
     let cutoff_found = !internal_text.is_empty() || stored.contains(&marker);
     Ok(AssessReport {
         at: now_iso(),
@@ -1013,7 +1017,7 @@ pub fn assert_assess_ok(report: &AssessReport, label: &str) -> Result<()> {
     let failed = report
         .checks
         .iter()
-        .filter(|c| c.status == "fail")
+        .filter(|c| c.status == CheckStatus::Fail)
         .map(|c| format!("{}: {}", c.id, c.detail))
         .collect::<Vec<_>>()
         .join("\n");

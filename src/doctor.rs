@@ -101,7 +101,11 @@ pub fn format_doctor_summary(report: &DoctorReport) -> String {
     if report.ok {
         "Uplink doctor: all checks passed".into()
     } else {
-        let failed = report.checks.iter().filter(|c| c.status == "fail").count();
+        let failed = report
+            .checks
+            .iter()
+            .filter(|c| c.status == crate::types::CheckStatus::Fail)
+            .count();
         format!("Uplink doctor: {failed} check(s) failed")
     }
 }

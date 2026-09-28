@@ -2,7 +2,7 @@ use std::io::{IsTerminal, Write};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::types::AssessCheck;
+use crate::types::{AssessCheck, CheckStatus};
 
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
@@ -20,35 +20,35 @@ pub enum ProgressMode {
 
 #[derive(Debug, Clone)]
 pub struct StepOutcome {
-    pub status: String,
+    pub status: CheckStatus,
     pub detail: String,
 }
 
 impl StepOutcome {
     pub fn pass(detail: impl Into<String>) -> Self {
         Self {
-            status: "pass".into(),
+            status: CheckStatus::Pass,
             detail: detail.into(),
         }
     }
 
     pub fn fail(detail: impl Into<String>) -> Self {
         Self {
-            status: "fail".into(),
+            status: CheckStatus::Fail,
             detail: detail.into(),
         }
     }
 
     pub fn skip(detail: impl Into<String>) -> Self {
         Self {
-            status: "skip".into(),
+            status: CheckStatus::Skip,
             detail: detail.into(),
         }
     }
 
     pub fn warn(detail: impl Into<String>) -> Self {
         Self {
-            status: "warn".into(),
+            status: CheckStatus::Warn,
             detail: detail.into(),
         }
     }
@@ -159,11 +159,11 @@ impl StepProgress {
 
 pub fn format_step_line(tty: bool, label: &str, outcome: &StepOutcome) -> String {
     if tty {
-        let (icon, color) = match outcome.status.as_str() {
-            "pass" => ("✓", GREEN),
-            "fail" => ("✗", RED),
-            "warn" => ("!", YELLOW),
-            _ => ("−", DIM),
+        let (icon, color) = match outcome.status {
+            CheckStatus::Pass => ("✓", GREEN),
+            CheckStatus::Fail => ("✗", RED),
+            CheckStatus::Warn => ("!", YELLOW),
+            CheckStatus::Skip => ("−", DIM),
         };
         let detail = if outcome.detail.is_empty() {
             String::new()
@@ -172,11 +172,11 @@ pub fn format_step_line(tty: bool, label: &str, outcome: &StepOutcome) -> String
         };
         format!("{color}{icon}{RESET} {label}{detail}{RESET}")
     } else {
-        let tag = match outcome.status.as_str() {
-            "pass" => "ok  ",
-            "fail" => "fail",
-            "warn" => "warn",
-            _ => "skip",
+        let tag = match outcome.status {
+            CheckStatus::Pass => "ok  ",
+            CheckStatus::Fail => "fail",
+            CheckStatus::Warn => "warn",
+            CheckStatus::Skip => "skip",
         };
         if outcome.detail.is_empty() {
             format!("[{tag}] {label}")
