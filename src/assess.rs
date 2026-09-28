@@ -1,13 +1,13 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::{Regex, RegexSet};
 
 use crate::error::{AssessError, Error, Result};
-use crate::git::{GitOpts, git, git_ok};
+use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::now_iso;
 use crate::repo::{ensure_revs, has_ref, show_at, state_branch};
 use crate::types::{
@@ -586,94 +586,58 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
     } else {
         "HEAD"
     };
-    let root = env::temp_dir().join(format!("uplink-delta-tree-{}", uuid::Uuid::new_v4()));
-    let old_dir = root.join("old");
-    let new_dir = root.join("new");
-    let old_file = root.join("approved.patch");
-    let new_file = root.join("current.patch");
-    fs::create_dir_all(&root).ok()?;
-    fs::write(&old_file, old_patch).ok()?;
-    fs::write(&new_file, new_patch).ok()?;
-    let added_old = git(
-        repo,
-        &["worktree", "add", "--detach", old_dir.to_str()?, base],
-        GitOpts::allow_fail(),
-    )
-    .ok()?;
-    if added_old.code != 0 {
-        let _ = fs::remove_dir_all(&root);
+    let root =
+        RemoveOnDrop(env::temp_dir().join(format!("uplink-delta-tree-{}", uuid::Uuid::new_v4())));
+    fs::create_dir_all(&root.0).ok()?;
+    let old_tree = patched_tree(repo, &root.0, "approved", base, old_patch)?;
+    let new_tree = patched_tree(repo, &root.0, "current", base, new_patch)?;
+    git(repo, &["diff", &old_tree, &new_tree], GitOpts::allow_fail())
+        .ok()
+        .map(|out| out.stdout)
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Tree id of `base` with `patch` applied, built in a throwaway worktree
+/// under `root`. None when the worktree cannot be added or the patch fails.
+fn patched_tree(repo: &Path, root: &Path, name: &str, base: &str, patch: &str) -> Option<String> {
+    let patch_file = root.join(format!("{name}.patch"));
+    fs::write(&patch_file, patch).ok()?;
+    let dir = root.join(name);
+    if !git_succeeds(repo, &["worktree", "add", "--detach", dir.to_str()?, base]).ok()? {
         return None;
     }
-    let added_new = git(
-        repo,
-        &["worktree", "add", "--detach", new_dir.to_str()?, base],
-        GitOpts::allow_fail(),
-    )
-    .ok()?;
-    if added_new.code != 0 {
-        let _ = git(
-            repo,
-            &[
-                "worktree",
-                "remove",
-                "--force",
-                old_dir.to_str().unwrap_or(""),
-            ],
-            GitOpts::allow_fail(),
-        );
-        let _ = fs::remove_dir_all(&root);
+    let worktree = TempWorktree { repo, dir };
+    if !git_succeeds(&worktree.dir, &["apply", patch_file.to_str()?]).ok()? {
         return None;
     }
-    let applied_old = git(
-        &old_dir,
-        &["apply", old_file.to_str().unwrap_or("")],
-        GitOpts::allow_fail(),
-    )
-    .ok();
-    let applied_new = git(
-        &new_dir,
-        &["apply", new_file.to_str().unwrap_or("")],
-        GitOpts::allow_fail(),
-    )
-    .ok();
-    let diff =
-        if applied_old.is_some_and(|r| r.code == 0) && applied_new.is_some_and(|r| r.code == 0) {
-            let old_tree = write_worktree_tree(&old_dir);
-            let new_tree = write_worktree_tree(&new_dir);
-            match (old_tree, new_tree) {
-                (Some(old_tree), Some(new_tree)) => {
-                    git(repo, &["diff", &old_tree, &new_tree], GitOpts::allow_fail())
-                        .ok()
-                        .map(|out| out.stdout)
-                        .filter(|s| !s.trim().is_empty())
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-    let _ = git(
-        repo,
-        &[
-            "worktree",
-            "remove",
-            "--force",
-            old_dir.to_str().unwrap_or(""),
-        ],
-        GitOpts::allow_fail(),
-    );
-    let _ = git(
-        repo,
-        &[
-            "worktree",
-            "remove",
-            "--force",
-            new_dir.to_str().unwrap_or(""),
-        ],
-        GitOpts::allow_fail(),
-    );
-    let _ = fs::remove_dir_all(&root);
-    diff
+    write_worktree_tree(&worktree.dir)
+}
+
+/// Removes a directory tree when dropped.
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Removes a `git worktree add` checkout when dropped.
+struct TempWorktree<'a> {
+    repo: &'a Path,
+    dir: PathBuf,
+}
+
+impl Drop for TempWorktree<'_> {
+    fn drop(&mut self) {
+        if let Some(dir) = self.dir.to_str() {
+            let _ = git(
+                self.repo,
+                &["worktree", "remove", "--force", dir],
+                GitOpts::allow_fail(),
+            );
+        }
+    }
 }
 
 fn write_worktree_tree(worktree: &Path) -> Option<String> {
@@ -1025,6 +989,32 @@ mod tests {
         );
         assert!(find_domain_hits("jane@acme.company", &domains).is_empty());
         assert!(find_domain_hits("jane@acme.com", &[]).is_empty());
+    }
+
+    #[test]
+    fn tree_diff_patches_compares_applied_trees_and_cleans_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git_ok(repo, &["init", "-q"]).unwrap();
+        fs::write(repo.join("rate.txt"), "1800\n").unwrap();
+        git_ok(repo, &["add", "."]).unwrap();
+        git_ok(repo, &["commit", "-q", "-m", "base"]).unwrap();
+        let patch_to = |value: &str| {
+            fs::write(repo.join("rate.txt"), format!("{value}\n")).unwrap();
+            let diff = git_ok(repo, &["diff"]).unwrap() + "\n";
+            git_ok(repo, &["checkout", "--", "rate.txt"]).unwrap();
+            diff
+        };
+        let approved = patch_to("3600");
+        let current = patch_to("7200");
+
+        let tree = tree_diff_patches(repo, &approved, &current).expect("tree diff");
+        assert!(tree.contains("-3600") && tree.contains("+7200"), "{tree}");
+        assert_eq!(tree_diff_patches(repo, &approved, &approved), None);
+        assert_eq!(tree_diff_patches(repo, "not a patch\n", &current), None);
+
+        let worktrees = git_ok(repo, &["worktree", "list", "--porcelain"]).unwrap();
+        assert_eq!(worktrees.matches("worktree ").count(), 1, "{worktrees}");
     }
 
     #[test]

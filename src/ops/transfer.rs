@@ -153,104 +153,58 @@ pub(super) fn start_transfer(
     };
     let (original, original_sha) = checkout_identity(repo)?;
     let snapshot = snapshot_uplink(repo)?;
-    let kind = direction.gate_kind();
     let outcome = (|| -> Result<TransferResult> {
         git(
             repo,
             &["checkout", "-f", "--quiet", "--detach", upstream_ref],
             GitOpts::default(),
         )?;
-        let mut target_onto = None;
-        let mut target_after = None;
-        for item in apply_order_active(&preview)? {
-            if item.status == PatchStatus::Conflict {
-                return Err(Error::msg(format!(
-                    "Queue is blocked on conflict in {}",
-                    item.id
-                )));
-            }
-            let onto_here = rev_parse(repo, "HEAD")?;
-            let patch_file = snapshot.join(patch_path(&item.id)?);
-            let result = apply_patch_file(repo, &item, &patch_file, false)?;
-            if result == "conflict" {
-                if item.id != id {
-                    return Err(Error::msg(format!(
-                        "Cannot transfer {id}: {} (\"{}\") would not apply after the move.",
-                        item.id, item.title
-                    )));
-                }
-                let files = conflicted_files(repo)?;
-                let (base, work) = cut_gated_work(
+        let target = match apply_transfer_preview(repo, &preview, &snapshot, id)? {
+            PreviewOutcome::Conflict { onto, files } => {
+                return gate_transfer(
                     repo,
-                    kind,
-                    id,
-                    &onto_here,
-                    &format!("uplink: transfer {id} {}", direction.as_str()),
-                )?;
-                return Ok(gated_transfer_result(
-                    queue.clone(),
+                    &queue,
                     id,
                     direction,
-                    (base, work, onto_here),
+                    onto,
                     files,
                     format!("Patch {id} does not apply in the destination layer."),
-                ));
+                );
             }
-            if item.id == id {
-                target_onto = Some(onto_here);
-                target_after = Some(rev_parse(repo, "HEAD")?);
-            }
-        }
+            PreviewOutcome::Applied(target) => target,
+        };
 
         copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
-        let checks = match direction {
-            TransferDirection::ToUpstream => {
-                let onto = target_onto.as_deref().ok_or_else(|| {
-                    Error::msg(format!("{id} was not applied during transfer preview"))
-                })?;
-                let after = target_after.as_deref().ok_or_else(|| {
-                    Error::msg(format!("{id} was not applied during transfer preview"))
-                })?;
-                assess_transfer_to_upstream(repo, &preview, &patch, onto, after).and_then(
-                    |report| {
-                        let abs = snapshot.join(patch_path(id)?);
-                        assert_export_preflight(repo, &preview, &patch, &abs, None)
-                            .and_then(|_| assert_upstream_layer_applies(repo, &preview))?;
-                        Ok(Some(report))
-                    },
-                )
-            }
-            TransferDirection::ToInternal => run_preflight_command_in(&preview, repo).map(|_| None),
-        };
+        let checks = transfer_checks(
+            repo,
+            &preview,
+            &patch,
+            &snapshot.join(patch_path(id)?),
+            direction,
+            target.onto.as_deref(),
+            target.after.as_deref(),
+        );
         let _ = fs::remove_dir_all(repo.join(".uplink"));
         let assess_report = match checks {
             Ok(report) => report,
             Err(err) => {
-                let onto = target_onto.ok_or_else(|| {
-                    Error::msg(format!("{id} was not applied during transfer preview"))
-                })?;
-                if let Some(after) = &target_after {
+                let onto = target.onto.ok_or_else(|| not_previewed(id))?;
+                if let Some(after) = &target.after {
                     git(
                         repo,
                         &["checkout", "-f", "--quiet", after],
                         GitOpts::default(),
                     )?;
                 }
-                let (base, work) = cut_gated_work(
+                return gate_transfer(
                     repo,
-                    kind,
-                    id,
-                    &onto,
-                    &format!("uplink: transfer {id} {}", direction.as_str()),
-                )?;
-                return Ok(gated_transfer_result(
-                    queue.clone(),
+                    &queue,
                     id,
                     direction,
-                    (base, work, onto),
+                    onto,
                     Vec::new(),
                     err.to_string(),
-                ));
+                );
             }
         };
 
@@ -272,6 +226,119 @@ pub(super) fn start_transfer(
             Err(err)
         }
     }
+}
+
+/// Commits around the transferred patch in the preview apply.
+#[derive(Default)]
+struct TransferTarget {
+    /// HEAD before the transferred patch applied.
+    onto: Option<String>,
+    /// HEAD after it applied.
+    after: Option<String>,
+}
+
+enum PreviewOutcome {
+    /// The transferred patch itself did not apply on `onto`.
+    Conflict {
+        onto: String,
+        files: Vec<String>,
+    },
+    Applied(TransferTarget),
+}
+
+fn not_previewed(id: &str) -> Error {
+    Error::msg(format!("{id} was not applied during transfer preview"))
+}
+
+/// Applies the queue as it would look after the move, from a detached
+/// upstream checkout. Only a conflict in the transferred patch can be gated.
+fn apply_transfer_preview(
+    repo: &Path,
+    preview: &QueueState,
+    snapshot: &Path,
+    id: &str,
+) -> Result<PreviewOutcome> {
+    let mut target = TransferTarget::default();
+    for item in apply_order_active(preview)? {
+        if item.status == PatchStatus::Conflict {
+            return Err(Error::msg(format!(
+                "Queue is blocked on conflict in {}",
+                item.id
+            )));
+        }
+        let onto_here = rev_parse(repo, "HEAD")?;
+        let patch_file = snapshot.join(patch_path(&item.id)?);
+        let result = apply_patch_file(repo, &item, &patch_file, false)?;
+        if result == "conflict" {
+            if item.id != id {
+                return Err(Error::msg(format!(
+                    "Cannot transfer {id}: {} (\"{}\") would not apply after the move.",
+                    item.id, item.title
+                )));
+            }
+            return Ok(PreviewOutcome::Conflict {
+                onto: onto_here,
+                files: conflicted_files(repo)?,
+            });
+        }
+        if item.id == id {
+            target.onto = Some(onto_here);
+            target.after = Some(rev_parse(repo, "HEAD")?);
+        }
+    }
+    Ok(PreviewOutcome::Applied(target))
+}
+
+/// To upstream: assess the change `onto..after`, export preflight of `patch_abs`,
+/// and upstream-layer apply. To internal: the configured preflight command.
+/// Returns the new assess report for an upstream move.
+fn transfer_checks(
+    repo: &Path,
+    preview: &QueueState,
+    patch: &Patch,
+    patch_abs: &Path,
+    direction: TransferDirection,
+    onto: Option<&str>,
+    after: Option<&str>,
+) -> Result<Option<AssessReport>> {
+    match direction {
+        TransferDirection::ToUpstream => {
+            let onto = onto.ok_or_else(|| not_previewed(&patch.id))?;
+            let after = after.ok_or_else(|| not_previewed(&patch.id))?;
+            let report = assess_transfer_to_upstream(repo, preview, patch, onto, after)?;
+            assert_export_preflight(repo, preview, patch, patch_abs, None)?;
+            assert_upstream_layer_applies(repo, preview)?;
+            Ok(Some(report))
+        }
+        TransferDirection::ToInternal => run_preflight_command_in(preview, repo).map(|_| None),
+    }
+}
+
+/// Cuts the gated base/work branches at `onto` and reports the transfer as gated.
+fn gate_transfer(
+    repo: &Path,
+    queue: &QueueState,
+    id: &str,
+    direction: TransferDirection,
+    onto: String,
+    files: Vec<String>,
+    message: String,
+) -> Result<TransferResult> {
+    let (base, work) = cut_gated_work(
+        repo,
+        direction.gate_kind(),
+        id,
+        &onto,
+        &format!("uplink: transfer {id} {}", direction.as_str()),
+    )?;
+    Ok(gated_transfer_result(
+        queue.clone(),
+        id,
+        direction,
+        (base, work, onto),
+        files,
+        message,
+    ))
 }
 
 pub(super) fn gated_transfer_result(
@@ -364,21 +431,7 @@ pub(super) fn complete_transfer(
             "Check out {base} or {work} before completing transfer of {id} (currently on {head})."
         )));
     }
-    let queue_ref = state_branch(repo);
-    if has_ref(repo, &queue_ref)? {
-        git(
-            repo,
-            &[
-                "restore",
-                "--source",
-                &queue_ref,
-                "--worktree",
-                "--",
-                ".uplink",
-            ],
-            GitOpts::default(),
-        )?;
-    }
+    restore_uplink_from_state(repo)?;
     let queue = read_queue_file(repo)?;
     let patch = validate_transfer(&queue, id, direction)?;
     assert_resolution_clean(repo)?;
@@ -390,45 +443,22 @@ pub(super) fn complete_transfer(
 
     let mut preview = queue.clone();
     move_patch(&mut preview, id, direction.to_internal())?;
-    let assess_report = match direction {
-        TransferDirection::ToUpstream => {
-            let current = get_patch(&preview, id)?;
-            let report = assess_transfer_to_upstream(repo, &preview, current, &onto, "HEAD")?;
-            let abs = repo.join(patch_path(id)?);
-            assert_export_preflight(repo, &preview, current, &abs, None)?;
-            assert_upstream_layer_applies(repo, &preview)?;
-            Some(report)
-        }
-        TransferDirection::ToInternal => {
-            run_preflight_command_in(&preview, repo)?;
-            None
-        }
-    };
+    let assess_report = transfer_checks(
+        repo,
+        &preview,
+        get_patch(&preview, id)?,
+        &repo.join(patch_path(id)?),
+        direction,
+        Some(&onto),
+        Some("HEAD"),
+    )?;
 
     let rel = patch_path(id)?.to_string_lossy().into_owned();
     let stable = stable_patch_id(repo, &rel)?;
     let mut queue = read_queue_file(repo)?;
     let (pr_close_url, pr_close_number, pr_close_branch) =
         pr_close_from_patch(get_patch(&queue, id)?, direction);
-    move_patch(&mut queue, id, direction.to_internal())?;
-    {
-        let current = get_patch_mut(&mut queue, id)?;
-        current.status = PatchStatus::Queued;
-        current.conflict = None;
-        current.patch_id_stable = Some(stable);
-        if direction.to_internal() {
-            current.upstream = None;
-            current.approvals.clear();
-        }
-        if let Some(report) = assess_report {
-            apply_upstream_assess(current, report);
-        }
-        add_event(
-            current,
-            "transferred",
-            format!("Moved {} after gated work", direction.as_str()),
-        );
-    }
+    record_transfer(&mut queue, id, direction, stable, assess_report)?;
     write_queue_file(repo, &queue)?;
     commit_queue(
         repo,
@@ -450,6 +480,34 @@ pub(super) fn complete_transfer(
         pr_close_number,
         pr_close_branch,
     })
+}
+
+/// Moves the patch to its new layer as queued, with the gated work's patch id.
+fn record_transfer(
+    queue: &mut QueueState,
+    id: &str,
+    direction: TransferDirection,
+    stable: String,
+    assess_report: Option<AssessReport>,
+) -> Result<()> {
+    move_patch(queue, id, direction.to_internal())?;
+    let current = get_patch_mut(queue, id)?;
+    current.status = PatchStatus::Queued;
+    current.conflict = None;
+    current.patch_id_stable = Some(stable);
+    if direction.to_internal() {
+        current.upstream = None;
+        current.approvals.clear();
+    }
+    if let Some(report) = assess_report {
+        apply_upstream_assess(current, report);
+    }
+    add_event(
+        current,
+        "transferred",
+        format!("Moved {} after gated work", direction.as_str()),
+    );
+    Ok(())
 }
 
 pub(super) fn pr_close_from_patch(

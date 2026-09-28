@@ -186,20 +186,8 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
             let patch_file = snapshot.join(patch_path(&patch.id)?);
             let result = apply_patch_file(repo, &patch, &patch_file, false)?;
             if result == "empty" {
-                let is_upstream = queue.is_upstream(&patch.id);
-                let current = get_patch_mut(&mut queue, &patch.id)?;
-                if is_upstream {
-                    current.status = PatchStatus::Merged;
-                    current.merged = Some(PatchMerged {
-                        via: MergeVia::EmptyRebase,
-                        at: stamp(),
-                        upstream_sha: Some(rev_parse(repo, upstream_ref)?),
-                    });
-                    add_event(
-                        current,
-                        "merged",
-                        "Became empty on rebuild; treating as already present upstream",
-                    );
+                if queue.is_upstream(&patch.id) {
+                    mark_merged_by_empty_rebase(repo, &mut queue, &patch.id, upstream_ref)?;
                 }
                 continue;
             }
@@ -216,60 +204,106 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
                 )?));
             }
 
-            let contents = fs::read_to_string(&patch_file)?;
-            let current = get_patch_mut(&mut queue, &patch.id)?;
-            current.patch_id_stable = Some(stable_patch_id_from_contents(repo, &contents)?);
-            if current.status == PatchStatus::Conflict {
-                current.status = if current
-                    .upstream
-                    .as_ref()
-                    .and_then(|u| u.pr_number)
-                    .is_some()
-                {
-                    PatchStatus::Submitted
-                } else {
-                    PatchStatus::Queued
-                };
-            }
-            current.conflict = None;
+            record_clean_apply(repo, &mut queue, &patch.id, &patch_file)?;
         }
 
-        git(repo, &["add", "-A"], GitOpts::default())?;
-        if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
-            git(
-                repo,
-                &[
-                    "commit",
-                    "-m",
-                    &format!("uplink: rebuild company {company_branch} onto upstream"),
-                ],
-                GitOpts::default(),
-            )?;
-        }
-        git(
-            repo,
-            &["branch", "-f", &company_branch, "HEAD"],
-            GitOpts::default(),
-        )?;
-        git(
-            repo,
-            &["checkout", "-f", "--quiet", &company_branch],
-            GitOpts::default(),
-        )?;
-        fs::create_dir_all(repo.join(".uplink/patches"))?;
-        copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
-        queue.last_sync = Some(LastSync {
-            at: stamp(),
-            upstream_sha: rev_parse(repo, upstream_ref)?,
-            result: "ok".into(),
-            message: Some("Rebuild completed".into()),
-        });
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, "uplink: record rebuild status")?;
+        publish_rebuilt_company(repo, &mut queue, &snapshot, &company_branch, upstream_ref)?;
         Ok(queue)
     })();
     let _ = fs::remove_dir_all(&snapshot);
     outcome
+}
+
+/// An upstream patch that applies empty is already in upstream.
+fn mark_merged_by_empty_rebase(
+    repo: &Path,
+    queue: &mut QueueState,
+    id: &str,
+    upstream_ref: &str,
+) -> Result<()> {
+    let current = get_patch_mut(queue, id)?;
+    current.status = PatchStatus::Merged;
+    current.merged = Some(PatchMerged {
+        via: MergeVia::EmptyRebase,
+        at: stamp(),
+        upstream_sha: Some(rev_parse(repo, upstream_ref)?),
+    });
+    add_event(
+        current,
+        "merged",
+        "Became empty on rebuild; treating as already present upstream",
+    );
+    Ok(())
+}
+
+/// Refreshes the stable patch id and clears any earlier conflict.
+fn record_clean_apply(
+    repo: &Path,
+    queue: &mut QueueState,
+    id: &str,
+    patch_file: &Path,
+) -> Result<()> {
+    let contents = fs::read_to_string(patch_file)?;
+    let current = get_patch_mut(queue, id)?;
+    current.patch_id_stable = Some(stable_patch_id_from_contents(repo, &contents)?);
+    if current.status == PatchStatus::Conflict {
+        current.status = if current
+            .upstream
+            .as_ref()
+            .and_then(|u| u.pr_number)
+            .is_some()
+        {
+            PatchStatus::Submitted
+        } else {
+            PatchStatus::Queued
+        };
+    }
+    current.conflict = None;
+    Ok(())
+}
+
+/// Commits the rebuilt tree, points the company branch at it, restores
+/// `.uplink` from the snapshot, and records the rebuild on uplink/state.
+fn publish_rebuilt_company(
+    repo: &Path,
+    queue: &mut QueueState,
+    snapshot: &Path,
+    company_branch: &str,
+    upstream_ref: &str,
+) -> Result<()> {
+    git(repo, &["add", "-A"], GitOpts::default())?;
+    if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
+        git(
+            repo,
+            &[
+                "commit",
+                "-m",
+                &format!("uplink: rebuild company {company_branch} onto upstream"),
+            ],
+            GitOpts::default(),
+        )?;
+    }
+    git(
+        repo,
+        &["branch", "-f", company_branch, "HEAD"],
+        GitOpts::default(),
+    )?;
+    git(
+        repo,
+        &["checkout", "-f", "--quiet", company_branch],
+        GitOpts::default(),
+    )?;
+    fs::create_dir_all(repo.join(".uplink/patches"))?;
+    copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
+    queue.last_sync = Some(LastSync {
+        at: stamp(),
+        upstream_sha: rev_parse(repo, upstream_ref)?,
+        result: "ok".into(),
+        message: Some("Rebuild completed".into()),
+    });
+    write_queue_file(repo, queue)?;
+    commit_queue(repo, "uplink: record rebuild status")?;
+    Ok(())
 }
 
 pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
@@ -282,21 +316,7 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
                 "Check out {base} or {work} before resolving {id} (currently on {head})."
             )));
         }
-        let queue_ref = state_branch(repo);
-        if has_ref(repo, &queue_ref)? {
-            git(
-                repo,
-                &[
-                    "restore",
-                    "--source",
-                    &queue_ref,
-                    "--worktree",
-                    "--",
-                    ".uplink",
-                ],
-                GitOpts::default(),
-            )?;
-        }
+        restore_uplink_from_state(repo)?;
         let mut queue = read_queue_file(repo)?;
         let patch = get_patch(&queue, id)?.clone();
         if patch.status != PatchStatus::Conflict {

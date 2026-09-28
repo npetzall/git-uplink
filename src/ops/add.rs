@@ -55,22 +55,62 @@ pub(super) fn add_patch_once(
     from_sha: &str,
     head_sha: &str,
 ) -> Result<Patch> {
-    let destination = if opts.internal_only {
-        "internal"
-    } else {
-        "upstream"
-    };
-    let id = new_patch_id();
-    let created_at = stamp();
     let raw_message = opts
         .message
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(opts.title.as_str());
-    let depends_on = depends_on_from_message(raw_message, &opts.depends_on);
-    let mut patch = Patch {
-        id: id.clone(),
+    let mut patch = new_queued_patch(opts, depends_on_from_message(raw_message, &opts.depends_on));
+    let id = patch.id.clone();
+    check_add_dependencies(queue, opts, &patch.depends_on)?;
+    add_event(
+        &mut patch,
+        "created",
+        import_event_detail(opts, from_sha, head_sha),
+    );
+    assess_new_patch(
+        repo,
+        queue,
+        opts,
+        &mut patch,
+        from_sha,
+        head_sha,
+        raw_message,
+    )?;
+
+    let message = company_commit_message(&patch);
+    write_product_patch(repo, &id, from_sha, &message, head_sha)?;
+    let rel = patch_path(&id)?.to_string_lossy().into_owned();
+    patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
+    if let Some(duplicate) = queue.all_patches().find(|item| {
+        item.patch_id_stable.is_some() && item.patch_id_stable == patch.patch_id_stable
+    }) {
+        return Ok(duplicate.clone());
+    }
+
+    let candidate_abs = repo.join(patch_path(&id)?);
+    if let Err(err) = validate_candidate(repo, queue, opts, &patch, &candidate_abs, head_sha) {
+        let _ = fs::remove_file(&candidate_abs);
+        return Err(err);
+    }
+
+    let rebuild = !opts.internal_only && queue.internal.iter().any(is_active);
+    queue.push_patch(patch, opts.internal_only);
+    write_queue_file(repo, queue)?;
+    commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
+    if rebuild {
+        rebuild_once(repo)?;
+    } else {
+        mark_empty_if_already_upstream(repo, &id)?;
+    }
+    Ok(get_patch(&read_queue_file(repo)?, &id)?.clone())
+}
+
+fn new_queued_patch(opts: &AddPatchOpts, depends_on: Vec<String>) -> Patch {
+    let created_at = stamp();
+    Patch {
+        id: new_patch_id(),
         title: opts.title.clone(),
         commit_message: String::new(),
         status: PatchStatus::Queued,
@@ -91,9 +131,17 @@ pub(super) fn add_patch_once(
         approvals: Vec::new(),
         events: Vec::new(),
         kind: None,
-    };
+    }
+}
 
-    for dep_id in &patch.depends_on {
+/// Every dependency must exist, and upstream-bound patches may not depend on
+/// internal-only or tooling patches.
+fn check_add_dependencies(
+    queue: &QueueState,
+    opts: &AddPatchOpts,
+    depends_on: &[String],
+) -> Result<()> {
+    for dep_id in depends_on {
         get_patch(queue, dep_id)?;
         if cannot_depend_on(queue, opts.internal_only, dep_id) {
             return Err(Error::msg(format!(
@@ -102,82 +150,80 @@ pub(super) fn add_patch_once(
             )));
         }
     }
+    Ok(())
+}
 
-    add_event(
-        &mut patch,
-        "created",
-        if let Some(pr) = opts.internal_pr_number {
-            format!("Internally approved via PR #{pr}; imported as {destination}")
-        } else {
-            format!(
-                "Imported from {}..{} as {destination}",
-                &from_sha[..from_sha.len().min(8)],
-                &head_sha[..head_sha.len().min(8)]
-            )
-        },
-    );
-    patch.assess = Some(assess_from_message(
+fn import_event_detail(opts: &AddPatchOpts, from_sha: &str, head_sha: &str) -> String {
+    let destination = if opts.internal_only {
+        "internal"
+    } else {
+        "upstream"
+    };
+    if let Some(pr) = opts.internal_pr_number {
+        format!("Internally approved via PR #{pr}; imported as {destination}")
+    } else {
+        format!(
+            "Imported from {}..{} as {destination}",
+            &from_sha[..from_sha.len().min(8)],
+            &head_sha[..head_sha.len().min(8)]
+        )
+    }
+}
+
+/// Records the assess report and commit message. Upstream-bound patches must pass.
+fn assess_new_patch(
+    repo: &Path,
+    queue: &QueueState,
+    opts: &AddPatchOpts,
+    patch: &mut Patch,
+    from_sha: &str,
+    head_sha: &str,
+    raw_message: &str,
+) -> Result<()> {
+    let intent = if opts.internal_only {
+        "internal-only"
+    } else {
+        "upstream"
+    };
+    let report = assess_from_message(
         repo,
         queue,
         from_sha,
         head_sha,
         raw_message,
         Some(&opts.title),
-        if opts.internal_only {
-            "internal-only"
-        } else {
-            "upstream"
-        },
-    )?);
-    if let Some(report) = &patch.assess {
-        patch.commit_message = report.commit_message.clone();
-        if !opts.internal_only {
-            assert_assess_ok(report, &opts.title)?;
-        }
-    }
-
-    let message = company_commit_message(&patch);
-    write_product_patch(repo, &id, from_sha, &message, head_sha)?;
-    let rel = patch_path(&id)?.to_string_lossy().into_owned();
-    patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-    if let Some(duplicate) = queue.all_patches().find(|item| {
-        item.patch_id_stable.is_some() && item.patch_id_stable == patch.patch_id_stable
-    }) {
-        return Ok(duplicate.clone());
-    }
-
-    let candidate_abs = repo.join(patch_path(&id)?);
+        intent,
+    )?;
+    patch.commit_message = report.commit_message.clone();
     if !opts.internal_only {
-        let preflight = assert_export_preflight(
+        assert_assess_ok(&report, &opts.title)?;
+    }
+    patch.assess = Some(report);
+    Ok(())
+}
+
+/// Export preflight for upstream-bound patches, then (unless an explicit
+/// --from/--head range was given) that the change is already on company main.
+fn validate_candidate(
+    repo: &Path,
+    queue: &QueueState,
+    opts: &AddPatchOpts,
+    patch: &Patch,
+    candidate_abs: &Path,
+    head_sha: &str,
+) -> Result<()> {
+    if !opts.internal_only {
+        assert_export_preflight(
             repo,
             queue,
-            &patch,
-            &candidate_abs,
+            patch,
+            candidate_abs,
             opts.preflight_command.clone().map(Some),
-        );
-        if let Err(err) = preflight {
-            let _ = fs::remove_file(&candidate_abs);
-            return Err(err);
-        }
+        )?;
     }
-
     let explicit_range = opts.from_ref.is_some() && opts.head_ref.is_some();
-    if !explicit_range
-        && let Err(err) =
-            assert_change_already_on_company(repo, queue, &candidate_abs, &opts.title, head_sha)
-    {
-        let _ = fs::remove_file(&candidate_abs);
-        return Err(err);
+    if !explicit_range {
+        assert_change_already_on_company(repo, queue, candidate_abs, &opts.title, head_sha)?;
     }
-
-    let rebuild = !opts.internal_only && queue.internal.iter().any(is_active);
-    queue.push_patch(patch, opts.internal_only);
-    write_queue_file(repo, queue)?;
-    commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
-    if rebuild {
-        rebuild_once(repo)?;
-    } else {
-        mark_empty_if_already_upstream(repo, &id)?;
-    }
-    Ok(get_patch(&read_queue_file(repo)?, &id)?.clone())
+    Ok(())
 }
