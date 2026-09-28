@@ -5867,6 +5867,44 @@ fn ref_exists(repo: &Path, name: &str) -> bool {
 }
 
 #[test]
+fn assess_fails_an_export_author_at_an_internal_domain() {
+    let world = setup_world();
+    let company = &world.company;
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.internal_email_domains = vec!["acme.com".into()];
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: internal domains").unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let err = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            message: Some(format!(
+                "Use SHA-256 for tokens\n\nReplace SHA-1.\n\n{DEFAULT_CUTOFF}\n\n\
+Uplink-Export-Author: Jane <jane@acme.com>\n"
+            )),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::Assess(_)), "{err}");
+    assert!(err.to_string().contains("@acme.com"), "{err}");
+}
+
+#[test]
 fn transfer_to_upstream_moves_immediately_when_apply_and_preflight_pass() {
     let world = setup_world();
     let company = &world.company;
