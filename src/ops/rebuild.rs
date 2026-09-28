@@ -95,6 +95,7 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
     } else {
         company_branch.as_str()
     };
+    ensure_clean_worktree(repo, "a preview rebuild")?;
     let (original, original_sha) = checkout_identity(repo)?;
     let snapshot = snapshot_uplink(repo)?;
     let outcome = (|| -> Result<QueueState> {
@@ -167,6 +168,7 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
     } else {
         company_branch.as_str()
     };
+    ensure_clean_worktree(repo, "a rebuild")?;
     let snapshot = snapshot_uplink(repo)?;
     let outcome = (|| -> Result<QueueState> {
         git(

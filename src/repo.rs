@@ -103,6 +103,45 @@ pub fn stable_patch_id(repo: &Path, patch_file: &str) -> Result<String> {
     stable_patch_id_from_contents(repo, &contents)
 }
 
+/// A detached `git worktree add` checkout, removed when dropped. Work done in
+/// it never touches the operator's own checkout.
+pub(crate) struct TempWorktree<'a> {
+    pub(crate) repo: &'a Path,
+    pub(crate) dir: PathBuf,
+}
+
+impl<'a> TempWorktree<'a> {
+    pub(crate) fn add(repo: &'a Path, prefix: &str, at: &str) -> Result<Self> {
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}", Uuid::new_v4()));
+        git(
+            repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                "--quiet",
+                dir.to_str().unwrap_or(""),
+                at,
+            ],
+            GitOpts::default(),
+        )?;
+        Ok(Self { repo, dir })
+    }
+}
+
+impl Drop for TempWorktree<'_> {
+    fn drop(&mut self) {
+        if let Some(dir) = self.dir.to_str() {
+            let _ = git(
+                self.repo,
+                &["worktree", "remove", "--force", dir],
+                GitOpts::allow_fail(),
+            );
+        }
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
 pub fn write_product_patch(
     repo: &Path,
     id: &str,
@@ -128,52 +167,37 @@ pub fn write_product_patch(
         return Err(Error::msg("No product changes to import as a patch."));
     }
 
-    let original = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    let original_sha = git_ok(repo, &["rev-parse", "HEAD"])?;
-    let formatted = (|| -> Result<String> {
-        git(
-            repo,
-            &["checkout", "--quiet", "--detach", from_ref],
-            GitOpts::default(),
-        )?;
-        let payload = format!("{diff}\n");
-        let apply = git(
-            repo,
-            &["apply", "--3way", "--index"],
-            GitOpts {
-                allow_fail: true,
-                input: Some(payload.as_bytes()),
-                ..GitOpts::default()
-            },
-        )?;
-        if apply.code != 0 {
-            return Err(Error::msg(format!(
-                "Could not isolate patch {id}: {}",
-                if apply.stderr.is_empty() {
-                    apply.stdout
-                } else {
-                    apply.stderr
-                }
-            )));
-        }
-        git(repo, &["commit", "-m", message], GitOpts::default())?;
-        git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])
-    })();
-
-    if original != "HEAD" {
-        git(
-            repo,
-            &["checkout", "-f", "--quiet", &original],
-            GitOpts::default(),
-        )?;
-    } else {
-        git(
-            repo,
-            &["checkout", "-f", "--quiet", &original_sha],
-            GitOpts::default(),
-        )?;
+    let worktree = TempWorktree::add(repo, "uplink-isolate", from_ref)?;
+    let payload = format!("{diff}\n");
+    let apply = git(
+        &worktree.dir,
+        &["apply", "--3way", "--index"],
+        GitOpts {
+            allow_fail: true,
+            input: Some(payload.as_bytes()),
+            ..GitOpts::default()
+        },
+    )?;
+    if apply.code != 0 {
+        return Err(Error::msg(format!(
+            "Could not isolate patch {id}: {}",
+            if apply.stderr.is_empty() {
+                apply.stdout
+            } else {
+                apply.stderr
+            }
+        )));
     }
-    let formatted = formatted?;
+    git(
+        &worktree.dir,
+        &["commit", "-m", message],
+        GitOpts::default(),
+    )?;
+    let formatted = git_ok(
+        &worktree.dir,
+        &["format-patch", "--full-index", "-1", "--stdout"],
+    )?;
+    drop(worktree);
     fs::create_dir_all(repo.join(PATCH_DIR))?;
     let body = if formatted.ends_with('\n') {
         formatted

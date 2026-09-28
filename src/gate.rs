@@ -100,6 +100,20 @@ pub fn format_patch_at_head(repo: &Path) -> Result<String> {
     }
 }
 
+/// Refuses to continue when tracked files have staged or unstaged changes.
+/// Callers that `checkout -f` the operator's checkout would discard them.
+/// Untracked files survive a checkout unless the target tree has the same path.
+pub(crate) fn ensure_clean_worktree(repo: &Path, what: &str) -> Result<()> {
+    if !git_succeeds(repo, &["diff", "--cached", "--quiet"])?
+        || !git_succeeds(repo, &["diff", "--quiet"])?
+    {
+        return Err(crate::error::Error::msg(format!(
+            "Uncommitted changes in the working tree; commit or stash them before {what}."
+        )));
+    }
+    Ok(())
+}
+
 fn worktree_dirty(repo: &Path) -> Result<bool> {
     if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
         return Ok(true);
