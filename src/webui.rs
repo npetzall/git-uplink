@@ -251,12 +251,9 @@ fn launch_browser(url: &str) {
     }
 }
 
+/// Fetching from origin is opt-in: a plain `GET /api/status` never touches the network.
 fn wants_fetch(value: Option<&str>) -> bool {
-    match value.map(str::trim) {
-        None => true,
-        Some("0") | Some("false") | Some("no") => false,
-        Some(_) => true,
-    }
+    matches!(value.map(str::trim), Some("1" | "true" | "yes"))
 }
 
 fn missing_status(cwd: String, source: QueueSource, error: String) -> StatusResponse {
@@ -658,6 +655,16 @@ mod tests {
             (header::HOST, "127.0.0.1:43721"),
             (header::ORIGIN, "null"),
         ])));
+    }
+
+    #[test]
+    fn status_fetch_is_opt_in() {
+        for value in [None, Some(""), Some("0"), Some("false"), Some("bogus")] {
+            assert!(!wants_fetch(value), "{value:?}");
+        }
+        for value in ["1", "true", "yes", " 1 "] {
+            assert!(wants_fetch(Some(value)), "{value}");
+        }
     }
 
     #[tokio::test]
