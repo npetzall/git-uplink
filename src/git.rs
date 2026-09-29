@@ -7,13 +7,23 @@ use crate::error::{Error, Result};
 const BOT_NAME: &str = "Uplink Bot";
 const BOT_EMAIL: &str = "uplink@company.example";
 
-const IDENTITY_CONFIG: &[(&str, &str)] = &[
+/// Settings forced on every call: the bot identity, no signing, and output
+/// that uplink parses (diffs, patches) free of the operator's colors,
+/// prefixes and sign-offs. Hooks never run on the bot's commits.
+const FIXED_CONFIG: &[(&str, &str)] = &[
     ("user.name", BOT_NAME),
     ("user.email", BOT_EMAIL),
     ("commit.gpgsign", "false"),
     ("tag.gpgsign", "false"),
     ("push.gpgsign", "false"),
     ("advice.detachedHead", "false"),
+    ("color.ui", "never"),
+    ("color.diff", "never"),
+    ("diff.noprefix", "false"),
+    ("diff.mnemonicPrefix", "false"),
+    ("diff.relative", "false"),
+    ("core.hooksPath", "/dev/null"),
+    ("format.signOff", "false"),
 ];
 
 const NETWORK_COMMANDS: &[&str] = &["fetch", "push", "ls-remote", "clone", "pull"];
@@ -532,8 +542,12 @@ fn build_command(cwd: &Path, args: &[&str], opts: &GitOpts<'_>, transport: &Tran
     }
 
     let mut cmd = Command::new("git");
-    for (key, value) in IDENTITY_CONFIG {
+    for (key, value) in FIXED_CONFIG {
         cmd.arg("-c").arg(format!("{key}={value}"));
+    }
+    // diff.external / GIT_EXTERNAL_DIFF would replace the diff uplink parses.
+    if child_args.first().is_some_and(|cmd| cmd == "diff") {
+        child_args.insert(1, "--no-ext-diff".into());
     }
     // actions/checkout persist-credentials writes http.<origin>/.extraheader
     // (GITHUB_TOKEN). An empty value overrides that multi-value; a following
@@ -571,7 +585,9 @@ fn build_command(cwd: &Path, args: &[&str], opts: &GitOpts<'_>, transport: &Tran
             cmd.env(key, value);
         }
     }
-    cmd.env_remove("GIT_SSH").env_remove("GIT_SSH_COMMAND");
+    cmd.env_remove("GIT_SSH")
+        .env_remove("GIT_SSH_COMMAND")
+        .env_remove("GIT_EXTERNAL_DIFF");
     if transport.isolate_gitconfig {
         cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null");

@@ -4841,6 +4841,55 @@ fn does_not_submit_or_push_when_export_tests_fail() {
 }
 
 #[test]
+fn user_git_config_and_hooks_do_not_change_the_imported_patch() {
+    let world = setup_world();
+    let company = &world.company;
+    for (key, value) in [
+        ("color.ui", "always"),
+        ("color.diff", "always"),
+        ("diff.noprefix", "true"),
+        ("diff.external", "false"),
+        ("format.signOff", "true"),
+    ] {
+        git(company, &["config", key, value], GitOpts::default()).unwrap();
+    }
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hook = company.join(".git/hooks/pre-commit");
+    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let body = fs::read_to_string(tooling_patch_path(company, &patch.id)).unwrap();
+    assert!(!body.contains('\u{1b}'), "{body}");
+    assert!(body.contains("--- a/src/tokens.js"), "{body}");
+    assert!(body.contains("+++ b/src/tokens.js"), "{body}");
+    assert!(!body.contains("Signed-off-by"), "{body}");
+}
+
+#[test]
 fn preflight_command_does_not_see_uplink_credentials() {
     let world = setup_world();
     let company = &world.company;
