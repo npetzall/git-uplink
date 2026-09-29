@@ -922,6 +922,19 @@ pub fn assess_from_message(
             },
         });
     }
+    if !intent.is_internal_only() {
+        let binaries = binary_files(repo, from_ref, head_ref)?;
+        if !binaries.is_empty() {
+            checks.push(AssessCheck {
+                id: "binary-files".into(),
+                status: CheckStatus::Warn,
+                detail: format!(
+                    "Export contains binary files that the keyword scan cannot read: {}. Check them by hand for company names and internal data.",
+                    binaries.join(", ")
+                ),
+            });
+        }
+    }
 
     let ok = checks.iter().all(|c| c.status != CheckStatus::Fail);
     let cutoff_found = !internal_text.is_empty() || stored.contains(&marker);
@@ -938,6 +951,27 @@ pub fn assess_from_message(
         cutoff_found,
         checks,
     })
+}
+
+/// Paths `git diff --numstat` reports as binary (`-\t-\t<path>`) in the export.
+fn binary_files(repo: &Path, from_ref: &str, head_ref: &str) -> Result<Vec<String>> {
+    let numstat = git_ok(
+        repo,
+        &[
+            "diff",
+            "--numstat",
+            from_ref,
+            head_ref,
+            "--",
+            ".",
+            ":!.uplink",
+        ],
+    )?;
+    Ok(numstat
+        .lines()
+        .filter_map(|line| line.strip_prefix("-\t-\t"))
+        .map(str::to_string)
+        .collect())
 }
 
 pub fn assert_assess_ok(report: &AssessReport, label: &str) -> Result<()> {

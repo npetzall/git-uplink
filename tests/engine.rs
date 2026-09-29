@@ -6222,6 +6222,38 @@ fn ref_exists(repo: &Path, name: &str) -> bool {
 }
 
 #[test]
+fn assess_warns_about_binary_files_in_the_export() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/logo"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    fs::write(company.join("logo.bin"), b"\x00\x01AcmeCorp\x00\xff").unwrap();
+    commit_all(company, "add logo");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add logo".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let assess = patch.assess.as_ref().unwrap();
+    let check = assess
+        .checks
+        .iter()
+        .find(|c| c.id == "binary-files")
+        .expect("binary-files check");
+    assert_eq!(check.status, CheckStatus::Warn);
+    assert!(check.detail.contains("logo.bin"), "{}", check.detail);
+    assert!(assess.ok);
+}
+
+#[test]
 fn assess_fails_an_export_author_at_an_internal_domain() {
     let world = setup_world();
     let company = &world.company;
