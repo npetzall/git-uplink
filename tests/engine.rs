@@ -4481,6 +4481,49 @@ fn push_refuses_when_origin_changed_the_same_patch() {
 }
 
 #[test]
+fn rebuild_push_leaves_origin_main_when_state_push_is_rejected() {
+    let world = setup_world();
+    let origin = publish_origin(&world.company);
+    let (asha_keep, asha) = clone_company_from(&origin, &world.upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &world.upstream);
+    git(&asha, &["checkout", "--quiet", "main"], GitOpts::default()).unwrap();
+
+    add_notes_patch(&ben);
+    push_origin(&ben).unwrap();
+    let origin_main = rev_of(&origin, "main");
+
+    git(
+        &asha,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&asha, "README.md", "from-asha\n");
+    commit_all(&asha, "readme from asha");
+    add_landed_patch(
+        &asha,
+        AddPatchOpts {
+            title: "Readme from Asha".into(),
+            from_ref: Some("main".into()),
+            internal_pr_number: Some(401),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let err = rebuild_with(
+        &asha,
+        RebuildOpts {
+            push: true,
+            ..Default::default()
+        },
+    );
+    assert!(err.is_err(), "state push should be rejected");
+    assert_eq!(rev_of(&origin, "main"), origin_main);
+    drop((asha_keep, ben_keep));
+}
+
+#[test]
 fn push_fast_forwards_when_local_is_behind() {
     let world = setup_world();
     let company = &world.company;
