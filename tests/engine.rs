@@ -3426,6 +3426,8 @@ fn sync_detects_several_patches_merged_by_patch_id() {
             "{id}"
         );
     }
+    let message = queue.last_sync.unwrap().message.unwrap();
+    assert_eq!(message, format!("Marked merged: {}", ids.join(", ")));
 }
 
 #[test]
