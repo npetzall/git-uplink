@@ -353,29 +353,41 @@ pub fn run_preflight_command_in(queue: &QueueState, cwd: &Path) -> Result<()> {
 }
 
 pub fn assert_upstream_layer_applies(repo: &Path, queue: &QueueState) -> Result<()> {
-    with_upstream_worktree(repo, |dir| {
-        for patch in apply_order_upstream_layer(queue)? {
-            if patch.status == PatchStatus::Conflict {
-                return Err(Error::msg(format!(
-                    "Queue is blocked on conflict in {}; cannot preflight the upstream layer.",
-                    patch.id
-                )));
-            }
-            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
-            if result == ApplyOutcome::Conflict {
-                return Err(Error::Preflight(PreflightError::new(
-                    format!(
-                        "Queued patch \"{}\" does not apply onto tooling + upstream.",
-                        patch.title
-                    ),
-                    Vec::new(),
-                    "apply",
-                    None,
-                )));
-            }
+    with_upstream_worktree(repo, |dir| apply_upstream_layer(dir, repo, queue, None))
+}
+
+/// Applies tooling + active upstream patches in order onto `dir`. `before`
+/// names the candidate that will follow, for the error message.
+fn apply_upstream_layer(
+    dir: &Path,
+    repo: &Path,
+    queue: &QueueState,
+    before: Option<&str>,
+) -> Result<()> {
+    for patch in apply_order_upstream_layer(queue)? {
+        if patch.status == PatchStatus::Conflict {
+            return Err(Error::msg(format!(
+                "Queue is blocked on conflict in {}; cannot preflight the upstream layer.",
+                patch.id
+            )));
         }
-        Ok(())
-    })
+        let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
+        if result == ApplyOutcome::Conflict {
+            let before = before
+                .map(|title| format!(" before \"{title}\""))
+                .unwrap_or_default();
+            return Err(Error::Preflight(PreflightError::new(
+                format!(
+                    "Queued patch \"{}\" does not apply onto tooling + upstream{before}.",
+                    patch.title
+                ),
+                Vec::new(),
+                "apply",
+                None,
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn assert_upstream_layer_preflight(
@@ -385,26 +397,7 @@ pub fn assert_upstream_layer_preflight(
     title: &str,
 ) -> Result<()> {
     with_upstream_worktree(repo, |dir| {
-        for patch in apply_order_upstream_layer(queue)? {
-            if patch.status == PatchStatus::Conflict {
-                return Err(Error::msg(format!(
-                    "Queue is blocked on conflict in {}; cannot preflight the upstream layer.",
-                    patch.id
-                )));
-            }
-            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
-            if result == ApplyOutcome::Conflict {
-                return Err(Error::Preflight(PreflightError::new(
-                    format!(
-                        "Queued patch \"{}\" does not apply onto tooling + upstream before \"{title}\".",
-                        patch.title
-                    ),
-                    Vec::new(),
-                    "apply",
-                    None,
-                )));
-            }
-        }
+        apply_upstream_layer(dir, repo, queue, Some(title))?;
         let applied = apply_abs(dir, candidate_abs, title)?;
         if applied == ApplyOutcome::Conflict {
             return Err(Error::Preflight(PreflightError::new(
