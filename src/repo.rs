@@ -383,22 +383,10 @@ pub fn fetch_upstream(repo: &Path, queue: &QueueState) -> Result<String> {
     Ok(sha)
 }
 
-pub fn state_branch(repo: &Path) -> String {
-    let path = repo.join(QUEUE_PATH);
-    if path.is_file()
-        && let Ok(raw) = fs::read_to_string(&path)
-        && let Ok(queue) = serde_json::from_str::<QueueState>(&raw)
-        && !queue.config.state_branch.is_empty()
-    {
-        return queue.config.state_branch;
-    }
-    STATE_BRANCH.to_string()
-}
-
 fn state_ref_source(repo: &Path) -> Result<Option<String>> {
-    let branch = state_branch(repo);
-    if has_ref(repo, &branch)? {
-        return Ok(Some(branch));
+    let branch = STATE_BRANCH;
+    if has_ref(repo, branch)? {
+        return Ok(Some(branch.to_string()));
     }
     let origin = format!("{COMPANY_REMOTE}/{branch}");
     if has_ref(repo, &origin)? {
@@ -552,15 +540,11 @@ pub fn ensure_state_worktree(repo: &Path) -> Result<()> {
     let Some(source) = state_ref_source(repo)? else {
         return Ok(());
     };
-    let branch = state_branch(repo);
+    let branch = STATE_BRANCH;
     if source != branch {
-        git(
-            repo,
-            &["branch", "-f", &branch, &source],
-            GitOpts::default(),
-        )?;
+        git(repo, &["branch", "-f", branch, &source], GitOpts::default())?;
     }
-    restore_state_worktree(repo, &branch)
+    restore_state_worktree(repo, branch)
 }
 
 fn uplink_worktree_tree(repo: &Path, branch: &str) -> Result<String> {
@@ -590,16 +574,16 @@ fn uplink_worktree_tree(repo: &Path, branch: &str) -> Result<String> {
 }
 
 pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
-    let branch = state_branch(repo);
-    let tree = uplink_worktree_tree(repo, &branch)?;
-    if has_ref(repo, &branch)? {
+    let branch = STATE_BRANCH;
+    let tree = uplink_worktree_tree(repo, branch)?;
+    if has_ref(repo, branch)? {
         let old_tree = git_ok(repo, &["rev-parse", &format!("{branch}^{{tree}}")])?;
         if old_tree == tree {
             return Ok(());
         }
     }
-    let parent = if has_ref(repo, &branch)? {
-        Some(rev_parse(repo, &branch)?)
+    let parent = if has_ref(repo, branch)? {
+        Some(rev_parse(repo, branch)?)
     } else {
         None
     };
@@ -794,17 +778,17 @@ pub fn file_history(repo: &Path, git_ref: &str, path: &str) -> Result<Vec<FileRe
 }
 
 pub fn patch_state_commit(repo: &Path, id: &str) -> Result<String> {
-    let branch = state_branch(repo);
+    let branch = STATE_BRANCH;
     let path = patch_path(id)?.to_string_lossy().into_owned();
     let result = git(
         repo,
-        &["log", "-1", "--format=%H", &branch, "--", &path],
+        &["log", "-1", "--format=%H", branch, "--", &path],
         GitOpts::allow_fail(),
     )?;
     if result.code == 0 && !result.stdout.is_empty() {
         return Ok(result.stdout);
     }
-    rev_parse(repo, &branch)
+    rev_parse(repo, branch)
 }
 
 pub fn refresh_company_branch(repo: &Path, remote: &str, branch: &str) -> Result<String> {

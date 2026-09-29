@@ -8,10 +8,6 @@ pub const TOOLING_PATCH_KIND: &str = "uplink-tooling";
 pub const TOOLING_PATCH_TITLE: &str = "Uplink tooling";
 pub const QUEUE_VERSION: u32 = 1;
 
-fn default_state_branch() -> String {
-    STATE_BRANCH.to_string()
-}
-
 pub const DEFAULT_EXPORT_AUTHOR: (&str, &str) =
     ("Uplink Contributor", "uplink@users.noreply.github.com");
 
@@ -372,8 +368,6 @@ pub struct QueueConfig {
     pub upstream_url: Option<String>,
     #[serde(default, skip_serializing_if = "skip_empty_option")]
     pub contrib_url: Option<String>,
-    #[serde(default = "default_state_branch")]
-    pub state_branch: String,
     pub trailer_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preflight_command: Option<String>,
@@ -400,7 +394,6 @@ impl Default for QueueConfig {
             internal_branch: "main".into(),
             upstream_url: None,
             contrib_url: None,
-            state_branch: STATE_BRANCH.into(),
             trailer_key: "Uplink-Patch-Id".into(),
             preflight_command: None,
             cutoff_marker: Some(DEFAULT_CUTOFF.into()),
