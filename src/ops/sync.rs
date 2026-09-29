@@ -354,7 +354,7 @@ pub(super) fn apply_fetched_upstream(repo: &Path, sha: &str) -> Result<QueueStat
                 message: Some(if merged.is_empty() {
                     "Synced with upstream".into()
                 } else {
-                    format!("Dropped merged patches: {}", merged.join(", "))
+                    format!("Marked merged: {}", merged.join(", "))
                 }),
             });
             write_queue_file(repo, &queue)?;
