@@ -253,7 +253,6 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
                 }
             }
         }
-        let _ = live;
     }
     Ok(merged_ids)
 }
