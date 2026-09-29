@@ -1498,6 +1498,31 @@ fn init_upgrade_cli_reports_already_up_to_date() {
     assert_eq!(before, after);
 }
 
+fn run_version(args: &[&str]) -> String {
+    let dir = temp_dir();
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(args)
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn version_subcommand_prints_version_outside_a_repo() {
+    let stdout = run_version(&["version"]);
+    let prefix = format!("git-uplink {} (", env!("CARGO_PKG_VERSION"));
+    assert!(stdout.starts_with(&prefix), "{stdout}");
+    assert!(stdout.ends_with(")\n"), "{stdout}");
+}
+
+#[test]
+fn version_flag_matches_subcommand() {
+    assert_eq!(run_version(&["--version"]), run_version(&["version"]));
+    assert_eq!(run_version(&["-V"]), run_version(&["version"]));
+}
+
 #[test]
 fn init_upgrade_cli_reports_a_tooling_refresh() {
     let world = setup_uninitialized();

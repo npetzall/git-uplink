@@ -21,10 +21,18 @@ use git_uplink::{
     Patch, PatchIntent, PatchStatus, QueueState, SyncResult, TransferDirection, TransferResult,
 };
 
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("GIT_UPLINK_COMMIT"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "git-uplink",
     bin_name = "git uplink",
+    version = VERSION,
     about = "Carry internal patches on upstream, contribute once, drop when merged.",
     long_about = "Developers open PRs and merge them; they never push main.\n\
 add records a merged PR as a queued patch on uplink/state. assess uses the PR\n\
@@ -226,6 +234,8 @@ enum Commands {
         #[arg(long)]
         no_open: bool,
     },
+    /// Print the git uplink version and the commit it was built from.
+    Version,
 }
 
 fn read_commit_message(
@@ -1060,6 +1070,7 @@ fn run() -> Result<(), Error> {
                 .block_on(git_uplink::webui::serve(repo, addr, !no_open))
                 .map_err(|err| Error::msg(format!("web-ui server: {err}")))?;
         }
+        Commands::Version => println!("git-uplink {VERSION}"),
     }
     Ok(())
 }
