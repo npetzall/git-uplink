@@ -70,7 +70,7 @@ fn export_onto(
     let company_branch = &queue.config.internal_branch;
     ensure_clean_worktree(repo, "submit")?;
     let snapshot = snapshot_uplink(repo)?;
-    let applied = (|| -> Result<&'static str> {
+    let applied = (|| -> Result<ApplyOutcome> {
         git(
             repo,
             &["checkout", "-f", "--quiet", "--detach", start],
@@ -85,7 +85,7 @@ fn export_onto(
             return Err(err);
         }
     };
-    if applied == "conflict" {
+    if applied == ApplyOutcome::Conflict {
         let files = conflicted_files(repo).unwrap_or_default();
         checkout_company(repo, company_branch)?;
         let _ = fs::remove_dir_all(&snapshot);
@@ -95,7 +95,7 @@ fn export_onto(
             files,
         )));
     }
-    if applied == "empty" {
+    if applied == ApplyOutcome::Empty {
         checkout_company(repo, company_branch)?;
         let _ = fs::remove_dir_all(&snapshot);
         return Err(Error::msg(format!(

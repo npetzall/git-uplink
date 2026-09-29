@@ -128,10 +128,10 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
             }
             let patch_file = snapshot.join(patch_path(&patch.id)?);
             let result = apply_patch_file(repo, &patch, &patch_file, false)?;
-            if result == "empty" {
+            if result == ApplyOutcome::Empty {
                 continue;
             }
-            if result == "conflict" {
+            if result == ApplyOutcome::Conflict {
                 let files = conflicted_files(repo)?;
                 git(
                     repo,
@@ -196,13 +196,13 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
             }
             let patch_file = snapshot.join(patch_path(&patch.id)?);
             let result = apply_patch_file(repo, &patch, &patch_file, false)?;
-            if result == "empty" {
+            if result == ApplyOutcome::Empty {
                 if queue.is_upstream(&patch.id) {
                     mark_merged_by_empty_rebase(repo, &mut queue, &patch.id, upstream_ref)?;
                 }
                 continue;
             }
-            if result == "conflict" {
+            if result == ApplyOutcome::Conflict {
                 let files = conflicted_files(repo)?;
                 return Err(Error::Conflict(persist_apply_conflict(
                     repo,

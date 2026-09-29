@@ -48,6 +48,15 @@ impl std::fmt::Display for PatchStatus {
     }
 }
 
+/// What applying a patch file did: committed a change, found it already
+/// present (nothing to commit), or hit a conflict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyOutcome {
+    Applied,
+    Empty,
+    Conflict,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatchLayer {
     Tooling,
