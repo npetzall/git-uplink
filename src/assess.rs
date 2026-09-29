@@ -816,36 +816,80 @@ pub fn assess_from_message(
     let (public_text, internal_text) = split_internal_message(&stored, &marker);
     let (subject, body) = subject_and_body(&public_text, fallback);
     let author = resolve_export_author(queue, &internal_text);
+    let (original_author, original_email) = head_author(repo, head_ref)?;
+
+    let mut checks = message_checks(
+        &marker,
+        &public_text,
+        &internal_text,
+        &author,
+        (original_author.as_deref(), original_email.as_deref()),
+    );
+    if intent.is_internal_only() {
+        checks.push(AssessCheck {
+            id: "affiliation-leak".into(),
+            status: CheckStatus::Skip,
+            detail: "internal-only patches are not exported; keyword scan skipped.".into(),
+        });
+    } else {
+        let diff = git_ok(
+            repo,
+            &[
+                "diff",
+                "--full-index",
+                from_ref,
+                head_ref,
+                "--",
+                ".",
+                ":!.uplink",
+            ],
+        )?;
+        // The export author lands in the public commit, so it is scanned too.
+        let export_surface = format!("{} <{}>\n{subject}\n{body}\n{diff}", author.0, author.1);
+        checks.push(affiliation_check(queue, &export_surface));
+        checks.extend(binary_files_check(repo, from_ref, head_ref)?);
+    }
+
+    let ok = checks.iter().all(|c| c.status != CheckStatus::Fail);
+    let cutoff_found = !internal_text.is_empty() || stored.contains(&marker);
+    Ok(AssessReport {
+        at: now_iso(),
+        ok,
+        commit_message: stored,
+        public_subject: subject,
+        public_body: body,
+        author_name: author.0,
+        author_email: author.1,
+        original_author,
+        original_email,
+        cutoff_found,
+        checks,
+    })
+}
+
+/// Author name and email of `head_ref`, when git has them.
+fn head_author(repo: &Path, head_ref: &str) -> Result<(Option<String>, Option<String>)> {
     let original = git(
         repo,
         &["log", "-1", "--format=%an%x00%ae", head_ref],
         GitOpts::allow_fail(),
     )?;
-    let mut orig = original.stdout.split('\u{0}');
-    let original_author = orig.next().filter(|s| !s.is_empty()).map(str::to_string);
-    let original_email = orig.next().filter(|s| !s.is_empty()).map(str::to_string);
+    let mut parts = original.stdout.split('\u{0}');
+    let name = parts.next().filter(|s| !s.is_empty()).map(str::to_string);
+    let email = parts.next().filter(|s| !s.is_empty()).map(str::to_string);
+    Ok((name, email))
+}
 
-    let diff = git_ok(
-        repo,
-        &[
-            "diff",
-            "--full-index",
-            from_ref,
-            head_ref,
-            "--",
-            ".",
-            ":!.uplink",
-        ],
-    )?;
-    // The export author lands in the public commit, so it is scanned too.
-    let export_surface = format!("{} <{}>\n{subject}\n{body}\n{diff}", author.0, author.1);
-    let keys = keywords_for(queue);
-    let domains = internal_domains(queue);
-    let key_hits = find_keyword_hits(&export_surface, &keys);
-    let domain_hits = find_domain_hits(&export_surface, &domains);
-    let tickets: Vec<&str> = TICKET.find_iter(&public_text).map(|m| m.as_str()).collect();
-
-    let mut checks = vec![
+/// Checks on the commit message and author rewrite: message-scrubbed, cutoff-used, author-rewrite.
+fn message_checks(
+    marker: &str,
+    public_text: &str,
+    internal_text: &str,
+    author: &(String, String),
+    original: (Option<&str>, Option<&str>),
+) -> Vec<AssessCheck> {
+    let tickets: Vec<&str> = TICKET.find_iter(public_text).map(|m| m.as_str()).collect();
+    vec![
         AssessCheck {
             id: "message-scrubbed".into(),
             status: CheckStatus::Pass,
@@ -884,73 +928,58 @@ pub fn assess_from_message(
                 "Export author {} <{}> (was {} <{}>). Company main still records the Uplink bot.",
                 author.0,
                 author.1,
-                original_author.as_deref().unwrap_or("unknown"),
-                original_email.as_deref().unwrap_or("")
+                original.0.unwrap_or("unknown"),
+                original.1.unwrap_or("")
             ),
         },
-    ];
+    ]
+}
 
-    if intent.is_internal_only() {
-        checks.push(AssessCheck {
-            id: "affiliation-leak".into(),
-            status: CheckStatus::Skip,
-            detail: "internal-only patches are not exported; keyword scan skipped.".into(),
-        });
-    } else if keys.is_empty() && domains.is_empty() {
-        checks.push(AssessCheck {
+/// Scans the export surface for configured company keywords and internal email domains.
+fn affiliation_check(queue: &QueueState, export_surface: &str) -> AssessCheck {
+    let keys = keywords_for(queue);
+    let domains = internal_domains(queue);
+    if keys.is_empty() && domains.is_empty() {
+        return AssessCheck {
             id: "affiliation-leak".into(),
             status: CheckStatus::Warn,
             detail: "No redactKeywords / internalEmailDomains configured. Set them (or UPLINK_REDACT_KEYWORDS) so tests cannot mention the company.".into(),
-        });
-    } else {
-        let mut hits = key_hits;
-        hits.extend(domain_hits);
-        checks.push(AssessCheck {
-            id: "affiliation-leak".into(),
-            status: if hits.is_empty() {
-                CheckStatus::Pass
-            } else {
-                CheckStatus::Fail
-            },
-            detail: if hits.is_empty() {
-                "No configured company keywords or internal email domains in the export surface.".into()
-            } else {
-                format!(
-                    "Export diff or public message contains: {}. Remove company names, internal hostnames, and staff emails from the contribution (including tests).",
-                    hits.join(", ")
-                )
-            },
-        });
+        };
     }
-    if !intent.is_internal_only() {
-        let binaries = binary_files(repo, from_ref, head_ref)?;
-        if !binaries.is_empty() {
-            checks.push(AssessCheck {
-                id: "binary-files".into(),
-                status: CheckStatus::Warn,
-                detail: format!(
-                    "Export contains binary files that the keyword scan cannot read: {}. Check them by hand for company names and internal data.",
-                    binaries.join(", ")
-                ),
-            });
-        }
+    let mut hits = find_keyword_hits(export_surface, &keys);
+    hits.extend(find_domain_hits(export_surface, &domains));
+    AssessCheck {
+        id: "affiliation-leak".into(),
+        status: if hits.is_empty() {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        },
+        detail: if hits.is_empty() {
+            "No configured company keywords or internal email domains in the export surface.".into()
+        } else {
+            format!(
+                "Export diff or public message contains: {}. Remove company names, internal hostnames, and staff emails from the contribution (including tests).",
+                hits.join(", ")
+            )
+        },
     }
+}
 
-    let ok = checks.iter().all(|c| c.status != CheckStatus::Fail);
-    let cutoff_found = !internal_text.is_empty() || stored.contains(&marker);
-    Ok(AssessReport {
-        at: now_iso(),
-        ok,
-        commit_message: stored,
-        public_subject: subject,
-        public_body: body,
-        author_name: author.0,
-        author_email: author.1,
-        original_author,
-        original_email,
-        cutoff_found,
-        checks,
-    })
+/// Warns when the export has binary files, which the keyword scan cannot read.
+fn binary_files_check(repo: &Path, from_ref: &str, head_ref: &str) -> Result<Option<AssessCheck>> {
+    let binaries = binary_files(repo, from_ref, head_ref)?;
+    if binaries.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(AssessCheck {
+        id: "binary-files".into(),
+        status: CheckStatus::Warn,
+        detail: format!(
+            "Export contains binary files that the keyword scan cannot read: {}. Check them by hand for company names and internal data.",
+            binaries.join(", ")
+        ),
+    }))
 }
 
 /// Paths `git diff --numstat` reports as binary (`-\t-\t<path>`) in the export.

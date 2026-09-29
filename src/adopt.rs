@@ -264,75 +264,81 @@ fn resolve_group_runs(
         ));
     }
     let mut assigned = vec![None; analysis.commits.len()];
-    let mut runs = Vec::new();
-    for (group_idx, group) in groups.iter().enumerate() {
-        if group.commits.is_empty() {
+    let runs = groups
+        .iter()
+        .enumerate()
+        .map(|(group_idx, group)| resolve_group(analysis, group, group_idx, &mut assigned))
+        .collect::<Result<Vec<_>>>()?;
+    check_group_order(analysis, &assigned)?;
+    Ok(runs)
+}
+
+/// Resolves one group to a contiguous first-parent run, recording its commits in `assigned`.
+fn resolve_group(
+    analysis: &AheadAnalysis,
+    group: &AdoptGroup,
+    group_idx: usize,
+    assigned: &mut [Option<usize>],
+) -> Result<ResolvedGroup> {
+    if group.commits.is_empty() {
+        return Err(Error::msg(format!(
+            "adopt group {} has no commits",
+            group_idx + 1
+        )));
+    }
+    let mut indices = Vec::new();
+    for spec in &group.commits {
+        let commit = resolve_sha(&analysis.commits, spec)?;
+        let idx = analysis
+            .commits
+            .iter()
+            .position(|c| c.sha == commit.sha)
+            .expect("resolved commit is in the list");
+        if assigned[idx].is_some() {
             return Err(Error::msg(format!(
-                "adopt group {} has no commits",
-                group_idx + 1
+                "commit {} is in more than one adopt group",
+                commit.short
             )));
         }
-        let mut indices = Vec::new();
-        let mut shas = Vec::new();
-        for spec in &group.commits {
-            let commit = resolve_sha(&analysis.commits, spec)?;
-            let idx = analysis
-                .commits
-                .iter()
-                .position(|c| c.sha == commit.sha)
-                .expect("resolved commit is in the list");
-            if assigned[idx].is_some() {
-                return Err(Error::msg(format!(
-                    "commit {} is in more than one adopt group",
-                    commit.short
-                )));
-            }
-            assigned[idx] = Some(group_idx);
-            indices.push(idx);
-            shas.push(commit.sha.clone());
-        }
-        indices.sort_unstable();
-        shas = indices
+        assigned[idx] = Some(group_idx);
+        indices.push(idx);
+    }
+    indices.sort_unstable();
+    // Indices are unique, so a span as long as the count means no gaps.
+    let first = indices[0];
+    let last = *indices.last().unwrap();
+    if last + 1 - first != indices.len() {
+        return Err(Error::msg(format!(
+            "adopt group \"{}\" is not a contiguous first-parent run",
+            group.title
+        )));
+    }
+    let title = group.title.trim();
+    if title.is_empty() {
+        return Err(Error::msg("adopt group title is empty"));
+    }
+    let message = group
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(title)
+        .to_string();
+    Ok(ResolvedGroup {
+        from_sha: analysis.commits[first].first_parent.clone(),
+        head_sha: analysis.commits[last].sha.clone(),
+        shas: indices
             .iter()
             .map(|i| analysis.commits[*i].sha.clone())
-            .collect();
-        let first = indices[0];
-        let last = *indices.last().unwrap();
-        if last + 1 - first != indices.len() {
-            return Err(Error::msg(format!(
-                "adopt group \"{}\" is not a contiguous first-parent run",
-                group.title
-            )));
-        }
-        for window in indices.windows(2) {
-            if window[1] != window[0] + 1 {
-                return Err(Error::msg(format!(
-                    "adopt group \"{}\" is not a contiguous first-parent run",
-                    group.title
-                )));
-            }
-        }
-        let intent = group.intent;
-        let title = group.title.trim();
-        if title.is_empty() {
-            return Err(Error::msg("adopt group title is empty"));
-        }
-        let message = group
-            .message
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(title)
-            .to_string();
-        runs.push(ResolvedGroup {
-            from_sha: analysis.commits[first].first_parent.clone(),
-            head_sha: analysis.commits[last].sha.clone(),
-            shas,
-            title: title.to_string(),
-            intent,
-            message,
-        });
-    }
+            .collect(),
+        title: title.to_string(),
+        intent: group.intent,
+        message,
+    })
+}
+
+/// Every commit must be in a group, and group numbers must not interleave along history.
+fn check_group_order(analysis: &AheadAnalysis, assigned: &[Option<usize>]) -> Result<()> {
     if let Some(idx) = assigned.iter().position(|g| g.is_none()) {
         return Err(Error::msg(format!(
             "commit {} is not assigned to an adopt group",
@@ -357,7 +363,7 @@ fn resolve_group_runs(
         }
         seen.push(group_idx);
     }
-    Ok(runs)
+    Ok(())
 }
 
 fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueState> {
@@ -376,81 +382,18 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
     let mut last_upstream_id: Option<String> = None;
     let outcome = (|| -> Result<()> {
         for group in &groups {
-            let intent = group.intent;
-            let id = new_patch_id();
-            let created_at = stamp();
-            let depends_on = if !intent.is_internal_only() {
-                last_upstream_id.clone().into_iter().collect()
-            } else {
-                Vec::new()
-            };
-            if let Some(dep_id) = depends_on.first() {
-                get_patch(&queue, dep_id)?;
-                if cannot_depend_on(&queue, intent.is_internal_only(), dep_id) {
-                    return Err(Error::msg(format!(
-                        "Upstream-bound patch \"{}\" cannot depend on internal-only patch {dep_id}.",
-                        group.title
-                    )));
-                }
-            }
-            let mut patch = Patch {
-                id: id.clone(),
-                title: group.title.clone(),
-                commit_message: String::new(),
-                status: PatchStatus::Queued,
-                depends_on,
-                created_at: created_at.clone(),
-                updated_at: created_at,
-                patch_id_stable: None,
-                source: PatchSource {
-                    note: Some(format!(
-                        "{ADOPT_NOTE_PREFIX}{}..{}",
-                        &group.from_sha[..group.from_sha.len().min(8)],
-                        &group.head_sha[..group.head_sha.len().min(8)]
-                    )),
-                    ..Default::default()
-                },
-                assess: None,
-                upstream: None,
-                merged: None,
-                conflict: None,
-                approvals: Vec::new(),
-                events: Vec::new(),
-                kind: None,
-            };
-            add_event(
-                &mut patch,
-                "created",
-                format!(
-                    "Adopted from {}..{} as {intent}",
-                    &group.from_sha[..group.from_sha.len().min(8)],
-                    &group.head_sha[..group.head_sha.len().min(8)]
-                ),
-            );
-            patch.assess = Some(assess_from_message(
-                repo,
-                &queue,
-                &group.from_sha,
-                &group.head_sha,
-                &group.message,
-                Some(&group.title),
-                intent,
-            )?);
-            if let Some(report) = &patch.assess {
-                patch.commit_message = report.commit_message.clone();
-                if !intent.is_internal_only() {
-                    assert_assess_ok(report, &group.title)?;
-                }
-            }
+            let internal_only = group.intent.is_internal_only();
+            let mut patch = adopted_patch(repo, &queue, group, last_upstream_id.as_deref())?;
+            let id = patch.id.clone();
             let message = company_commit_message(&patch);
             write_product_patch(repo, &id, &group.from_sha, &message, &group.head_sha)?;
             written.push(id.clone());
             let rel = patch_path(&id)?.to_string_lossy().into_owned();
             patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-            if !intent.is_internal_only() {
-                last_upstream_id = Some(id.clone());
+            if !internal_only {
+                last_upstream_id = Some(id);
             }
-            queue.push_patch(patch, intent.is_internal_only());
+            queue.push_patch(patch, internal_only);
         }
         write_queue_file(repo, &queue)?;
         let n = written.len();
@@ -469,6 +412,78 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
     }
     outcome?;
     read_queue_file(repo)
+}
+
+/// Builds and assesses the queued patch for one adopt group. Upstream-bound groups
+/// depend on the previous upstream-bound group.
+fn adopted_patch(
+    repo: &Path,
+    queue: &QueueState,
+    group: &ResolvedGroup,
+    last_upstream_id: Option<&str>,
+) -> Result<Patch> {
+    let intent = group.intent;
+    let depends_on: Vec<String> = if !intent.is_internal_only() {
+        last_upstream_id.map(str::to_string).into_iter().collect()
+    } else {
+        Vec::new()
+    };
+    if let Some(dep_id) = depends_on.first() {
+        get_patch(queue, dep_id)?;
+        if cannot_depend_on(queue, intent.is_internal_only(), dep_id) {
+            return Err(Error::msg(format!(
+                "Upstream-bound patch \"{}\" cannot depend on internal-only patch {dep_id}.",
+                group.title
+            )));
+        }
+    }
+    let range = format!(
+        "{}..{}",
+        &group.from_sha[..group.from_sha.len().min(8)],
+        &group.head_sha[..group.head_sha.len().min(8)]
+    );
+    let created_at = stamp();
+    let mut patch = Patch {
+        id: new_patch_id(),
+        title: group.title.clone(),
+        commit_message: String::new(),
+        status: PatchStatus::Queued,
+        depends_on,
+        created_at: created_at.clone(),
+        updated_at: created_at,
+        patch_id_stable: None,
+        source: PatchSource {
+            note: Some(format!("{ADOPT_NOTE_PREFIX}{range}")),
+            ..Default::default()
+        },
+        assess: None,
+        upstream: None,
+        merged: None,
+        conflict: None,
+        approvals: Vec::new(),
+        events: Vec::new(),
+        kind: None,
+    };
+    add_event(
+        &mut patch,
+        "created",
+        format!("Adopted from {range} as {intent}"),
+    );
+    let report = assess_from_message(
+        repo,
+        queue,
+        &group.from_sha,
+        &group.head_sha,
+        &group.message,
+        Some(&group.title),
+        intent,
+    )?;
+    patch.commit_message = report.commit_message.clone();
+    if !intent.is_internal_only() {
+        assert_assess_ok(&report, &group.title)?;
+    }
+    patch.assess = Some(report);
+    Ok(patch)
 }
 
 pub fn default_title_for(commits: &[AdoptCommit]) -> String {

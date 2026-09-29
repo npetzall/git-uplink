@@ -14,8 +14,8 @@ use crate::repo::{
     patch_substance, stable_patch_id_from_contents, stamp,
 };
 use crate::types::{
-    DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchIntent, PatchSource, PatchStatus, QueueState,
-    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    AssessReport, DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchIntent, PatchSource, PatchStatus,
+    QueueState, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
 };
 
 #[derive(RustEmbed)]
@@ -94,63 +94,77 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
     )?;
 
     if created {
-        let created_at = stamp();
-        let mut patch = Patch {
-            id: id.clone(),
-            title: TOOLING_PATCH_TITLE.into(),
-            commit_message: String::new(),
-            status: PatchStatus::Queued,
-            depends_on: Vec::new(),
-            created_at: created_at.clone(),
-            updated_at: created_at,
-            patch_id_stable: Some(new_stable.clone()),
-            source: PatchSource {
-                note: Some(format!("forge {forge}")),
-                ..Default::default()
-            },
-            assess: Some(assess.clone()),
-            upstream: None,
-            merged: None,
-            conflict: None,
-            approvals: Vec::new(),
-            events: Vec::new(),
-            kind: Some(TOOLING_PATCH_KIND.into()),
-        };
-        patch.commit_message = assess.commit_message.clone();
-        add_event(
-            &mut patch,
-            "created",
-            format!("Installed {forge} forge pack as internal-only tooling"),
-        );
-        queue.tooling = Some(patch);
+        queue.tooling = Some(new_tooling_patch(&id, forge, new_stable, assess));
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: add {id} {TOOLING_PATCH_TITLE}"))?;
     } else {
-        if queue.tooling.as_ref().map(|p| p.id.as_str()) != Some(id.as_str()) {
-            if let Some(idx) = queue.internal.iter().position(|p| p.id == id) {
-                queue.tooling = Some(queue.internal.remove(idx));
-            } else if let Some(idx) = queue.upstream.iter().position(|p| p.id == id) {
-                queue.tooling = Some(queue.upstream.remove(idx));
-            }
-        }
-        if let Some(patch) = queue.tooling.as_mut() {
-            patch.kind = Some(TOOLING_PATCH_KIND.into());
-            patch.status = PatchStatus::Queued;
-            patch.conflict = None;
-            patch.patch_id_stable = Some(new_stable);
-            patch.assess = Some(assess.clone());
-            patch.commit_message = assess.commit_message.clone();
-            add_event(
-                patch,
-                "upgraded",
-                format!("Refreshed {forge} forge pack from embedded templates"),
-            );
-        }
+        upgrade_tooling_patch(&mut queue, &id, forge, new_stable, assess);
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: upgrade {id} {TOOLING_PATCH_TITLE}"))?;
     }
 
     Ok(ToolingRefresh { changed: true })
+}
+
+fn new_tooling_patch(id: &str, forge: Forge, stable: String, assess: AssessReport) -> Patch {
+    let created_at = stamp();
+    let mut patch = Patch {
+        id: id.to_string(),
+        title: TOOLING_PATCH_TITLE.into(),
+        commit_message: assess.commit_message.clone(),
+        status: PatchStatus::Queued,
+        depends_on: Vec::new(),
+        created_at: created_at.clone(),
+        updated_at: created_at,
+        patch_id_stable: Some(stable),
+        source: PatchSource {
+            note: Some(format!("forge {forge}")),
+            ..Default::default()
+        },
+        assess: Some(assess),
+        upstream: None,
+        merged: None,
+        conflict: None,
+        approvals: Vec::new(),
+        events: Vec::new(),
+        kind: Some(TOOLING_PATCH_KIND.into()),
+    };
+    add_event(
+        &mut patch,
+        "created",
+        format!("Installed {forge} forge pack as internal-only tooling"),
+    );
+    patch
+}
+
+/// Moves patch `id` into the tooling layer if needed and records the refreshed pack.
+fn upgrade_tooling_patch(
+    queue: &mut QueueState,
+    id: &str,
+    forge: Forge,
+    stable: String,
+    assess: AssessReport,
+) {
+    if queue.tooling.as_ref().map(|p| p.id.as_str()) != Some(id) {
+        if let Some(idx) = queue.internal.iter().position(|p| p.id == id) {
+            queue.tooling = Some(queue.internal.remove(idx));
+        } else if let Some(idx) = queue.upstream.iter().position(|p| p.id == id) {
+            queue.tooling = Some(queue.upstream.remove(idx));
+        }
+    }
+    if let Some(patch) = queue.tooling.as_mut() {
+        patch.kind = Some(TOOLING_PATCH_KIND.into());
+        patch.status = PatchStatus::Queued;
+        patch.conflict = None;
+        patch.patch_id_stable = Some(stable);
+        patch.commit_message = assess.commit_message.clone();
+        patch.assess = Some(assess);
+        add_event(
+            patch,
+            "upgraded",
+            format!("Refreshed {forge} forge pack from embedded templates"),
+        );
+    }
 }
 
 pub fn composed_files(forge: Forge) -> Result<Vec<(String, Vec<u8>)>> {
