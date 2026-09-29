@@ -2939,6 +2939,67 @@ fn sync_sends_merge_commits_to_review() {
 }
 
 #[test]
+fn sync_detects_merged_patches_by_a_custom_trailer_key() {
+    let world = setup_world();
+    let company = &world.company;
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.trailer_key = "Company-Patch".into();
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: custom trailer").unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let upstream = &world.upstream;
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    git(upstream, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        upstream,
+        &[
+            "commit",
+            "-m",
+            &format!("Use SHA-256 for tokens\n\nCompany-Patch: {}\n", patch.id),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let queue = sync_apply(company);
+    let merged = queue.all_patches().find(|p| p.id == patch.id).unwrap();
+    assert_eq!(merged.status, PatchStatus::Merged);
+    assert_eq!(merged.merged.as_ref().unwrap().via, MergeVia::Trailer);
+}
+
+#[test]
 fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
     let world = setup_world();
     let company = &world.company;
