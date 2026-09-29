@@ -43,8 +43,8 @@ use crate::repo::{
 };
 use crate::types::{
     ApplyOutcome, AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval,
-    PatchConflict, PatchIntent, PatchLayer, PatchMerged, PatchSource, PatchStatus, PatchUpstream,
-    PendingUpstream, QueueConfig, QueueState, STATE_BRANCH, TransferDirection,
+    PatchConflict, PatchEvent, PatchIntent, PatchLayer, PatchMerged, PatchSource, PatchStatus,
+    PatchUpstream, PendingUpstream, QueueConfig, QueueState, STATE_BRANCH, TransferDirection,
 };
 
 mod add;
