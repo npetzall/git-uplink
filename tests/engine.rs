@@ -3000,6 +3000,42 @@ fn sync_detects_merged_patches_by_a_custom_trailer_key() {
 }
 
 #[test]
+fn mark_merged_commits_the_queue() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    mark_merged(company, &patch.id, MergeVia::Manual, None).unwrap();
+    assert_eq!(
+        git_ok(company, &["log", "-1", "--format=%s", STATE_BRANCH]).unwrap(),
+        format!("uplink: merged {}", patch.id)
+    );
+    let committed = git_uplink::queue_at(company, STATE_BRANCH).unwrap();
+    let recorded = committed.all_patches().find(|p| p.id == patch.id).unwrap();
+    assert_eq!(recorded.status, PatchStatus::Merged);
+}
+
+#[test]
 fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
     let world = setup_world();
     let company = &world.company;

@@ -117,6 +117,7 @@ pub fn mark_merged(
             add_event(patch, "merged", format!("Detected via {}", via.as_str()));
         }
         write_queue_file(repo, &queue)?;
+        commit_queue(repo, &format!("uplink: merged {id}"))?;
         Ok(get_patch(&queue, id)?.clone())
     })
 }
