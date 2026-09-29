@@ -506,6 +506,26 @@ fn git_inner(
         Transport::default()
     };
 
+    let mut cmd = build_command(cwd, args, &opts, &transport);
+    let mut child = cmd.spawn().map_err(Error::from)?;
+    if let Some(input) = opts.input
+        && let Some(mut stdin) = child.stdin.take()
+    {
+        stdin.write_all(input)?;
+    }
+    let output = child.wait_with_output()?;
+    let result = GitResult {
+        stdout: strip_nl(String::from_utf8_lossy(&output.stdout).into_owned()),
+        stderr: strip_nl(String::from_utf8_lossy(&output.stderr).into_owned()),
+        code: output.status.code().unwrap_or(1),
+    };
+    if result.code != 0 && !opts.allow_fail {
+        return Err(Error::Git(GitError::new(args, result)));
+    }
+    Ok(result)
+}
+
+fn build_command(cwd: &Path, args: &[&str], opts: &GitOpts<'_>, transport: &Transport) -> Command {
     let mut child_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     if let (Some(index), Some(url)) = (network_remote_index(args), transport.remote_url.as_ref()) {
         child_args[index] = url.clone();
@@ -516,13 +536,20 @@ fn git_inner(
         cmd.arg("-c").arg(format!("{key}={value}"));
     }
     // actions/checkout persist-credentials writes http.<origin>/.extraheader
-    // (GITHUB_TOKEN). Empty `-c` overrides that multi-value; a following `-c`
-    // on the same key supplies UPLINK_INTERNAL_TOKEN / UPLINK_CONTRIB_TOKEN /
+    // (GITHUB_TOKEN). An empty value overrides that multi-value; a following
+    // entry on the same key supplies UPLINK_INTERNAL_TOKEN / UPLINK_CONTRIB_TOKEN /
     // UPLINK_UPSTREAM_TOKEN. Anonymous HTTPS upstream blanks the key and does
     // not write a replacement. Generic http.extraHeader is shadowed once the
-    // URL-specific key exists.
-    for value in http_auth_config_args(&transport) {
-        cmd.arg("-c").arg(value);
+    // URL-specific key exists. These go through GIT_CONFIG_* env vars, not
+    // `-c`, so the token never shows up in the process list.
+    let auth = http_auth_config_args(transport);
+    if !auth.is_empty() {
+        cmd.env("GIT_CONFIG_COUNT", auth.len().to_string());
+        for (i, entry) in auth.iter().enumerate() {
+            let (key, value) = entry.split_once('=').unwrap_or((entry, ""));
+            cmd.env(format!("GIT_CONFIG_KEY_{i}"), key)
+                .env(format!("GIT_CONFIG_VALUE_{i}"), value);
+        }
     }
     if transport.isolate_gitconfig {
         cmd.arg("-c").arg("safe.directory=*");
@@ -557,23 +584,7 @@ fn git_inner(
     } else {
         cmd.stdin(Stdio::null());
     }
-
-    let mut child = cmd.spawn().map_err(Error::from)?;
-    if let Some(input) = opts.input
-        && let Some(mut stdin) = child.stdin.take()
-    {
-        stdin.write_all(input)?;
-    }
-    let output = child.wait_with_output()?;
-    let result = GitResult {
-        stdout: strip_nl(String::from_utf8_lossy(&output.stdout).into_owned()),
-        stderr: strip_nl(String::from_utf8_lossy(&output.stderr).into_owned()),
-        code: output.status.code().unwrap_or(1),
-    };
-    if result.code != 0 && !opts.allow_fail {
-        return Err(Error::Git(GitError::new(args, result)));
-    }
-    Ok(result)
+    cmd
 }
 
 pub fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
@@ -616,8 +627,8 @@ fn has_role_credentials(role: AuthRole, opts: &GitOpts<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthRole, GitOpts, git_http_extra_header, http_auth_config_args, http_origin,
-        is_local_transport, named_auth_role, network_remote_index, ssh_to_https,
+        AuthRole, GitOpts, build_command, git_http_extra_header, http_auth_config_args,
+        http_origin, is_local_transport, named_auth_role, network_remote_index, ssh_to_https,
         transport_from_role, urls_match,
     };
 
@@ -646,6 +657,54 @@ mod tests {
         let padded = git_http_extra_header("a");
         assert_eq!(padded, "Authorization: Basic eC1hY2Nlc3MtdG9rZW46YQ==");
         assert!(!padded.contains('\n'));
+    }
+
+    #[test]
+    fn token_header_is_passed_in_env_not_argv() {
+        let opts = GitOpts {
+            extra_env: vec![("UPLINK_INTERNAL_TOKEN".into(), "pat-token".into())],
+            ..GitOpts::default()
+        };
+        let transport =
+            transport_from_role("https://github.com/acme/app.git", AuthRole::Internal, &opts)
+                .unwrap();
+        let cmd = build_command(
+            std::path::Path::new("."),
+            &["fetch", "origin"],
+            &opts,
+            &transport,
+        );
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains("Authorization") || a.contains("extraheader")),
+            "{args:?}"
+        );
+        let envs: Vec<(String, String)> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().into_owned(),
+                    v?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect();
+        let get = |key: &str| envs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        assert_eq!(get("GIT_CONFIG_COUNT"), Some("3"));
+        assert_eq!(get("GIT_CONFIG_KEY_0"), Some("credential.helper"));
+        assert_eq!(get("GIT_CONFIG_VALUE_0"), Some(""));
+        assert_eq!(
+            get("GIT_CONFIG_KEY_2"),
+            Some("http.https://github.com/.extraheader")
+        );
+        assert!(
+            get("GIT_CONFIG_VALUE_2").is_some_and(|v| v.starts_with("Authorization: Basic ")),
+            "{envs:?}"
+        );
     }
 
     #[test]
