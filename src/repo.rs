@@ -483,8 +483,20 @@ pub fn ensure_upstream_ref(repo: &Path) -> Result<()> {
         return Ok(());
     }
     let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/heads/{UPSTREAM_REF}");
-    if !git_succeeds(repo, &["fetch", "--quiet", COMPANY_REMOTE, &spec])? {
-        return Ok(());
+    let args = ["fetch", "--quiet", COMPANY_REMOTE, spec.as_str()];
+    // C locale so the "couldn't find remote ref" message is not translated.
+    let fetched = git(
+        repo,
+        &args,
+        GitOpts {
+            allow_fail: true,
+            extra_env: vec![("LC_ALL".into(), "C".into())],
+            ..GitOpts::default()
+        },
+    )?;
+    // An origin without uplink/upstream is fine; any other failure is real.
+    if fetched.code != 0 && !fetched.stderr.contains("couldn't find remote ref") {
+        return Err(Error::Git(crate::git::GitError::new(&args, fetched)));
     }
     Ok(())
 }
@@ -858,8 +870,37 @@ pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_history, patch_substance, show_at};
+    use super::{
+        UPSTREAM_REF, ensure_upstream_ref, file_history, has_ref, patch_substance, show_at,
+    };
     use crate::git::git_ok;
+
+    #[test]
+    fn ensure_upstream_ref_tolerates_a_missing_branch_but_not_a_broken_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("origin.git");
+        let repo = dir.path().join("work");
+        std::fs::create_dir_all(&repo).unwrap();
+        git_ok(
+            dir.path(),
+            &["init", "-q", "--bare", bare.to_str().unwrap()],
+        )
+        .unwrap();
+        git_ok(&repo, &["init", "-q"]).unwrap();
+        git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+        git_ok(&repo, &["remote", "add", "origin", bare.to_str().unwrap()]).unwrap();
+
+        ensure_upstream_ref(&repo).unwrap();
+        assert!(!has_ref(&repo, UPSTREAM_REF).unwrap());
+
+        let missing = dir.path().join("missing.git");
+        git_ok(
+            &repo,
+            &["remote", "set-url", "origin", missing.to_str().unwrap()],
+        )
+        .unwrap();
+        assert!(ensure_upstream_ref(&repo).is_err());
+    }
 
     #[test]
     fn option_like_refs_are_not_parsed_as_git_options() {
