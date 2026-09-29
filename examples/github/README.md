@@ -15,10 +15,10 @@ Rationale for each flow: [`way-of-working.md`](../../way-of-working.md). Setup, 
 Company `main` is always:
 
 ```text
-public upstream/main  +  every patch that is not merged or dropped
+public upstream/main  +  tooling  +  active upstream[]  +  active internal[]
 ```
 
-After bootstrap, the queue already has one **internal-only** patch (Uplink tooling: GitHub workflows and the PR template). Product stories start from that baseline.
+After bootstrap, the tooling slot already holds **Uplink tooling** (GitHub workflows and the PR template). Product stories start from that baseline.
 
 ## How a story step works
 
@@ -54,4 +54,4 @@ examples/github/
   stories/
 ```
 
-The first Actions run on a PR compiles git-uplink (Rust 1.98 + Node 22). Later runs hit the cargo cache.
+Actions jobs download the `git-uplink` release named by the `UPLINK_SRC` / `UPLINK_VERSION` repository variables; nothing is compiled.

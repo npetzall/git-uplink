@@ -5,12 +5,18 @@ on:
     branches: [main]
     paths:
       - site/**
+      - docs/**
+      - way-of-working.md
+      - templates/README.md
       - .github/workflows/site.yml
       - .github/workflows/zizmor.yml
       - .github/codeql/site.yml
   pull_request:
     paths:
       - site/**
+      - docs/**
+      - way-of-working.md
+      - templates/README.md
       - .github/workflows/site.yml
       - .github/workflows/zizmor.yml
       - .github/codeql/site.yml

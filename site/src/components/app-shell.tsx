@@ -13,8 +13,9 @@ const LINKS = [
   { href: "/internals", label: "Internals" },
   { href: "/collaboration", label: "Collaboration" },
   { href: "/install", label: "Install" },
-  { href: "/setup", label: "Forge packs" },
-  { href: "/examples", label: "Examples" },
+  { href: "/cli", label: "CLI" },
+  { href: "/examples", label: "Try it yourself" },
+  { href: "/setup", label: "Production setup" },
 ];
 
 function NavLinks({ onClick }: { onClick?: () => void }) {
