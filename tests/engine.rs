@@ -3040,6 +3040,63 @@ fn sync_detects_merged_patches_by_a_custom_trailer_key() {
 }
 
 #[test]
+fn drop_and_merged_refuse_patches_they_do_not_apply_to() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    let company = &world.company;
+    let tooling = queue.tooling.as_ref().unwrap().id.clone();
+    let before = rev_of(company, STATE_BRANCH);
+    let err = drop_patch(company, &tooling, "oops")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("tooling patch"), "{err}");
+    assert_eq!(rev_of(company, STATE_BRANCH), before);
+
+    let internal = add_internal_notes(company);
+    let err = mark_merged(company, &internal.id, MergeVia::Manual, None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not in the upstream queue"), "{err}");
+
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let upstream = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    drop_patch(company, &upstream.id, "not needed").unwrap();
+    let err = mark_merged(company, &upstream.id, MergeVia::Manual, None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("already dropped"), "{err}");
+    let err = drop_patch(company, &upstream.id, "again")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("already dropped"), "{err}");
+}
+
+#[test]
 fn mark_merged_commits_the_queue() {
     let world = setup_world();
     let company = &world.company;
