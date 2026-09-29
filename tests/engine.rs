@@ -375,6 +375,223 @@ fn clone_company_from(origin: &Path, upstream: &Path) -> (TempDir, PathBuf) {
     (dir_keep, dir)
 }
 
+const PUSH_MARKER: &str = "UPLINK_TEST_PUSHED";
+
+fn git_dir_of(repo: &Path) -> PathBuf {
+    let dot_git = repo.join(".git");
+    if dot_git.is_dir() {
+        dot_git
+    } else {
+        repo.to_path_buf()
+    }
+}
+
+fn remote_refs(repo: &Path) -> String {
+    git_ok(repo, &["for-each-ref", "--format=%(refname) %(objectname)"]).unwrap()
+}
+
+/// Fails any push into `repo` and leaves a marker behind, so a push is caught
+/// even when the caller swallows the rejection.
+fn arm_push_tripwire(repo: &Path) -> PathBuf {
+    let git_dir = git_dir_of(repo);
+    let marker = git_dir.join(PUSH_MARKER);
+    let hooks = git_dir.join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-receive");
+    fs::write(
+        &hook,
+        format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    marker
+}
+
+/// Snapshot of remotes that must not receive a push.
+struct PushGuard {
+    remotes: Vec<(PathBuf, PathBuf, String)>,
+}
+
+impl PushGuard {
+    fn arm(repos: &[&Path]) -> Self {
+        let remotes = repos
+            .iter()
+            .map(|repo| {
+                let marker = arm_push_tripwire(repo);
+                (repo.to_path_buf(), marker, remote_refs(repo))
+            })
+            .collect();
+        Self { remotes }
+    }
+
+    fn assert_untouched(&self) {
+        for (repo, marker, refs) in &self.remotes {
+            assert!(!marker.exists(), "push attempted to {}", repo.display());
+            assert_eq!(
+                &remote_refs(repo),
+                refs,
+                "refs changed on {}",
+                repo.display()
+            );
+        }
+    }
+}
+
+fn add_origin(company: &Path) -> PathBuf {
+    let origin = create_bare_from(company);
+    git(
+        company,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    origin
+}
+
+fn contrib_of(world: &World) -> PathBuf {
+    PathBuf::from(remote_get_url(&world.company, "contrib"))
+}
+
+#[test]
+fn push_tripwire_detects_a_push() {
+    let world = setup_uninitialized();
+    let origin = add_origin(&world.company);
+    init_with_recorded_urls(&world);
+    let guard = PushGuard::arm(&[&origin]);
+    let pushed = rebuild_with(
+        &world.company,
+        RebuildOpts {
+            push: true,
+            push_remote: Some("origin".into()),
+            ..Default::default()
+        },
+    );
+    assert!(pushed.is_err(), "tripwire should reject the push");
+    assert!(
+        std::panic::catch_unwind(|| guard.assert_untouched()).is_err(),
+        "guard should report the push"
+    );
+}
+
+#[test]
+fn init_first_run_does_not_push() {
+    let world = setup_uninitialized();
+    let origin = add_origin(&world.company);
+    let contrib = contrib_of(&world);
+    let guard = PushGuard::arm(&[&origin, &contrib, &world.upstream]);
+    init_with_recorded_urls(&world);
+    guard.assert_untouched();
+}
+
+#[test]
+fn init_adopt_does_not_push() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    let origin = add_origin(&world.company);
+    let contrib = contrib_of(&world);
+    let guard = PushGuard::arm(&[&origin, &contrib, &world.upstream]);
+    let queue = init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&a, &b], "Metrics", PatchIntent::Upstream),
+            adopt_group(&[&c], "Dashboards", PatchIntent::InternalOnly),
+        ],
+    );
+    assert_eq!(queue.all_patches().count(), 3);
+    guard.assert_untouched();
+}
+
+#[test]
+fn init_on_existing_queue_does_not_push() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let contrib = contrib_of(&world);
+    let new_contrib = create_bare_from(&world.upstream);
+    let guard = PushGuard::arm(&[&origin, &contrib, &new_contrib, &world.upstream]);
+    let queue = init(
+        &world.company,
+        InitOpts {
+            contrib_url: Some(new_contrib.to_str().unwrap().into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .queue;
+    assert_eq!(
+        queue.config.contrib_url.as_deref(),
+        Some(new_contrib.to_str().unwrap())
+    );
+    guard.assert_untouched();
+}
+
+#[test]
+fn init_without_args_hydrate_does_not_push() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    let contrib = contrib_of(&world);
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    let guard = PushGuard::arm(&[&origin, &contrib, &world.upstream]);
+    init(&clone, InitOpts::default()).unwrap();
+    assert!(has_git_ref(&clone, "uplink/upstream"));
+    guard.assert_untouched();
+}
+
+#[test]
+fn init_upgrade_with_tooling_change_does_not_push() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    make_tooling_stale(&world.company, &queue.patch_refs()[0].id);
+    let origin = publish_origin(&world.company);
+    let contrib = contrib_of(&world);
+    let guard = PushGuard::arm(&[&origin, &contrib, &world.upstream]);
+    let upgraded = init(
+        &world.company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(upgraded.tooling_changed);
+    guard.assert_untouched();
+}
+
+#[test]
+fn init_cli_does_not_push() {
+    let world = setup_uninitialized();
+    let origin = add_origin(&world.company);
+    let contrib = contrib_of(&world);
+    let guard = PushGuard::arm(&[&origin, &contrib, &world.upstream]);
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args([
+            "init",
+            "--upstream",
+            world.upstream.to_str().unwrap(),
+            "--contrib",
+            contrib.to_str().unwrap(),
+            "--forge",
+            "ghec",
+        ])
+        .current_dir(&world.company)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    guard.assert_untouched();
+}
+
 #[test]
 fn init_records_remote_urls_and_internal_branch() {
     let world = setup_uninitialized();
@@ -1153,6 +1370,38 @@ fn init_rejects_forge_renames_on_an_existing_queue() {
     assert!(err.contains("example-github"), "{err}");
 }
 
+/// Replace the stored tooling patch with one that writes a stale workflow, so
+/// the next `init --upgrade` sees a changed pack and rebuilds.
+fn make_tooling_stale(company: &Path, id: &str) {
+    let original = git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "--detach", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, ".github/workflows/uplink-pr.yml", "stale\n");
+    git(company, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["commit", "-m", "stale tooling"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let stale = git_ok(company, &["format-patch", "--full-index", "-1", "--stdout"]).unwrap();
+    git(
+        company,
+        &["checkout", "-f", "--quiet", &original],
+        GitOpts::default(),
+    )
+    .unwrap();
+    fs::write(company.join(format!(".uplink/patches/{id}.patch")), stale).unwrap();
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.tooling.as_mut().unwrap().patch_id_stable = Some("stale".into());
+    git_uplink::write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: stale tooling patch").unwrap();
+}
+
 #[test]
 fn init_upgrade_refreshes_the_same_tooling_patch() {
     let world = setup_uninitialized();
@@ -1162,42 +1411,7 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
         queue.patch_refs()[0].kind.as_deref(),
         Some(TOOLING_PATCH_KIND)
     );
-
-    let original = git_ok(&world.company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
-    git(
-        &world.company,
-        &["checkout", "--quiet", "--detach", "uplink/upstream"],
-        GitOpts::default(),
-    )
-    .unwrap();
-    write(&world.company, ".github/workflows/uplink-pr.yml", "stale\n");
-    git(&world.company, &["add", "-A"], GitOpts::default()).unwrap();
-    git(
-        &world.company,
-        &["commit", "-m", "stale tooling"],
-        GitOpts::default(),
-    )
-    .unwrap();
-    let stale = git_ok(
-        &world.company,
-        &["format-patch", "--full-index", "-1", "--stdout"],
-    )
-    .unwrap();
-    git(
-        &world.company,
-        &["checkout", "-f", "--quiet", &original],
-        GitOpts::default(),
-    )
-    .unwrap();
-    fs::write(
-        world.company.join(format!(".uplink/patches/{id}.patch")),
-        stale,
-    )
-    .unwrap();
-    let mut queue = git_uplink::read_queue(&world.company).unwrap();
-    queue.tooling.as_mut().unwrap().patch_id_stable = Some("stale".into());
-    git_uplink::write_queue(&world.company, &queue).unwrap();
-    git_uplink::commit_queue(&world.company, "uplink: stale tooling patch").unwrap();
+    make_tooling_stale(&world.company, &id);
 
     let upgraded = init(
         &world.company,
