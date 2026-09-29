@@ -189,7 +189,7 @@ pub fn apply_groups(
 }
 
 pub fn adopted_next_steps() -> &'static str {
-    "Company main is unchanged and nothing was pushed.\n\
+    "Company main is unchanged.\n\
 Preview with: git uplink rebuild --branch uplink/preview/verify\n\
 Inspect with:  git diff main uplink/preview/verify\n\
 After verification: git uplink rebuild --push"
