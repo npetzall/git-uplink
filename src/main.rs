@@ -189,7 +189,7 @@ enum Commands {
     Rebuild {
         #[arg(
             long,
-            help = "Rebuild onto this branch instead of company main (preview; does not mutate the queue)"
+            help = "Rebuild onto uplink/preview/<name> instead of company main (preview; does not mutate the queue or push)"
         )]
         branch: Option<String>,
         #[arg(long, help = "Push uplink/state and the rebuilt branch after rebuild")]

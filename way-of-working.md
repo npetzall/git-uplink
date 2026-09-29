@@ -85,12 +85,12 @@ Greenfield init (company `main` matches public upstream) still installs the tool
 Preview, then publish:
 
 ```bash
-git uplink rebuild --branch uplink/verify
-git diff main uplink/verify
+git uplink rebuild --branch uplink/preview/verify
+git diff main uplink/preview/verify
 git uplink rebuild --push
 ```
 
-`--branch` other than company `main` is read-only on the queue. After you are satisfied, a normal rebuild rewrites those original commits into synthetic apply commits (`public upstream` + tooling + adopted patches) and `--push` publishes `uplink/state` and `main`. If internal is also behind upstream, rebase or merge current upstream first; init refuses a diverged history.
+`--branch` takes an `uplink/preview/<name>` branch. It is read-only on the queue and is never pushed. After you are satisfied, a normal rebuild rewrites those original commits into synthetic apply commits (`public upstream` + tooling + adopted patches) and `--push` publishes `uplink/state` and `main`. If internal is also behind upstream, rebase or merge current upstream first; init refuses a diverged history.
 
 After that, work as in the stories below: one internal PR per change.
 

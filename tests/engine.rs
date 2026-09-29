@@ -1552,7 +1552,7 @@ fn rebuild_preview_branch_leaves_main_and_queue_alone() {
     rebuild_with(
         &world.company,
         RebuildOpts {
-            branch: Some("uplink/verify".into()),
+            branch: Some("uplink/preview/verify".into()),
             ..Default::default()
         },
     )
@@ -1562,14 +1562,14 @@ fn rebuild_preview_branch_leaves_main_and_queue_alone() {
         git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap(),
         queue_before
     );
-    assert!(has_git_ref(&world.company, "uplink/verify"));
+    assert!(has_git_ref(&world.company, "uplink/preview/verify"));
     let diff = git(
         &world.company,
         &[
             "diff",
             "--quiet",
             original.as_str(),
-            "uplink/verify",
+            "uplink/preview/verify",
             "--",
             ".",
             ":!.github",
@@ -1583,11 +1583,44 @@ fn rebuild_preview_branch_leaves_main_and_queue_alone() {
         &[
             "cat-file",
             "-e",
-            "uplink/verify:.github/workflows/uplink-pr.yml",
+            "uplink/preview/verify:.github/workflows/uplink-pr.yml",
         ],
         GitOpts::default(),
     )
     .unwrap();
+}
+
+#[test]
+fn rebuild_preview_refuses_other_branches_and_push() {
+    let world = setup_world();
+    let company = &world.company;
+    git(company, &["branch", "develop"], GitOpts::default()).unwrap();
+    let develop = rev_of(company, "develop");
+
+    let err = rebuild_with(
+        company,
+        RebuildOpts {
+            branch: Some("develop".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("uplink/preview/<name>"), "{err}");
+    assert_eq!(rev_of(company, "develop"), develop);
+
+    let err = rebuild_with(
+        company,
+        RebuildOpts {
+            branch: Some("uplink/preview/x".into()),
+            push: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("not pushing preview"), "{err}");
+    assert!(!has_git_ref(company, "uplink/preview/x"));
 }
 
 #[test]
