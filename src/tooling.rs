@@ -204,7 +204,14 @@ fn find_tooling_patch(queue: &QueueState, repo: &Path) -> Result<Option<String>>
     {
         return Ok(Some(patch.id.clone()));
     }
-    for patch in queue.internal.iter().chain(queue.upstream.iter()) {
+    // Legacy queues kept the tooling patch in internal[] without a kind. Only
+    // that patch is migrated; an ordinary patch that edits an uplink workflow
+    // is left where it is.
+    for patch in queue
+        .internal
+        .iter()
+        .filter(|p| p.title == TOOLING_PATCH_TITLE)
+    {
         let Ok(rel) = patch_path(&patch.id) else {
             continue;
         };
@@ -260,6 +267,55 @@ fn synthesize_pack_patch(
         from_sha,
         head_sha,
     })
+}
+
+#[cfg(test)]
+mod find_tooling_tests {
+    use super::*;
+
+    fn patch(id: &str, title: &str) -> Patch {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "title": title,
+            "status": "queued",
+            "dependsOn": [],
+            "createdAt": "",
+            "updatedAt": "",
+            "source": {},
+            "events": [],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_the_legacy_tooling_patch_is_found_by_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        fs::create_dir_all(repo.join(".uplink/patches")).unwrap();
+        for id in ["upl_aaaaaaaaaa", "upl_bbbbbbbbbb", "upl_cccccccccc"] {
+            fs::write(
+                repo.join(format!(".uplink/patches/{id}.patch")),
+                "diff --git a/.github/workflows/uplink-pr.yml b/.github/workflows/uplink-pr.yml\n",
+            )
+            .unwrap();
+        }
+        let mut queue = QueueState::empty(Default::default());
+        queue
+            .internal
+            .push(patch("upl_aaaaaaaaaa", "Tune PR workflow"));
+        queue
+            .upstream
+            .push(patch("upl_bbbbbbbbbb", TOOLING_PATCH_TITLE));
+        assert_eq!(find_tooling_patch(&queue, repo).unwrap(), None);
+
+        queue
+            .internal
+            .push(patch("upl_cccccccccc", TOOLING_PATCH_TITLE));
+        assert_eq!(
+            find_tooling_patch(&queue, repo).unwrap().as_deref(),
+            Some("upl_cccccccccc")
+        );
+    }
 }
 
 #[cfg(test)]
