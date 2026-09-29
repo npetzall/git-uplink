@@ -201,16 +201,17 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
         if !patch.status.is_active() || !live.is_upstream(&id) {
             continue;
         }
-        let grep = format!("Uplink-Patch-Id: {}", patch.id);
+        let grep = format!("{}: {}", live.config.trailer_key, patch.id);
         let trailer = git(
             repo,
             &[
                 "log",
-                "uplink/upstream",
+                "--fixed-strings",
                 "--grep",
                 &grep,
                 "--format=%H",
                 "-1",
+                "uplink/upstream",
             ],
             GitOpts::allow_fail(),
         )?;
