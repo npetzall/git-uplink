@@ -659,6 +659,405 @@ Publish main: git uplink rebuild --push"
     )
 }
 
+struct InitArgs {
+    upstream: Option<String>,
+    contrib: Option<String>,
+    upstream_remote_name: Option<String>,
+    upstream_branch: Option<String>,
+    contrib_remote_name: Option<String>,
+    internal_branch: Option<String>,
+    forge: Option<Forge>,
+    upgrade: bool,
+    adopt_groups: Option<PathBuf>,
+    json: bool,
+}
+
+fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
+    let adopt_groups = match args.adopt_groups {
+        Some(path) => Some(load_groups_file(&path)?),
+        None => None,
+    };
+    let hydrate = args.upstream.is_none()
+        && args.contrib.is_none()
+        && args.upstream_remote_name.is_none()
+        && args.upstream_branch.is_none()
+        && args.contrib_remote_name.is_none()
+        && args.internal_branch.is_none()
+        && adopt_groups.is_none()
+        && args.forge.is_none()
+        && !args.upgrade;
+    let opts = InitOpts {
+        upstream_url: args.upstream,
+        contrib_url: args.contrib,
+        upstream_remote_name: args.upstream_remote_name,
+        upstream_branch: args.upstream_branch,
+        contrib_remote_name: args.contrib_remote_name,
+        internal_branch: args.internal_branch,
+        forge: args.forge,
+        upgrade: args.upgrade,
+        adopt_groups,
+        interactive: None,
+        progress: if hydrate {
+            ProgressMode::Disabled
+        } else {
+            ProgressMode::Auto
+        },
+    };
+    let result = init(repo, opts)?;
+    let queue = &result.queue;
+    if queue.all_patches().any(|p| {
+        p.source
+            .note
+            .as_deref()
+            .is_some_and(|n| n.starts_with("adopted from "))
+    }) {
+        eprintln!("{}", adopted_next_steps());
+    }
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&queue.config)?);
+    } else if !hydrate {
+        println!("{}", format_init_summary(&result.report));
+        if args.upgrade {
+            if result.tooling_changed {
+                println!("{}", upgrade_next_steps(&queue.config.internal_branch));
+            } else {
+                println!("already up-to-date");
+            }
+        }
+    }
+    if !result.report.ok {
+        return Err(Error::msg(format_init_summary(&result.report)));
+    }
+    Ok(())
+}
+
+fn cmd_doctor(repo: &Path, json: bool) -> Result<(), Error> {
+    let report = doctor(repo, ProgressMode::Auto)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", format_doctor_summary(&report));
+    }
+    if !report.ok {
+        return Err(Error::msg(format_doctor_summary(&report)));
+    }
+    Ok(())
+}
+
+fn cmd_add(repo: &Path, opts: AddPatchOpts) -> Result<(), Error> {
+    let internal_only = opts.internal_only;
+    match add_patch(repo, opts) {
+        Ok(patch) => {
+            println!(
+                "{}  {}  {}  {}",
+                patch.id,
+                if internal_only {
+                    "internal"
+                } else {
+                    "upstream"
+                },
+                patch.status,
+                patch.title
+            );
+            Ok(())
+        }
+        Err(err) => {
+            print_failure_comment(&err);
+            Err(err)
+        }
+    }
+}
+
+fn cmd_push(repo: &Path, push_remote: Option<String>) -> Result<(), Error> {
+    let result = push_queue(
+        repo,
+        PushOpts {
+            push_remote: Some(push_remote.unwrap_or_else(|| "origin".into())),
+        },
+    )?;
+    println!(
+        "{} {} to {} at {}",
+        result.action, result.branch, result.remote, result.sha
+    );
+    Ok(())
+}
+
+fn cmd_refresh(repo: &Path) -> Result<(), Error> {
+    let result = refresh_from_origin(repo)?;
+    println!("origin/{} {}", result.internal_branch, result.internal_sha);
+    println!("origin/{} {}", STATE_BRANCH, result.state_sha);
+    println!("origin/uplink/upstream {}", result.upstream_sha);
+    Ok(())
+}
+
+fn cmd_reset(repo: &Path) -> Result<(), Error> {
+    let result = reset_from_origin(repo)?;
+    println!("{} {}", result.internal_branch, result.internal_sha);
+    println!("{} {}", STATE_BRANCH, result.state_sha);
+    println!("uplink/upstream {}", result.upstream_sha);
+    Ok(())
+}
+
+fn cmd_assess(
+    repo: &Path,
+    from: Option<String>,
+    head: Option<String>,
+    title: String,
+    message: String,
+    internal_only: bool,
+) -> Result<(), Error> {
+    let queue = read_queue(repo)?;
+    let report = assess_from_message(
+        repo,
+        &queue,
+        from.as_deref().unwrap_or("main"),
+        head.as_deref().unwrap_or("HEAD"),
+        &message,
+        Some(&title),
+        PatchIntent::from_internal_only(internal_only),
+    )?;
+    let markdown = format_assess_markdown(&report);
+    println!("{markdown}");
+    if !report.ok {
+        return Err(Error::msg("assess failed"));
+    }
+    Ok(())
+}
+
+fn cmd_report(
+    repo: &Path,
+    id: &str,
+    out: Option<PathBuf>,
+    extra_dir: Option<PathBuf>,
+) -> Result<(), Error> {
+    let queue = read_queue(repo)?;
+    let patch = queue
+        .all_patches()
+        .find(|p| p.id == id)
+        .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
+    let packet = format_contribution_packet_with_extras(repo, patch, extra_dir.as_deref())?;
+    let default_out = report_paths(id)?.1;
+    let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
+    write_markdown_file(repo, &dest, &packet)?;
+    commit_queue(repo, &format!("uplink: contribution packet {id}"))?;
+    println!("{packet}");
+    eprintln!("Wrote {}", dest.display());
+    Ok(())
+}
+
+fn cmd_preflight(
+    repo: &Path,
+    id: Option<String>,
+    incoming: IncomingPreflight,
+) -> Result<(), Error> {
+    let result = if let Some(id) = id {
+        let queue = read_queue(repo)?;
+        preflight_existing_patch(repo, &queue, &id)
+    } else {
+        preflight_incoming_change(repo, incoming)
+    };
+    match result {
+        Ok(()) => {
+            println!("export preflight passed");
+            Ok(())
+        }
+        Err(err) => {
+            print_failure_comment(&err);
+            Err(err)
+        }
+    }
+}
+
+fn cmd_status(repo: &Path, json: bool) -> Result<(), Error> {
+    let snapshot = status_snapshot(repo)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&status_report(&snapshot))?
+        );
+    } else {
+        print!("{}", format_status_table(&snapshot));
+    }
+    Ok(())
+}
+
+fn cmd_approve(repo: &Path, id: &str, out: Option<PathBuf>) -> Result<(), Error> {
+    let queue = read_queue(repo)?;
+    if !queue.all_patches().any(|p| p.id == id) {
+        return Err(Error::msg(format!("unknown patch {id}")));
+    }
+    let receipt = build_receipt(
+        repo,
+        id,
+        "UPLINK_TO_UPSTREAM_ENVIRONMENT",
+        TO_UPSTREAM_ENVIRONMENT,
+    );
+    let default_out = report_paths(id)?.2;
+    let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
+    write_markdown_file(repo, &dest, &receipt.text)?;
+    let patch = approve_patch_at(repo, id, Some(&receipt.sha), Some(&receipt.run_url))?;
+    commit_queue(repo, &format!("uplink: to-upstream approval receipt {id}"))?;
+    println!("{}", receipt.text);
+    eprintln!("{} approved", patch.id);
+    eprintln!("Wrote {}", dest.display());
+    Ok(())
+}
+
+fn cmd_submit(repo: &Path, id: &str) -> Result<(), Error> {
+    let queue = read_queue(repo)?;
+    let patch = queue
+        .all_patches()
+        .find(|p| p.id == id)
+        .cloned()
+        .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
+    let exported = match submit_patch(repo, id) {
+        Ok(v) => v,
+        Err(err) => {
+            print_failure_comment(&err);
+            return Err(err);
+        }
+    };
+    submit_artifact(repo, &queue, &patch, &exported.branch, &exported.sha)
+}
+
+fn cmd_submitted(
+    repo: &Path,
+    id: &str,
+    pr_url: &str,
+    pr: Option<u64>,
+    push_remote: &str,
+) -> Result<(), Error> {
+    let number = pr_number(pr, pr_url)?;
+    let branch = format!("uplink/{id}");
+    let patch = record_pull_request(repo, id, number, pr_url, &branch, Some(push_remote))?;
+    println!("{} submitted as {pr_url}", patch.id);
+    Ok(())
+}
+
+fn cmd_sync(repo: &Path) -> Result<(), Error> {
+    let result = sync(repo)?;
+    let summary = result.report.clone();
+    finish_sync(repo, result, summary.as_deref())
+}
+
+fn cmd_accept_upstream(repo: &Path) -> Result<(), Error> {
+    let queue = read_queue(repo)?;
+    if queue.pending_upstream.is_none() {
+        return Err(Error::msg(
+            "No pending upstream to accept. Run `git uplink sync` first.",
+        ));
+    }
+    let receipt = build_receipt(
+        repo,
+        "incoming",
+        "UPLINK_FROM_UPSTREAM_ENVIRONMENT",
+        FROM_UPSTREAM_ENVIRONMENT,
+    );
+    let dest = PathBuf::from(from_upstream_report_paths().2);
+    write_markdown_file(repo, &dest, &receipt.text)?;
+    finish_sync(repo, accept_upstream(repo)?, Some(&receipt.text))
+}
+
+fn cmd_gated(
+    repo: &Path,
+    id: &str,
+    pr_url: &str,
+    pr: Option<u64>,
+    push_remote: &str,
+) -> Result<(), Error> {
+    let number = pr_number(pr, pr_url)?;
+    let patch = record_gated_pr(repo, id, number, pr_url, Some(push_remote))?;
+    println!("{} conflict PR {pr_url}", patch.id);
+    Ok(())
+}
+
+fn cmd_merged(repo: &Path, id: &str, via: MergeVia, sha: Option<&str>) -> Result<(), Error> {
+    mark_merged(repo, id, via, sha)?;
+    rebuild_with(repo, RebuildOpts::default())?;
+    println!("{id} marked merged via {}", via.as_str());
+    Ok(())
+}
+
+fn cmd_drop(repo: &Path, id: &str, reason: Option<&str>) -> Result<(), Error> {
+    drop_patch(repo, id, reason.unwrap_or("dropped by operator"))?;
+    println!("{id} dropped");
+    Ok(())
+}
+
+fn cmd_rebuild(
+    repo: &Path,
+    branch: Option<String>,
+    push: bool,
+    push_remote: Option<String>,
+) -> Result<(), Error> {
+    let result = rebuild_with(
+        repo,
+        RebuildOpts {
+            branch,
+            push,
+            push_remote: if push {
+                Some(push_remote.unwrap_or_else(|| "origin".into()))
+            } else {
+                push_remote
+            },
+        },
+    )?;
+    if result.preview {
+        println!("rebuild preview at {}", result.branch);
+        eprintln!(
+            "Inspect with: git diff {} {}",
+            result.queue.config.internal_branch, result.branch
+        );
+    } else {
+        println!("rebuild complete");
+    }
+    Ok(())
+}
+
+fn cmd_resolve(repo: &Path, id: &str) -> Result<(), Error> {
+    match resolve_conflict(repo, id) {
+        Ok(queue) => print_resolve_artifact(repo, id, &queue, false),
+        Err(Error::Conflict(_)) => {
+            let queue = read_queue(repo)?;
+            print_resolve_artifact(repo, id, &queue, true)?;
+            if let Some(conflict) = find_conflict(&queue) {
+                eprint_conflict(conflict);
+            }
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn cmd_transfer(
+    repo: &Path,
+    id: &str,
+    direction: TransferDirection,
+    complete: bool,
+) -> Result<(), Error> {
+    let result = transfer_patch(repo, id, direction, complete)?;
+    print_transfer_artifact(repo, &result)?;
+    if result.gated {
+        eprintln!(
+            "TRANSFER {} needs work on {}",
+            result.id,
+            result.work_branch.as_deref().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
+fn cmd_web_ui(repo: PathBuf, port: u16, no_open: bool) -> Result<(), Error> {
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| Error::msg(format!("tokio runtime: {err}")))?;
+    runtime
+        .block_on(git_uplink::webui::serve(repo, addr, !no_open))
+        .map_err(|err| Error::msg(format!("web-ui server: {err}")))
+}
+
 fn run() -> Result<(), Error> {
     let cli = Cli::parse();
     let repo = env::current_dir()?;
@@ -674,23 +1073,11 @@ fn run() -> Result<(), Error> {
             upgrade,
             adopt_groups,
             json,
-        } => {
-            let adopt_groups = match adopt_groups {
-                Some(path) => Some(load_groups_file(&path)?),
-                None => None,
-            };
-            let hydrate = !upstream.is_some()
-                && !contrib.is_some()
-                && upstream_remote_name.is_none()
-                && upstream_branch.is_none()
-                && contrib_remote_name.is_none()
-                && internal_branch.is_none()
-                && adopt_groups.is_none()
-                && forge.is_none()
-                && !upgrade;
-            let opts = InitOpts {
-                upstream_url: upstream,
-                contrib_url: contrib,
+        } => cmd_init(
+            &repo,
+            InitArgs {
+                upstream,
+                contrib,
                 upstream_remote_name,
                 upstream_branch,
                 contrib_remote_name,
@@ -698,50 +1085,10 @@ fn run() -> Result<(), Error> {
                 forge,
                 upgrade,
                 adopt_groups,
-                interactive: None,
-                progress: if hydrate {
-                    ProgressMode::Disabled
-                } else {
-                    ProgressMode::Auto
-                },
-            };
-            let result = init(&repo, opts)?;
-            let queue = &result.queue;
-            if queue.all_patches().any(|p| {
-                p.source
-                    .note
-                    .as_deref()
-                    .is_some_and(|n| n.starts_with("adopted from "))
-            }) {
-                eprintln!("{}", adopted_next_steps());
-            }
-            if json {
-                println!("{}", serde_json::to_string_pretty(&queue.config)?);
-            } else if !hydrate {
-                println!("{}", format_init_summary(&result.report));
-                if upgrade {
-                    if result.tooling_changed {
-                        println!("{}", upgrade_next_steps(&queue.config.internal_branch));
-                    } else {
-                        println!("already up-to-date");
-                    }
-                }
-            }
-            if !result.report.ok {
-                return Err(Error::msg(format_init_summary(&result.report)));
-            }
-        }
-        Commands::Doctor { json } => {
-            let report = doctor(&repo, ProgressMode::Auto)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!("{}", format_doctor_summary(&report));
-            }
-            if !report.ok {
-                return Err(Error::msg(format_doctor_summary(&report)));
-            }
-        }
+                json,
+            },
+        ),
+        Commands::Doctor { json } => cmd_doctor(&repo, json),
         Commands::Add {
             title,
             message,
@@ -754,62 +1101,25 @@ fn run() -> Result<(), Error> {
             depends_on,
         } => {
             let message = read_commit_message(message, message_file, &title)?;
-            let opts = AddPatchOpts {
-                title,
-                message: Some(message),
-                internal_only,
-                from_ref: from,
-                head_ref: head,
-                depends_on,
-                author: env::var("GIT_AUTHOR_NAME").ok(),
-                internal_pr_number: pr,
-                internal_pr_url: pr_url,
-                ..Default::default()
-            };
-            match add_patch(&repo, opts) {
-                Ok(patch) => {
-                    println!(
-                        "{}  {}  {}  {}",
-                        patch.id,
-                        if internal_only {
-                            "internal"
-                        } else {
-                            "upstream"
-                        },
-                        patch.status,
-                        patch.title
-                    );
-                }
-                Err(err) => {
-                    print_failure_comment(&err);
-                    return Err(err);
-                }
-            }
-        }
-        Commands::Push { push_remote } => {
-            let result = push_queue(
+            cmd_add(
                 &repo,
-                PushOpts {
-                    push_remote: Some(push_remote.unwrap_or_else(|| "origin".into())),
+                AddPatchOpts {
+                    title,
+                    message: Some(message),
+                    internal_only,
+                    from_ref: from,
+                    head_ref: head,
+                    depends_on,
+                    author: env::var("GIT_AUTHOR_NAME").ok(),
+                    internal_pr_number: pr,
+                    internal_pr_url: pr_url,
+                    ..Default::default()
                 },
-            )?;
-            println!(
-                "{} {} to {} at {}",
-                result.action, result.branch, result.remote, result.sha
-            );
+            )
         }
-        Commands::Refresh => {
-            let result = refresh_from_origin(&repo)?;
-            println!("origin/{} {}", result.internal_branch, result.internal_sha);
-            println!("origin/{} {}", STATE_BRANCH, result.state_sha);
-            println!("origin/uplink/upstream {}", result.upstream_sha);
-        }
-        Commands::Reset => {
-            let result = reset_from_origin(&repo)?;
-            println!("{} {}", result.internal_branch, result.internal_sha);
-            println!("{} {}", STATE_BRANCH, result.state_sha);
-            println!("uplink/upstream {}", result.upstream_sha);
-        }
+        Commands::Push { push_remote } => cmd_push(&repo, push_remote),
+        Commands::Refresh => cmd_refresh(&repo),
+        Commands::Reset => cmd_reset(&repo),
         Commands::Assess {
             from,
             head,
@@ -818,39 +1128,11 @@ fn run() -> Result<(), Error> {
             message_file,
             internal_only,
         } => {
-            let queue = read_queue(&repo)?;
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
-            let report = assess_from_message(
-                &repo,
-                &queue,
-                from.as_deref().unwrap_or("main"),
-                head.as_deref().unwrap_or("HEAD"),
-                &message,
-                Some(&title),
-                PatchIntent::from_internal_only(internal_only),
-            )?;
-            let markdown = format_assess_markdown(&report);
-            println!("{markdown}");
-            if !report.ok {
-                return Err(Error::msg("assess failed"));
-            }
+            cmd_assess(&repo, from, head, title, message, internal_only)
         }
-        Commands::Report { id, out, extra_dir } => {
-            let queue = read_queue(&repo)?;
-            let patch = queue
-                .all_patches()
-                .find(|p| p.id == id)
-                .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
-            let packet =
-                format_contribution_packet_with_extras(&repo, patch, extra_dir.as_deref())?;
-            let default_out = report_paths(&id)?.1;
-            let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
-            write_markdown_file(&repo, &dest, &packet)?;
-            commit_queue(&repo, &format!("uplink: contribution packet {id}"))?;
-            println!("{packet}");
-            eprintln!("Wrote {}", dest.display());
-        }
+        Commands::Report { id, out, extra_dir } => cmd_report(&repo, &id, out, extra_dir),
         Commands::Preflight {
             id,
             from,
@@ -863,181 +1145,45 @@ fn run() -> Result<(), Error> {
         } => {
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
-            let result = if let Some(id) = id {
-                let queue = read_queue(&repo)?;
-                preflight_existing_patch(&repo, &queue, &id)
-            } else {
-                preflight_incoming_change(
-                    &repo,
-                    IncomingPreflight {
-                        title,
-                        from_ref: from.unwrap_or_else(|| "main".into()),
-                        head_ref: head.unwrap_or_else(|| "HEAD".into()),
-                        depends_on,
-                        message: Some(message),
-                        preflight_command: None,
-                        internal_only,
-                    },
-                )
-            };
-            match result {
-                Ok(()) => println!("export preflight passed"),
-                Err(err) => {
-                    print_failure_comment(&err);
-                    return Err(err);
-                }
-            }
-        }
-        Commands::Status { json } => {
-            let snapshot = status_snapshot(&repo)?;
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&status_report(&snapshot))?
-                );
-            } else {
-                print!("{}", format_status_table(&snapshot));
-            }
-        }
-        Commands::Approve { id, out } => {
-            let queue = read_queue(&repo)?;
-            if !queue.all_patches().any(|p| p.id == id) {
-                return Err(Error::msg(format!("unknown patch {id}")));
-            }
-            let receipt = build_receipt(
+            cmd_preflight(
                 &repo,
-                &id,
-                "UPLINK_TO_UPSTREAM_ENVIRONMENT",
-                TO_UPSTREAM_ENVIRONMENT,
-            );
-            let default_out = report_paths(&id)?.2;
-            let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
-            write_markdown_file(&repo, &dest, &receipt.text)?;
-            let patch = approve_patch_at(&repo, &id, Some(&receipt.sha), Some(&receipt.run_url))?;
-            commit_queue(&repo, &format!("uplink: to-upstream approval receipt {id}"))?;
-            println!("{}", receipt.text);
-            eprintln!("{} approved", patch.id);
-            eprintln!("Wrote {}", dest.display());
+                id,
+                IncomingPreflight {
+                    title,
+                    from_ref: from.unwrap_or_else(|| "main".into()),
+                    head_ref: head.unwrap_or_else(|| "HEAD".into()),
+                    depends_on,
+                    message: Some(message),
+                    preflight_command: None,
+                    internal_only,
+                },
+            )
         }
-        Commands::Submit { id } => {
-            let queue = read_queue(&repo)?;
-            let patch = queue
-                .all_patches()
-                .find(|p| p.id == id)
-                .cloned()
-                .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
-            let exported = match submit_patch(&repo, &id) {
-                Ok(v) => v,
-                Err(err) => {
-                    print_failure_comment(&err);
-                    return Err(err);
-                }
-            };
-            submit_artifact(&repo, &queue, &patch, &exported.branch, &exported.sha)?;
-        }
+        Commands::Status { json } => cmd_status(&repo, json),
+        Commands::Approve { id, out } => cmd_approve(&repo, &id, out),
+        Commands::Submit { id } => cmd_submit(&repo, &id),
         Commands::Submitted {
             id,
             pr_url,
             pr,
             push_remote,
-        } => {
-            let number = pr_number(pr, &pr_url)?;
-            let branch = format!("uplink/{id}");
-            let patch = record_pull_request(
-                &repo,
-                &id,
-                number,
-                &pr_url,
-                &branch,
-                Some(push_remote.as_str()),
-            )?;
-            println!("{} submitted as {pr_url}", patch.id);
-        }
-        Commands::Sync => {
-            let result = sync(&repo)?;
-            let summary = result.report.clone();
-            finish_sync(&repo, result, summary.as_deref())?;
-        }
-        Commands::AcceptUpstream => {
-            let queue = read_queue(&repo)?;
-            if queue.pending_upstream.is_none() {
-                return Err(Error::msg(
-                    "No pending upstream to accept. Run `git uplink sync` first.",
-                ));
-            }
-            let receipt = build_receipt(
-                &repo,
-                "incoming",
-                "UPLINK_FROM_UPSTREAM_ENVIRONMENT",
-                FROM_UPSTREAM_ENVIRONMENT,
-            );
-            let dest = PathBuf::from(from_upstream_report_paths().2);
-            write_markdown_file(&repo, &dest, &receipt.text)?;
-            finish_sync(&repo, accept_upstream(&repo)?, Some(&receipt.text))?;
-        }
+        } => cmd_submitted(&repo, &id, &pr_url, pr, &push_remote),
+        Commands::Sync => cmd_sync(&repo),
+        Commands::AcceptUpstream => cmd_accept_upstream(&repo),
         Commands::Gated {
             id,
             pr_url,
             pr,
             push_remote,
-        } => {
-            let number = pr_number(pr, &pr_url)?;
-            let patch = record_gated_pr(&repo, &id, number, &pr_url, Some(push_remote.as_str()))?;
-            println!("{} conflict PR {pr_url}", patch.id);
-        }
-        Commands::Merged { id, via, sha } => {
-            mark_merged(&repo, &id, via, sha.as_deref())?;
-            rebuild_with(&repo, RebuildOpts::default())?;
-            println!("{id} marked merged via {}", via.as_str());
-        }
-        Commands::Drop { id, reason } => {
-            drop_patch(
-                &repo,
-                &id,
-                reason.as_deref().unwrap_or("dropped by operator"),
-            )?;
-            println!("{id} dropped");
-        }
+        } => cmd_gated(&repo, &id, &pr_url, pr, &push_remote),
+        Commands::Merged { id, via, sha } => cmd_merged(&repo, &id, via, sha.as_deref()),
+        Commands::Drop { id, reason } => cmd_drop(&repo, &id, reason.as_deref()),
         Commands::Rebuild {
             branch,
             push,
             push_remote,
-        } => {
-            let result = rebuild_with(
-                &repo,
-                RebuildOpts {
-                    branch: branch.clone(),
-                    push,
-                    push_remote: if push {
-                        Some(push_remote.unwrap_or_else(|| "origin".into()))
-                    } else {
-                        push_remote
-                    },
-                },
-            )?;
-            if result.preview {
-                println!("rebuild preview at {}", result.branch);
-                eprintln!(
-                    "Inspect with: git diff {} {}",
-                    result.queue.config.internal_branch, result.branch
-                );
-            } else {
-                println!("rebuild complete");
-            }
-        }
-        Commands::Resolve { id } => match resolve_conflict(&repo, &id) {
-            Ok(queue) => {
-                print_resolve_artifact(&repo, &id, &queue, false)?;
-            }
-            Err(Error::Conflict(_)) => {
-                let queue = read_queue(&repo)?;
-                print_resolve_artifact(&repo, &id, &queue, true)?;
-                if let Some(conflict) = find_conflict(&queue) {
-                    eprint_conflict(conflict);
-                }
-            }
-            Err(err) => return Err(err),
-        },
+        } => cmd_rebuild(&repo, branch, push, push_remote),
+        Commands::Resolve { id } => cmd_resolve(&repo, &id),
         Commands::Transfer {
             id,
             to_upstream,
@@ -1050,29 +1196,14 @@ fn run() -> Result<(), Error> {
             } else {
                 TransferDirection::ToInternal
             };
-            let result = transfer_patch(&repo, &id, direction, complete)?;
-            print_transfer_artifact(&repo, &result)?;
-            if result.gated {
-                eprintln!(
-                    "TRANSFER {} needs work on {}",
-                    result.id,
-                    result.work_branch.as_deref().unwrap_or("")
-                );
-            }
+            cmd_transfer(&repo, &id, direction, complete)
         }
-        Commands::WebUi { port, no_open } => {
-            let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|err| Error::msg(format!("tokio runtime: {err}")))?;
-            runtime
-                .block_on(git_uplink::webui::serve(repo, addr, !no_open))
-                .map_err(|err| Error::msg(format!("web-ui server: {err}")))?;
+        Commands::WebUi { port, no_open } => cmd_web_ui(repo, port, no_open),
+        Commands::Version => {
+            println!("git-uplink {VERSION}");
+            Ok(())
         }
-        Commands::Version => println!("git-uplink {VERSION}"),
     }
-    Ok(())
 }
 
 fn main() -> ExitCode {
