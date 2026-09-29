@@ -10,7 +10,9 @@ use crate::git::{GitOpts, git, git_succeeds};
 use crate::queue::{
     active_upstream, apply_order_upstream_layer, get_patch, patch_path, read_queue,
 };
-use crate::repo::{ensure_revs, ensure_upstream_ref, has_ref, rev_parse, write_product_patch};
+use crate::repo::{
+    TempWorktree, ensure_revs, ensure_upstream_ref, has_ref, rev_parse, write_product_patch,
+};
 use crate::types::{ApplyOutcome, Patch, PatchStatus, QueueState};
 
 /// Credentials the import, transfer and submit workflows put in the same step
@@ -66,27 +68,9 @@ fn with_upstream_worktree<T>(repo: &Path, f: impl FnOnce(&Path) -> Result<T>) ->
             "No uplink/upstream ref; cannot preflight an export tree.",
         ));
     }
-    let dir = std::env::temp_dir().join(format!("uplink-export-{}", Uuid::new_v4()));
-    git(
-        repo,
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            "--quiet",
-            dir.to_str().unwrap_or(""),
-            "uplink/upstream",
-        ],
-        GitOpts::default(),
-    )?;
-    let result = f(&dir);
-    let _ = git(
-        repo,
-        &["worktree", "remove", "--force", dir.to_str().unwrap_or("")],
-        GitOpts::allow_fail(),
-    );
-    let _ = fs::remove_dir_all(&dir);
-    result
+    // Dropped even if `f` panics, so the worktree is always removed.
+    let worktree = TempWorktree::add(repo, "uplink-export", "uplink/upstream")?;
+    f(&worktree.dir)
 }
 
 fn reset_export(dir: &Path, repo: &Path) -> Result<()> {
@@ -464,7 +448,26 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::is_credential_env;
+    use super::{is_credential_env, with_upstream_worktree};
+    use crate::git::git_ok;
+
+    #[test]
+    fn upstream_worktree_is_removed_when_the_closure_panics() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git_ok(repo, &["init", "-q"]).unwrap();
+        git_ok(repo, &["commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+        git_ok(repo, &["branch", "uplink/upstream"]).unwrap();
+
+        let panicked = std::panic::catch_unwind(|| {
+            let _ = with_upstream_worktree(repo, |_| -> crate::error::Result<()> {
+                panic!("preflight closure failed")
+            });
+        });
+        assert!(panicked.is_err());
+        let worktrees = git_ok(repo, &["worktree", "list", "--porcelain"]).unwrap();
+        assert_eq!(worktrees.matches("worktree ").count(), 1, "{worktrees}");
+    }
 
     #[test]
     fn credential_env_names() {
