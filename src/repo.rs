@@ -7,7 +7,9 @@ use crate::assess::{company_commit_message, export_commit_message};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{now_iso, patch_path};
-use crate::types::{PATCH_DIR, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH};
+use crate::types::{
+    ApplyOutcome, PATCH_DIR, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
+};
 
 pub(crate) const UPSTREAM_REF: &str = "uplink/upstream";
 pub(crate) const COMPANY_REMOTE: &str = "origin";
@@ -213,7 +215,7 @@ pub fn apply_patch_file(
     patch: &Patch,
     patch_file_abs: &Path,
     export_identity: bool,
-) -> Result<&'static str> {
+) -> Result<ApplyOutcome> {
     if git_succeeds(
         repo,
         &[
@@ -223,7 +225,7 @@ pub fn apply_patch_file(
             patch_file_abs.to_str().unwrap_or(""),
         ],
     )? {
-        return Ok("empty");
+        return Ok(ApplyOutcome::Empty);
     }
 
     if !git_succeeds(
@@ -235,11 +237,11 @@ pub fn apply_patch_file(
             patch_file_abs.to_str().unwrap_or(""),
         ],
     )? {
-        return Ok("conflict");
+        return Ok(ApplyOutcome::Conflict);
     }
 
     if git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
-        return Ok("empty");
+        return Ok(ApplyOutcome::Empty);
     }
 
     let mut opts = GitOpts::default();
@@ -270,7 +272,7 @@ pub fn apply_patch_file(
         }
         fs::write(patch_file_abs, body)?;
     }
-    Ok("applied")
+    Ok(ApplyOutcome::Applied)
 }
 
 /// Patch text with the mbox `From <sha>` line and the `Date:` header removed.

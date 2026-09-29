@@ -270,7 +270,7 @@ fn apply_transfer_preview(
         let onto_here = rev_parse(repo, "HEAD")?;
         let patch_file = snapshot.join(patch_path(&item.id)?);
         let result = apply_patch_file(repo, &item, &patch_file, false)?;
-        if result == "conflict" {
+        if result == ApplyOutcome::Conflict {
             if item.id != id {
                 return Err(Error::msg(format!(
                     "Cannot transfer {id}: {} (\"{}\") would not apply after the move.",

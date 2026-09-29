@@ -11,7 +11,7 @@ use crate::queue::{
     active_upstream, apply_order_upstream_layer, get_patch, patch_path, read_queue,
 };
 use crate::repo::{ensure_revs, ensure_upstream_ref, has_ref, rev_parse, write_product_patch};
-use crate::types::{Patch, PatchStatus, QueueState};
+use crate::types::{ApplyOutcome, Patch, PatchStatus, QueueState};
 
 /// Credentials the import, transfer and submit workflows put in the same step
 /// as preflight. The product's build and tests must not be able to read them.
@@ -40,7 +40,7 @@ fn run_shell(command: &str, cwd: &Path) -> (i32, String) {
     }
 }
 
-fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<&'static str> {
+fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<ApplyOutcome> {
     if !git_succeeds(
         dir,
         &[
@@ -50,13 +50,13 @@ fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<&'static str
             patch_abs.to_str().unwrap_or(""),
         ],
     )? {
-        return Ok("conflict");
+        return Ok(ApplyOutcome::Conflict);
     }
     if git_succeeds(dir, &["diff", "--cached", "--quiet"])? {
-        return Ok("empty");
+        return Ok(ApplyOutcome::Empty);
     }
     git(dir, &["commit", "-m", message], GitOpts::default())?;
-    Ok("applied")
+    Ok(ApplyOutcome::Applied)
 }
 
 fn with_upstream_worktree<T>(repo: &Path, f: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
@@ -109,7 +109,7 @@ fn apply_deps(
     repo: &Path,
     queue: &QueueState,
     dep_ids: &[String],
-) -> Result<&'static str> {
+) -> Result<ApplyOutcome> {
     for id in dep_ids {
         let dep = get_patch(queue, id)?;
         let result = apply_abs(
@@ -117,11 +117,11 @@ fn apply_deps(
             &dep_patch_abs(repo, id)?,
             &format!("{} (dep)", dep.title),
         )?;
-        if result == "conflict" {
-            return Ok("conflict");
+        if result == ApplyOutcome::Conflict {
+            return Ok(ApplyOutcome::Conflict);
         }
     }
-    Ok("ok")
+    Ok(ApplyOutcome::Applied)
 }
 
 pub fn preflight_command_for(queue: &QueueState) -> Option<String> {
@@ -163,15 +163,15 @@ pub fn suggest_depends_on(
         .collect();
     with_upstream_worktree(repo, |dir| {
         let alone = apply_abs(dir, candidate_abs, candidate_message)?;
-        if alone != "conflict" {
+        if alone != ApplyOutcome::Conflict {
             return Ok(Vec::new());
         }
         for id in &candidates {
             reset_export(dir, repo)?;
-            if apply_deps(dir, repo, queue, std::slice::from_ref(id))? == "conflict" {
+            if apply_deps(dir, repo, queue, std::slice::from_ref(id))? == ApplyOutcome::Conflict {
                 continue;
             }
-            if apply_abs(dir, candidate_abs, candidate_message)? != "conflict" {
+            if apply_abs(dir, candidate_abs, candidate_message)? != ApplyOutcome::Conflict {
                 return Ok(vec![id.clone()]);
             }
         }
@@ -179,10 +179,10 @@ pub fn suggest_depends_on(
         for id in &candidates {
             prefix.push(id.clone());
             reset_export(dir, repo)?;
-            if apply_deps(dir, repo, queue, &prefix)? == "conflict" {
+            if apply_deps(dir, repo, queue, &prefix)? == ApplyOutcome::Conflict {
                 continue;
             }
-            if apply_abs(dir, candidate_abs, candidate_message)? != "conflict" {
+            if apply_abs(dir, candidate_abs, candidate_message)? != ApplyOutcome::Conflict {
                 return Ok(prefix);
             }
         }
@@ -208,7 +208,7 @@ pub fn assert_export_preflight(
 
     with_upstream_worktree(repo, |dir| {
         let deps = apply_deps(dir, repo, queue, &patch.depends_on)?;
-        if deps == "conflict" {
+        if deps == ApplyOutcome::Conflict {
             let suggested = suggest_depends_on(repo, queue, candidate_abs, &patch.title)?;
             return Err(Error::Preflight(PreflightError::new(
                 format!(
@@ -228,7 +228,7 @@ pub fn assert_export_preflight(
         }
 
         let applied = apply_abs(dir, candidate_abs, &patch.title)?;
-        if applied == "conflict" {
+        if applied == ApplyOutcome::Conflict {
             let suggested = suggest_depends_on(repo, queue, candidate_abs, &patch.title)?;
             let extra = if patch.depends_on.is_empty() {
                 " alone".to_string()
@@ -298,10 +298,10 @@ fn suggest_command_deps(
     for id in candidates {
         prefix.push(id);
         reset_export(dir, repo)?;
-        if apply_deps(dir, repo, queue, &prefix)? == "conflict" {
+        if apply_deps(dir, repo, queue, &prefix)? == ApplyOutcome::Conflict {
             continue;
         }
-        if apply_abs(dir, candidate_abs, &patch.title)? == "conflict" {
+        if apply_abs(dir, candidate_abs, &patch.title)? == ApplyOutcome::Conflict {
             continue;
         }
         let (code, _) = run_shell(command, dir);
@@ -362,7 +362,7 @@ pub fn assert_upstream_layer_applies(repo: &Path, queue: &QueueState) -> Result<
                 )));
             }
             let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
-            if result == "conflict" {
+            if result == ApplyOutcome::Conflict {
                 return Err(Error::Preflight(PreflightError::new(
                     format!(
                         "Queued patch \"{}\" does not apply onto tooling + upstream.",
@@ -393,7 +393,7 @@ pub fn assert_upstream_layer_preflight(
                 )));
             }
             let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
-            if result == "conflict" {
+            if result == ApplyOutcome::Conflict {
                 return Err(Error::Preflight(PreflightError::new(
                     format!(
                         "Queued patch \"{}\" does not apply onto tooling + upstream before \"{title}\".",
@@ -406,7 +406,7 @@ pub fn assert_upstream_layer_preflight(
             }
         }
         let applied = apply_abs(dir, candidate_abs, title)?;
-        if applied == "conflict" {
+        if applied == ApplyOutcome::Conflict {
             return Err(Error::Preflight(PreflightError::new(
                 format!(
                     "Patch \"{title}\" does not apply onto tooling + queued upstream (internal omitted). \

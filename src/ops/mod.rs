@@ -42,9 +42,9 @@ use crate::repo::{
     uplink_uncommitted_paths, write_product_patch,
 };
 use crate::types::{
-    AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict,
-    PatchLayer, PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingUpstream, QueueConfig,
-    QueueState, STATE_BRANCH, TransferDirection,
+    ApplyOutcome, AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval,
+    PatchConflict, PatchLayer, PatchMerged, PatchSource, PatchStatus, PatchUpstream,
+    PendingUpstream, QueueConfig, QueueState, STATE_BRANCH, TransferDirection,
 };
 
 mod add;
