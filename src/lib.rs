@@ -54,8 +54,8 @@ pub use progress::{ProgressMode, StepOutcome, StepProgress, format_step_line};
 pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};
 pub use types::{
     AssessReport, CheckStatus, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, Forge, GateKind, MergeVia,
-    Patch, PatchApproval, PatchLayer, PatchStatus, PendingUpstream, QUEUE_PATH, QUEUE_VERSION,
-    QueueConfig, QueueState, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    Patch, PatchApproval, PatchIntent, PatchLayer, PatchStatus, PendingUpstream, QUEUE_PATH,
+    QUEUE_VERSION, QueueConfig, QueueState, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
     TransferDirection,
 };
 

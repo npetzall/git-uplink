@@ -14,7 +14,7 @@ use crate::repo::{
     patch_substance, stable_patch_id_from_contents, stamp,
 };
 use crate::types::{
-    DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchSource, PatchStatus, QueueState,
+    DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchIntent, PatchSource, PatchStatus, QueueState,
     TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
 };
 
@@ -90,7 +90,7 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
         &head_sha,
         &message,
         Some(TOOLING_PATCH_TITLE),
-        "internal-only",
+        PatchIntent::InternalOnly,
     )?;
 
     if created {

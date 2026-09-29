@@ -10,7 +10,7 @@ use ratatui::{
 use crate::adopt::{AdoptCommit, AdoptGroup, AheadAnalysis, groups_from_numbers, resolve_groups};
 use crate::assess::{assert_assess_ok, assess_from_message};
 use crate::error::{Error, Result};
-use crate::types::QueueState;
+use crate::types::{PatchIntent, QueueState};
 
 enum Phase {
     Assign,
@@ -19,7 +19,7 @@ enum Phase {
 
 struct Form {
     title: String,
-    intent: String,
+    intent: PatchIntent,
     message: String,
 }
 
@@ -158,7 +158,7 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
                     .iter()
                     .map(|g| Form {
                         title: g.title.clone(),
-                        intent: g.intent.clone(),
+                        intent: g.intent,
                         message: g.message.clone().unwrap_or_else(|| g.title.clone()),
                     })
                     .collect();
@@ -232,10 +232,10 @@ fn handle_details(
         }
         KeyCode::Char('i') if matches!(ui.field, Field::Intent) => {
             let form = &mut ui.forms[index];
-            form.intent = if form.intent == "internal-only" {
-                "upstream".into()
+            form.intent = if form.intent.is_internal_only() {
+                PatchIntent::Upstream
             } else {
-                "internal-only".into()
+                PatchIntent::InternalOnly
             };
         }
         KeyCode::Char('q') if matches!(ui.field, Field::Intent) => {
@@ -272,7 +272,7 @@ fn finish(
 ) -> Result<Option<Vec<AdoptGroup>>> {
     for (i, form) in ui.forms.iter().enumerate() {
         ui.groups[i].title = form.title.trim().to_string();
-        ui.groups[i].intent = form.intent.clone();
+        ui.groups[i].intent = form.intent;
         ui.groups[i].message = Some(form.message.clone());
     }
     match resolve_groups(analysis, &ui.groups) {
@@ -297,9 +297,9 @@ fn finish(
                     head,
                     message,
                     Some(&group.title),
-                    &group.intent,
+                    group.intent,
                 ) {
-                    Ok(report) if group.intent == "upstream" => {
+                    Ok(report) if !group.intent.is_internal_only() => {
                         if let Err(err) = assert_assess_ok(&report, &group.title) {
                             ui.phase = Phase::Details { index: i };
                             ui.status = err.to_string();
@@ -395,8 +395,8 @@ fn draw_details(
     let form = &ui.forms[index];
     let group = &ui.groups[index];
     let warn = if index > 0
-        && ui.forms[index.saturating_sub(1)].intent == "internal-only"
-        && form.intent == "upstream"
+        && ui.forms[index.saturating_sub(1)].intent.is_internal_only()
+        && !form.intent.is_internal_only()
     {
         "\nWarning: previous group is internal-only; this upstream patch cannot depend on it."
     } else {

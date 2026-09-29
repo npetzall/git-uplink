@@ -17,7 +17,9 @@ use git_uplink::{
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
     resolve_conflict, status_report, status_snapshot, submit_patch, sync, transfer_patch,
 };
-use git_uplink::{Patch, PatchStatus, QueueState, SyncResult, TransferDirection, TransferResult};
+use git_uplink::{
+    Patch, PatchIntent, PatchStatus, QueueState, SyncResult, TransferDirection, TransferResult,
+};
 
 #[derive(Parser)]
 #[command(
@@ -816,11 +818,7 @@ fn run() -> Result<(), Error> {
                 head.as_deref().unwrap_or("HEAD"),
                 &message,
                 Some(&title),
-                if internal_only {
-                    "internal-only"
-                } else {
-                    "upstream"
-                },
+                PatchIntent::from_internal_only(internal_only),
             )?;
             let markdown = format_assess_markdown(&report);
             println!("{markdown}");

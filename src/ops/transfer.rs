@@ -123,7 +123,7 @@ pub(super) fn assess_transfer_to_upstream(
         head_ref,
         &stored_commit_message(patch),
         Some(&patch.title),
-        "upstream",
+        PatchIntent::Upstream,
     )?;
     assert_assess_ok(&report, &patch.title)?;
     Ok(report)

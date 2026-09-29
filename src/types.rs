@@ -48,6 +48,43 @@ impl std::fmt::Display for PatchStatus {
     }
 }
 
+/// Where a new patch is bound: the upstream queue (exported after IP review)
+/// or the internal queue (never exported, leak scan skipped).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum PatchIntent {
+    #[default]
+    Upstream,
+    InternalOnly,
+}
+
+impl PatchIntent {
+    pub fn from_internal_only(internal_only: bool) -> Self {
+        if internal_only {
+            Self::InternalOnly
+        } else {
+            Self::Upstream
+        }
+    }
+
+    pub fn is_internal_only(self) -> bool {
+        self == Self::InternalOnly
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Upstream => "upstream",
+            Self::InternalOnly => "internal-only",
+        }
+    }
+}
+
+impl std::fmt::Display for PatchIntent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// What applying a patch file did: committed a change, found it already
 /// present (nothing to commit), or hit a conflict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -558,7 +595,37 @@ impl QueueStateWire {
 
 #[cfg(test)]
 mod tests {
-    use super::{CheckStatus, PatchStatus};
+    use super::{CheckStatus, PatchIntent, PatchStatus};
+
+    #[test]
+    fn patch_intent_uses_kebab_case_json() {
+        assert_eq!(
+            serde_json::from_str::<PatchIntent>("\"internal-only\"").unwrap(),
+            PatchIntent::InternalOnly
+        );
+        assert_eq!(
+            serde_json::from_str::<PatchIntent>("\"upstream\"").unwrap(),
+            PatchIntent::Upstream
+        );
+        assert_eq!(
+            serde_json::to_string(&PatchIntent::InternalOnly).unwrap(),
+            "\"internal-only\""
+        );
+        assert!(serde_json::from_str::<PatchIntent>("\"internal\"").is_err());
+        assert_eq!(PatchIntent::default(), PatchIntent::Upstream);
+    }
+
+    #[test]
+    fn adopt_group_intent_defaults_to_upstream() {
+        let group: crate::AdoptGroup =
+            serde_json::from_str(r#"{"commits": ["abc"], "title": "Metrics"}"#).unwrap();
+        assert_eq!(group.intent, PatchIntent::Upstream);
+        let err = serde_json::from_str::<crate::AdoptGroup>(
+            r#"{"commits": ["abc"], "title": "Metrics", "intent": "internal"}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("internal"), "{err}");
+    }
 
     #[test]
     fn check_status_keeps_lowercase_json() {

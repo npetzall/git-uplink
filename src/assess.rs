@@ -12,7 +12,7 @@ use crate::queue::now_iso;
 use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
 use crate::types::{
     AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR,
-    Patch, PatchStatus, QueueState, STATE_BRANCH,
+    Patch, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
 };
 
 static HTML_COMMENT: LazyLock<Regex> =
@@ -802,7 +802,7 @@ pub fn assess_from_message(
     head_ref: &str,
     message: &str,
     title: Option<&str>,
-    intent: &str,
+    intent: PatchIntent,
 ) -> Result<AssessReport> {
     let shas = ensure_revs(repo, &[from_ref, head_ref])?;
     let from_ref = shas[0].as_str();
@@ -890,7 +890,7 @@ pub fn assess_from_message(
         },
     ];
 
-    if intent == "internal-only" {
+    if intent.is_internal_only() {
         checks.push(AssessCheck {
             id: "affiliation-leak".into(),
             status: CheckStatus::Skip,
