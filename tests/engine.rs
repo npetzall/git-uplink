@@ -3133,6 +3133,63 @@ fn mark_merged_commits_the_queue() {
 }
 
 #[test]
+fn sync_detects_several_patches_merged_by_patch_id() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    let hashed = TOKENS.replace("return sha1(value);", "return sha256(value);");
+    let mut ids = Vec::new();
+    for (branch, file, contents, title) in [
+        (
+            "feat/hash",
+            "src/tokens.js",
+            hashed.as_str(),
+            "Use SHA-256 for tokens",
+        ),
+        ("feat/readme", "README.md", "tokenkit v2\n", "Describe v2"),
+    ] {
+        git(
+            company,
+            &["checkout", "--quiet", "main"],
+            GitOpts::default(),
+        )
+        .unwrap();
+        git(company, &["checkout", "-b", branch], GitOpts::default()).unwrap();
+        write(company, file, contents);
+        commit_all(company, title);
+        let patch = add_landed_patch(
+            company,
+            AddPatchOpts {
+                title: title.into(),
+                from_ref: Some("main".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        ids.push(patch.id);
+        write(upstream, file, contents);
+        commit_all(upstream, &format!("{title} (squashed)"));
+    }
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let queue = sync_apply(company);
+    for id in &ids {
+        let patch = queue.all_patches().find(|p| &p.id == id).unwrap();
+        assert_eq!(patch.status, PatchStatus::Merged, "{id}");
+        assert_eq!(
+            patch.merged.as_ref().unwrap().via,
+            MergeVia::PatchId,
+            "{id}"
+        );
+    }
+}
+
+#[test]
 fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
     let world = setup_world();
     let company = &world.company;

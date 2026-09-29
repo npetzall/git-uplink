@@ -191,16 +191,15 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
     if !has_ref(repo, "uplink/upstream")? {
         return Ok(merged_ids);
     }
-    let ids: Vec<String> = queue.all_patches().map(|p| p.id.clone()).collect();
-    for id in ids {
-        let live = read_queue_file(repo)?;
-        let patch = match live.all_patches().find(|p| p.id == id) {
-            Some(p) => p.clone(),
-            None => continue,
-        };
-        if !patch.status.is_active() || !live.is_upstream(&id) {
-            continue;
-        }
+    let live = read_queue_file(repo)?;
+    let candidates: Vec<Patch> = queue
+        .all_patches()
+        .filter_map(|p| live.all_patches().find(|l| l.id == p.id))
+        .filter(|p| p.status.is_active() && live.is_upstream(&p.id))
+        .cloned()
+        .collect();
+    let mut upstream_ids: Option<HashMap<String, String>> = None;
+    for patch in candidates {
         let grep = format!("{}: {}", live.config.trailer_key, patch.id);
         let trailer = git(
             repo,
@@ -225,36 +224,53 @@ pub fn detect_merged_in_upstream(repo: &Path, queue: &QueueState) -> Result<Vec<
             merged_ids.push(patch.id);
             continue;
         }
-        if let Some(stable) = &patch.patch_id_stable {
-            let commits = git_ok(
-                repo,
-                &[
-                    "rev-list",
-                    "--no-merges",
-                    "--max-count=400",
-                    "uplink/upstream",
-                ],
-            )?;
-            for sha in commits.lines().filter(|s| !s.is_empty()) {
-                let shown = git(repo, &["show", "--binary", sha], GitOpts::allow_fail())?;
-                let ident = git(
-                    repo,
-                    &["patch-id", "--stable"],
-                    GitOpts {
-                        input: Some(shown.stdout.as_bytes()),
-                        ..GitOpts::default()
-                    },
-                )?;
-                let their_id = ident.stdout.split_whitespace().next().unwrap_or("");
-                if !their_id.is_empty() && their_id == stable {
-                    mark_merged(repo, &patch.id, MergeVia::PatchId, Some(sha))?;
-                    merged_ids.push(patch.id.clone());
-                    break;
-                }
-            }
+        let Some(stable) = &patch.patch_id_stable else {
+            continue;
+        };
+        if upstream_ids.is_none() {
+            upstream_ids = Some(upstream_patch_ids(repo)?);
+        }
+        if let Some(sha) = upstream_ids.as_ref().and_then(|ids| ids.get(stable)) {
+            mark_merged(repo, &patch.id, MergeVia::PatchId, Some(sha))?;
+            merged_ids.push(patch.id.clone());
         }
     }
     Ok(merged_ids)
+}
+
+/// Stable patch id -> newest commit for the last 400 non-merge commits on
+/// uplink/upstream, from one `git log -p` piped into one `git patch-id`.
+fn upstream_patch_ids(repo: &Path) -> Result<HashMap<String, String>> {
+    let log = git_ok(
+        repo,
+        &[
+            "log",
+            "--no-merges",
+            "--max-count=400",
+            "-p",
+            "--binary",
+            "--format=commit %H",
+            "uplink/upstream",
+        ],
+    )?;
+    let mut input = log;
+    input.push('\n');
+    let ids = git(
+        repo,
+        &["patch-id", "--stable"],
+        GitOpts {
+            input: Some(input.as_bytes()),
+            ..GitOpts::default()
+        },
+    )?;
+    let mut map = HashMap::new();
+    for line in ids.stdout.lines() {
+        let mut parts = line.split_whitespace();
+        if let (Some(id), Some(sha)) = (parts.next(), parts.next()) {
+            map.entry(id.to_string()).or_insert_with(|| sha.to_string());
+        }
+    }
+    Ok(map)
 }
 
 pub(super) fn restore_company_branch(repo: &Path, company_branch: &str) -> Result<()> {
