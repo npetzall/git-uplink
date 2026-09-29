@@ -38,8 +38,8 @@ use crate::repo::{
     patch_already_applied_on, path_exists_at, point_branch_at, promote_upstream, push_branch_force,
     push_state_branch, queue_at, refresh_company_branch, refresh_upstream_ref,
     replace_state_from_origin, restore_paths_from, rev_parse, set_state_branch, stable_patch_id,
-    stable_patch_id_from_contents, stamp, state_branch, state_exists,
-    try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
+    stable_patch_id_from_contents, stamp, state_exists, try_replace_state_from_origin,
+    uplink_uncommitted_paths, write_product_patch,
 };
 use crate::types::{
     AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval, PatchConflict,
@@ -83,14 +83,14 @@ pub(super) fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
 
 /// Resets the `.uplink` worktree to the committed uplink/state, when it exists.
 pub(super) fn restore_uplink_from_state(repo: &Path) -> Result<()> {
-    let queue_ref = state_branch(repo);
-    if has_ref(repo, &queue_ref)? {
+    let queue_ref = STATE_BRANCH;
+    if has_ref(repo, queue_ref)? {
         git(
             repo,
             &[
                 "restore",
                 "--source",
-                &queue_ref,
+                queue_ref,
                 "--worktree",
                 "--",
                 ".uplink",

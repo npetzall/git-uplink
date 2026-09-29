@@ -9,10 +9,10 @@ use regex::{Regex, RegexSet};
 use crate::error::{AssessError, Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::now_iso;
-use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at, state_branch};
+use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
 use crate::types::{
     AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR,
-    Patch, PatchStatus, QueueState,
+    Patch, PatchStatus, QueueState, STATE_BRANCH,
 };
 
 static HTML_COMMENT: LazyLock<Regex> =
@@ -535,7 +535,7 @@ fn format_delta_since(repo: &Path, patch: &Patch, sha: &str) -> Result<String> {
         }
     };
     let new_patch = fs::read_to_string(repo.join(&new_path))
-        .unwrap_or_else(|_| show_at(repo, &state_branch(repo), &new_path).unwrap_or_default());
+        .unwrap_or_else(|_| show_at(repo, STATE_BRANCH, &new_path).unwrap_or_default());
     if let Some(tree) = tree_diff_patches(repo, &old_patch, &new_patch) {
         return Ok(format!(
             "Source tree diff of the last approved patch vs the current patch, both applied on the same base.\n\n\

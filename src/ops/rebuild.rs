@@ -22,13 +22,12 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
     with_queue_lock(repo, || {
         let queued = read_queue_file(repo)?;
         let company_branch = queued.config.internal_branch.clone();
-        let state_branch = queued.config.state_branch.clone();
         let target = opts
             .branch
             .as_deref()
             .unwrap_or(company_branch.as_str())
             .to_string();
-        if is_reserved_rebuild_branch(&target, &queued.config) {
+        if is_reserved_rebuild_branch(&target) {
             return Err(Error::msg(format!(
                 "cannot rebuild onto reserved branch {target}"
             )));
@@ -42,7 +41,7 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
         if opts.push {
             let remote = opts.push_remote.as_deref().unwrap_or("origin");
             push_branch_force(repo, remote, &target)?;
-            push_state_branch(repo, remote, &state_branch)?;
+            push_state_branch(repo, remote, STATE_BRANCH)?;
         }
         Ok(RebuildResult {
             queue,
@@ -52,9 +51,8 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
     })
 }
 
-pub(super) fn is_reserved_rebuild_branch(name: &str, config: &crate::types::QueueConfig) -> bool {
+pub(super) fn is_reserved_rebuild_branch(name: &str) -> bool {
     name == "uplink/state"
-        || name == config.state_branch
         || name == "uplink/upstream"
         || name == adopt::ADOPT_FROM_REF
         || name.starts_with("uplink/conflict/")

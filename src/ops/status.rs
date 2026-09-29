@@ -72,7 +72,7 @@ pub(super) fn state_status(repo: &Path) -> Result<StateStatus> {
 }
 
 pub fn state_status_at(repo: &Path, fetch: bool) -> Result<StateStatus> {
-    let branch = state_branch(repo);
+    let branch = STATE_BRANCH.to_string();
     let local = if has_ref(repo, &branch)? {
         Some(rev_parse(repo, &branch)?)
     } else {

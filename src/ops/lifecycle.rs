@@ -41,7 +41,7 @@ pub fn approve_patch_at(
             patch.status = PatchStatus::Approved;
             let sha = match sha {
                 Some(value) if !value.is_empty() => value.to_string(),
-                _ => rev_parse(repo, &state_branch(repo))?,
+                _ => rev_parse(repo, STATE_BRANCH)?,
             };
             let run_url = run_url
                 .map(str::trim)
@@ -243,7 +243,7 @@ pub fn record_pull_request(
 ) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
-        let state_branch = queue.config.state_branch.clone();
+        let state_branch = STATE_BRANCH;
         let patch = get_patch(&queue, id)?.clone();
         if let Some(existing) = patch.upstream.as_ref() {
             if existing.pr_number == Some(number)
@@ -251,7 +251,7 @@ pub fn record_pull_request(
                 && patch.status == PatchStatus::Submitted
             {
                 let message = format!("uplink: submit {id} as PR {number}");
-                push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
+                push_recorded_patch(repo, id, state_branch, &message, push_remote)?;
                 return Ok(patch);
             }
             if let Some(recorded_number) = existing.pr_number
@@ -280,7 +280,7 @@ pub fn record_pull_request(
         write_queue_file(repo, &queue)?;
         let message = format!("uplink: submit {id} as PR {number}");
         commit_queue(repo, &message)?;
-        push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
+        push_recorded_patch(repo, id, state_branch, &message, push_remote)?;
         Ok(get_patch(&read_queue_file(repo)?, id)?.clone())
     })
 }
@@ -294,7 +294,7 @@ pub fn record_gated_pr(
 ) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
-        let state_branch = queue.config.state_branch.clone();
+        let state_branch = STATE_BRANCH;
         let patch = get_patch(&queue, id)?.clone();
         if patch.status != PatchStatus::Conflict {
             return Err(Error::msg(format!("{id} is not in conflict")));
@@ -304,7 +304,7 @@ pub fn record_gated_pr(
         };
         if conflict.pr_number == Some(number) && conflict.pr_url.as_deref() == Some(url) {
             let message = format!("uplink: conflict PR {id} #{number}");
-            push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
+            push_recorded_patch(repo, id, state_branch, &message, push_remote)?;
             return Ok(patch);
         }
         if let Some(recorded_number) = conflict.pr_number
@@ -330,7 +330,7 @@ pub fn record_gated_pr(
         write_queue_file(repo, &queue)?;
         let message = format!("uplink: conflict PR {id} #{number}");
         commit_queue(repo, &message)?;
-        push_recorded_patch(repo, id, &state_branch, &message, push_remote)?;
+        push_recorded_patch(repo, id, state_branch, &message, push_remote)?;
         Ok(get_patch(&read_queue_file(repo)?, id)?.clone())
     })
 }

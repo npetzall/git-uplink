@@ -16,9 +16,9 @@ use tokio::net::TcpListener;
 use crate::ops::{QueueCounts, StateStatus, refresh_from_origin, state_status_at, summarize_queue};
 use crate::queue::{get_patch, patch_path, require_path_component};
 use crate::repo::{
-    COMPANY_REMOTE, FileRevision, file_history, has_ref, queue_at, rev_parse, show_at, state_branch,
+    COMPANY_REMOTE, FileRevision, file_history, has_ref, queue_at, rev_parse, show_at,
 };
-use crate::types::{LastSync, Patch, QUEUE_PATH, QueueState};
+use crate::types::{LastSync, Patch, QUEUE_PATH, QueueState, STATE_BRANCH};
 
 #[derive(RustEmbed)]
 #[folder = "web/dist"]
@@ -276,11 +276,10 @@ fn missing_status(cwd: String, source: QueueSource, error: String) -> StatusResp
     }
 }
 
-fn source_ref(repo: &Path, source: QueueSource) -> String {
-    let branch = state_branch(repo);
+fn source_ref(source: QueueSource) -> String {
     match source {
-        QueueSource::Checkout => branch,
-        QueueSource::Remote => format!("{COMPANY_REMOTE}/{branch}"),
+        QueueSource::Checkout => STATE_BRANCH.to_string(),
+        QueueSource::Remote => format!("{COMPANY_REMOTE}/{STATE_BRANCH}"),
     }
 }
 
@@ -299,7 +298,7 @@ fn queue_for_source(repo: &Path, source: QueueSource) -> crate::error::Result<Qu
             crate::repo::ensure_state_worktree(repo)?;
             crate::ops::read_queue(repo)
         }
-        QueueSource::Remote => queue_at(repo, &source_ref(repo, source)),
+        QueueSource::Remote => queue_at(repo, &source_ref(source)),
     }
 }
 
@@ -392,7 +391,7 @@ fn read_uplink_file(
     }
     let git_ref = match sha {
         Some(sha) => sha.to_string(),
-        None => source_ref(repo, source),
+        None => source_ref(source),
     };
     show_at(repo, &git_ref, path)
 }
@@ -406,7 +405,7 @@ fn patch_revisions(
     let path = patch_path(id)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let git_ref = source_ref(repo, source);
+    let git_ref = source_ref(source);
     let mut revisions = file_history(repo, &git_ref, &path).unwrap_or_default();
     if source == QueueSource::Checkout && uncommitted.iter().any(|p| p == &path) {
         revisions.insert(

@@ -246,6 +246,27 @@ fn work_branch_of(patch: &Patch) -> String {
 }
 
 #[test]
+fn a_stored_state_branch_setting_is_ignored() {
+    let world = setup_world();
+    let company = &world.company;
+    let path = company.join(".uplink/queue.json");
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    raw["config"]["stateBranch"] = "custom/state".into();
+    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+
+    git_uplink::read_queue(company).unwrap();
+    let before = rev_of(company, STATE_BRANCH);
+    git_uplink::commit_queue(company, "uplink: legacy config").unwrap();
+    assert_ne!(rev_of(company, STATE_BRANCH), before);
+    assert!(!has_git_ref(company, "custom/state"));
+}
+
+fn rev_of(repo: &Path, git_ref: &str) -> String {
+    git_ok(repo, &["rev-parse", git_ref]).unwrap()
+}
+
+#[test]
 fn init_puts_uplink_on_the_orphan_state_branch_not_main() {
     let world = setup_world();
     let company = &world.company;

@@ -75,8 +75,8 @@ pub fn push_queue(repo: &Path, opts: PushOpts) -> Result<PushResult> {
 }
 
 pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
-    let queue = read_queue_file(repo)?;
-    let branch = queue.config.state_branch.clone();
+    read_queue_file(repo)?;
+    let branch = STATE_BRANCH.to_string();
     if !has_ref(repo, &branch)? {
         return Err(Error::msg(
             "uplink/state is missing; run `git uplink init` before pushing",
@@ -89,7 +89,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
             action: "pushed".into(),
             remote: remote.into(),
             branch,
-            sha: rev_parse(repo, &state_branch(repo))?,
+            sha: rev_parse(repo, STATE_BRANCH)?,
         });
     };
 
@@ -134,7 +134,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
         action,
         remote: remote.into(),
         branch,
-        sha: rev_parse(repo, &state_branch(repo))?,
+        sha: rev_parse(repo, STATE_BRANCH)?,
     })
 }
 
