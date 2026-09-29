@@ -174,7 +174,7 @@ impl std::fmt::Display for MergeVia {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PatchEvent {
     pub at: String,
     #[serde(rename = "type")]
