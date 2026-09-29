@@ -38,8 +38,9 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
         };
         if opts.push {
             let remote = opts.push_remote.as_deref().unwrap_or("origin");
-            push_branch_force(repo, remote, &target)?;
+            // State first: a rejected state push leaves origin main alone.
             push_state_branch(repo, remote, STATE_BRANCH)?;
+            push_branch_force(repo, remote, &target)?;
         }
         Ok(RebuildResult {
             queue,
