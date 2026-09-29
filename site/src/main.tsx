@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { HomePage } from "./pages/home";
+import { CliPage } from "./pages/cli";
 import { CollaborationPage } from "./pages/collaboration";
 import { ExamplesPage } from "./pages/examples";
 import { InstallPage } from "./pages/install";
@@ -22,7 +23,8 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />
-      <Route path="/collaboration" element={<CollaborationPage />} />
+      <Route path="/cli" element={<CliPage />} />
+      <Route path="/collaboration"element={<CollaborationPage />} />
       <Route path="/examples" element={<ExamplesPage />} />
       <Route path="/install" element={<InstallPage />} />
       <Route path="/internals" element={<InternalsPage />} />

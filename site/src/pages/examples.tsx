@@ -53,12 +53,13 @@ export function ExamplesPage() {
     <AppShell>
       <article className="mx-auto max-w-3xl space-y-10">
         <header className="space-y-3">
-          <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">Examples</p>
+          <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">Try it yourself</p>
           <h1 className="text-4xl font-semibold tracking-tight">Try it on GitHub</h1>
           <p className="text-lg leading-8 text-muted-foreground">
             <code className="rounded bg-muted px-1.5 py-0.5 text-[15px] text-foreground">examples/github/</code> is a
-            walkthrough on three repositories. You apply patches, open PRs, and let Actions import, submit, and
-            sync.             The{" "}
+            walkthrough on three repositories in a new GitHub organization, wired with fine-grained tokens.
+            Bootstrap scripts do the setup; then you apply patches, open PRs, and let Actions import, submit, and
+            sync. The{" "}
             <Link to="/lab" className="text-primary underline-offset-4 hover:underline">
               live lab
             </Link>{" "}
@@ -75,8 +76,9 @@ export function ExamplesPage() {
           </div>
           <p className="text-[15px] leading-7 text-muted-foreground">
             Company <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">main</code> is always public{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">upstream/main</code> plus every patch that
-            is not merged or dropped. After bootstrap, the queue already has one internal-only tooling patch.
+            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">upstream/main</code> plus tooling, then
+            every active upstream and internal patch. After bootstrap, the tooling slot already holds the Uplink
+            workflows.
           </p>
         </section>
 
@@ -118,8 +120,7 @@ export function ExamplesPage() {
         </section>
 
         <p className="text-sm text-muted-foreground">
-          Setup, tokens, and the <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">to-upstream</code>{" "}
-          Environment:{" "}
+          Start here — organization, repositories, fine-grained tokens, and Environments:{" "}
           <a
             href={`${GITHUB_BLOB}/examples/github/SETUP.md`}
             className="text-primary underline-offset-4 hover:underline"

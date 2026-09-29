@@ -1,8 +1,11 @@
 import { Link } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { GITHUB_BLOB, GITHUB_REPO } from "../lib/links";
+
+const code = "rounded bg-muted px-1.5 py-0.5 text-foreground";
+const pre = "overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200";
+const link = "text-primary underline-offset-4 hover:underline";
 
 export function InstallPage() {
   return (
@@ -12,98 +15,74 @@ export function InstallPage() {
           <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">Install</p>
           <h1 className="text-4xl font-semibold tracking-tight">Get git uplink on PATH</h1>
           <p className="text-lg leading-8 text-muted-foreground">
-            The binary is <code className="rounded bg-muted px-1.5 py-0.5 text-[15px] text-foreground">git-uplink</code>,
-            so Git treats it as <code className="rounded bg-muted px-1.5 py-0.5 text-[15px] text-foreground">git uplink</code>.
-            Building the crate needs Rust 1.98+ (<code className="rounded bg-muted px-1.5 py-0.5 text-foreground">rust-toolchain.toml</code>{" "}
-            pins 1.98.1), Node.js 22 (for the embedded operator UI), and npm.
+            The binary is <code className={`${code} text-[15px]`}>git-uplink</code>, so Git treats it as{" "}
+            <code className={`${code} text-[15px]`}>git uplink</code>. Download a release binary for your platform
+            and put it on <code className={`${code} text-[15px]`}>PATH</code>.
           </p>
         </header>
 
         <section className="space-y-3">
-          <h2 className="text-xl font-semibold">From a clone</h2>
-          <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`git clone ${GITHUB_REPO}.git
-cd git-uplink
-cargo install --path .
-git uplink -h`}</pre>
+          <h2 className="text-xl font-semibold">macOS and Linux</h2>
           <p className="text-[15px] leading-7 text-muted-foreground">
-            For a local binary without installing into Cargo&apos;s bin directory:
+            With the <a href="https://cli.github.com/" className={link}>GitHub CLI</a>: download, verify the checksum,
+            make it executable, and move it onto <code className={code}>PATH</code>.
           </p>
-          <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`cargo build --release
-export PATH="$PWD/target/release:$PATH"`}</pre>
+          <pre className={pre}>{`target=aarch64-apple-darwin   # or x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+gh release download --repo npetzall/git-uplink --pattern "git-uplink-$target" --pattern SHA256SUMS
+grep " git-uplink-$target\\$" SHA256SUMS | shasum -a 256 -c
+chmod +x "git-uplink-$target"
+mkdir -p ~/.local/bin && mv "git-uplink-$target" ~/.local/bin/git-uplink
+git uplink version`}</pre>
           <p className="text-[15px] leading-7 text-muted-foreground">
-            Use <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">git-uplink -h</code> or{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">git uplink -h</code>. Plain{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">git uplink --help</code> goes through
-            Git&apos;s man-page path, not clap.
+            Make sure <code className={code}>~/.local/bin</code> is on your <code className={code}>PATH</code>. Without{" "}
+            <code className={code}>gh</code>, download the same files from{" "}
+            <a href={`${GITHUB_REPO}/releases`} className={link}>Releases</a>.
           </p>
         </section>
 
         <section className="space-y-3">
-          <h2 className="text-xl font-semibold">Operator UI vs this site</h2>
+          <h2 className="text-xl font-semibold">Windows</h2>
           <p className="text-[15px] leading-7 text-muted-foreground">
-            This GitHub Pages site is the public playbook, lab, and install docs.{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">git uplink web-ui</code> is the local
-            dashboard for the checkout you started in: it reads{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">.uplink/queue.json</code> from{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">uplink/state</code>.
+            Download <code className={code}>git-uplink-x86_64-pc-windows-msvc.exe</code> from{" "}
+            <a href={`${GITHUB_REPO}/releases`} className={link}>Releases</a>, rename it to{" "}
+            <code className={code}>git-uplink.exe</code>, and place it in a directory on{" "}
+            <code className={code}>PATH</code>.
           </p>
-          <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`git uplink web-ui
-git uplink web-ui --no-open
-git uplink web-ui --port 43721`}</pre>
         </section>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Commands</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <pre className="overflow-x-auto rounded-lg bg-black/40 p-4 font-mono text-xs leading-6 text-zinc-200">{`git uplink init [--upstream <url>] [--contrib <url>] [--forge ghec|example-github]
-            [--upgrade] [--adopt-groups <file>]
-            [--upstream-remote-name <name>] [--upstream-branch <branch>]
-            [--contrib-remote-name <name>] [--internal-branch <branch>]
-git uplink add --title <text> [--message <text> | --message-file <path>]
-            [--from <ref>] [--head <ref>] [--internal-only]
-            [--pr <n>] [--pr-url <url>] [--depends-on <id>]...
-git uplink push [--push-remote <remote>]
-git uplink reset
-git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
-            [--message <text> | --message-file <path>]
-            [--depends-on <id>]...
-git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
-            [--message <text> | --message-file <path>]
-            [--internal-only]
-git uplink report <id> [--out <file>] [--extra-dir <path>]
-git uplink status [--json]
-git uplink approve <id> [--out <file>]
-git uplink submit <id>
-git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote origin]
-git uplink sync
-git uplink accept-upstream
-git uplink gated <id> --pr-url <url> [--pr <n>] [--push-remote origin]
-git uplink merged <id> [--via pr|trailer|patch-id|empty-rebase|manual] [--sha <sha>]
-git uplink drop <id> [--reason <text>]
-git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
-git uplink resolve <id>
-git uplink transfer <id> --to-upstream|--to-internal [--complete]
-git uplink web-ui [--port 43721] [--no-open]`}</pre>
-          </CardContent>
-        </Card>
+        <section className="space-y-3">
+          <h2 className="text-xl font-semibold">Check it</h2>
+          <p className="text-[15px] leading-7 text-muted-foreground">
+            Use <code className={code}>git-uplink -h</code> or <code className={code}>git uplink -h</code>. Plain{" "}
+            <code className={code}>git uplink --help</code> goes through Git&apos;s man-page path, not clap.{" "}
+            <code className={code}>git uplink web-ui</code> opens the local operator dashboard for the checkout you
+            start it in (<code className={code}>--no-open</code>, <code className={code}>--port 43721</code>).
+          </p>
+        </section>
 
-        <p className="text-sm text-muted-foreground">
-          Full notes live in the{" "}
-          <a href={`${GITHUB_BLOB}/README.md`} className="text-primary underline-offset-4 hover:underline">
-            README
-          </a>
-          . After install,{" "}
-          <Link to="/setup" className="text-primary underline-offset-4 hover:underline">
-            forge packs
-          </Link>{" "}
-          and the{" "}
-          <Link to="/examples" className="text-primary underline-offset-4 hover:underline">
-            GitHub example
-          </Link>{" "}
-          walk through a product repo.
-        </p>
+        <section className="space-y-3">
+          <h2 className="text-xl font-semibold">Next</h2>
+          <p className="text-[15px] leading-7 text-muted-foreground">
+            Installing only adds the command. To see it work, follow{" "}
+            <Link to="/examples" className={link}>
+              Try it yourself
+            </Link>{" "}
+            on three GitHub repositories. To wire up a real product repository, go to{" "}
+            <Link to="/setup" className={link}>
+              Production setup
+            </Link>
+            . Every command and flag is in the{" "}
+            <Link to="/cli" className={link}>
+              CLI reference
+            </Link>
+            . Building from source is in{" "}
+            <a href={`${GITHUB_BLOB}/CONTRIBUTING.md`} className={link}>
+              CONTRIBUTING.md
+            </a>
+            .
+          </p>
+        </section>
+
         <Button asChild variant="outline" size="sm">
           <a href={GITHUB_REPO}>Source on GitHub</a>
         </Button>
