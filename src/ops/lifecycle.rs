@@ -84,6 +84,15 @@ pub(super) fn github_run_url_opt() -> Option<String> {
 pub fn drop_patch(repo: &Path, id: &str, reason: &str) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
+        if queue.is_tooling(id) {
+            return Err(Error::msg(format!(
+                "{id} is the tooling patch; it holds the uplink workflows. Refresh it with `git uplink init --upgrade` instead of dropping it."
+            )));
+        }
+        let status = get_patch(&queue, id)?.status;
+        if !status.is_active() {
+            return Err(Error::msg(format!("{id} is already {status}")));
+        }
         {
             let patch = get_patch_mut(&mut queue, id)?;
             patch.status = PatchStatus::Dropped;
@@ -105,6 +114,16 @@ pub fn mark_merged(
 ) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
+        if !queue.is_upstream(id) {
+            get_patch(&queue, id)?;
+            return Err(Error::msg(format!(
+                "{id} is not in the upstream queue; internal-only and tooling patches are never submitted upstream"
+            )));
+        }
+        let status = get_patch(&queue, id)?.status;
+        if !status.is_active() {
+            return Err(Error::msg(format!("{id} is already {status}")));
+        }
         {
             let patch = get_patch_mut(&mut queue, id)?;
             patch.status = PatchStatus::Merged;
