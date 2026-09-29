@@ -121,8 +121,8 @@ export function PlaybookPage() {
             push. It records those unique first-parent commits as patches after tooling. Merge
             commits are one patch each; rebase-style runs are grouped in the terminal UI (or{" "}
             <code>--adopt-groups</code>). Preview with{" "}
-            <code>git uplink rebuild --branch uplink/verify</code>, inspect{" "}
-            <code>git diff main uplink/verify</code>, then{" "}
+            <code>git uplink rebuild --branch uplink/preview/verify</code>, inspect{" "}
+            <code>git diff main uplink/preview/verify</code>, then{" "}
             <code>git uplink rebuild --push</code>. A preview branch does not move{" "}
             <code>main</code> and does not mutate the queue. After that, developers work one
             internal PR per change as usual.

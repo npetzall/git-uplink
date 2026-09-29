@@ -187,9 +187,9 @@ export function InternalsPage() {
             </li>
           </ol>
           <p>
-            <code>git uplink rebuild --branch uplink/verify</code> is preview only: it does not move{" "}
+            <code>git uplink rebuild --branch uplink/preview/verify</code> is preview only: it does not move{" "}
             <code>main</code> and does not mutate the queue. Inspect with{" "}
-            <code>git diff main uplink/verify</code>, then <code>git uplink rebuild --push</code> to
+            <code>git diff main uplink/preview/verify</code>, then <code>git uplink rebuild --push</code> to
             publish.
           </p>
           <MermaidDiagram chart={REBUILD_CHART} title="rebuild_once: snapshot, replay, restore" />

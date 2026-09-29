@@ -27,12 +27,10 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
             .as_deref()
             .unwrap_or(company_branch.as_str())
             .to_string();
-        if is_reserved_rebuild_branch(&target) {
-            return Err(Error::msg(format!(
-                "cannot rebuild onto reserved branch {target}"
-            )));
-        }
         let preview = target != company_branch;
+        if preview {
+            check_preview_branch(&target, opts.push)?;
+        }
         let queue = if preview {
             rebuild_preview(repo, &target)?
         } else {
@@ -51,13 +49,25 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
     })
 }
 
-pub(super) fn is_reserved_rebuild_branch(name: &str) -> bool {
-    name == "uplink/state"
-        || name == "uplink/upstream"
-        || name == adopt::ADOPT_FROM_REF
-        || name.starts_with("uplink/conflict/")
-        || name.starts_with("uplink/transfer-to-upstream/")
-        || name.starts_with("uplink/transfer-to-internal/")
+const PREVIEW_BRANCH_PREFIX: &str = "uplink/preview/";
+
+/// A preview may only overwrite its own `uplink/preview/<name>` branch, and is
+/// never force-pushed, so a typo cannot clobber a real branch here or on origin.
+fn check_preview_branch(target: &str, push: bool) -> Result<()> {
+    if target
+        .strip_prefix(PREVIEW_BRANCH_PREFIX)
+        .is_none_or(str::is_empty)
+    {
+        return Err(Error::msg(format!(
+            "cannot rebuild onto {target}: preview branches must be named {PREVIEW_BRANCH_PREFIX}<name>"
+        )));
+    }
+    if push {
+        return Err(Error::msg(format!(
+            "--push publishes company main only; not pushing preview {target}"
+        )));
+    }
+    Ok(())
 }
 
 pub(super) fn checkout_identity(repo: &Path) -> Result<(String, String)> {
