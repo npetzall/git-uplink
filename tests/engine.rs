@@ -5,10 +5,10 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, CheckStatus, ConflictError, DEFAULT_CUTOFF, Error,
-    Forge, GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PatchStatus, ProgressMode,
-    PushOpts, QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH, StepOutcome,
-    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream, add_patch,
-    approve_patch, doctor, drop_patch, format_approval_receipt, format_approver_packet,
+    Forge, GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PatchIntent, PatchStatus,
+    ProgressMode, PushOpts, QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH,
+    StepOutcome, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream,
+    add_patch, approve_patch, doctor, drop_patch, format_approval_receipt, format_approver_packet,
     format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
     from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
     parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
@@ -1458,11 +1458,11 @@ fn rev(repo: &Path) -> String {
     git_ok(repo, &["rev-parse", "HEAD"]).unwrap()
 }
 
-fn adopt_group(commits: &[&str], title: &str, intent: &str) -> AdoptGroup {
+fn adopt_group(commits: &[&str], title: &str, intent: PatchIntent) -> AdoptGroup {
     AdoptGroup {
         commits: commits.iter().map(|s| s.to_string()).collect(),
         title: title.into(),
-        intent: intent.into(),
+        intent,
         message: None,
     }
 }
@@ -1504,8 +1504,8 @@ fn init_adopts_linear_history_without_moving_main() {
     let queue = init_adopt(
         &world,
         vec![
-            adopt_group(&[&a, &b], "Metrics", "upstream"),
-            adopt_group(&[&c], "Dashboards", "internal-only"),
+            adopt_group(&[&a, &b], "Metrics", PatchIntent::Upstream),
+            adopt_group(&[&c], "Dashboards", PatchIntent::InternalOnly),
         ],
     );
     assert_eq!(rev(&world.company), main_before);
@@ -1544,8 +1544,8 @@ fn rebuild_preview_branch_leaves_main_and_queue_alone() {
     init_adopt(
         &world,
         vec![
-            adopt_group(&[&a, &b], "Metrics", "upstream"),
-            adopt_group(&[&c], "Dashboards", "internal-only"),
+            adopt_group(&[&a, &b], "Metrics", PatchIntent::Upstream),
+            adopt_group(&[&c], "Dashboards", PatchIntent::InternalOnly),
         ],
     );
     let queue_before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
@@ -1659,8 +1659,8 @@ fn rebuild_after_adopt_replays_onto_main() {
     init_adopt(
         &world,
         vec![
-            adopt_group(&[&a, &b], "Metrics", "upstream"),
-            adopt_group(&[&c], "Dashboards", "internal-only"),
+            adopt_group(&[&a, &b], "Metrics", PatchIntent::Upstream),
+            adopt_group(&[&c], "Dashboards", PatchIntent::InternalOnly),
         ],
     );
     rebuild(&world.company).unwrap();
@@ -1737,7 +1737,7 @@ fn init_adopts_each_merge_commit_as_a_patch() {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Ghec),
-            adopt_groups: Some(vec![adopt_group(&[&side], "Side", "upstream")]),
+            adopt_groups: Some(vec![adopt_group(&[&side], "Side", PatchIntent::Upstream)]),
             interactive: Some(false),
             ..Default::default()
         },
@@ -1748,8 +1748,8 @@ fn init_adopts_each_merge_commit_as_a_patch() {
     let queue = init_adopt(
         &world,
         vec![
-            adopt_group(&[&m1], "One", "upstream"),
-            adopt_group(&[&m2], "Two", "upstream"),
+            adopt_group(&[&m1], "One", PatchIntent::Upstream),
+            adopt_group(&[&m2], "Two", PatchIntent::Upstream),
         ],
     );
     assert_eq!(queue.all_patches().count(), 3);
@@ -1793,8 +1793,8 @@ fn init_adopts_mixed_merge_then_direct_commit() {
     let queue = init_adopt(
         &world,
         vec![
-            adopt_group(&[&merge], "One", "upstream"),
-            adopt_group(&[&direct], "Hotfix", "upstream"),
+            adopt_group(&[&merge], "One", PatchIntent::Upstream),
+            adopt_group(&[&direct], "Hotfix", PatchIntent::Upstream),
         ],
     );
     assert_eq!(queue.all_patches().count(), 3);
@@ -1834,7 +1834,10 @@ fn init_skips_empty_first_parent_merge_in() {
     write(&world.company, "src/real.js", "export const real = 1;\n");
     commit_all(&world.company, "real product change");
     let real = rev(&world.company);
-    let queue = init_adopt(&world, vec![adopt_group(&[&real], "Real", "upstream")]);
+    let queue = init_adopt(
+        &world,
+        vec![adopt_group(&[&real], "Real", PatchIntent::Upstream)],
+    );
     assert_eq!(queue.all_patches().count(), 2);
     assert_eq!(queue.patch_refs()[1].title, "Real");
 }
@@ -1850,7 +1853,11 @@ fn init_rejects_incomplete_and_noncontiguous_adopt_groups() {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Ghec),
-            adopt_groups: Some(vec![adopt_group(&[&a, &b], "Partial", "upstream")]),
+            adopt_groups: Some(vec![adopt_group(
+                &[&a, &b],
+                "Partial",
+                PatchIntent::Upstream,
+            )]),
             interactive: Some(false),
             ..Default::default()
         },
@@ -1867,8 +1874,8 @@ fn init_rejects_incomplete_and_noncontiguous_adopt_groups() {
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Ghec),
             adopt_groups: Some(vec![
-                adopt_group(&[&a, &c], "Split", "upstream"),
-                adopt_group(&[&b], "Mid", "upstream"),
+                adopt_group(&[&a, &c], "Split", PatchIntent::Upstream),
+                adopt_group(&[&b], "Mid", PatchIntent::Upstream),
             ]),
             interactive: Some(false),
             ..Default::default()
@@ -1901,7 +1908,7 @@ fn init_rejects_history_that_is_ahead_and_behind() {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Ghec),
-            adopt_groups: Some(vec![adopt_group(&["HEAD"], "Nope", "upstream")]),
+            adopt_groups: Some(vec![adopt_group(&["HEAD"], "Nope", PatchIntent::Upstream)]),
             interactive: Some(false),
             ..Default::default()
         },
@@ -1938,8 +1945,8 @@ fn rebuild_push_publishes_state_and_main() {
     init_adopt(
         &world,
         vec![
-            adopt_group(&[&a, &b], "Metrics", "upstream"),
-            adopt_group(&[&c], "Dashboards", "internal-only"),
+            adopt_group(&[&a, &b], "Metrics", PatchIntent::Upstream),
+            adopt_group(&[&c], "Dashboards", PatchIntent::InternalOnly),
         ],
     );
     let origin = keep_dir();
@@ -1977,8 +1984,8 @@ fn rebuild_push_replaces_remote_main_that_moved() {
     init_adopt(
         &world,
         vec![
-            adopt_group(&[&a, &b], "Metrics", "upstream"),
-            adopt_group(&[&c], "Dashboards", "internal-only"),
+            adopt_group(&[&a, &b], "Metrics", PatchIntent::Upstream),
+            adopt_group(&[&c], "Dashboards", PatchIntent::InternalOnly),
         ],
     );
     let origin = keep_dir();

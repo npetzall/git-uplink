@@ -15,7 +15,7 @@ use crate::queue::{
 use crate::repo::{
     commit_queue, has_ref, new_patch_id, rev_parse, stable_patch_id, stamp, write_product_patch,
 };
-use crate::types::{Patch, PatchSource, PatchStatus, QueueState};
+use crate::types::{Patch, PatchIntent, PatchSource, PatchStatus, QueueState};
 
 pub const ADOPT_FROM_REF: &str = "uplink/adopt-from";
 const ADOPT_NOTE_PREFIX: &str = "adopted from ";
@@ -34,14 +34,10 @@ pub struct AdoptCommit {
 pub struct AdoptGroup {
     pub commits: Vec<String>,
     pub title: String,
-    #[serde(default = "default_upstream_intent")]
-    pub intent: String,
+    #[serde(default)]
+    pub intent: PatchIntent,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-}
-
-fn default_upstream_intent() -> String {
-    "upstream".into()
 }
 
 #[derive(Debug, Clone)]
@@ -57,9 +53,8 @@ struct ResolvedGroup {
     head_sha: String,
     shas: Vec<String>,
     title: String,
-    intent: String,
+    intent: PatchIntent,
     message: String,
-    previous_was_internal_only: bool,
 }
 
 pub fn analyze_ahead(repo: &Path) -> Result<AheadAnalysis> {
@@ -270,7 +265,6 @@ fn resolve_group_runs(
     }
     let mut assigned = vec![None; analysis.commits.len()];
     let mut runs = Vec::new();
-    let mut previous_was_internal_only = false;
     for (group_idx, group) in groups.iter().enumerate() {
         if group.commits.is_empty() {
             return Err(Error::msg(format!(
@@ -318,17 +312,7 @@ fn resolve_group_runs(
                 )));
             }
         }
-        let intent = group.intent.trim();
-        let intent = if intent.is_empty() {
-            "upstream"
-        } else if intent == "upstream" || intent == "internal-only" {
-            intent
-        } else {
-            return Err(Error::msg(format!(
-                "adopt group \"{}\" has unknown intent \"{}\" (use upstream or internal-only)",
-                group.title, group.intent
-            )));
-        };
+        let intent = group.intent;
         let title = group.title.trim();
         if title.is_empty() {
             return Err(Error::msg("adopt group title is empty"));
@@ -345,11 +329,9 @@ fn resolve_group_runs(
             head_sha: analysis.commits[last].sha.clone(),
             shas,
             title: title.to_string(),
-            intent: intent.to_string(),
+            intent,
             message,
-            previous_was_internal_only,
         });
-        previous_was_internal_only = intent == "internal-only";
     }
     if let Some(idx) = assigned.iter().position(|g| g.is_none()) {
         return Err(Error::msg(format!(
@@ -394,20 +376,17 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
     let mut last_upstream_id: Option<String> = None;
     let outcome = (|| -> Result<()> {
         for group in &groups {
-            if group.intent == "upstream" && group.previous_was_internal_only {
-                // still recorded; operator was warned in the TUI
-            }
-            let intent = group.intent.as_str();
+            let intent = group.intent;
             let id = new_patch_id();
             let created_at = stamp();
-            let depends_on = if intent == "upstream" {
+            let depends_on = if !intent.is_internal_only() {
                 last_upstream_id.clone().into_iter().collect()
             } else {
                 Vec::new()
             };
             if let Some(dep_id) = depends_on.first() {
                 get_patch(&queue, dep_id)?;
-                if cannot_depend_on(&queue, intent == "internal-only", dep_id) {
+                if cannot_depend_on(&queue, intent.is_internal_only(), dep_id) {
                     return Err(Error::msg(format!(
                         "Upstream-bound patch \"{}\" cannot depend on internal-only patch {dep_id}.",
                         group.title
@@ -459,7 +438,7 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
             )?);
             if let Some(report) = &patch.assess {
                 patch.commit_message = report.commit_message.clone();
-                if intent == "upstream" {
+                if !intent.is_internal_only() {
                     assert_assess_ok(report, &group.title)?;
                 }
             }
@@ -468,10 +447,10 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
             written.push(id.clone());
             let rel = patch_path(&id)?.to_string_lossy().into_owned();
             patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-            if intent == "upstream" {
+            if !intent.is_internal_only() {
                 last_upstream_id = Some(id.clone());
             }
-            queue.push_patch(patch, intent == "internal-only");
+            queue.push_patch(patch, intent.is_internal_only());
         }
         write_queue_file(repo, &queue)?;
         let n = written.len();
@@ -524,7 +503,7 @@ pub fn groups_from_numbers(commits: &[AdoptCommit], numbers: &[u32]) -> Result<V
         groups.push(AdoptGroup {
             commits: slice.iter().map(|c| c.sha.clone()).collect(),
             title: title.clone(),
-            intent: "upstream".into(),
+            intent: PatchIntent::Upstream,
             message: Some(title),
         });
         i = j;

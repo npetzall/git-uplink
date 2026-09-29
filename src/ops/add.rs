@@ -180,11 +180,7 @@ fn assess_new_patch(
     head_sha: &str,
     raw_message: &str,
 ) -> Result<()> {
-    let intent = if opts.internal_only {
-        "internal-only"
-    } else {
-        "upstream"
-    };
+    let intent = PatchIntent::from_internal_only(opts.internal_only);
     let report = assess_from_message(
         repo,
         queue,
