@@ -22,6 +22,7 @@ permissions:
 
 jobs:
   validate:
+    name: Uplink gate
     if: ${{ !endsWith(github.event.pull_request.base.ref, '-work') }}
     runs-on: ubuntu-latest
     steps:
