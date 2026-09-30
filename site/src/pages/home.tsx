@@ -12,7 +12,7 @@ const GATES = [
   },
   {
     title: "Stay current, keep your deltas",
-    body: "Company main is public upstream plus tooling, then queued upstream patches, then internal patches last. Merge lands a change on main; import records it on uplink/state. Upstream import rebuilds so the new patch sits under internal. Sync rebuilds main only when upstream moved. Merged work is dropped so later upstream fixes are not reverted.",
+    body: "Company main is public upstream plus tooling, then queued upstream patches, then internal patches last. Merge lands a change on internal main; import records it in uplink/state. Upstream import rebuilds so the new patch sits under internal. Sync rebuilds main only when upstream moved. Merged work is dropped so later upstream fixes are not reverted.",
   },
   {
     title: "IP control before publicity",
@@ -28,12 +28,12 @@ export function HomePage() {
           Private forge → contribution fork → upstream → gated sync
         </p>
         <h1 className="text-4xl font-semibold tracking-tight text-balance md:text-5xl">
-          Contribute upstream without a second copy of every change.
+          Contribute to upstream without a second copy of every change.
         </h1>
         <p className="text-lg leading-8 text-muted-foreground text-pretty">
-          git uplink is the Git subcommand for a company on a private forge that must build on a
-          public project, keep unreleased work private, pass IP review, and still make it easy for
-          upstream maintainers to merge. EMU on GitHub Enterprise Cloud is one such forge.
+          git uplink is the Git subcommand for a company with a private forge that builds on a
+          public project, keep private changes private, pass through IP review, and make it easy for
+          upstream maintainers to merge. EMU on GitHub Enterprise Cloud is one such company forge.
         </p>
         <div className="flex flex-wrap gap-3">
           <Button asChild>
@@ -42,16 +42,16 @@ export function HomePage() {
             </Link>
           </Button>
           <Button asChild variant="outline">
+            <Link to="/why">Why</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to="/how">How it works</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to="/day-to-day">Day to day</Link>
+          </Button>
+          <Button asChild variant="outline">
             <Link to="/install">Install</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link to="/working">Way of working</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link to="/playbook">Read the playbook</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link to="/internals">Internals</Link>
           </Button>
           <Button asChild variant="outline">
             <a href={GITHUB_REPO}>GitHub</a>
@@ -73,17 +73,18 @@ export function HomePage() {
       <section className="mt-12 space-y-4">
         <h2 className="text-xl font-semibold">Two gates, not one</h2>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          Multiple developers share company main through internal PRs. Importing a PR is{" "}
-          <strong className="text-foreground">approved for the internal</strong> — the product builds
-          it. Legal review is a later <strong className="text-foreground">to-upstream Environment</strong>{" "}
-          approval on the submit workflow, before anything is pushed to the public contribution fork.
-          Concurrent imports publish with <code className="rounded bg-muted px-1 py-0.5 text-foreground">git uplink push</code> so two adds cannot drop a patch.
+          <strong className="text-foreground">Gate 1</strong> -{" "} pull requests towards internal main.
+          Merging a PR means it's approved for the internal product.
+          <br />
+          <strong className="text-foreground">Gate 2</strong> -{" "} Submit workflow.
+          Submitting a change signals the intention of contributing to upstream.
+          It triggers the IP review and only after approval, is the change pushed to the public contribution fork.
           Those two gates are outbound. Inbound review of foreign public commits is the{" "}
-          <strong className="text-foreground">from-upstream Environment</strong>.
+          <strong className="text-foreground">sync workflow</strong>.
         </p>
         <Button asChild variant="outline" size="sm">
-          <Link to="/collaboration">
-            How collaboration works <ArrowRight />
+          <Link to="/day-to-day">
+            What developers do day to day <ArrowRight />
           </Link>
         </Button>
       </section>
@@ -92,25 +93,24 @@ export function HomePage() {
         <h2 className="text-xl font-semibold">Then it becomes public maintenance</h2>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
           After IP export and an ordinary upstream merge, the change is public. Sync flows it back,
-          marks the patch merged, and drops the internal copy so company{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">main</code> is rebuilt as
-          public upstream plus remaining private patches. Flow-back of our own patches is automatic
+          marks the patch merged, so it's skipped during rebuild of
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">internal main</code>.
           (trailer / <code className="rounded bg-muted px-1 py-0.5 text-foreground">patch-id</code>
-          ). Foreign public commits wait on the{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">from-upstream</code>{" "}
-          Environment — the company does not silently take unrelated upstream onto{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">main</code>.
+          is the identification of a merged company contribution). Foreign public commits wait on the{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">sync workflow</code>{" "}
+          approval - we do{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">NOT</code>{" "}silently take unrelated upstream changes into{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">internal main</code>.
         </p>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          Everyone who branches from company{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">main</code> now builds on
-          that public form. New contributions must account for those submitted-and-flowed-back
-          changes instead of carrying a private copy.
+          Since the change is in upstream, maintenance has shifted to the upstream repository. Upstream
+          maintainers, third party contributors must make their changes work with ours and not ours work
+          with theirs.
         </p>
         <div className="flex flex-wrap gap-3">
           <Button asChild variant="outline" size="sm">
-            <Link to="/playbook">
-              Inbound gate in the playbook <ArrowRight />
+            <Link to="/how">
+              How sync and the inbound gate work <ArrowRight />
             </Link>
           </Button>
           <Button asChild variant="outline" size="sm">
@@ -127,9 +127,11 @@ export function HomePage() {
             name="Company product repo"
             host="Private forge"
             points={[
-              "Synthetic main = upstream + queue",
+              "Synthetic main = upstream + tooling + queues",
               "Developers merge PRs here; bot rebuilds main on sync",
-              "Merge = internal product; to-upstream environment = IP",
+              "Merge = internal product",
+              "Submit workflow = IP approval, upstream contribution",
+              "Sync flows our merge back and drops the internal copy; foreign commits wait on from-upstream",
             ]}
           />
           <RepoCard
@@ -149,7 +151,6 @@ export function HomePage() {
             points={[
               "Maintainers merge ordinary PRs",
               "Uplink-Patch-Id trailer survives squash",
-              "Sync flows our merge back and drops the internal copy; foreign commits wait on from-upstream",
             ]}
           />
         </div>

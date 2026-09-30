@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { AppShell } from "../components/app-shell";
+import { DocPage } from "../components/doc-page";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { GITHUB_BLOB } from "../lib/links";
 
@@ -50,12 +50,11 @@ const STORIES = [
 
 export function ExamplesPage() {
   return (
-    <AppShell>
-      <article className="mx-auto max-w-3xl space-y-10">
-        <header className="space-y-3">
-          <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">Try it yourself</p>
-          <h1 className="text-4xl font-semibold tracking-tight">Try it on GitHub</h1>
-          <p className="text-lg leading-8 text-muted-foreground">
+    <DocPage
+      eyebrow="Try it yourself"
+      title="Try it on GitHub"
+      lead={
+        <>
             <code className="rounded bg-muted px-1.5 py-0.5 text-[15px] text-foreground">examples/github/</code> is a
             walkthrough on three repositories in a new GitHub organization, wired with fine-grained tokens.
             Bootstrap scripts do the setup; then you apply patches, open PRs, and let Actions import, submit, and
@@ -64,8 +63,9 @@ export function ExamplesPage() {
               live lab
             </Link>{" "}
             hosts the same stories in the browser, with a Manual vs CI toggle for the commands.
-          </p>
-        </header>
+          </>
+      }
+    >
 
         <section className="space-y-3">
           <h2 className="text-xl font-semibold">Three repositories</h2>
@@ -87,9 +87,9 @@ export function ExamplesPage() {
           <p className="text-[15px] leading-7 text-muted-foreground">
             Reset all three repos at the start of each story (Actions → Reset example), then{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">git uplink reset</code> in the internal
-            clone. Rationale for each flow is in the{" "}
-            <Link to="/working" className="text-primary underline-offset-4 hover:underline">
-              way of working
+            clone. What each flow means for developers is in{" "}
+            <Link to="/day-to-day" className="text-primary underline-offset-4 hover:underline">
+              day to day
             </Link>
             .
           </p>
@@ -136,8 +136,7 @@ export function ExamplesPage() {
           </a>
           .
         </p>
-      </article>
-    </AppShell>
+    </DocPage>
   );
 }
 
