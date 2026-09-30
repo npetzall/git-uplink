@@ -71,4 +71,4 @@ The telemetry patch is `queued` on the **internal** queue (label `uplink:interna
 
 **Actions → Uplink submit** with that patch id. `git uplink approve` / `submit` refuse internal-only. Nothing is pushed to the contrib fork.
 
-The tooling patch from bootstrap is the same class of change: product-only, never submitted.
+The tooling patch from setup is the same class of change: product-only, never submitted.

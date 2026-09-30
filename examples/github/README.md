@@ -2,7 +2,7 @@
 
 A walkthrough of the Uplink operating model on three GitHub repositories. You `git apply` the patches in [`patches/`](patches/), push a branch, and open the PR in the GitHub UI. Actions import, submit, and sync.
 
-How it works: [How](https://npetzall.github.io/git-uplink/how). What developers do: [Day to day](https://npetzall.github.io/git-uplink/day-to-day). Setup, tokens, and the `to-upstream` / `from-upstream` / `abandon-contrib` Environments: [`SETUP.md`](SETUP.md).
+How it works: [How](https://npetzall.github.io/git-uplink/how). What developers do: [Day to day](https://npetzall.github.io/git-uplink/day-to-day). Set it up step by step: [Try it yourself → Setup](https://npetzall.github.io/git-uplink/examples?view=setup). Kit files and resets: [`SETUP.md`](SETUP.md).
 
 ## Repositories
 
@@ -18,7 +18,7 @@ Company `main` is always:
 public upstream/main  +  tooling  +  active upstream[]  +  active internal[]
 ```
 
-After bootstrap, the tooling slot already holds **Uplink tooling** (GitHub workflows and the PR template). Product stories start from that baseline.
+After setup, the tooling slot already holds **Uplink tooling** (GitHub workflows and the PR template). Product stories start from that baseline.
 
 ## How a story step works
 
@@ -44,13 +44,12 @@ Reset all three repos at the start of each story: **Actions → Reset example** 
 
 ```text
 examples/github/
-  SETUP.md
-  example-reset.yml     stub workflow (checkout orphan example-reset)
-  reset/                per-repo reset scripts (published on example-reset)
-  upstream/             tokenkit
+  SETUP.md              kit files and resets (setup steps are on the site)
+  example-reset.yml     Reset example workflow, copied into each repo
+  reset/                per-repo reset scripts, copied onto each repo's example-reset branch
+  upstream/             tokenkit, the first commit of uplink-example-upstream
   patches/*.diff        git apply these
   patches/*.yml         copy into the internal clone (assessment hook)
-  scripts/bootstrap_*.sh  seed upstream, then contrib fork, then internal
   stories/
 ```
 

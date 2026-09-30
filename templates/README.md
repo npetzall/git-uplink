@@ -5,6 +5,6 @@
 | `--forge` | Pack | Docs |
 | --- | --- | --- |
 | `ghec` | [`ghec/`](ghec/) | [GitHub Enterprise Cloud setup](ghec/README.md) |
-| `example-github` | [`example-github/`](example-github/) | [GitHub example setup](../examples/github/SETUP.md) |
+| `example-github` | [`example-github/`](example-github/) | [GitHub example workflows](example-github/README.md) |
 
 [`github/`](github/) holds files shared by every GitHub-family pack: the pull request template, the `install-git-uplink` action, and a sample pack-files ruleset.
