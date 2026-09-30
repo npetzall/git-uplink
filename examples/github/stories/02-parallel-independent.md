@@ -1,6 +1,6 @@
 # Story 2 — Asha and Ben in parallel; Ben merges first
 
-Independent changes (hash vs TTL). Queue order is not upstream order. This is [way-of-working.md](../../../way-of-working.md) story 2.
+Independent changes (hash vs TTL). Queue order is not upstream order. Developer view: [Day to day — build on someone else's change](https://npetzall.github.io/git-uplink/day-to-day#depends-on) (only declare what you need).
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github

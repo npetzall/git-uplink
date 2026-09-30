@@ -1,6 +1,6 @@
 # Story 1 — Asha starts a new fix
 
-Asha changes token hashing. Nobody else is in the way. This is [way-of-working.md](../../../way-of-working.md) story 1: internal PR → import → to-upstream submit → upstream merge → sync drops the patch.
+Asha changes token hashing. Nobody else is in the way. Developer view: [Day to day — make a new change](https://npetzall.github.io/git-uplink/day-to-day#new-change). The flow: internal PR → import → to-upstream submit → upstream merge → sync drops the patch.
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github

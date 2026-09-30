@@ -1,6 +1,6 @@
 # Story 6 — Internal-only telemetry
 
-A company-only change must never pass the IP gate. `companyTelemetry` is in `UPLINK_REDACT_KEYWORDS`. This is the internal-only escape hatch in [way-of-working.md](../../../way-of-working.md).
+A company-only change must never pass the IP gate. `companyTelemetry` is in `UPLINK_REDACT_KEYWORDS`. Developer view: [Day to day — make a company-only change](https://npetzall.github.io/git-uplink/day-to-day#internal-only).
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github
