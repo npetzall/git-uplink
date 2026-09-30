@@ -189,9 +189,16 @@ pub fn composed_files(forge: Forge) -> Result<Vec<(String, Vec<u8>)>> {
     Ok(files)
 }
 
+/// Pack documentation for operators. It is rendered on the site and must not
+/// land in the product repository, where it would replace the product README.
+const PACK_README: &str = "README.md";
+
 fn collect_pack<E: RustEmbed>(files: &mut Vec<(String, Vec<u8>)>) {
     for name in E::iter() {
         let rel = name.as_ref().replace('\\', "/");
+        if rel == PACK_README {
+            continue;
+        }
         let Some(file) = E::get(name.as_ref()) else {
             continue;
         };
@@ -369,6 +376,17 @@ mod embed_tests {
             paths.contains(&".github/actions/install-git-uplink/action.yml"),
             "{paths:?}"
         );
+    }
+
+    #[test]
+    fn pack_readme_is_not_installed_into_the_product_repo() {
+        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+            let files = composed_files(forge).unwrap();
+            assert!(
+                files.iter().all(|(p, _)| p != PACK_README),
+                "{forge:?} pack would overwrite the product README"
+            );
+        }
     }
 
     #[test]
