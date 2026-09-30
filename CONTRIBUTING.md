@@ -67,7 +67,7 @@ CodeQL for Rust and `web/`, zizmor, and Socket start immediately and do not gate
 
 ### Site (`site.yml`)
 
-Runs on site pull requests and on push to `main` when `site/` or the markdown it renders (`docs/`, `templates/*/README.md`) changes.
+Runs on site pull requests and on push to `main` when `site/` or the markdown it renders (`docs/`, `templates/*/README.md`, `examples/github/stories/`) changes.
 
 - `sfw npm audit`, typecheck, and vitest run in parallel with site CodeQL and zizmor, then a separate build job.
 - The Pages artifact is uploaded, and deploy runs, only on `main`, after that build, site CodeQL, and zizmor succeed.
