@@ -7,6 +7,7 @@ on:
       - site/**
       - docs/**
       - templates/*/README.md
+      - examples/github/stories/**
       - .github/workflows/site.yml
       - .github/workflows/zizmor.yml
       - .github/codeql/site.yml
@@ -15,6 +16,7 @@ on:
       - site/**
       - docs/**
       - templates/*/README.md
+      - examples/github/stories/**
       - .github/workflows/site.yml
       - .github/workflows/zizmor.yml
       - .github/codeql/site.yml
