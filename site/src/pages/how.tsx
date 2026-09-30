@@ -24,7 +24,7 @@ const PHASES = [
   ["Product gate", "Review and merge.", "Queued: in the company build"],
   ["IP gate", "IP reviews the packet and approves the to-upstream Environment.", "Approved"],
   ["Submit", "Same run pushes to the contribution fork and opens the public PR.", "Submitted: first time the change is public"],
-  ["Upstream merge", "Maintainers merge as usual.", "Sync detects it and drops the patch"],
+  ["Upstream merge", "Maintainers merge as usual.", "Sync detects it and marks the patch merged"],
 ];
 
 export function HowPage() {
@@ -134,7 +134,7 @@ export function HowPage() {
         <ul>
           <li>
             <strong>Flow-back</strong>: one of our patches, merged upstream. It is recognized and applied
-            immediately, and the patch is dropped from the queue.
+            immediately, and the patch is marked merged, so it is never applied again.
           </li>
           <li>
             <strong>Foreign</strong>: anything else. It waits for a reviewer to approve the{" "}
@@ -166,7 +166,7 @@ export function HowPage() {
         <p>
           Empty-apply is only a hint. If upstream merged your change and then changed the same lines,
           re-applying your original patch would bring back the old code. The trailer and PR number make sure
-          the patch is dropped instead.
+          the patch is marked merged instead.
         </p>
       </Section>
 
