@@ -95,7 +95,10 @@
   @apply bg-transparent p-0;
 }
 .markdown-body table {
-  @apply my-4 w-full text-sm;
+  @apply my-4 block w-full overflow-x-auto text-sm;
+}
+.markdown-body :not(pre) > code {
+  overflow-wrap: anywhere;
 }
 .markdown-body th,
 .markdown-body td {

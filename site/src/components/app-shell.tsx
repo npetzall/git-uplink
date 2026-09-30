@@ -7,11 +7,11 @@ import { GITHUB_REPO } from "../lib/links";
 
 const LINKS = [
   { href: "/", label: "Overview" },
-  { href: "/lab", label: "Lab" },
-  { href: "/working", label: "Way of working" },
-  { href: "/playbook", label: "Playbook" },
+  { href: "/why", label: "Why" },
+  { href: "/how", label: "How" },
+  { href: "/day-to-day", label: "Day to day" },
   { href: "/internals", label: "Internals" },
-  { href: "/collaboration", label: "Collaboration" },
+  { href: "/lab", label: "Lab" },
   { href: "/install", label: "Install" },
   { href: "/cli", label: "CLI" },
   { href: "/examples", label: "Try it yourself" },
@@ -92,8 +92,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <a href={GITHUB_REPO} className="inline-flex items-center gap-1 hover:text-foreground">
             GitHub <ExternalLink className="size-3" />
           </a>
-          <NavLink to="/working" className="hover:text-foreground">
-            Way of working
+          <NavLink to="/day-to-day" className="hover:text-foreground">
+            Day to day
           </NavLink>
           <span>
             Local queue UI:{" "}

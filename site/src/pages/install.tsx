@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { AppShell } from "../components/app-shell";
+import { DocPage } from "../components/doc-page";
 import { Button } from "../components/ui/button";
 import { GITHUB_BLOB, GITHUB_REPO } from "../lib/links";
 
@@ -9,17 +9,16 @@ const link = "text-primary underline-offset-4 hover:underline";
 
 export function InstallPage() {
   return (
-    <AppShell>
-      <article className="mx-auto max-w-3xl space-y-10">
-        <header className="space-y-3">
-          <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">Install</p>
-          <h1 className="text-4xl font-semibold tracking-tight">Get git uplink on PATH</h1>
-          <p className="text-lg leading-8 text-muted-foreground">
-            The binary is <code className={`${code} text-[15px]`}>git-uplink</code>, so Git treats it as{" "}
-            <code className={`${code} text-[15px]`}>git uplink</code>. Download a release binary for your platform
-            and put it on <code className={`${code} text-[15px]`}>PATH</code>.
-          </p>
-        </header>
+    <DocPage
+      eyebrow="Install"
+      title="Get git uplink on PATH"
+      lead={
+        <>
+          The binary is <code>git-uplink</code>, so Git treats it as <code>git uplink</code>. Download a release
+          binary for your platform and put it on <code>PATH</code>.
+        </>
+      }
+    >
 
         <section className="space-y-3">
           <h2 className="text-xl font-semibold">macOS and Linux</h2>
@@ -86,7 +85,6 @@ git uplink version`}</pre>
         <Button asChild variant="outline" size="sm">
           <a href={GITHUB_REPO}>Source on GitHub</a>
         </Button>
-      </article>
-    </AppShell>
+    </DocPage>
   );
 }

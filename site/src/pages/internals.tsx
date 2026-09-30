@@ -1,5 +1,5 @@
-import { Link } from "react-router-dom";
-import { AppShell } from "../components/app-shell";
+import type React from "react";
+import { DocPage, Section } from "../components/doc-page";
 import { MermaidDiagram } from "../components/mermaid-diagram";
 
 const BRANCH_CHART = `
@@ -111,134 +111,325 @@ const BRANCHES = [
   },
 ];
 
+const INIT_CHART = `
+flowchart TD
+  start(["git uplink init"]) --> args{"arguments?"}
+  args -->|"none"| hydrate["Hydrate: fetch origin uplink/state,<br/>uplink/upstream and main,<br/>re-add remotes from stored URLs"]
+  args -->|"--upgrade"| upgrade["Refresh the tooling patch<br/>in its slot"]
+  args -->|"--upstream --contrib --forge"| exists{"uplink/state<br/>on origin?"}
+  exists -->|"yes"| check["Use it; check the<br/>requested names match"]
+  exists -->|"no"| create["Create orphan uplink/state<br/>with an empty queue.json"]
+  create --> remotes["Add upstream and contrib remotes"]
+  remotes --> seed["Fetch upstream, seed uplink/upstream"]
+  seed --> compare{"company main<br/>vs upstream"}
+  compare -->|"same"| tooling["Record the forge pack<br/>as the tooling patch"]
+  tooling --> rebuild["Rebuild main =<br/>upstream + tooling"]
+  compare -->|"ahead"| adopt["Record tooling, then turn each<br/>first-parent commit (or group)<br/>into a queued patch"]
+  adopt --> preview["You preview with rebuild --branch,<br/>then publish with rebuild --push"]
+  compare -->|"diverged"| refuse["Refuse: bring main<br/>up to date first"]
+`;
+
+const PR_CHART = `
+sequenceDiagram
+  actor Dev as Developer
+  participant PR as Internal PR
+  participant CI as uplink-pr.yml
+  Dev->>PR: open or edit
+  par assess
+    CI->>CI: git uplink assess
+    Note right of CI: message, cutoff, export author,<br/>keyword and email scan
+  and preflight
+    CI->>CI: git uplink preflight
+    Note right of CI: apply on upstream + declared deps<br/>+ tooling + queued upstream,<br/>run UPLINK_PREFLIGHT
+  end
+  CI-->>PR: report comment, required checks
+`;
+
+const IMPORT_CHART = `
+sequenceDiagram
+  actor Dev as Developer
+  participant Main as company main
+  participant CI as uplink-import.yml
+  participant State as uplink/state
+  Dev->>Main: merge PR
+  Main->>CI: push event
+  CI->>State: git uplink add (patch = PR base..head)
+  alt upstream-bound and internal[] not empty
+    CI->>Main: rebuild so the patch sits under internal[]
+  end
+  CI->>State: git uplink push (restack if origin moved)
+`;
+
+const SUBMIT_CHART = `
+sequenceDiagram
+  actor Op as Operator
+  participant Packet as packet + finalize jobs
+  participant Env as to-upstream
+  participant Submit as submit job
+  participant Fork as contribution fork
+  participant Up as upstream
+  Op->>Packet: dispatch Uplink submit (id)
+  Packet->>Packet: git uplink report (optional assessment hook extras)
+  Packet->>Submit: needs
+  Submit->>Env: wait for IP reviewer
+  Env-->>Submit: approved
+  Submit->>Submit: git uplink approve
+  Submit->>Fork: git uplink submit (push uplink/id)
+  Submit->>Up: open public PR
+  Submit->>Submit: git uplink submitted (record PR on the queue)
+`;
+
+const SYNC_CHART = `
+sequenceDiagram
+  participant Up as upstream
+  participant Inspect as inspect job
+  participant Env as from-upstream
+  participant Apply as apply job
+  participant Main as company main
+  Up->>Inspect: git uplink sync (fetch, do not move uplink/upstream)
+  alt every new commit is a flow-back of our patch
+    Inspect->>Main: promote, mark merged, rebuild
+  else any foreign commit
+    Inspect->>Inspect: write incoming.md packet
+    Apply->>Env: wait for inbound reviewer
+    Env-->>Apply: approved
+    Apply->>Main: git uplink accept-upstream (promote, detect merges, rebuild)
+  end
+`;
+
+const CONFLICT_CHART = `
+sequenceDiagram
+  participant Sync as sync or resolve job
+  participant Base as uplink/conflict/id
+  participant Work as uplink/conflict/id-work
+  actor Owner as Patch owner
+  participant Resolve as uplink-resolve.yml
+  Sync->>Sync: rebuild stops on id, status conflict
+  Sync->>Base: push protected base at the apply prefix
+  Sync->>Work: push work branch with conflict markers
+  Sync->>Sync: print gh.prCreate JSON, exit 0
+  Sync->>Base: gh pr create, then git uplink gated
+  Owner->>Work: fix and push
+  Owner->>Base: merge the gated PR
+  Base->>Resolve: pull_request closed (merged)
+  Resolve->>Resolve: git uplink resolve id (same id, rebuild)
+  opt already submitted
+    Resolve->>Resolve: status amended, dispatch submit for a delta
+  end
+`;
+
+const GATE_CHART = `
+flowchart LR
+  a["Job 1<br/>command A"] -->|"packet or JSON,<br/>exit 0"| review{{"Human review<br/>Environment or PR"}}
+  review -->|"approve / merge"| b["Job 2<br/>command B"]
+  review -->|"reject / close"| stop(["nothing changes"])
+`;
+
+const GATES = [
+  ["Contribution (IP)", "git uplink report", "to-upstream Environment", "git uplink approve + submit"],
+  ["Inbound upstream", "git uplink sync", "from-upstream Environment", "git uplink accept-upstream"],
+  ["Conflict", "git uplink sync / resolve", "gated PR into uplink/conflict/<id>", "git uplink resolve"],
+  ["Transfer", "git uplink transfer", "transfer PR", "git uplink transfer --complete"],
+  ["Withdraw contribution", "git uplink transfer --to-internal", "abandon-contrib Environment", "close public PR, delete fork branch"],
+];
+
+function Step({ n, title, workflow, children }: { n: number; title: string; workflow: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-3">
+      <h3 className="text-base font-semibold text-foreground">
+        {n}. {title} <span className="ms-2 font-mono text-xs font-normal text-muted-foreground">{workflow}</span>
+      </h3>
+      {children}
+    </div>
+  );
+}
+
 export function InternalsPage() {
   return (
-    <AppShell>
-      <article className="mx-auto max-w-3xl space-y-10">
-        <header className="space-y-3">
-          <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">Internals</p>
-          <h1 className="text-4xl font-semibold tracking-tight">Branches, rebuild, and restack</h1>
-          <p className="text-lg leading-8 text-muted-foreground">
-            The engine is forge-agnostic. Unreleased work lives on the private forge.{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-[15px] text-foreground">submit</code> is
-            the first time a change is public, because that is when the bot pushes{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-[15px] text-foreground">uplink/&lt;id&gt;</code>{" "}
-            to the contribution fork. Every git ref except the patch object is derived.
-          </p>
-        </header>
-
-        <section className="space-y-4 text-[15px] leading-7 text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_code]:text-foreground">
-          <h2 className="text-xl font-semibold text-foreground">Branches</h2>
-          <MermaidDiagram chart={BRANCH_CHART} title="Where each ref lives, and which writes are derived" />
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <thead className="text-xs tracking-wide text-muted-foreground uppercase">
-                <tr className="border-b">
-                  <th className="py-2 pr-3 font-medium">Ref</th>
-                  <th className="py-2 pr-3 font-medium">Where</th>
-                  <th className="py-2 font-medium">Role</th>
-                </tr>
-              </thead>
-              <tbody>
-                {BRANCHES.map((row) => (
-                  <tr key={row.ref} className="border-b border-border/60 align-top">
-                    <td className="py-2 pr-3 font-mono text-xs text-foreground whitespace-nowrap">{row.ref}</td>
-                    <td className="py-2 pr-3 whitespace-nowrap">{row.where}</td>
-                    <td className="py-2 text-muted-foreground">{row.role}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p>
-            Never base product work on <code>uplink/state</code>, <code>uplink/upstream</code>, contrib{" "}
-            <code>uplink/&lt;id&gt;</code>, or a protected uplink base. Work on{" "}
-            <code>uplink/conflict/&lt;id&gt;-work</code> (or a transfer <code>-work</code>) only to
-            finish that gated PR. Branch new product work from latest company <code>main</code>.
-          </p>
-        </section>
-
-        <section className="space-y-4 text-[15px] leading-7 text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_code]:text-foreground">
-          <h2 className="text-xl font-semibold text-foreground">Rebuild</h2>
-          <p>
-            Rebuild rewrites company <code>main</code> as a clean replay of accepted upstream plus
-            every <strong className="text-foreground">active</strong> patch (not{" "}
-            <code>merged</code> / <code>dropped</code>). Apply order is tooling, then{" "}
-            <code>upstream[]</code>, then <code>internal[]</code>, each topo-sorted by{" "}
-            <code>dependsOn</code>.
-          </p>
-          <ol className="list-decimal space-y-2 ps-5">
-            <li>
-              Snapshot <code>.uplink/</code> from <code>uplink/state</code>.
-            </li>
-            <li>
-              Detach at <code>uplink/upstream</code> (or company <code>main</code> if that ref is
-              missing).
-            </li>
-            <li>
-              <code>git apply</code> each active patch. Empty apply of an upstream-bound patch marks
-              it <code>merged</code>. Conflict stops the replay: later patches are not skipped;
-              product <code>main</code> stays at the last good rebuild; the bot publishes{" "}
-              <code>uplink/conflict/&lt;id&gt;</code> plus <code>-work</code>.
-            </li>
-            <li>
-              Force company <code>main</code> to that HEAD, restore <code>.uplink/</code> from the
-              snapshot, commit queue status.
-            </li>
-          </ol>
-          <p>
-            <code>git uplink rebuild --branch uplink/preview/verify</code> is preview only: it does not move{" "}
-            <code>main</code> and does not mutate the queue. Inspect with{" "}
-            <code>git diff main uplink/preview/verify</code>, then <code>git uplink rebuild --push</code> to
-            publish.
-          </p>
-          <MermaidDiagram chart={REBUILD_CHART} title="rebuild_once: snapshot, replay, restore" />
-        </section>
-
-        <section className="space-y-4 text-[15px] leading-7 text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_code]:text-foreground">
-          <h2 className="text-xl font-semibold text-foreground">Add with restack retry</h2>
-          <p>
-            <code>git uplink add</code> records a patch on local <code>uplink/state</code>. It does
-            not publish. Workflows (and operators) then call <code>git uplink push</code>.
-          </p>
-          <ol className="list-decimal space-y-2 ps-5">
-            <li>
-              Isolate the product diff <code>from..head</code> (excluding <code>.uplink/</code>),
-              write <code>.uplink/patches/&lt;id&gt;.patch</code>, append to the local queue.
-            </li>
-            <li>
-              Upstream-bound: rebuild so the new patch sits under any <code>internal[]</code>.
-              Internal-only: add-only, no rebuild.
-            </li>
-            <li>
-              <code>git uplink push</code> publishes <code>uplink/state</code>. Up to eight attempts,
-              with exponential backoff, if the push lease is rejected.
-            </li>
-            <li>
-              If origin moved: restack — reset local <code>uplink/state</code> to the remote tip,
-              copy local-only patch files, append those patches to the remote queue, commit{" "}
-              <code>uplink: restack onto origin</code>, push again. The same internal PR number is a
-              no-op.
-            </li>
-          </ol>
-          <MermaidDiagram
-            chart={RESTACK_CHART}
-            title="Two concurrent imports: lease reject, restack, retry"
-          />
-        </section>
-
-        <p className="text-sm text-muted-foreground">
-          Operating model and gates:{" "}
-          <Link to="/playbook" className="text-primary underline-offset-4 hover:underline">
-            playbook
-          </Link>
-          . Day-to-day stories:{" "}
-          <Link to="/working" className="text-primary underline-offset-4 hover:underline">
-            way of working
-          </Link>
-          .
+    <DocPage
+      eyebrow="Internals"
+      title="From init to sync, step by step"
+      lead={
+        <>
+          The engine is forge-agnostic and every command is a plain CLI call. CI workflows are thin wrappers that
+          run those commands and put a human review between them.
+        </>
+      }
+    >
+      <Section title="What init does">
+        <p>
+          <code>git uplink init --upstream &lt;url&gt; --contrib &lt;url&gt; --forge ghec</code> runs once per
+          product repository. Every CI job then runs a bare <code>git uplink init</code> to hydrate its checkout.
         </p>
-      </article>
-    </AppShell>
+        <MermaidDiagram chart={INIT_CHART} title="init: create, adopt, hydrate, or upgrade" />
+        <ul>
+          <li>
+            The queue lives on the orphan branch <code>uplink/state</code> as <code>.uplink/queue.json</code> and{" "}
+            <code>.uplink/patches/*.patch</code>, with remote URLs, branch names, and the forge.
+          </li>
+          <li>
+            The forge pack (workflows and the PR template) is itself a patch, the <strong>tooling</strong> slot,
+            applied right after upstream.
+          </li>
+          <li>
+            <code>uplink/upstream</code> is the last accepted public <code>main</code>. It only moves through sync.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="From pull request to upstream and back">
+        <Step n={1} title="Pull request opened" workflow="uplink-pr.yml">
+          <MermaidDiagram chart={PR_CHART} title="Assess and preflight run in parallel on every upstream-bound PR" />
+        </Step>
+        <Step n={2} title="Merge: the product gate" workflow="uplink-import.yml">
+          <MermaidDiagram chart={IMPORT_CHART} title="Import records the merged change as a queued patch" />
+          <p>
+            The merge already put the change on <code>main</code>. Import only records it. An internal-only
+            import, or an upstream import with nothing in <code>internal[]</code>, does not rebuild.
+          </p>
+        </Step>
+        <Step n={3} title="Submit: the IP gate" workflow="uplink-submit.yml">
+          <MermaidDiagram chart={SUBMIT_CHART} title="Packet, wait for to-upstream, then approve and submit in the same run" />
+          <p>
+            The packet (<code>.uplink/reports/&lt;id&gt;/assessment.md</code>) is committed to{" "}
+            <code>uplink/state</code> before the wait, so reviewers and auditors read the same bytes. Fork-write
+            credentials exist only in the job after the Environment approval.
+          </p>
+        </Step>
+        <Step n={4} title="Upstream merges" workflow="maintainers">
+          <p>
+            Maintainers merge the public PR however they like. The exported commit carries an{" "}
+            <code>Uplink-Patch-Id</code> trailer, and the PR number is on the queue, so squash and rebase merges
+            are still recognized.
+          </p>
+        </Step>
+        <Step n={5} title="Sync: the inbound gate" workflow="uplink-sync.yml">
+          <MermaidDiagram chart={SYNC_CHART} title="Flow-back applies at once; foreign commits wait for from-upstream" />
+          <p>
+            Merge detection runs in this order: recorded PR, then trailer, then <code>git patch-id --stable</code>,
+            then empty apply. Merged patches are sticky: never applied again.
+          </p>
+        </Step>
+        <Step n={6} title="When a patch no longer applies" workflow="uplink-sync.yml → uplink-resolve.yml">
+          <MermaidDiagram chart={CONFLICT_CHART} title="Conflicts become a gated PR; merging it runs resolve" />
+          <p>
+            A blocked patch blocks the rest of the rebuild. There is no skip, so company <code>main</code> stays at
+            the last good rebuild until the gated PR merges.
+          </p>
+        </Step>
+      </Section>
+
+      <Section title="How gates work">
+        <p>
+          Every gate has the same shape: <strong>command A</strong> prepares something and stops,{" "}
+          <strong>a human reviews</strong>, and <strong>command B</strong> acts on it. In CI these are separate
+          jobs, split exactly at the review: a GitHub Environment approval or a pull request merge.
+        </p>
+        <MermaidDiagram chart={GATE_CHART} title="Command A, review, command B" />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="text-xs tracking-wide uppercase">
+              <tr className="border-b">
+                <th className="py-2 pr-3 font-medium">Gate</th>
+                <th className="py-2 pr-3 font-medium">Command A</th>
+                <th className="py-2 pr-3 font-medium">Review</th>
+                <th className="py-2 font-medium">Command B</th>
+              </tr>
+            </thead>
+            <tbody>
+              {GATES.map(([gate, a, review, b]) => (
+                <tr key={gate} className="border-b border-border/60 align-top">
+                  <td className="py-2 pr-3 text-foreground">{gate}</td>
+                  <td className="py-2 pr-3 font-mono text-xs">{a}</td>
+                  <td className="py-2 pr-3">{review}</td>
+                  <td className="py-2 font-mono text-xs">{b}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p>
+          That is why command A prints JSON (<code>gh.prCreate</code>, <code>gh.prClose</code>) and exits 0 when it
+          opens a gate: the workflow reads the JSON to open the PR or dispatch the next job. A gate is a normal
+          outcome, not a failure. Locally, you can run A and B yourself. Nothing in the engine requires CI.
+        </p>
+      </Section>
+
+      <Section title="Branches">
+        <MermaidDiagram chart={BRANCH_CHART} title="Where each ref lives, and which writes are derived" />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="text-xs tracking-wide uppercase">
+              <tr className="border-b">
+                <th className="py-2 pr-3 font-medium">Ref</th>
+                <th className="py-2 pr-3 font-medium">Where</th>
+                <th className="py-2 font-medium">Role</th>
+              </tr>
+            </thead>
+            <tbody>
+              {BRANCHES.map((row) => (
+                <tr key={row.ref} className="border-b border-border/60 align-top">
+                  <td className="py-2 pr-3 font-mono text-xs whitespace-nowrap text-foreground">{row.ref}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap">{row.where}</td>
+                  <td className="py-2">{row.role}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
+      <Section title="Rebuild">
+        <p>
+          Rebuild rewrites company <code>main</code> as a clean replay of accepted upstream plus every{" "}
+          <strong>active</strong> patch (not <code>merged</code> / <code>dropped</code>). Apply order is tooling,
+          then <code>upstream[]</code>, then <code>internal[]</code>, each topo-sorted by <code>dependsOn</code>.
+        </p>
+        <ol>
+          <li>
+            Snapshot <code>.uplink/</code> from <code>uplink/state</code>.
+          </li>
+          <li>
+            Detach at <code>uplink/upstream</code> (or company <code>main</code> if that ref is missing).
+          </li>
+          <li>
+            <code>git apply</code> each active patch. Empty apply of an upstream-bound patch marks it{" "}
+            <code>merged</code>. A conflict stops the replay: <code>main</code> stays at the last good rebuild and
+            the conflict branches are published.
+          </li>
+          <li>
+            Force company <code>main</code> to that HEAD, restore <code>.uplink/</code> from the snapshot, and
+            commit queue status.
+          </li>
+        </ol>
+        <p>
+          <code>git uplink rebuild --branch uplink/preview/verify</code> is preview only: it does not move{" "}
+          <code>main</code> and does not change the queue.
+        </p>
+        <MermaidDiagram chart={REBUILD_CHART} title="rebuild_once: snapshot, replay, restore" />
+      </Section>
+
+      <Section title="Concurrency">
+        <p>
+          Two PRs can merge at the same time. They must not both rewrite <code>queue.json</code> from a stale
+          checkout, or the later push would drop the earlier patch. Three layers prevent that:
+        </p>
+        <ul>
+          <li>
+            GitHub Actions concurrency group <code>uplink-mutate</code> on every job that writes the queue. Later
+            jobs queue instead of being cancelled. Jobs waiting on an Environment do <strong>not</strong> hold the
+            group, so a pending IP or inbound review never freezes imports.
+          </li>
+          <li>
+            A process lock in <code>.git/uplink.lock</code>, so two CLI processes in one checkout cannot interleave.
+          </li>
+          <li>
+            Restack on push: if origin moved, local-only patches are replayed onto the remote queue and the push is
+            retried (up to eight times, with backoff). Re-importing the same PR number is a no-op.
+          </li>
+        </ul>
+        <MermaidDiagram chart={RESTACK_CHART} title="Two concurrent imports: lease reject, restack, retry" />
+      </Section>
+    </DocPage>
   );
 }
