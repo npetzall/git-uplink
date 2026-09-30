@@ -2,7 +2,7 @@
 
 Company scans that belong in the contribution packet run **after** `git uplink report` and **before** Environment **to-upstream**. The forge pack does not ship this file. You add `.github/workflows/uplink-assessment-hook.yml` as an internal-only product patch. Submit’s finalize job dispatches it and prepends artifact `uplink-packet-extra` onto `assessment.md`.
 
-This is the walkthrough for [templates/README.md](../../../templates/README.md) **Assessment hook**. The copy-paste YAML is [`uplink-assessment-hook.yml`](../patches/uplink-assessment-hook.yml).
+This is the walkthrough for [templates/ghec/README.md](../../../templates/ghec/README.md) **Assessment hook**. The copy-paste YAML is [`uplink-assessment-hook.yml`](../patches/uplink-assessment-hook.yml).
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github

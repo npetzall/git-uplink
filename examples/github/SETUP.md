@@ -1,6 +1,6 @@
 # Set up the GitHub example
 
-This walkthrough runs the whole Uplink model on three repositories in a **new GitHub organization**, using **fine-grained personal access tokens**. It is the shortest path to seeing it work. GitHub Apps, EMU, and forks under another owner are production concerns; see [`templates/README.md`](../../templates/README.md).
+This walkthrough runs the whole Uplink model on three repositories in a **new GitHub organization**, using **fine-grained personal access tokens**. It is the shortest path to seeing it work. GitHub Apps, EMU, and forks under another owner are production concerns; see [Production setup](https://npetzall.github.io/git-uplink/setup).
 
 Order matters: bootstrap upstream first, then fork it (GitHub cannot fork an empty repository), then bootstrap contrib and internal. Then create tokens, secrets, and environments. After that, walk the [stories](README.md).
 
@@ -96,7 +96,7 @@ Create three fine-grained tokens under **Settings → Developer settings → Per
 
 | Token | Repositories | Permissions | Used by |
 | --- | --- | --- | --- |
-| **internal** | `uplink-example-internal` | Contents: read and write · Workflows: read and write | Import, sync, resolve, transfer push company `main` and gated branches (including `.github/workflows`) |
+| **internal** | `uplink-example-internal` | Contents: read and write · Workflows: read and write · Pull requests: read and write | Import, sync, resolve, transfer push company `main` and gated branches (including `.github/workflows`) and open the gated PRs |
 | **upstream** | `uplink-example-upstream`, `uplink-example-upstream-contrib` | Contents: read · Pull requests: read and write | Fetch public upstream; open (submit) and close (abandon) the public PR |
 | **contrib** | `uplink-example-upstream-contrib` | Contents: read and write | Push and delete `uplink/<id>` on the fork |
 
@@ -181,7 +181,7 @@ Actions clears remotes; `git fetch origin --prune` drops stale remote-tracking b
 
 ## Optional: branch protection
 
-Not required for the walkthrough. Production rulesets are in [`templates/README.md`](../../templates/README.md):
+Not required for the walkthrough. Production rulesets, with ready-to-run JSON, are in [Production setup → rulesets](https://npetzall.github.io/git-uplink/setup?forge=ghec&view=steps#rulesets):
 
 - Protect `main` as usual (PR required).
 - Protect the three gated **bases**: `uplink/conflict/*`, `uplink/transfer-to-upstream/*`, `uplink/transfer-to-internal/*`. **Exclude** `*-work`. Require a pull request; no direct pushes. Require the **Uplink gate** check.
@@ -190,4 +190,4 @@ Not required for the walkthrough. Production rulesets are in [`templates/README.
 
 ## Next
 
-[`README.md`](README.md) lists the stories. Rationale: [`way-of-working.md`](../../way-of-working.md). Going to production (GitHub Apps, EMU, a fork under another owner): [`templates/README.md`](../../templates/README.md).
+[`README.md`](README.md) lists the stories. Background: [How](https://npetzall.github.io/git-uplink/how) and [Day to day](https://npetzall.github.io/git-uplink/day-to-day). Going to production (GitHub Apps, EMU, a fork under another owner): [Production setup](https://npetzall.github.io/git-uplink/setup).

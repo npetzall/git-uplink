@@ -47,18 +47,19 @@ No GitHub account handy? The [live lab](https://npetzall.github.io/git-uplink/la
 
 ## Production setup
 
-[Production setup](https://npetzall.github.io/git-uplink/setup) covers the GitHub Enterprise Cloud forge pack: `git uplink init --forge ghec`, the workflows it installs, GitHub Apps, the `to-upstream` / `from-upstream` / `abandon-contrib` Environments, and rulesets.
+[Production setup](https://npetzall.github.io/git-uplink/setup) walks through setting up a GitHub Enterprise Cloud repository step by step, in the web UI or with the gh CLI: the contribution fork, GitHub Apps, variables and secrets, the `to-upstream` / `from-upstream` / `abandon-contrib` Environments, labels, and rulesets, ending with `git uplink init` and the first push.
 
 ## Documentation
 
 | Topic | Site | Source |
 | --- | --- | --- |
-| Why and how it works | [Overview](https://npetzall.github.io/git-uplink/), [Playbook](https://npetzall.github.io/git-uplink/playbook) | `site/` |
-| Day-to-day developer flow | [Way of working](https://npetzall.github.io/git-uplink/working) | [way-of-working.md](way-of-working.md) |
+| Why it exists | [Why](https://npetzall.github.io/git-uplink/why) | `site/` |
+| How it works | [How](https://npetzall.github.io/git-uplink/how) | `site/` |
+| What developers do | [Day to day](https://npetzall.github.io/git-uplink/day-to-day) | `site/` |
 | Every command and flag, credentials | [CLI](https://npetzall.github.io/git-uplink/cli) | [docs/cli.md](docs/cli.md) |
 | Try it on three GitHub repos | [Try it yourself](https://npetzall.github.io/git-uplink/examples) | [examples/github/](examples/github/) |
-| Workflows, Environments, secrets | [Production setup](https://npetzall.github.io/git-uplink/setup) | [templates/README.md](templates/README.md) |
-| Branches, rebuild, restack | [Internals](https://npetzall.github.io/git-uplink/internals) | `site/` |
+| Step-by-step setup; what each workflow does and needs | [Production setup](https://npetzall.github.io/git-uplink/setup) | [templates/ghec/README.md](templates/ghec/README.md) (workflows) |
+| From init to sync, gates, diagrams | [Internals](https://npetzall.github.io/git-uplink/internals) | `site/` |
 
 ## Contributing
 

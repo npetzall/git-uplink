@@ -1,6 +1,6 @@
 # Story 5 — Cam depends on Asha and Ben
 
-Asha (hash) and Ben (TTL) are independent. Cam’s helper calls both APIs. This is [way-of-working.md](../../../way-of-working.md) story 5.
+Asha (hash) and Ben (TTL) are independent. Cam’s helper calls both APIs. Developer view: [Day to day — build on someone else's change](https://npetzall.github.io/git-uplink/day-to-day#depends-on).
 
 Do **not** submit Cam while Asha and Ben are only `submitted`. Submit of Cam would apply onto the last still-submitted sibling fork branch, which does not contain the other sibling.
 

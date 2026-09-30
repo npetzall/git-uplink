@@ -1,6 +1,6 @@
 # Story 4 — Upstream conflicts with a queued patch
 
-Ben’s TTL patch is queued. Upstream then changes the same lines. Sync stops; Ben is `conflict`; you resolve on `uplink/conflict/<id>`, not a PR. This is [way-of-working.md](../../../way-of-working.md) story 4.
+Ben’s TTL patch is queued. Upstream then changes the same lines. Sync stops; Ben is `conflict`. The sync workflow opens a gated pull request from `uplink/conflict/<id>-work` into `uplink/conflict/<id>`. You fix the change on the `-work` branch, and merging that PR resolves it. Developer view: [Day to day — my change conflicts with upstream](https://npetzall.github.io/git-uplink/day-to-day#conflict).
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github
@@ -70,28 +70,29 @@ git commit -am "shorten default ttl"
 git push origin main
 ```
 
-**Actions → Uplink sync** on internal. Inspect finds the shorten-ttl commit is not a company patch, so the apply job waits on Environment **from-upstream**. Approve that deployment. Apply succeeds and opens a gated PR (the run stays green). Internal gets:
+**Actions → Uplink sync** on internal. Inspect finds the shorten-ttl commit is not a company patch, so the apply job waits on Environment **from-upstream**. Approve that deployment. The rebuild stops on Ben’s patch. The run stays **green**: a conflict is a gate, not a failure. The workflow creates:
 
 - Ben’s status `conflict` on `uplink/state`
-- protected base `uplink/conflict/<id>` (apply prefix) and `uplink/conflict/<id>-work` (conflict markers)
-- a gated PR from `-work` into the base, labeled `uplink:conflict`
+- protected base `uplink/conflict/<id>` (the queue applied up to Ben) and unprotected `uplink/conflict/<id>-work` (Ben’s patch with conflict markers)
+- a pull request from `-work` into the base, labeled `uplink:conflict`, opened by the workflow
 
-Company `main` stays at the last successful rebuild (still 7200, no markers). Work on `-work` only; merge is the only update to the base.
+Do not open a PR yourself, and do not push the base. Company `main` stays at the last successful rebuild (still 7200, no markers) until the gated PR is merged.
 
 ```bash
 git uplink reset
-git fetch origin '+refs/heads/uplink/conflict/*:refs/heads/uplink/conflict/*'
 git uplink status
 ```
 
-## Resolve on the work branch
+`status` shows Ben as `conflict`. On GitHub, open **Pull requests** and find the `uplink:conflict` PR for Ben’s id.
 
-In **internal**:
+## Fix the change on the -work branch
+
+In **internal**, check out the `-work` branch the workflow pushed:
 
 ```bash
 id=upl_YOUR_ID
 git fetch origin
-git checkout "uplink/conflict/${id}-work"
+git switch "uplink/conflict/${id}-work"
 ```
 
 If the file still has conflict markers, keep Ben’s 7200 on the new upstream:
@@ -114,7 +115,9 @@ git commit -m "Resolve ttl onto the new upstream"
 git push origin "uplink/conflict/${id}-work"
 ```
 
-Merge the gated PR into `uplink/conflict/${id}`. **Uplink resolve** runs on that merge. It refreshes the same patch id, rebuilds `main`, and deletes both conflict branches.
+The push updates the gated PR. Wait for the **Uplink gate** check (no conflict markers, no pack-file changes), get it reviewed, and merge it in the GitHub UI. Merging is the only way the base changes.
+
+**Uplink resolve** runs on that merge. It refreshes the same patch id, rebuilds `main`, and deletes both conflict branches. If a later patch also conflicts, the job stays green and opens the next gated PR.
 
 ```bash
 git uplink reset
