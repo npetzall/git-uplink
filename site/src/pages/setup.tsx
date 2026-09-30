@@ -1,20 +1,30 @@
 import type React from "react";
 import { useSearchParams } from "react-router-dom";
-import { marked } from "marked";
 import { DocPage } from "../components/doc-page";
 import { Tabs } from "../components/ui/tabs";
-import { ModeContext, ModeToggle, type Mode } from "../components/setup/step";
-import { SetupValuesForm, SetupValuesProvider } from "../components/setup/values";
-import { GITHUB_BLOB } from "../lib/links";
-import { GhecSteps } from "./setup/ghec-steps";
+import { SetupGuide } from "../components/setup/guide";
+import type { Mode } from "../components/setup/step";
+import type { Derive, Field } from "../components/setup/values";
+import { renderRepoMarkdown } from "../lib/markdown";
+import { GHEC_FIELDS, GhecSteps, ghecDerive } from "./setup/ghec-steps";
 import ghecWorkflows from "../../../templates/ghec/README.md?raw";
 
 /** One entry per production-ready forge. Add a forge by adding an entry. */
-const FORGES: { id: string; label: string; Steps: () => React.ReactNode; workflows: string; source: string }[] = [
+const FORGES: {
+  id: string;
+  label: string;
+  Steps: () => React.ReactNode;
+  fields: Field[];
+  derive: Derive;
+  workflows: string;
+  source: string;
+}[] = [
   {
     id: "ghec",
     label: "GitHub Enterprise Cloud",
     Steps: GhecSteps,
+    fields: GHEC_FIELDS,
+    derive: ghecDerive,
     workflows: ghecWorkflows,
     source: "templates/ghec/README.md",
   },
@@ -24,13 +34,6 @@ const VIEWS = [
   { id: "steps", label: "Steps" },
   { id: "workflows", label: "Workflows" },
 ];
-
-/** Render a repo markdown file, pointing its relative links at the file's location on GitHub. */
-function renderRepoMarkdown(markdown: string, source: string): string {
-  const base = `${GITHUB_BLOB}/${source}`;
-  const html = marked.parse(markdown.replace(/^# .*\n/, ""), { async: false }) as string;
-  return html.replace(/href="(?![a-z]+:|#|\/)([^"]+)"/g, (_, href: string) => `href="${new URL(href, base)}"`);
-}
 
 export function SetupPage() {
   const [params, setParams] = useSearchParams();
@@ -55,20 +58,20 @@ export function SetupPage() {
                 id: "steps",
                 label: VIEWS[0].label,
                 content: (
-                  <ModeContext.Provider value={mode}>
-                    <div className="space-y-8">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm text-muted-foreground">
-                          Every preparation, in order, ending with{" "}
-                          <code className="rounded bg-muted px-1.5 py-0.5 text-[13px] text-foreground">git uplink init</code> and
-                          the first push.
-                        </p>
-                        <ModeToggle mode={mode} onChange={(m) => update({ mode: m })} />
-                      </div>
-                      <SetupValuesForm />
-                      <forge.Steps />
-                    </div>
-                  </ModeContext.Provider>
+                  <SetupGuide
+                    fields={forge.fields}
+                    storageKey={`uplink-setup-values-${forge.id}`}
+                    derive={forge.derive}
+                    mode={mode}
+                    onMode={(m) => update({ mode: m })}
+                    intro={
+                      <>
+                        Every preparation, in order, ending with <code>git uplink init</code> and the first push.
+                      </>
+                    }
+                  >
+                    <forge.Steps />
+                  </SetupGuide>
                 ),
               },
               {
@@ -94,9 +97,7 @@ export function SetupPage() {
       title="Set up Uplink for a product repository"
       lead="Choose your forge. Steps walks you through the setup; Workflows describes what each installed workflow does and needs."
     >
-      <SetupValuesProvider>
-        <Tabs label="Forge" items={forgeItems} value={forgeId} onChange={(id) => update({ forge: id })} />
-      </SetupValuesProvider>
+      <Tabs label="Forge" items={forgeItems} value={forgeId} onChange={(id) => update({ forge: id })} />
     </DocPage>
   );
 }

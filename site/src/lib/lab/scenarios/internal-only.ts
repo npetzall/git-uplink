@@ -49,7 +49,7 @@ export const internalOnly: LabScenario = {
       title: "Import with uplink:internal-only",
       summary:
         "Open a new PR and add label uplink:internal-only before Create (Uplink PR checks only see labels that exist when the check runs). Merge. The patch is queued on the internal queue. Company main calls companyTelemetry().",
-      why: "The label appends to internal[] and skips both Uplink PR checks. Tooling from bootstrap is the same class of change.",
+      why: "The label appends to internal[] and skips both Uplink PR checks. Tooling from setup is the same class of change.",
       operations: [
         branchPush("feat/telemetry", "internal-telemetry.diff", "Vendor telemetry"),
         ...importOps({ title: "Vendor telemetry", internalOnly: true }),

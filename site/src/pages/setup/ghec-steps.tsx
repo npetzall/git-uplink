@@ -1,6 +1,37 @@
 import { Link } from "react-router-dom";
 import { Command, Step, V } from "../../components/setup/step";
+import type { Derive, Field } from "../../components/setup/values";
 import { GITHUB_BLOB } from "../../lib/links";
+
+export const GHEC_FIELDS: Field[] = [
+  { key: "host", label: "Company GitHub host", token: "COMPANY_HOST", initial: "github.com", help: "github.com, or your GHE.com subdomain" },
+  { key: "companyOrg", label: "Company organization", token: "COMPANY_ORG", initial: "" },
+  { key: "productRepo", label: "Product repository", token: "PRODUCT_REPO", initial: "" },
+  { key: "upstreamUrl", label: "Public upstream URL", token: "UPSTREAM_URL", initial: "", help: "https://github.com/owner/project.git" },
+  { key: "contribOrg", label: "Contribution fork organization", token: "CONTRIB_ORG", initial: "", help: "On public github.com; same org as upstream to use Apps" },
+  { key: "contribRepo", label: "Contribution fork name", token: "CONTRIB_REPO", initial: "" },
+  { key: "ipTeam", label: "IP reviewer team (slug)", token: "IP_TEAM", initial: "" },
+  { key: "inboundTeam", label: "Inbound reviewer team (slug)", token: "INBOUND_TEAM", initial: "" },
+  { key: "abandonTeam", label: "Withdraw reviewer team (slug)", token: "ABANDON_TEAM", initial: "" },
+  { key: "internalAppId", label: "Internal App ID", token: "INTERNAL_APP_ID", initial: "", help: "From step 2" },
+  { key: "upstreamAppId", label: "Upstream App ID", token: "UPSTREAM_APP_ID", initial: "", help: "From step 2" },
+  { key: "contribAppId", label: "Contrib App ID", token: "CONTRIB_APP_ID", initial: "", help: "From step 2" },
+  { key: "uplinkVersion", label: "git-uplink release", token: "UPLINK_VERSION", initial: "latest" },
+];
+
+function upstreamSlug(url: string): string {
+  const m = url.match(/github\.com[:/]([^/]+)\/([^/]+?)(\.git)?\/?$/);
+  return m ? `${m[1]}/${m[2]}` : "";
+}
+
+export const ghecDerive: Derive = (get, values) => ({
+  companyRepo: `${get("companyOrg")}/${get("productRepo")}`,
+  ghRepo:
+    (values.host && values.host !== "github.com" ? `${values.host}/` : "") + `${get("companyOrg")}/${get("productRepo")}`,
+  companyUrl: `https://${get("host")}/${get("companyOrg")}/${get("productRepo")}.git`,
+  contribUrl: `https://github.com/${get("contribOrg")}/${get("contribRepo")}.git`,
+  upstreamSlug: upstreamSlug(values.upstreamUrl ?? "") || "<UPSTREAM_OWNER>/<UPSTREAM_REPO>",
+});
 
 const LABELS = [
   ["uplink:internal-only", "5319E7", "Never approve or submit this change upstream"],
@@ -145,6 +176,9 @@ export function GhecSteps() {
               On your machine: <code>git</code>, <Link to="/install">git-uplink</Link>, and for the gh CLI path{" "}
               <a href="https://cli.github.com/">gh</a>. Fill in <strong>Your values</strong> above; every command on
               this page uses them.
+            </p>
+            <p>
+              Commands are for bash or zsh. On Windows, use WSL or Git Bash.
             </p>
           </>
         }
