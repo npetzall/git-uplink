@@ -54,6 +54,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-workflows: write
+          permission-pull-requests: write
 
       - name: Read upstream and contrib from the queue
         id: queue
@@ -169,7 +170,10 @@ jobs:
             existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
             if [ -z "$existing" ]; then
               gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
-              url=$(gh pr create --title "$title" --base "$base" --head "$head" --label uplink:conflict --body-file "$body_file")
+              # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
+              # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
+              url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+              gh pr edit "$url" --add-label uplink:conflict
             else
               url="$existing"
             fi
@@ -221,6 +225,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-workflows: write
+          permission-pull-requests: write
 
       - name: Read upstream and contrib from the queue
         id: queue
@@ -333,7 +338,10 @@ jobs:
           existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
           if [ -z "$existing" ]; then
             gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
-            url=$(gh pr create --title "$title" --base "$base" --head "$head" --label uplink:conflict --body-file "$body_file")
+            # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
+            # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
+            url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+            gh pr edit "$url" --add-label uplink:conflict
           else
             url="$existing"
           fi

@@ -11,7 +11,7 @@
 #
 # Company extras for the IP packet are not collected here (no patch id
 # yet). Add `.github/workflows/uplink-assessment-hook.yml` and see
-# templates/README.md "Assessment hook".
+# templates/ghec/README.md "Assessment hook".
 #
 # Put both job names in the required status checks for the PR.
 # This workflow does not write uplink/state (not uplink-mutate).
