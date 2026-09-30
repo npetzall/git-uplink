@@ -13,6 +13,30 @@ import {
   type StatusResponse,
 } from "../lib/api";
 import { cn } from "../lib/utils";
+import { STATUS_INFO, STATUS_ORDER } from "../lib/status";
+
+function StatusLegend() {
+  return (
+    <details className="mb-6 max-w-3xl rounded-xl border border-border bg-card px-4 py-3 text-sm">
+      <summary className="cursor-pointer font-medium">What do the statuses mean?</summary>
+      <dl className="mt-3 space-y-3">
+        {STATUS_ORDER.map((status) => (
+          <div key={status} className="grid gap-1 sm:grid-cols-[7rem_1fr] sm:gap-3">
+            <dt>
+              <StatusBadge value={status} />
+            </dt>
+            <dd className="space-y-1 text-muted-foreground">
+              <p>{STATUS_INFO[status].meaning}</p>
+              <p>
+                <span className="text-foreground">Next:</span> {STATUS_INFO[status].next}
+              </p>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
 
 function PatchTable({
   patches,
@@ -182,6 +206,8 @@ export function QueuePage() {
           </Button>
         </div>
       </div>
+
+      <StatusLegend />
 
       {data?.state ? (
         <p
