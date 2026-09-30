@@ -23,6 +23,7 @@ git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--internal-only]
 git uplink report <id> [--out <file>] [--extra-dir <path>]
 git uplink status [--json]
+git uplink doctor [--json]
 git uplink approve <id> [--out <file>]
 git uplink submit <id>
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote origin]
@@ -106,6 +107,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - **`assess`** checks the message, cutoff, author, and affiliation of a change.
 - **`report <id>`** writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`. `--extra-dir` prepends company assessment-hook extras.
 - **`status`** shows the queue (`--json` for machines).
+- **`doctor`** checks the setup of this clone: queue and recorded URLs, remotes and whether upstream and contrib are reachable, `origin/uplink/state`, the forge tooling patch and workflows on the company branch, `UPLINK_*` credentials, pending adoption, and the company branch against `uplink/upstream`. `--json` prints the report. Credential checks fail on a machine without the `UPLINK_*` variables; that is expected outside CI.
 
 ## Contributing upstream
 
