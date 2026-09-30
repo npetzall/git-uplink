@@ -6,8 +6,7 @@ on:
     paths:
       - site/**
       - docs/**
-      - way-of-working.md
-      - templates/README.md
+      - templates/*/README.md
       - .github/workflows/site.yml
       - .github/workflows/zizmor.yml
       - .github/codeql/site.yml
@@ -15,8 +14,7 @@ on:
     paths:
       - site/**
       - docs/**
-      - way-of-working.md
-      - templates/README.md
+      - templates/*/README.md
       - .github/workflows/site.yml
       - .github/workflows/zizmor.yml
       - .github/codeql/site.yml
