@@ -3801,7 +3801,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert_eq!(first.approvals[0].kind, "initial");
     let still = approve_patch(company, &ttl_patch.id).unwrap();
     assert_eq!(still.approvals.len(), 1);
-    let submitted = submit_patch(company, &ttl_patch.id).unwrap();
+    let submitted = submit_patch(company, &ttl_patch.id, true).unwrap();
     record_pull_request(
         company,
         &ttl_patch.id,
@@ -3856,7 +3856,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     let fork_after_resolve =
         git_ok(company, &["rev-parse", &format!("uplink/{}", ttl_patch.id)]).unwrap();
     assert_eq!(fork_after_resolve, submitted.sha);
-    let err = submit_patch(company, &ttl_patch.id).unwrap_err();
+    let err = submit_patch(company, &ttl_patch.id, true).unwrap_err();
     assert!(err.to_string().contains("must be approved"), "{}", err);
 
     let packet = format_contribution_packet(company, amended).unwrap();
@@ -3884,7 +3884,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert_eq!(second.approvals[1].kind, "delta");
     assert_ne!(second.approvals[0].sha, second.approvals[1].sha);
 
-    let resubmitted = submit_patch(company, &ttl_patch.id).unwrap();
+    let resubmitted = submit_patch(company, &ttl_patch.id, true).unwrap();
     let recorded = record_pull_request(
         company,
         &ttl_patch.id,
@@ -4150,7 +4150,7 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
     let err = approve_patch(company, &internal.id).unwrap_err();
     assert!(err.to_string().contains("internal-only"));
     approve_patch(company, &hash_patch.id).unwrap();
-    let submitted = submit_patch(company, &hash_patch.id).unwrap();
+    let submitted = submit_patch(company, &hash_patch.id, true).unwrap();
     record_pull_request(
         company,
         &hash_patch.id,
@@ -4255,7 +4255,7 @@ fn imports_as_queued_not_contribution_approved() {
     )
     .unwrap();
     assert_eq!(patch.status, PatchStatus::Queued);
-    let err = submit_patch(company, &patch.id).unwrap_err();
+    let err = submit_patch(company, &patch.id, true).unwrap_err();
     assert!(err.to_string().contains("must be approved"));
     let again = add_landed_patch(
         company,
@@ -5471,7 +5471,7 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     let mut queue = git_uplink::read_queue(company).unwrap();
     queue.config.preflight_command = Some("exit 1".into());
     write_queue(company, &queue).unwrap();
-    let err = submit_patch(company, &hash_patch.id);
+    let err = submit_patch(company, &hash_patch.id, true);
     assert!(matches!(err, Err(Error::Preflight(_))));
 
     let snapshot = status_snapshot(company).unwrap();
@@ -5650,7 +5650,7 @@ fn strips_the_internal_commit_section_and_adds_a_co_author_trailer() {
     assert!(!stored.contains("Visible while writing"));
 
     approve_patch(company, &patch.id).unwrap();
-    let submitted = submit_patch(company, &patch.id).unwrap();
+    let submitted = submit_patch(company, &patch.id, true).unwrap();
     let contrib_msg = git_ok(company, &["log", "-1", "--format=%B", &submitted.branch]).unwrap();
     assert!(contrib_msg.contains("Replace SHA-1 in the default hasher."));
     assert!(!contrib_msg.contains("PROJ-9999"));
@@ -5708,7 +5708,7 @@ fn exports_no_co_author_trailer_without_an_export_author_header() {
     assert_eq!(check.status, CheckStatus::Skip);
 
     approve_patch(company, &patch.id).unwrap();
-    let submitted = submit_patch(company, &patch.id).unwrap();
+    let submitted = submit_patch(company, &patch.id, true).unwrap();
     let contrib_msg = git_ok(company, &["log", "-1", "--format=%B", &submitted.branch]).unwrap();
     assert!(!contrib_msg.contains("Co-Authored-By"), "{contrib_msg}");
 }
@@ -5758,17 +5758,145 @@ fn refuses_approve_and_submit_until_an_upstream_dependency_is_merged() {
     .unwrap();
 
     approve_patch(company, &first.id).unwrap();
-    submit_patch(company, &first.id).unwrap();
+    submit_patch(company, &first.id, true).unwrap();
     let err = approve_patch(company, &second.id).unwrap_err();
     assert!(err.to_string().contains("not merged upstream"), "{err}");
-    let err = submit_patch(company, &second.id).unwrap_err();
+    let err = submit_patch(company, &second.id, true).unwrap_err();
     assert!(err.to_string().contains("not merged upstream"), "{err}");
 
     mark_merged(company, &first.id, MergeVia::Manual, None).unwrap();
     approve_patch(company, &second.id).unwrap();
-    let submitted = submit_patch(company, &second.id).unwrap();
+    let submitted = submit_patch(company, &second.id, true).unwrap();
     let parent = git_ok(company, &["rev-parse", &format!("{}^", submitted.branch)]).unwrap();
     assert_eq!(parent.trim(), rev_of(company, "uplink/upstream"));
+}
+
+#[test]
+fn submit_pushes_to_contrib_only_with_push() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    approve_patch(company, &patch.id).unwrap();
+    let contrib = PathBuf::from(git_ok(company, &["remote", "get-url", "contrib"]).unwrap());
+    let branch = format!("uplink/{}", patch.id);
+
+    let local = submit_patch(company, &patch.id, false).unwrap();
+    assert!(!local.pushed);
+    assert!(!has_git_ref(&contrib, &branch), "contrib must be untouched");
+    assert_eq!(local.base, rev_of(company, "uplink/upstream"));
+    assert_eq!(rev_of(company, &format!("{}^", local.sha)), local.base);
+    assert_eq!(
+        local.tree,
+        rev_of(company, &format!("{}^{{tree}}", local.sha))
+    );
+    assert!(
+        local
+            .message
+            .contains(&format!("Uplink-Patch-Id: {}", patch.id)),
+        "{}",
+        local.message
+    );
+
+    let pushed = submit_patch(company, &patch.id, true).unwrap();
+    assert!(pushed.pushed);
+    assert_eq!(rev_of(&contrib, &branch), pushed.sha);
+
+    git(
+        company,
+        &["remote", "remove", "contrib"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let err = submit_patch(company, &patch.id, true).unwrap_err();
+    assert!(err.to_string().contains("--push needs"), "{err}");
+}
+
+#[test]
+fn submit_cli_prints_the_contrib_commit_for_the_forge() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    approve_patch(company, &patch.id).unwrap();
+    let contrib = PathBuf::from(git_ok(company, &["remote", "get-url", "contrib"]).unwrap());
+    let branch = format!("uplink/{}", patch.id);
+    let submit = |extra: &[&str]| -> serde_json::Value {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(["submit", &patch.id])
+            .args(extra)
+            .current_dir(company)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+
+    let value = submit(&[]);
+    assert_eq!(value["pushed"], false);
+    assert!(!has_git_ref(&contrib, &branch), "contrib must be untouched");
+    let commit = &value["contribCommit"];
+    assert_eq!(commit["branch"], branch.as_str());
+    let local = commit["localSha"].as_str().unwrap();
+    assert_eq!(value["sha"], local);
+    assert_eq!(
+        commit["baseSha"],
+        rev_of(company, "uplink/upstream").as_str()
+    );
+    assert_eq!(
+        commit["treeSha"],
+        rev_of(company, &format!("{local}^{{tree}}")).as_str()
+    );
+    let message =
+        fs::read_to_string(company.join(commit["messageFile"].as_str().unwrap())).unwrap();
+    assert!(message.starts_with("Use SHA-256 for tokens\n"), "{message}");
+    assert!(
+        message.contains(&format!("Uplink-Patch-Id: {}", patch.id)),
+        "{message}"
+    );
+
+    let value = submit(&["--push"]);
+    assert_eq!(value["pushed"], true);
+    assert!(value.get("contribCommit").is_none(), "{value}");
+    assert_eq!(rev_of(&contrib, &branch), value["sha"].as_str().unwrap());
 }
 
 #[test]
@@ -6233,7 +6361,7 @@ fn submit_does_not_commit_queue_until_submitted() {
     )
     .unwrap();
     approve_patch(company, &patch.id).unwrap();
-    let exported = submit_patch(company, &patch.id).unwrap();
+    let exported = submit_patch(company, &patch.id, true).unwrap();
     let after_submit = status_snapshot(company).unwrap();
     assert_eq!(
         after_submit.queue.patch_refs()[0].status,
@@ -7174,7 +7302,7 @@ fn transfer_to_internal_of_submitted_clears_upstream() {
     )
     .unwrap();
     approve_patch(company, &patch.id).unwrap();
-    let submitted = submit_patch(company, &patch.id).unwrap();
+    let submitted = submit_patch(company, &patch.id, true).unwrap();
     record_pull_request(
         company,
         &patch.id,

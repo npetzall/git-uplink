@@ -19,7 +19,8 @@ use git_uplink::{
     submit_patch, sync, transfer_patch,
 };
 use git_uplink::{
-    Patch, PatchIntent, PatchStatus, QueueState, SyncResult, TransferDirection, TransferResult,
+    Patch, PatchIntent, PatchStatus, QueueState, SubmitResult, SyncResult, TransferDirection,
+    TransferResult,
 };
 
 const VERSION: &str = concat!(
@@ -187,8 +188,13 @@ enum Commands {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Build the export commit on uplink/upstream. The forge creates the
+    /// signed contrib commit from the printed `contribCommit`.
     Submit {
         id: String,
+        /// Force-push the local, unsigned export commit to contrib instead.
+        #[arg(long)]
+        push: bool,
     },
     Submitted {
         id: String,
@@ -618,17 +624,17 @@ fn submit_artifact(
     repo: &Path,
     queue: &QueueState,
     patch: &Patch,
-    branch: &str,
-    sha: &str,
+    exported: &SubmitResult,
 ) -> Result<(), Error> {
+    let branch = exported.branch.as_str();
     let body = format!(
         "Company contribution exported by Uplink.\n\nUplink-Patch-Id: {}\n",
         patch.id
     );
-    let body_file = match report_paths(&patch.id) {
-        Ok((dir, _, _)) => format!("{dir}/pr.md"),
-        Err(_) => return Ok(()),
+    let Ok((report_dir, _, _)) = report_paths(&patch.id) else {
+        return Ok(());
     };
+    let body_file = format!("{report_dir}/pr.md");
     write_markdown_file(repo, Path::new(&body_file), &body)?;
     let existing = patch.upstream.as_ref().and_then(|u| {
         u.pr_url.as_ref().map(|url| {
@@ -669,9 +675,21 @@ fn submit_artifact(
     let mut value = serde_json::json!({
         "id": patch.id,
         "branch": branch,
-        "sha": sha,
+        "sha": exported.sha,
+        "pushed": exported.pushed,
         "existingPr": existing,
     });
+    if !exported.pushed {
+        let message_file = format!("{report_dir}/commit-message.txt");
+        write_markdown_file(repo, Path::new(&message_file), &exported.message)?;
+        value["contribCommit"] = serde_json::json!({
+            "branch": branch,
+            "baseSha": exported.base,
+            "localSha": exported.sha,
+            "treeSha": exported.tree,
+            "messageFile": message_file,
+        });
+    }
     if !gh.is_empty() {
         value["gh"] = serde_json::Value::Object(gh);
     }
@@ -938,21 +956,21 @@ fn cmd_approve(repo: &Path, id: &str, out: Option<PathBuf>) -> Result<(), Error>
     Ok(())
 }
 
-fn cmd_submit(repo: &Path, id: &str) -> Result<(), Error> {
+fn cmd_submit(repo: &Path, id: &str, push: bool) -> Result<(), Error> {
     let queue = read_queue(repo)?;
     let patch = queue
         .all_patches()
         .find(|p| p.id == id)
         .cloned()
         .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
-    let exported = match submit_patch(repo, id) {
+    let exported = match submit_patch(repo, id, push) {
         Ok(v) => v,
         Err(err) => {
             print_failure_comment(&err);
             return Err(err);
         }
     };
-    submit_artifact(repo, &queue, &patch, &exported.branch, &exported.sha)
+    submit_artifact(repo, &queue, &patch, &exported)
 }
 
 fn cmd_submitted(
@@ -1224,7 +1242,7 @@ fn run() -> Result<(), Error> {
         }
         Commands::Status { json } => cmd_status(&repo, json),
         Commands::Approve { id, out } => cmd_approve(&repo, &id, out),
-        Commands::Submit { id } => cmd_submit(&repo, &id),
+        Commands::Submit { id, push } => cmd_submit(&repo, &id, push),
         Commands::Submitted {
             id,
             pr_url,
