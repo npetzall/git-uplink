@@ -109,8 +109,9 @@ git switch -c fix/token-hash origin/main`}</Code>
             they are queued before yours.
           </li>
           <li>
-            Your change is submitted after its dependencies. If it depends on two changes that don&apos;t depend on
-            each other, it is best submitted once both have merged upstream.
+            Your change can be approved and submitted only after its dependencies have merged upstream. Until
+            then the submit workflow stops in its first job. Each public PR stands alone on public{" "}
+            <code>main</code>.
           </li>
         </ul>
         <Lab scenario="stacked-depends-on">Stacked depends-on</Lab>
@@ -141,7 +142,8 @@ git switch -c fix/token-hash origin/main`}</Code>
             part.
           </li>
           <li>
-            <code>author-rewrite</code>: the author upstream will see, and who wrote the change internally.
+            <code>co-author</code>: the <code>Co-Authored-By</code> trailer upstream will see, and who wrote the
+            change internally. Skipped when there is no <code>Uplink-Export-Author</code>.
           </li>
           <li>
             <code>affiliation-leak</code>: company keywords, product aliases, and internal email domains in the
@@ -166,9 +168,11 @@ git switch -c fix/token-hash origin/main`}</Code>
           </li>
         </ul>
         <p>
-          The public author is the configured export identity. To use a different one for this change, add{" "}
-          <code>Uplink-Export-Author: Name &lt;email&gt;</code> below the cutoff. Edit the PR and the check reruns.
-          If the change is not meant for upstream, label it internal-only.
+          The public commit is authored by the contribution account (the contrib App or machine user). To credit
+          a person as well, add <code>Uplink-Export-Author: Name &lt;email&gt;</code> below the cutoff; it becomes
+          a <code>Co-Authored-By</code> trailer on the public commit. Use a public address such as your{" "}
+          <code>users.noreply.github.com</code> email. Edit the PR and the check reruns. If the change is not meant
+          for upstream, label it internal-only.
         </p>
       </Section>
 

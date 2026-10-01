@@ -150,6 +150,20 @@ describe("lab scenarios", () => {
     expect(refused.contrib).toEqual([]);
   });
 
+  it("refuses Ben until Asha is merged, then exports him alone onto public main", () => {
+    const scenario = scenarioById("stacked-depends-on");
+    const refused = runThrough(scenario, stepCount("submit-ben-first", scenario));
+    expect(refused.contrib).toEqual([]);
+    expect(refused.patches.find((patch) => patch.id === "upl_ben")?.status).toBe("queued");
+
+    const submitted = runThrough(scenario, stepCount("submit-order", scenario));
+    expect(submitted.patches.find((patch) => patch.id === "upl_asha")?.status).toBe("merged");
+    expect(submitted.patches.find((patch) => patch.id === "upl_ben")?.status).toBe("submitted");
+    expect(submitted.upstream["src/tokens.js"]).toContain("sha256");
+    expect(submitted.contrib.map((branch) => branch.branch)).toEqual(["uplink/upl_ben"]);
+    expect(submitted.contrib[0]?.files["src/tokens.js"]).toContain("console.log");
+  });
+
   it("submits Cam only after both siblings have merged", () => {
     const scenario = scenarioById("cam-two-deps");
     const afterSiblings = runThrough(scenario, stepCount("merge-siblings", scenario));

@@ -70,7 +70,7 @@ export const camTwoDeps: LabScenario = {
       id: "import-cam",
       title: "Import Cam with both trailers",
       summary:
-        "Cam’s PR body lists Uplink-Depends-On for both ids. Submit of Cam is refused until each upstream-bound dependency is submitted or merged.",
+        "Cam’s PR body lists Uplink-Depends-On for both ids. Approve and submit of Cam are refused until each upstream-bound dependency is merged upstream.",
       why: "Cam’s patch file is only Cam’s unique delta against a tree that already had Asha and Ben.",
       operations: [
         branchPush("feat/cam", "cam-wire.diff", "Wire hash into a describe helper"),
@@ -101,17 +101,17 @@ export const camTwoDeps: LabScenario = {
       id: "merge-siblings",
       title: "Export and merge the siblings first",
       summary:
-        "Submit Asha and Ben; squash-merge both upstream PRs; sync. After sync they are merged. Cam is the leftover delta on public main. Do not submit Cam while the siblings are only submitted — that would apply Cam onto one sibling fork branch, which lacks the other.",
+        "Submit Asha and Ben; squash-merge both upstream PRs; sync. After sync they are merged. Cam is the leftover delta on public main. Cam cannot be approved or submitted while the siblings are only queued or submitted.",
       why: "For a patch that depends on two independent patches, wait until those two have merged upstream.",
       operations: [
         you(
           ["git uplink approve upl_cam", "git uplink submit upl_cam"],
-          "Refused while siblings are only queued/submitted. Wait until both are merged.",
+          "Refused: upl_cam depends on upl_asha, which is not merged upstream yet.",
         ),
         ciJob(
           "Uplink submit",
-          ["git uplink init", "git uplink approve upl_cam", "git uplink submit upl_cam"],
-          "Refused: Submit upl_asha before upl_cam (and the same for Ben). Do not export Cam onto a sibling fork branch.",
+          ["gh workflow run uplink-submit.yml -f patch_id=upl_cam"],
+          "Fails in the first job: upl_asha and upl_ben are not merged upstream. No hook, packet, or to-upstream review.",
         ),
         ...submitOps("upl_asha"),
         ...submitOps("upl_ben"),

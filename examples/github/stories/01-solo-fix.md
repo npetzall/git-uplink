@@ -46,7 +46,7 @@ Replace SHA-1 in the default hasher with SHA-256.
 Ticket: PROJ-1234
 ```
 
-This PR body omits `Uplink-Export-Author`. On submit, the public commit uses the repo default `UPLINK_EXPORT_AUTHOR` (`Uplink Example <uplink@example.com>` from [`SETUP.md`](../SETUP.md)) — not Asha's git identity.
+This PR body omits `Uplink-Export-Author`. On submit, GitHub creates the public commit with the contrib token, so its author is the contrib machine user (or App), not Asha's git identity, and it carries no `Co-Authored-By` trailer. Later stories add `Uplink-Export-Author` to credit the developer as a co-author.
 
 Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green.
 

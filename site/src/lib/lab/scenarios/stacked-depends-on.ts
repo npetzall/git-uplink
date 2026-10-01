@@ -4,10 +4,12 @@ import {
   branchPush,
   ciJob,
   importOps,
+  mergeUpstream,
   preflightCi,
   resetStatus,
   startExample,
   submitOps,
+  syncFlowBack,
   you,
 } from "../ops";
 
@@ -15,7 +17,7 @@ export const stackedDependsOn: LabScenario = {
   id: "stacked-depends-on",
   title: "03 — Stacked depends-on",
   blurb:
-    "Ben’s log line needs Asha’s SHA-256. Preflight without the trailer fails. Submit of Ben is refused until Asha is submitted.",
+    "Ben’s log line needs Asha’s SHA-256. Preflight without the trailer fails. Approve and submit of Ben are refused until Asha is merged upstream.",
   highlight: "console.log",
   initial: exampleSeed,
   startOperations: startExample(),
@@ -105,48 +107,47 @@ export const stackedDependsOn: LabScenario = {
       id: "submit-ben-first",
       title: "Submit Ben first — refused",
       summary:
-        "Uplink submit for Ben fails: Submit upl_asha before upl_ben. The contrib fork is unchanged.",
-      why: "An upstream-bound patch may not export until each unmerged dependency is submitted or merged.",
+        "Uplink submit for Ben stops in its first job: upl_asha is not merged upstream. No hook, no packet, no to-upstream review. The contrib fork is unchanged.",
+      why: "Uplink-Depends-On orders the queue and guards contribution: an upstream-bound patch is not approved or exported until each upstream-bound dependency is merged upstream. Every public PR stands alone on public main.",
       operations: [
-        you(["git uplink approve upl_ben", "git uplink submit upl_ben"], "Refused: Submit upl_asha before upl_ben."),
+        you(["git uplink approve upl_ben", "git uplink submit upl_ben"], "Refused: upl_ben depends on upl_asha, which is not merged upstream yet."),
         ciJob(
           "Uplink submit",
-          ["git uplink init", "git uplink approve upl_ben", "git uplink submit upl_ben"],
-          "Job fails. Fork unchanged.",
+          ["gh workflow run uplink-submit.yml -f patch_id=upl_ben"],
+          "Job fails before the hook and the to-upstream environment. Fork unchanged.",
         ),
       ],
       apply: (state) => ({
         ...state,
         stepId: "submit-ben-first",
-        log: [...state.log, "Submit upl_ben refused: Submit upl_asha before upl_ben."],
+        log: [...state.log, "Submit upl_ben refused: upl_asha is not merged upstream yet."],
       }),
     },
     {
       id: "submit-order",
-      title: "Submit Asha, then Ben",
+      title: "Submit Asha, merge, then Ben",
       summary:
-        "Submit Asha (approve to-upstream), then Ben. Ben’s public PR is stacked on Asha’s contrib branch until Asha merges.",
-      why: "Submit order follows dependsOn. Ben’s export tree includes Asha until she is merged upstream.",
-      operations: [...submitOps("upl_asha"), ...submitOps("upl_ben")],
+        "Submit Asha (approve to-upstream). Squash-merge her public PR and sync, which marks her merged. Then submit Ben. His public PR is only the log line on public main.",
+      why: "Submit order follows dependsOn, one merge at a time. Ben is exported onto public main once Asha is part of it.",
+      operations: [...submitOps("upl_asha"), mergeUpstream("412"), ...syncFlowBack(), ...submitOps("upl_ben")],
       apply: (state) => {
         const patches = state.patches.map((patch) => {
-          if (patch.id === "upl_asha") return { ...patch, status: "submitted" as const, prNumber: 412 };
+          if (patch.id === "upl_asha") {
+            return { ...patch, status: "merged" as const, mergedVia: "pr #412", prNumber: 412 };
+          }
           if (patch.id === "upl_ben") return { ...patch, status: "submitted" as const, prNumber: 418 };
           return patch;
         });
-        const asha = patches.find((patch) => patch.id === "upl_asha")!;
-        const ben = patches.find((patch) => patch.id === "upl_ben")!;
+        const merged = rebuild({ ...state, upstream: tree(TOKENS_SHA256), patches });
+        const ben = merged.patches.find((patch) => patch.id === "upl_ben")!;
         return {
-          ...state,
+          ...merged,
           stepId: "submit-order",
-          patches,
-          contrib: [
-            { branch: "uplink/upl_asha", files: asha.files, prNumber: 412 },
-            { branch: "uplink/upl_ben", files: ben.files, prNumber: 418 },
-          ],
+          contrib: [{ branch: "uplink/upl_ben", files: ben.files, prNumber: 418 }],
           log: [
             ...state.log,
-            "Submitted upl_asha (#412), then upl_ben (#418) stacked on Asha’s contrib branch.",
+            "Submitted upl_asha (#412). Merged upstream; sync marked it merged.",
+            "Submitted upl_ben (#418) onto public main, which now has sha256.",
           ],
         };
       },

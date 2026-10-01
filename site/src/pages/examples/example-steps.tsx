@@ -27,7 +27,6 @@ const VARIABLES = [
   ["UPLINK_PREFLIGHT", "npm test", "Build and test command run on the export tree"],
   ["UPLINK_REDACT_KEYWORDS", "companyTelemetry,AcmeCorp", "Words that must not appear in a contribution"],
   ["UPLINK_INTERNAL_DOMAINS", "acme.example", "Email domains flagged in the export"],
-  ["UPLINK_EXPORT_AUTHOR", "Uplink Example <uplink@example.com>", "Public identity for contribution commits"],
   ["UPLINK_SRC", "npetzall/git-uplink", "Repository that publishes git-uplink releases"],
   ["UPLINK_VERSION", "{{uplinkVersion}}", "Release to install"],
   ["UPLINK_INTERNAL_AUTH", "pat", "Token model for the internal role"],
@@ -551,7 +550,9 @@ function SecretList() {
       <li>
         <code>UPLINK_CONTRIB_TOKEN</code> (contrib token) on the <code>to-upstream</code> <strong>and</strong>{" "}
         <code>abandon-contrib</code> environments. The fork write credential only exists behind a review. Environments
-        don&apos;t share secrets, so store it twice, and never at repository level.
+        don&apos;t share secrets, so store it twice, and never at repository level. GitHub creates the contribution
+        commit with this token, so the machine user is its author. Commits made with a PAT are not shown as Verified;
+        use a GitHub App for that.
       </li>
     </ul>
   );

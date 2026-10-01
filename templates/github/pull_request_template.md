@@ -20,4 +20,7 @@ Examples:
 Ticket: PROJ-1234
 Uplink-Depends-On: upl_…
 Uplink-Export-Author: Jane Public <jane@users.noreply.github.com>
+
+Uplink-Export-Author adds a Co-Authored-By trailer to the public commit.
+The commit author is the contribution account.
 -->
