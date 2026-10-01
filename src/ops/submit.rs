@@ -15,8 +15,7 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
         check_ready_to_submit(repo, &queue, &patch)?;
 
         let branch = format!("uplink/{id}");
-        let start = submit_base(repo, &queue, &patch)?;
-        let sha = export_onto(repo, &queue, &patch, &start, &branch)?;
+        let sha = export_onto(repo, &queue, &patch, "uplink/upstream", &branch)?;
         push_to_contrib(repo, &queue, &branch)?;
 
         Ok(SubmitResult {
@@ -27,27 +26,19 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
     })
 }
 
-/// Upstream-bound, approved, dependencies submitted or merged, assess ok,
-/// and export preflight passes.
+/// Upstream-bound, approved, upstream dependencies merged, assess ok,
+/// and export preflight passes. Every export is built on `uplink/upstream`.
 fn check_ready_to_submit(repo: &Path, queue: &QueueState, patch: &Patch) -> Result<()> {
     let id = &patch.id;
     if !queue.is_upstream(id) {
         return Err(Error::msg(format!("{id} is internal-only")));
     }
+    ensure_upstream_deps_merged(queue, patch, "Submit")?;
     if patch.status != PatchStatus::Approved && patch.status != PatchStatus::Submitted {
         return Err(Error::msg(format!(
             "{id} must be approved before submit (currently {})",
             patch.status
         )));
-    }
-    for dep_id in &patch.depends_on {
-        let dep = get_patch(queue, dep_id)?;
-        if queue.is_upstream(dep_id)
-            && dep.status != PatchStatus::Merged
-            && dep.status != PatchStatus::Submitted
-        {
-            return Err(Error::msg(format!("Submit {dep_id} before {id}")));
-        }
     }
     if patch.assess.as_ref().is_some_and(|p| !p.ok) {
         return Err(Error::msg(format!(
@@ -140,19 +131,22 @@ fn push_to_contrib(repo: &Path, queue: &QueueState, branch: &str) -> Result<()> 
     Ok(())
 }
 
-pub(super) fn submit_base(repo: &Path, queue: &QueueState, patch: &Patch) -> Result<String> {
-    let submitted_deps: Vec<&Patch> = patch
-        .depends_on
-        .iter()
-        .filter_map(|id| queue.all_patches().find(|p| p.id == *id))
-        .filter(|dep| queue.is_upstream(&dep.id) && dep.status == PatchStatus::Submitted)
-        .collect();
-    if let Some(last) = submitted_deps.last()
-        && let Some(branch) = last.upstream.as_ref().map(|u| u.contrib_branch.as_str())
-        && has_ref(repo, branch)?
-    {
-        return Ok(branch.to_string());
+/// Refuses `action` (approve or submit) while an upstream-bound dependency is
+/// not merged upstream. Internal-only dependencies never go upstream.
+pub(super) fn ensure_upstream_deps_merged(
+    queue: &QueueState,
+    patch: &Patch,
+    action: &str,
+) -> Result<()> {
+    let id = &patch.id;
+    for dep_id in &patch.depends_on {
+        let dep = get_patch(queue, dep_id)?;
+        if queue.is_upstream(dep_id) && dep.status != PatchStatus::Merged {
+            return Err(Error::msg(format!(
+                "{id} depends on {dep_id}, which is not merged upstream yet (currently {}). {action} {id} after {dep_id} is merged.",
+                dep.status
+            )));
+        }
     }
-    ensure_upstream_ref(repo)?;
-    Ok("uplink/upstream".into())
+    Ok(())
 }

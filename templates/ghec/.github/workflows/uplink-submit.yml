@@ -58,6 +58,20 @@ jobs:
             echo "Unknown patch ${PATCH_ID}."
             exit 1
           fi
+          # Uplink-Depends-On orders the queue and gates contribution: an
+          # upstream-bound dependency must be merged upstream before this
+          # patch is reviewed or exported. Internal-only dependencies never go upstream.
+          unmerged=$(jq -r --arg id "$PATCH_ID" '
+            (.upstream // []) as $up
+            | [.upstream[]?, .internal[]?] | map(select(.id == $id)) | .[0].dependsOn // []
+            | map(. as $dep | $up[] | select(.id == $dep and .status != "merged") | "\(.id) (\(.status))")
+            | join(", ")
+          ' <<<"$queue")
+          if [ -n "$unmerged" ]; then
+            echo "${PATCH_ID} depends on patches not merged upstream yet: ${unmerged}. Submit ${PATCH_ID} after they merge."
+            printf '%s depends on patches not merged upstream yet: %s.\n' "$PATCH_ID" "$unmerged" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           # Extras from the merged PR's assessment stay valid while the patch
           # content is unchanged. An amended patch is always assessed again.
           source=$(jq -r --arg id "$PATCH_ID" '
