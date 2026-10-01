@@ -64,7 +64,13 @@ jobs:
             echo "Conflict markers still present; remove them before merge."
             exit 1
           fi
-          if [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
+          if [[ "$BASE_REF" == uplink/conflict/* ]]; then
+            # The resolution is new code: assess it with the patch's stored
+            # message, as resolve will after merge. A failure blocks the merge.
+            git uplink assess --patch "${BASE_REF#uplink/conflict/}" \
+              --from "$FROM_SHA" \
+              --head "$HEAD_SHA"
+          elif [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
             {
               printf '%s\n\n' "$TITLE"
               printf '%s\n' "${BODY:-}"

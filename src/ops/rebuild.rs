@@ -340,11 +340,32 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
             .and_then(|c| c.onto.clone())
             .unwrap_or(recover_onto(repo, GateKind::Conflict, id, &head)?);
         let message = company_commit_message(&patch);
+        let before = rev_parse(repo, "HEAD")?;
         commit_resolution(repo, &onto, &message)?;
+        // The resolution is new code, so the stored assessment no longer
+        // describes it. An upstream-bound resolution must pass; otherwise the
+        // branch is put back as it was so the resolution can be fixed.
+        let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
+        let report = assess_from_message(
+            repo,
+            &queue,
+            &onto,
+            "HEAD",
+            &stored_commit_message(&patch),
+            Some(&patch.title),
+            intent,
+        )?;
+        if !intent.is_internal_only()
+            && let Err(err) = assert_assess_ok(&report, &patch.title)
+        {
+            git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+            return Err(err);
+        }
         fs::create_dir_all(repo.join(".uplink/patches"))?;
         fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
         {
             let patch = get_patch_mut(&mut queue, id)?;
+            patch.assess = Some(report);
             patch.status = if patch.upstream.is_some() {
                 PatchStatus::Amended
             } else {
@@ -356,7 +377,7 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
             add_event(
                 patch,
                 "amended",
-                "Conflict resolved; patch refreshed for rebuild and upstream PR",
+                "Conflict resolved; patch refreshed and re-assessed for rebuild and upstream PR",
             );
         }
         write_queue_file(repo, &queue)?;

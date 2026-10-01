@@ -15,8 +15,8 @@ use git_uplink::{
     load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, status_report, status_snapshot, store_patch_extras, submit_patch, sync,
-    transfer_patch,
+    resolve_conflict, status_report, status_snapshot, store_patch_extras, stored_commit_message,
+    submit_patch, sync, transfer_patch,
 };
 use git_uplink::{
     Patch, PatchIntent, PatchStatus, QueueState, SyncResult, TransferDirection, TransferResult,
@@ -145,6 +145,12 @@ enum Commands {
         message_file: Option<PathBuf>,
         #[arg(long)]
         internal_only: bool,
+        #[arg(
+            long,
+            conflicts_with_all = ["title", "message", "message_file", "internal_only"],
+            help = "Assess a queued patch with its stored title, message, and layer (for example a conflict resolution)"
+        )]
+        patch: Option<String>,
     },
     Report {
         id: String,
@@ -1160,7 +1166,25 @@ fn run() -> Result<(), Error> {
             message,
             message_file,
             internal_only,
+            patch,
         } => {
+            if let Some(id) = patch {
+                let queue = read_queue(&repo)?;
+                let stored = queue
+                    .all_patches()
+                    .find(|p| p.id == id)
+                    .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
+                let message = stored_commit_message(stored);
+                let internal_only = !queue.is_upstream(&id);
+                return cmd_assess(
+                    &repo,
+                    from,
+                    head,
+                    stored.title.clone(),
+                    message,
+                    internal_only,
+                );
+            }
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
             cmd_assess(&repo, from, head, title, message, internal_only)

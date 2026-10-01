@@ -59,7 +59,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 - **Runs on:** a merged pull request into `uplink/conflict/**` (`pull_request_target`, so the YAML comes from the default branch).
 - **Does:**
-  - `git uplink resolve <id>` refreshes the patch, rebuilds `main`, and deletes the base and `-work` branches.
+  - `git uplink resolve <id>` refreshes the patch, re-runs the upstream assessment on the resolution (refusing an upstream-bound resolution that fails it), rebuilds `main`, and deletes the base and `-work` branches.
   - If the rebuild stops on a later patch, it opens that conflict PR the same way sync does.
   - If the patch was already submitted, it marks it `amended`, cancels any running `Uplink submit <id>`, and dispatches a new one for the delta.
 - **Requires:**
@@ -97,7 +97,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 ## `uplink-gate.yml` — Uplink gate
 
 - **Runs on:** pull requests into `uplink/conflict/**`, `uplink/transfer-to-upstream/**`, and `uplink/transfer-to-internal/**` (`pull_request_target`).
-- **Does:** job **Uplink gate** fails if conflict markers remain or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`). For transfer-to-upstream PRs it also runs export preflight.
+- **Does:** job **Uplink gate** fails if conflict markers remain or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`). For conflict PRs it also runs the upstream assessment on the resolution with the patch's stored message, so a resolution that would leak company text cannot merge. For transfer-to-upstream PRs it runs export preflight.
 - **Requires:**
   - variable `UPLINK_PREFLIGHT`;
   - the Actions token (contents read);

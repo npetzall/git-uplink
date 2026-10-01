@@ -608,6 +608,10 @@ mod embed_tests {
                 "{forge:?} gate must be contents: read\n{gate}"
             );
             assert!(
+                gate.contains("git uplink assess --patch \"${BASE_REF#uplink/conflict/}\""),
+                "{forge:?} gate must assess conflict resolutions\n{gate}"
+            );
+            assert!(
                 !gate.contains("pull-requests: write"),
                 "{forge:?} gate must not request pull-requests: write\n{gate}"
             );
