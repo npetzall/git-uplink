@@ -169,9 +169,9 @@ describe("lab scenarios", () => {
     const scenario = scenarioById("assessment-hook");
     const submitted = runThrough(scenario, scenario.steps.length);
     expect(submitted.company[".github/workflows/uplink-assessment-hook.yml"]).toContain(
-      "Uplink assessment hook",
+      "Placeholder",
     );
-    expect(submitted.patches.find((patch) => patch.id === "upl_hook")?.queue).toBe("internal");
+    expect(submitted.patches.map((patch) => patch.id)).toEqual(["upl_tooling", "upl_asha"]);
     expect(submitted.patches.find((patch) => patch.id === "upl_asha")?.status).toBe("submitted");
     const asha = submitted.contrib.find((branch) => branch.branch === "uplink/upl_asha");
     expect(asha?.files["src/tokens.js"]).toContain("sha256");

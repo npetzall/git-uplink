@@ -422,10 +422,25 @@ mod embed_tests {
             let files = composed_files(forge).unwrap();
             let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
             assert!(
-                !paths
-                    .iter()
-                    .any(|p| p.ends_with("uplink-assessment-hook.yml")),
-                "{forge:?} must not embed company assessment hook: {paths:?}"
+                paths.contains(&".github/uplink-assessment-hook.md"),
+                "{forge:?} {paths:?}"
+            );
+            assert!(
+                paths.contains(&".github/uplink-hooks-ruleset.json"),
+                "{forge:?} {paths:?}"
+            );
+            let placeholder = files
+                .iter()
+                .find(|(p, _)| p == ".github/workflows/uplink-assessment-hook.yml")
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing assessment hook placeholder"));
+            assert!(
+                !placeholder.contains("inputs:"),
+                "{forge:?} placeholder must not be dispatchable as a hook\n{placeholder}"
+            );
+            assert!(
+                placeholder.contains("refs/heads/uplink/hooks"),
+                "{forge:?}\n{placeholder}"
             );
             let submit = files
                 .iter()
@@ -433,14 +448,81 @@ mod embed_tests {
                 .unwrap();
             let text = String::from_utf8_lossy(&submit.1);
             assert!(
-                text.contains("uplink-assessment-hook.yml"),
+                text.contains("uses: $/.github/actions/uplink-assessment-hook"),
                 "{forge:?}\n{text}"
             );
-            assert!(text.contains("uplink-packet-extra"), "{forge:?}");
-            assert!(text.contains("run-id:"), "{forge:?}");
-            assert!(text.contains("needs: finalize"), "{forge:?}");
+            assert!(text.contains("--store-extras"), "{forge:?}\n{text}");
+            assert!(text.contains(".extras.patchIdStable"), "{forge:?}\n{text}");
+            let action = files
+                .iter()
+                .find(|(p, _)| p == ".github/actions/uplink-assessment-hook/action.yml")
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing assessment hook action"));
+            assert!(
+                action.contains("gh workflow run uplink-assessment-hook.yml --ref uplink/hooks"),
+                "{action}"
+            );
+            assert!(
+                action.contains("::warning title=Uplink assessment hook failed::"),
+                "{action}"
+            );
+            assert!(action.contains("00-uplink-hook-failed.md"), "{action}");
+            assert!(
+                !action.contains("gh run watch \"$run_id\" --exit-status\n"),
+                "a failed hook must not fail the caller\n{action}"
+            );
+            let pr = files
+                .iter()
+                .find(|(p, _)| p == ".github/workflows/uplink-pr.yml")
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap();
+            assert!(
+                pr.contains("uses: $/.github/actions/uplink-assessment-hook"),
+                "{forge:?}\n{pr}"
+            );
+            assert!(pr.contains("<!-- uplink:assessment -->"), "{forge:?}");
+            assert!(pr.contains("--method PATCH"), "{forge:?}");
+            assert!(pr.contains("name: uplink-assessment"), "{forge:?}");
+            assert!(
+                !pr.contains("gh pr comment"),
+                "{forge:?} PR comments must be updated in place\n{pr}"
+            );
+            let import = files
+                .iter()
+                .find(|(p, _)| p == ".github/workflows/uplink-import.yml")
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap();
+            assert!(import.contains("--extra-dir"), "{forge:?}\n{import}");
+            assert!(import.contains("-n uplink-assessment"), "{forge:?}");
+            assert!(action.contains("uplink-packet-extra"), "{action}");
+            assert!(action.contains("run-id:"), "{action}");
+            assert!(action.contains("continue-on-error: true"), "{action}");
+            assert!(text.contains("needs: extras"), "{forge:?}");
+            assert!(text.contains("needs: packet"), "{forge:?}");
+            assert!(!text.contains("finalize:"), "{forge:?}\n{text}");
+            // The hook runs in `extras`, which must not hold the queue lock;
+            // only `packet` writes uplink/state.
+            let extras_job = text.find("\n  extras:").expect("extras job");
+            let packet_job = text.find("\n  packet:").expect("packet job");
+            let submit_job = text.find("\n  submit:").expect("submit job");
+            let lock = text.find("group: uplink-mutate").expect("uplink-mutate");
+            assert_eq!(
+                text.matches("group: uplink-mutate").count(),
+                1,
+                "{forge:?}\n{text}"
+            );
+            assert!(packet_job < lock && lock < submit_job, "{forge:?}\n{text}");
+            let hook = text
+                .find("uses: $/.github/actions/uplink-assessment-hook")
+                .unwrap();
+            assert!(extras_job < hook && hook < packet_job, "{forge:?}\n{text}");
+            assert_eq!(
+                text.matches("printf '%s\\n' \"$packet\" >> \"$GITHUB_STEP_SUMMARY\"")
+                    .count(),
+                1,
+                "{forge:?} the packet is written to the summary once\n{text}"
+            );
             assert!(text.contains("assessment.md"), "{forge:?}");
-            assert!(text.contains("continue-on-error: true"), "{forge:?}");
             assert!(
                 paths.contains(&".github/workflows/uplink-pr.yml"),
                 "{forge:?} {paths:?}"

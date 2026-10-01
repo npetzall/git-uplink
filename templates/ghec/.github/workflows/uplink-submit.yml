@@ -1,7 +1,11 @@
 # CONTRIBUTION / IP gate. Dispatch from company main with a patch id.
-# Packet job commits the report on uplink/state. Finalize runs an optional
-# company `.github/workflows/uplink-assessment-hook.yml` and prepends its artifact
-# onto assessment.md. Submit job then waits on Environment `to-upstream`.
+# Extras job (no queue lock) reuses the company extras stored at import if
+# the patch is unchanged since. Otherwise it runs the optional company
+# `.github/workflows/uplink-assessment-hook.yml` from branch uplink/hooks. A
+# failed hook is noted at the top of assessment.md; it does not fail submit.
+# Packet job then writes assessment.md once on uplink/state (holding
+# uplink-mutate only for that), and stores a successful hook result. Submit
+# job then waits on Environment `to-upstream`.
 # Resolve of an already-submitted patch dispatches this workflow so IP can
 # approve the delta.
 #
@@ -26,8 +30,69 @@ on:
 permissions: {}
 
 jobs:
+  # No uplink-mutate here: the hook can run for many minutes and must not hold
+  # the queue lock. This job only reads uplink/state.
+  extras:
+    name: Collect company extras
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      fresh: ${{ steps.stored.outputs.fresh }}
+      hook_status: ${{ steps.hook.outputs.status }}
+      hook_run_url: ${{ steps.hook.outputs.run_url }}
+    steps:
+      - name: Check extras stored at import
+        id: stored
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PATCH_ID: ${{ inputs.patch_id }}
+        run: |
+          set -euo pipefail
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
+          if ! jq -e --arg id "$PATCH_ID" '[.upstream[]?, .internal[]?] | any(.id == $id)' <<<"$queue" > /dev/null; then
+            echo "Unknown patch ${PATCH_ID}."
+            exit 1
+          fi
+          # Extras from the merged PR's assessment stay valid while the patch
+          # content is unchanged. An amended patch is always assessed again.
+          source=$(jq -r --arg id "$PATCH_ID" '
+            [.upstream[]?, .internal[]?] | map(select(.id == $id)) | .[0]
+            | if (.extras.patchIdStable // "") != "" and .extras.patchIdStable == .patchIdStable and .status != "amended"
+              then (.extras.source // "uplink/state") else empty end
+          ' <<<"$queue")
+          if [ -n "$source" ]; then
+            echo "Using company extras stored for the unchanged patch (${source}); not running the hook."
+            printf 'Company extras: stored for the unchanged patch (%s).\n' "$source" >> "$GITHUB_STEP_SUMMARY"
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run company assessment hook
+        id: hook
+        if: steps.stored.outputs.fresh != 'true'
+        uses: $/.github/actions/uplink-assessment-hook
+        with:
+          patch: ${{ inputs.patch_id }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.hook.outputs.status == 'success' || steps.hook.outputs.status == 'failure'
+        with:
+          name: uplink-packet-extras
+          path: ${{ steps.hook.outputs.dir }}/*.md
+          if-no-files-found: ignore
+          overwrite: true
+
+  # Holds uplink-mutate only to write the packet on uplink/state.
   packet:
     name: Write contribution packet
+    needs: extras
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -46,107 +111,51 @@ jobs:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # A hook that uploaded nothing leaves no artifact; the directory is then empty.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.extras.outputs.hook_status == 'success' || needs.extras.outputs.hook_status == 'failure'
+        continue-on-error: true
+        with:
+          name: uplink-packet-extras
+          path: ${{ runner.temp }}/uplink-packet-extras
 
       - name: Write approver packet
         env:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
+          HOOK_STATUS: ${{ needs.extras.outputs.hook_status }}
+          HOOK_RUN_URL: ${{ needs.extras.outputs.hook_run_url }}
+          EXTRA_DIR: ${{ runner.temp }}/uplink-packet-extras
         run: |
+          set -euo pipefail
           git uplink init
-          packet=$(git uplink report "$PATCH_ID")
-          printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
+          # A successful hook run is stored for later packets; a failed one is
+          # not, so the next submit runs the hook again. Without a hook run,
+          # report uses the stored extras if they still match the patch.
+          case "$HOOK_STATUS" in
+            success)
+              mkdir -p "$EXTRA_DIR"
+              packet=$(git uplink report "$PATCH_ID" --extra-dir "$EXTRA_DIR" \
+                --store-extras --extra-source "$HOOK_RUN_URL")
+              ;;
+            failure)
+              mkdir -p "$EXTRA_DIR"
+              packet=$(git uplink report "$PATCH_ID" --extra-dir "$EXTRA_DIR")
+              ;;
+            *)
+              packet=$(git uplink report "$PATCH_ID")
+              ;;
+          esac
           git push origin uplink/state
-
-  finalize:
-    name: Apply company packet extras
-    needs: packet
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: write
-      actions: write
-    concurrency:
-      group: uplink-mutate
-      queue: max
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-
-      - uses: $/.github/actions/install-git-uplink
-        with:
-          repo: ${{ vars.UPLINK_SRC }}
-          version: ${{ vars.UPLINK_VERSION }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Dispatch company packet hooks
-        id: hooks
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PATCH_ID: ${{ inputs.patch_id }}
-          CALLER_RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          if ! git cat-file -e "HEAD:.github/workflows/uplink-assessment-hook.yml" 2>/dev/null; then
-            echo "No .github/workflows/uplink-assessment-hook.yml on this ref; skipping extras."
-            echo "run_id=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          gh workflow run uplink-assessment-hook.yml --ref "${GITHUB_REF_NAME}" \
-            -f "patch_id=${PATCH_ID}" \
-            -f "caller_run_id=${CALLER_RUN_ID}"
-          run_id=""
-          for _ in $(seq 1 30); do
-            run_id=$(gh run list --workflow=uplink-assessment-hook.yml --event=workflow_dispatch --limit 20 \
-              --json databaseId,displayTitle \
-              --jq "[.[] | select((.displayTitle // \"\") | contains(\"${CALLER_RUN_ID}\") and contains(\"${PATCH_ID}\")) | .databaseId][0] // empty")
-            if [ -n "$run_id" ]; then
-              break
-            fi
-            sleep 2
-          done
-          if [ -z "$run_id" ]; then
-            echo "Timed out waiting for Uplink assessment hook run (patch ${PATCH_ID}, caller ${CALLER_RUN_ID})"
-            exit 1
-          fi
-          gh run watch "$run_id" --exit-status
-          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
-
-      # v8 has no if-no-artifact-found; ignore a hook that uploaded nothing.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: steps.hooks.outputs.run_id != ''
-        continue-on-error: true
-        with:
-          name: uplink-packet-extra
-          path: ${{ runner.temp }}/uplink-packet-extra
-          run-id: ${{ steps.hooks.outputs.run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Reassemble packet with extras
-        env:
-          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PATCH_ID: ${{ inputs.patch_id }}
-          EXTRA_DIR: ${{ runner.temp }}/uplink-packet-extra
-        run: |
-          set -euo pipefail
-          git uplink init
-          if [ -d "$EXTRA_DIR" ] && find "$EXTRA_DIR" -name '*.md' -type f | grep -q .; then
-            packet=$(git uplink report "$PATCH_ID" --extra-dir "$EXTRA_DIR")
-            printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
-            git push origin uplink/state
-          else
-            packet=$(git show "uplink/state:.uplink/reports/${PATCH_ID}/assessment.md")
-            printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
 
   # Do not put uplink-mutate on this job. A required-reviewer environment
   # holds its concurrency group the whole time the job is Waiting, which
   # would freeze import/resolve/transfer and block resolve's cancel+redispatch.
   submit:
     name: Approve to-upstream environment and submit
-    needs: finalize
+    needs: packet
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

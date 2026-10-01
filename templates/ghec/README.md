@@ -10,18 +10,20 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 - **Runs on:** pull requests to `main` (opened, synchronize, reopened, edited). Skipped for `uplink:internal-only`.
 - **Does:** two parallel jobs, both required checks.
-  - **Uplink upstream assess:** turns the PR title and body into the commit message, strips everything below the cutoff, rewrites the author, scans for company keywords and internal email domains, and comments the report on the PR.
-  - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs `UPLINK_PREFLIGHT`.
+  - **Uplink upstream assess:** turns the PR title and body into the commit message, strips everything below the cutoff, rewrites the author, and scans for company keywords and internal email domains. It also runs the optional assessment hook (below) with `pr`. Both results go into one PR comment that is updated in place on every run, and into artifact `uplink-assessment` for import. A failed hook is noted in the comment; it does not fail the check.
+  - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs `UPLINK_PREFLIGHT`. A failure is commented on the PR; later runs update that comment.
 - **Requires:**
   - variables `UPLINK_REDACT_KEYWORDS`, `UPLINK_INTERNAL_DOMAINS`, `UPLINK_EXPORT_AUTHOR`, `UPLINK_PREFLIGHT`;
-  - the Actions token (contents read, pull requests write);
+  - the Actions token (contents read, pull requests write, actions write to run the hook);
   - label `uplink:internal-only`.
 
 ## `uplink-import.yml` — Uplink import
 
 - **Runs on:** a merged pull request.
 - **Does:** `git uplink add` records the merged change on `uplink/state` as `queued`, in `internal[]` when labelled `uplink:internal-only`, otherwise in `upstream[]`. An upstream import rebuilds `main` so the patch sits under `internal[]`. Then `git uplink push`.
+  - For an upstream patch, import keeps the assessment-hook result from the PR checks when it was made for exactly what was merged (head commit, title and body). It is stored under `.uplink/reports/<id>/extras/`.
 - **Requires:**
+  - the Actions token (actions read) to download the PR check's `uplink-assessment` artifact;
   - the internal App or PAT (contents and workflows write), because the rebuild force-pushes `main`, which contains workflow files;
   - concurrency group `uplink-mutate`.
 
@@ -29,14 +31,14 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 - **Runs on:** manual dispatch from `main` with a `patch_id`, and dispatch by resolve for an `amended` patch.
 - **Does:**
-  1. **Packet:** `git uplink report` writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and to the job summary.
-  2. **Finalize:** runs the optional assessment hook (below) and prepends its extras.
+  1. **Extras:** uses the company extras stored at import while the patch is unchanged. Otherwise it runs the optional assessment hook (below) with `patch`. It reads `uplink/state` but does not take `uplink-mutate`, so a slow hook never blocks the queue.
+  2. **Packet:** `git uplink report` writes `.uplink/reports/<id>/assessment.md` on `uplink/state`, with the extras first, and to the job summary. A successful hook result is stored for later packets.
   3. **Submit:** waits on Environment `to-upstream`. After approval it records `approval.md`, runs `git uplink approve` and `git uplink submit` (pushes `uplink/<id>` to the fork), opens the public PR (`maintainer_can_modify` false), and runs `git uplink submitted`. If the patch already has a PR number, no second PR is opened.
 - **Requires:**
   - Environment `to-upstream` with the IP reviewers and the contrib App or PAT (fork contents write) as environment secrets;
   - repository secrets for the upstream App or PAT (contents read, pull requests write on upstream and the fork);
-  - the Actions token (contents write, actions write) for the packet and finalize jobs;
-  - `uplink-mutate` on packet and finalize only.
+  - the Actions token: contents read and actions write for the extras job, contents write for the packet job;
+  - `uplink-mutate` on the packet job only.
 
 ## `uplink-sync.yml` — Uplink sync
 
@@ -103,10 +105,13 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 ## Assessment hook
 
-- **Optional and company-owned.** It is not part of the pack, and `--upgrade` never touches it.
-- **Runs on:** dispatch by Uplink submit's finalize job, with inputs `patch_id` and `caller_run_id`. Both must appear in `run-name`.
-- **Does:** whatever company scans must reach the IP packet. It uploads `*.md` files as artifact `uplink-packet-extra`, which finalize prepends to `assessment.md` before IP is asked. A failed hook fails submit, so IP is never asked.
+- **Optional and company-owned.** The real hook lives on the orphan branch `uplink/hooks`, which is never queued, replayed, or contributed.
+- **Placeholder in the pack:** `.github/workflows/uplink-assessment-hook.yml` on `main`. GitHub only dispatches a workflow whose file exists on the default branch, so submit needs this file there. Run it by hand: it prints the setup guide, creates `uplink/hooks` if it is missing, and keeps `assessment-hook.md` there current.
+- **Runs on:** dispatch with `--ref uplink/hooks` by the PR checks (input `pr`) and by submit's extras job (input `patch`) when no current result is stored. `caller_run_id` must appear in `run-name`. If `uplink/hooks` has no `.github/workflows/uplink-assessment-hook.yml`, callers skip the hook.
+- **Does:** whatever company scans must reach the IP packet. It uploads `*.md` files as artifact `uplink-packet-extra`. The PR comment shows them, import stores them with the patch, and the packet prepends them to `assessment.md` before IP is asked. A failed hook fails neither the PR check nor submit: the run shows a warning, and the comment or `assessment.md` starts with a note that links to the failed hook run. A failed result is never stored.
 - **Requires:**
-  - `.github/workflows/uplink-assessment-hook.yml`, added as an `uplink:internal-only` change;
-  - it must not push `uplink/state`.
-- Starter: [`uplink-assessment-hook.yml`](../../examples/github/patches/uplink-assessment-hook.yml). Walkthrough: [story 07](../../examples/github/stories/07-assessment-hook.md).
+  - `.github/workflows/uplink-assessment-hook.yml` on `uplink/hooks`. Adding it needs workflows write;
+  - it must not push `uplink/state`;
+  - with `pr`, the checked-out code is unmerged. Do not run it with secrets;
+  - recommended: import [`uplink-hooks-ruleset.json`](../github/uplink-hooks-ruleset.json), so changes to `uplink/hooks` need a reviewed pull request. Its code runs during every submit. GitHub Actions bypasses, so the placeholder can update `assessment-hook.md`.
+- Guide and starter YAML: [`uplink-assessment-hook.md`](../github/uplink-assessment-hook.md). Walkthrough: [story 07](../../examples/github/stories/07-assessment-hook.md).

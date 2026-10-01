@@ -1,0 +1,116 @@
+name: Uplink assessment hook
+description: >-
+  Run the company assessment hook from branch uplink/hooks and collect its
+  uplink-packet-extra markdown. A missing hook is skipped. A failed hook is
+  reported in the outputs and as a note in the extras; it never fails the caller.
+inputs:
+  pr:
+    description: Internal pull request number. Set for PR checks.
+    required: false
+    default: ""
+  patch:
+    description: Patch id (upl_…). Set for submit.
+    required: false
+    default: ""
+  token:
+    description: Token with actions write (dispatch) and read (runs and artifacts). Workflows pass secrets.GITHUB_TOKEN.
+    required: true
+outputs:
+  status:
+    description: skipped, success, or failure
+    value: ${{ steps.run.outputs.status }}
+  run_id:
+    description: Hook run id, empty when skipped or not found
+    value: ${{ steps.run.outputs.run_id }}
+  run_url:
+    description: Hook run URL, empty when skipped or not found
+    value: ${{ steps.run.outputs.run_url }}
+  dir:
+    description: Directory of *.md extras (always exists; may be empty)
+    value: ${{ steps.collect.outputs.dir }}
+runs:
+  using: composite
+  steps:
+    - name: Run the hook from uplink/hooks
+      id: run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr }}
+        PATCH: ${{ inputs.patch }}
+      run: |
+        set -euo pipefail
+        hook=.github/workflows/uplink-assessment-hook.yml
+        caller="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        fail() {
+          echo "::warning title=Uplink assessment hook failed::$1"
+          printf '> [!WARNING]\n> Uplink assessment hook failed: %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+          echo "status=failure" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+        if ! probe=$(gh api "repos/${GH_REPO}/contents/${hook}?ref=uplink%2Fhooks" --jq .path 2>&1); then
+          if grep -q "HTTP 404" <<<"$probe"; then
+            echo "No ${hook} on uplink/hooks; skipping extras. See .github/uplink-assessment-hook.md to add one."
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          fail "could not read uplink/hooks: ${probe}"
+        fi
+        if ! gh workflow run uplink-assessment-hook.yml --ref uplink/hooks \
+          -f "pr=${PR}" \
+          -f "patch=${PATCH}" \
+          -f "caller_run_id=${caller}"; then
+          fail "could not dispatch the hook on uplink/hooks"
+        fi
+        run_id=""
+        for _ in $(seq 1 30); do
+          run_id=$(gh run list --workflow=uplink-assessment-hook.yml --branch uplink/hooks \
+            --event=workflow_dispatch --limit 20 \
+            --json databaseId,displayTitle \
+            --jq "[.[] | select((.displayTitle // \"\") | contains(\"${caller}\")) | .databaseId][0] // empty" \
+            || true)
+          if [ -n "$run_id" ]; then
+            break
+          fi
+          sleep 2
+        done
+        if [ -z "$run_id" ]; then
+          fail "timed out waiting for the hook run (caller ${caller})"
+        fi
+        run_url="${GITHUB_SERVER_URL}/${GH_REPO}/actions/runs/${run_id}"
+        echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+        echo "run_url=${run_url}" >> "$GITHUB_OUTPUT"
+        if ! gh run watch "$run_id" --exit-status; then
+          fail "$run_url"
+        fi
+        echo "status=success" >> "$GITHUB_OUTPUT"
+
+    # v8 has no if-no-artifact-found; ignore a hook that uploaded nothing.
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      if: steps.run.outputs.run_id != ''
+      continue-on-error: true
+      with:
+        name: uplink-packet-extra
+        path: ${{ runner.temp }}/uplink-packet-extra
+        run-id: ${{ steps.run.outputs.run_id }}
+        github-token: ${{ inputs.token }}
+
+    - name: Collect extras
+      id: collect
+      shell: bash
+      env:
+        DIR: ${{ runner.temp }}/uplink-packet-extra
+        STATUS: ${{ steps.run.outputs.status }}
+        RUN_URL: ${{ steps.run.outputs.run_url }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$DIR"
+        if [ "$STATUS" = "failure" ]; then
+          {
+            echo "> [!WARNING]"
+            echo "> **Uplink assessment hook failed.** Company extras below may be missing or partial."
+            echo "> Hook run: ${RUN_URL:-not started}"
+          } > "$DIR/00-uplink-hook-failed.md"
+        fi
+        echo "dir=${DIR}" >> "$GITHUB_OUTPUT"
