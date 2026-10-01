@@ -4,10 +4,22 @@ use super::*;
 pub struct SubmitResult {
     pub queue: QueueState,
     pub branch: String,
+    /// The local export commit. The forge recreates it on contrib, so the
+    /// public sha differs unless `pushed`.
     pub sha: String,
+    /// The `uplink/upstream` commit the export is built on.
+    pub base: String,
+    /// Tree of the export commit; the forge's API commit must match it.
+    pub tree: String,
+    pub message: String,
+    /// True when `--push` force-pushed the branch to contrib (unsigned).
+    pub pushed: bool,
 }
 
-pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
+/// Builds `uplink/<id>` on `uplink/upstream`. With `push`, force-pushes it to
+/// contrib as is. Without, nothing leaves the machine and the forge creates
+/// the signed commit from the result.
+pub fn submit_patch(repo: &Path, id: &str, push: bool) -> Result<SubmitResult> {
     with_queue_lock(repo, || {
         ensure_upstream_ref(repo)?;
         let queue = read_queue_file(repo)?;
@@ -15,13 +27,22 @@ pub fn submit_patch(repo: &Path, id: &str) -> Result<SubmitResult> {
         check_ready_to_submit(repo, &queue, &patch)?;
 
         let branch = format!("uplink/{id}");
-        let sha = export_onto(repo, &queue, &patch, "uplink/upstream", &branch)?;
-        push_to_contrib(repo, &queue, &branch)?;
+        let base = rev_parse(repo, "uplink/upstream")?;
+        let sha = export_onto(repo, &queue, &patch, &base, &branch)?;
+        let tree = rev_parse(repo, &format!("{sha}^{{tree}}"))?;
+        let message = git_ok(repo, &["log", "-1", "--format=%B", &sha])?;
+        if push {
+            push_to_contrib(repo, &queue, &branch)?;
+        }
 
         Ok(SubmitResult {
             queue: read_queue_file(repo)?,
             branch,
             sha,
+            base,
+            tree,
+            message,
+            pushed: push,
         })
     })
 }
@@ -110,24 +131,20 @@ fn checkout_company(repo: &Path, company_branch: &str) -> Result<()> {
     Ok(())
 }
 
-/// Force-pushes the export branch when a contrib remote is configured.
+/// Force-pushes the export branch to the contrib remote.
 fn push_to_contrib(repo: &Path, queue: &QueueState, branch: &str) -> Result<()> {
+    let contrib = &queue.config.contrib_remote;
     let remotes = git_ok(repo, &["remote"]).unwrap_or_default();
-    if remotes
-        .split('\n')
-        .any(|r| r == queue.config.contrib_remote)
-    {
-        git(
-            repo,
-            &[
-                "push",
-                "--force",
-                &queue.config.contrib_remote,
-                &format!("{branch}:{branch}"),
-            ],
-            GitOpts::default(),
-        )?;
+    if !remotes.split('\n').any(|r| r == contrib) {
+        return Err(Error::msg(format!(
+            "submit --push needs the `{contrib}` remote. Add it, or submit without --push and let the forge create the commit."
+        )));
     }
+    git(
+        repo,
+        &["push", "--force", contrib, &format!("{branch}:{branch}")],
+        GitOpts::default(),
+    )?;
     Ok(())
 }
 
