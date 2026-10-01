@@ -15,7 +15,8 @@ use git_uplink::{
     load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, status_report, status_snapshot, submit_patch, sync, transfer_patch,
+    resolve_conflict, status_report, status_snapshot, store_patch_extras, submit_patch, sync,
+    transfer_patch,
 };
 use git_uplink::{
     Patch, PatchIntent, PatchStatus, QueueState, SyncResult, TransferDirection, TransferResult,
@@ -93,6 +94,17 @@ enum Commands {
         pr_url: Option<String>,
         #[arg(long = "depends-on")]
         depends_on: Vec<String>,
+        #[arg(
+            long = "extra-dir",
+            help = "Directory of company assessment-hook *.md extras to store with the patch"
+        )]
+        extra_dir: Option<PathBuf>,
+        #[arg(
+            long = "extra-source",
+            requires = "extra_dir",
+            help = "Where the extras came from, such as the hook run URL"
+        )]
+        extra_source: Option<String>,
     },
     /// Publish local uplink/state, restacking unique patches if origin moved.
     Push {
@@ -140,9 +152,21 @@ enum Commands {
         out: Option<PathBuf>,
         #[arg(
             long = "extra-dir",
-            help = "Directory of *.md files prepended to the packet"
+            help = "Directory of *.md files prepended to the packet. Without it, extras stored for the unchanged patch are used"
         )]
         extra_dir: Option<PathBuf>,
+        #[arg(
+            long = "store-extras",
+            requires = "extra_dir",
+            help = "Also store --extra-dir as the patch's extras for later packets"
+        )]
+        store_extras: bool,
+        #[arg(
+            long = "extra-source",
+            requires = "store_extras",
+            help = "Where the stored extras came from, such as the hook run URL"
+        )]
+        extra_source: Option<String>,
     },
     Status {
         #[arg(long)]
@@ -829,7 +853,12 @@ fn cmd_report(
     id: &str,
     out: Option<PathBuf>,
     extra_dir: Option<PathBuf>,
+    store_extras: bool,
+    extra_source: Option<String>,
 ) -> Result<(), Error> {
+    if store_extras && let Some(dir) = extra_dir.as_deref() {
+        store_patch_extras(repo, id, dir, extra_source)?;
+    }
     let queue = read_queue(repo)?;
     let patch = queue
         .all_patches()
@@ -1099,6 +1128,8 @@ fn run() -> Result<(), Error> {
             pr,
             pr_url,
             depends_on,
+            extra_dir,
+            extra_source,
         } => {
             let message = read_commit_message(message, message_file, &title)?;
             cmd_add(
@@ -1113,6 +1144,8 @@ fn run() -> Result<(), Error> {
                     author: env::var("GIT_AUTHOR_NAME").ok(),
                     internal_pr_number: pr,
                     internal_pr_url: pr_url,
+                    extra_dir,
+                    extra_source,
                     ..Default::default()
                 },
             )
@@ -1132,7 +1165,13 @@ fn run() -> Result<(), Error> {
             let message = read_commit_message(message, message_file, &title)?;
             cmd_assess(&repo, from, head, title, message, internal_only)
         }
-        Commands::Report { id, out, extra_dir } => cmd_report(&repo, &id, out, extra_dir),
+        Commands::Report {
+            id,
+            out,
+            extra_dir,
+            store_extras,
+            extra_source,
+        } => cmd_report(&repo, &id, out, extra_dir, store_extras, extra_source),
         Commands::Preflight {
             id,
             from,

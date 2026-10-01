@@ -12,7 +12,7 @@ use crate::queue::now_iso;
 use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
 use crate::types::{
     AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR,
-    Patch, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
+    Patch, PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
 };
 
 static HTML_COMMENT: LazyLock<Regex> =
@@ -410,10 +410,63 @@ pub fn format_contribution_packet_with_extras(
     } else {
         format_approver_packet(patch)
     };
+    if extra_dir.is_none() && stored_extras_fresh(patch) {
+        let stored = repo.join(extras_dir(&patch.id)?);
+        if stored.is_dir() {
+            return prepend_report_extras(&packet, Some(&stored));
+        }
+    }
     prepend_report_extras(&packet, extra_dir)
 }
 
-pub fn load_extra_markdown(dir: &Path) -> Result<String> {
+/// Where the stored company extras for patch `id` live on `uplink/state`.
+pub fn extras_dir(id: &str) -> Result<String> {
+    Ok(format!("{}/extras", report_paths(id)?.0))
+}
+
+/// Stored extras are reused while the patch content is unchanged. An amended
+/// patch always gets a fresh assessment.
+pub fn stored_extras_fresh(patch: &Patch) -> bool {
+    patch.status != PatchStatus::Amended
+        && patch
+            .extras
+            .as_ref()
+            .is_some_and(|extras| patch.patch_id_stable.as_ref() == Some(&extras.patch_id_stable))
+}
+
+/// Replaces the stored extras for `patch` with the `*.md` files in `src` and
+/// records them as fresh for the patch's current content. No files is a valid
+/// result: the hook ran and had nothing to add.
+pub fn store_extras(
+    repo: &Path,
+    patch: &mut Patch,
+    src: &Path,
+    source: Option<String>,
+) -> Result<()> {
+    let Some(stable) = patch.patch_id_stable.clone() else {
+        return Err(Error::msg(format!(
+            "{} has no stable patch id; cannot store extras",
+            patch.id
+        )));
+    };
+    let names = extra_markdown_names(src)?;
+    let dest = repo.join(extras_dir(&patch.id)?);
+    if dest.exists() {
+        fs::remove_dir_all(&dest)?;
+    }
+    fs::create_dir_all(&dest)?;
+    for name in names {
+        fs::copy(src.join(&name), dest.join(&name))?;
+    }
+    patch.extras = Some(PatchExtras {
+        at: now_iso(),
+        patch_id_stable: stable,
+        source,
+    });
+    Ok(())
+}
+
+fn extra_markdown_names(dir: &Path) -> Result<Vec<String>> {
     if !dir.is_dir() {
         return Err(Error::msg(format!(
             "extra-dir {} is not a directory",
@@ -432,6 +485,11 @@ pub fn load_extra_markdown(dir: &Path) -> Result<String> {
         names.push(name.into_owned());
     }
     names.sort();
+    Ok(names)
+}
+
+pub fn load_extra_markdown(dir: &Path) -> Result<String> {
+    let names = extra_markdown_names(dir)?;
     let mut parts = Vec::new();
     for name in names {
         let body = fs::read_to_string(dir.join(&name))?;

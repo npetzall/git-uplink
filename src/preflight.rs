@@ -425,6 +425,7 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
         merged: None,
         conflict: None,
         approvals: Vec::new(),
+        extras: None,
         events: Vec::new(),
         kind: None,
     };

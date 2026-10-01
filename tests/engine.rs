@@ -8,13 +8,13 @@ use git_uplink::{
     Forge, GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PatchIntent, PatchStatus,
     ProgressMode, PushOpts, QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH,
     StepOutcome, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream,
-    add_patch, approve_patch, doctor, drop_patch, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
-    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
-    parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, status_snapshot, strip_html_comments, submit_patch, summarize_queue, sync,
-    transfer_patch, write_queue,
+    add_patch, approve_patch, doctor, drop_patch, extras_dir, format_approval_receipt,
+    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
+    format_step_line, from_upstream_report_paths, git, git_ok, init, init_repo,
+    load_extra_markdown, mark_merged, parse_depends_on, preflight_incoming_change, push_queue,
+    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
+    reset_from_origin, resolve_conflict, status_snapshot, store_patch_extras, stored_extras_fresh,
+    strip_html_comments, submit_patch, summarize_queue, sync, transfer_patch, write_queue,
 };
 use tempfile::TempDir;
 
@@ -5845,6 +5845,97 @@ fn report_extra_dir_prepends_markdown_and_rejects_dotdot_names() {
     write(bad.path(), "foo..md", "nope");
     let err = load_extra_markdown(bad.path()).unwrap_err();
     assert!(err.to_string().contains("invalid path component"), "{err}");
+}
+
+#[test]
+fn stored_extras_lead_the_packet_until_the_patch_changes() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let extras = temp_dir();
+    write(
+        extras.path(),
+        "10-company.md",
+        "## Company\n\nFrom the PR.\n",
+    );
+    let run = "https://github.example/acme/product/actions/runs/7";
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            extra_dir: Some(extras.path().to_path_buf()),
+            extra_source: Some(run.into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let stored = patch.extras.as_ref().expect("extras recorded");
+    assert_eq!(stored.source.as_deref(), Some(run));
+    assert_eq!(
+        Some(&stored.patch_id_stable),
+        patch.patch_id_stable.as_ref()
+    );
+    assert!(stored_extras_fresh(&patch));
+    let dir = extras_dir(&patch.id).unwrap();
+    let tracked = git_ok(
+        company,
+        &["show", &format!("{STATE_BRANCH}:{dir}/10-company.md")],
+    )
+    .unwrap();
+    assert!(tracked.contains("From the PR."));
+
+    let packet = format_contribution_packet(company, &patch).unwrap();
+    assert!(packet.starts_with("## Company"), "{packet}");
+
+    let mut changed = patch.clone();
+    changed.patch_id_stable = Some("0000000000000000000000000000000000000000".into());
+    assert!(!stored_extras_fresh(&changed));
+    let packet = format_contribution_packet(company, &changed).unwrap();
+    assert!(packet.starts_with("# Contribution packet"), "{packet}");
+
+    let mut amended = patch.clone();
+    amended.status = PatchStatus::Amended;
+    assert!(!stored_extras_fresh(&amended));
+
+    let rerun = temp_dir();
+    write(rerun.path(), "20-rerun.md", "## Rerun\n");
+    let refreshed = store_patch_extras(company, &patch.id, rerun.path(), None).unwrap();
+    assert!(stored_extras_fresh(&refreshed));
+    assert!(!company.join(&dir).join("10-company.md").exists());
+    let packet = format_contribution_packet(company, &refreshed).unwrap();
+    assert!(packet.starts_with("## Rerun"), "{packet}");
+    assert!(!packet.contains("From the PR."));
+}
+
+#[test]
+fn add_rejects_extras_for_internal_only_patches() {
+    let world = setup_world();
+    let company = &world.company;
+    let extras = temp_dir();
+    let err = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Internal".into(),
+            internal_only: true,
+            extra_dir: Some(extras.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("--extra-dir"), "{err}");
 }
 
 #[test]
