@@ -46,10 +46,9 @@ const VARIABLES = [
   ["UPLINK_PREFLIGHT", "npm test", "Build and test command run on the export tree"],
   ["UPLINK_REDACT_KEYWORDS", "<company>,<product alias>", "Words that must not appear in a contribution"],
   ["UPLINK_INTERNAL_DOMAINS", "<company.example>", "Email domains flagged in the export"],
-  ["UPLINK_EXPORT_AUTHOR", "Uplink Bot <uplink@company.example>", "Public identity for contribution commits"],
   ["UPLINK_INTERNAL_AUTH", "app", "app or pat"],
   ["UPLINK_UPSTREAM_AUTH", "app", "app or pat"],
-  ["UPLINK_CONTRIB_AUTH", "app", "app or pat"],
+  ["UPLINK_CONTRIB_AUTH", "app", "app or pat. Only app gives Verified contribution commits"],
 ];
 
 const APPS = [
@@ -145,7 +144,7 @@ const PACK_RULESET = `{
     "exclude": [] } },
   "rules": [
     { "type": "file_path_restriction", "parameters": {
-        "restricted_file_paths": [".github/workflows/uplink-*.yml", ".github/actions/install-git-uplink/**"] } }
+        "restricted_file_paths": [".github/workflows/uplink-*.yml", ".github/actions/install-git-uplink/**", ".github/uplink/**"] } }
   ]
 }`;
 
@@ -464,8 +463,14 @@ gh secret set UPLINK_CONTRIB_APP_PRIVATE_KEY --repo {{ghRepo}} --env ${env.name}
         alternative={{
           summary: "Using PATs instead",
           body: (
-            <Command>{`gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env to-upstream
+            <>
+              <p>
+                GitHub creates the contribution commit through its API and signs it, but marks it Verified only for
+                a GitHub App token. With a PAT the commit is authored by the machine user and shows as unverified.
+              </p>
+              <Command>{`gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env to-upstream
 gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env abandon-contrib`}</Command>
+            </>
           ),
         }}
       />
@@ -676,7 +681,8 @@ function RulesetList() {
       </li>
       <li>
         <strong>Uplink: pack files</strong> (same refs, including <code>*-work</code>): nobody but the bots may change{" "}
-        <code>.github/workflows/uplink-*.yml</code> or <code>.github/actions/install-git-uplink/**</code> on a gated
+        <code>.github/workflows/uplink-*.yml</code>, <code>.github/actions/install-git-uplink/**</code>, or{" "}
+        <code>.github/uplink/**</code> on a gated
         branch. Product workflows stay editable. Bypass: the internal App. Sample:{" "}
         <a href={`${GITHUB_BLOB}/templates/github/uplink-pack-files-ruleset.json`}>uplink-pack-files-ruleset.json</a>.
       </li>

@@ -10,10 +10,10 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 - **Runs on:** pull requests to `main` (opened, synchronize, reopened, edited). Skipped for `uplink:internal-only`.
 - **Does:** two parallel jobs, both required checks.
-  - **Uplink upstream assess:** turns the PR title and body into the commit message, strips everything below the cutoff, rewrites the author, and scans for company keywords and internal email domains. It also runs the optional assessment hook (below) with `pr`. Both results go into one PR comment that is updated in place on every run, and into artifact `uplink-assessment` for import. A failed hook is noted in the comment; it does not fail the check.
+  - **Uplink upstream assess:** turns the PR title and body into the commit message, strips everything below the cutoff, turns `Uplink-Export-Author` into a `Co-Authored-By` trailer, and scans for company keywords and internal email domains. It also runs the optional assessment hook (below) with `pr`. Both results go into one PR comment that is updated in place on every run, and into artifact `uplink-assessment` for import. A failed hook is noted in the comment; it does not fail the check.
   - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs `UPLINK_PREFLIGHT`. A failure is commented on the PR; later runs update that comment.
 - **Requires:**
-  - variables `UPLINK_REDACT_KEYWORDS`, `UPLINK_INTERNAL_DOMAINS`, `UPLINK_EXPORT_AUTHOR`, `UPLINK_PREFLIGHT`;
+  - variables `UPLINK_REDACT_KEYWORDS`, `UPLINK_INTERNAL_DOMAINS`, `UPLINK_PREFLIGHT`;
   - the Actions token (contents read, pull requests write, actions write to run the hook);
   - label `uplink:internal-only`.
 
@@ -31,11 +31,11 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 - **Runs on:** manual dispatch from `main` with a `patch_id`, and dispatch by resolve for an `amended` patch.
 - **Does:**
-  1. **Extras:** uses the company extras stored at import while the patch is unchanged. Otherwise it runs the optional assessment hook (below) with `patch`. It reads `uplink/state` but does not take `uplink-mutate`, so a slow hook never blocks the queue.
+  1. **Extras:** stops if an upstream-bound `Uplink-Depends-On` patch is not merged upstream yet. Otherwise it uses the company extras stored at import while the patch is unchanged. Otherwise it runs the optional assessment hook (below) with `patch`. It reads `uplink/state` but does not take `uplink-mutate`, so a slow hook never blocks the queue.
   2. **Packet:** `git uplink report` writes `.uplink/reports/<id>/assessment.md` on `uplink/state`, with the extras first, and to the job summary. A successful hook result is stored for later packets.
-  3. **Submit:** waits on Environment `to-upstream`. After approval it records `approval.md`, runs `git uplink approve` and `git uplink submit` (pushes `uplink/<id>` to the fork), opens the public PR (`maintainer_can_modify` false), and runs `git uplink submitted`. If the patch already has a PR number, no second PR is opened.
+  3. **Submit:** waits on Environment `to-upstream`. After approval it records `approval.md`, runs `git uplink approve` and `git uplink submit`, which builds the export commit on `uplink/upstream`. `.github/uplink/contrib_commit.py` then recreates that commit on the fork through the Git Database API and moves `uplink/<id>` to it. GitHub signs the commit, and it is Verified only with the contrib App (a PAT commit is unverified). The job then opens the public PR (`maintainer_can_modify` false), and runs `git uplink submitted`. If the patch already has a PR number, no second PR is opened.
 - **Requires:**
-  - Environment `to-upstream` with the IP reviewers and the contrib App or PAT (fork contents write) as environment secrets;
+  - Environment `to-upstream` with the IP reviewers and the contrib App (or PAT, without Verified commits) with fork contents write as environment secrets;
   - repository secrets for the upstream App or PAT (contents read, pull requests write on upstream and the fork);
   - the Actions token: contents read and actions write for the extras job, contents write for the packet job;
   - `uplink-mutate` on the packet job only.

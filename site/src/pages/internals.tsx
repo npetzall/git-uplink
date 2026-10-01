@@ -137,7 +137,7 @@ sequenceDiagram
   Dev->>PR: open or edit
   par assess
     CI->>CI: git uplink assess
-    Note right of CI: message, cutoff, export author,<br/>keyword and email scan
+    Note right of CI: message, cutoff, co-author,<br/>keyword and email scan
   and preflight
     CI->>CI: git uplink preflight
     Note right of CI: apply on upstream + declared deps<br/>+ tooling + queued upstream,<br/>run UPLINK_PREFLIGHT
@@ -174,7 +174,8 @@ sequenceDiagram
   Submit->>Env: wait for IP reviewer
   Env-->>Submit: approved
   Submit->>Submit: git uplink approve
-  Submit->>Fork: git uplink submit (push uplink/id)
+  Submit->>Submit: git uplink submit (export commit on uplink/upstream)
+  Submit->>Fork: contrib_commit.py (Git Database API, signed by GitHub)
   Submit->>Up: open public PR
   Submit->>Submit: git uplink submitted (record PR on the queue)
 `;

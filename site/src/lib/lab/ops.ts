@@ -104,9 +104,9 @@ export function submitOps(id: string): LabOperation[] {
     you([
       `git uplink report ${id}`,
       `git uplink approve ${id}`,
-      `git uplink submit ${id}`,
+      `git uplink submit ${id} --push`,
       `git uplink submitted ${id} --pr-url <url>`,
-    ]),
+    ], "Locally, --push force-pushes the export commit unsigned. The workflow lets GitHub create a signed one."),
     ciJob(
       "Uplink submit",
       [`gh workflow run uplink-assessment-hook.yml --ref uplink/hooks -f patch=${id}`],
@@ -126,7 +126,7 @@ export function submitOps(id: string): LabOperation[] {
         `gh api --method POST /repos/<upstream>/pulls -f head=<contrib_org>:uplink/${id} -f base=main -f title=<title> -F maintainer_can_modify=false`,
         `git uplink submitted ${id} --pr-url <url>`,
       ],
-      "Submit job waits on Environment to-upstream. Approve the deployment, then the same run exports.",
+      "Submit job waits on Environment to-upstream. Approve the deployment, then the same run exports: submit builds the commit on uplink/upstream, and contrib_commit.py recreates it on the fork through the Git Database API, so GitHub signs it (Verified with a GitHub App token).",
     ),
   ];
 }

@@ -117,7 +117,7 @@ git uplink reset
 git uplink status
 ```
 
-Copy Cam’s `upl_…` id. Submit of Cam is refused until each upstream-bound dependency is `submitted` or `merged`.
+Copy Cam’s `upl_…` id. Approve and submit of Cam are refused until each upstream-bound dependency is `merged` upstream.
 
 ## Export: merge the siblings first
 
