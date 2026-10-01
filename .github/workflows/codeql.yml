@@ -28,15 +28,17 @@ jobs:
           web='{"name":"javascript-typescript-web","language":"javascript-typescript","build-mode":"none","config":"./.github/codeql/web.yml","category":"/language:javascript-typescript-web"}'
           site='{"name":"javascript-typescript-site","language":"javascript-typescript","build-mode":"none","config":"./.github/codeql/site.yml","category":"/language:javascript-typescript-site"}'
           rust='{"name":"rust","language":"rust","build-mode":"none","config":"","category":"/language:rust"}'
+          python='{"name":"python-templates","language":"python","build-mode":"none","config":"./.github/codeql/templates.yml","category":"/language:python-templates"}'
+          scripts='{"name":"python-github-scripts","language":"python","build-mode":"none","config":"./.github/codeql/github-scripts.yml","category":"/language:python-github-scripts"}'
           case "$SCOPE" in
             product)
-              echo "matrix=[$web,$rust]" >>"$GITHUB_OUTPUT"
+              echo "matrix=[$web,$rust,$python,$scripts]" >>"$GITHUB_OUTPUT"
               ;;
             site)
               echo "matrix=[$site]" >>"$GITHUB_OUTPUT"
               ;;
             all)
-              echo "matrix=[$web,$site,$rust]" >>"$GITHUB_OUTPUT"
+              echo "matrix=[$web,$site,$rust,$python,$scripts]" >>"$GITHUB_OUTPUT"
               ;;
             *)
               echo "unknown scope: $SCOPE" >&2
