@@ -380,6 +380,34 @@ mod embed_tests {
     }
 
     #[test]
+    fn github_packs_install_the_contrib_commit_script_their_submit_runs() {
+        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+            let files = composed_files(forge).unwrap();
+            let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+            assert!(
+                paths.contains(&".github/uplink/contrib_commit.py"),
+                "{forge:?}: {paths:?}"
+            );
+            assert!(
+                paths
+                    .iter()
+                    .all(|p| !p.contains("__pycache__") && !p.ends_with(".pyc")),
+                "{forge:?}: {paths:?}"
+            );
+            let submit = files
+                .iter()
+                .find(|(p, _)| p == ".github/workflows/uplink-submit.yml")
+                .unwrap();
+            let text = String::from_utf8_lossy(&submit.1);
+            assert!(
+                text.contains("python3 .github/uplink/contrib_commit.py"),
+                "{forge:?}"
+            );
+            assert!(!text.contains("submit \"$PATCH_ID\" --push"), "{forge:?}");
+        }
+    }
+
+    #[test]
     fn pack_readme_is_not_installed_into_the_product_repo() {
         for forge in [Forge::Ghec, Forge::ExampleGithub] {
             let files = composed_files(forge).unwrap();
