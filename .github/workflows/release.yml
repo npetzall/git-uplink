@@ -20,6 +20,8 @@ on:
       - .github/workflows/zizmor.yml
       - .github/workflows/socket.yml
       - .github/codeql/web.yml
+      - .github/codeql/templates.yml
+      - .github/codeql/github-scripts.yml
 
 permissions: {}
 
