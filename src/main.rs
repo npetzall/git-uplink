@@ -37,7 +37,7 @@ const VERSION: &str = concat!(
     about = "Carry internal patches on upstream, contribute once, drop when merged.",
     long_about = "Developers open PRs and merge them; they never push main.\n\
 add records a merged PR as a queued patch on uplink/state. assess uses the PR\n\
-title and body as the single commit message, rewrites the export author, strips\n\
+title and body as the single commit message, adds a co-author trailer, strips\n\
 the internal section before contrib export, and scans for company affiliation.\n\
 On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment;\n\
 approve/submit run after that review. git uplink talks to git only; workflows\n\

@@ -11,8 +11,8 @@ use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::now_iso;
 use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
 use crate::types::{
-    AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, DEFAULT_EXPORT_AUTHOR, PATCH_DIR,
-    Patch, PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
+    AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, PATCH_DIR, Patch, PatchExtras,
+    PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
 };
 
 static HTML_COMMENT: LazyLock<Regex> =
@@ -109,7 +109,7 @@ pub fn parse_person(value: Option<&str>) -> Option<(String, String)> {
         return Some((caps[1].trim().to_string(), caps[2].trim().to_string()));
     }
     if value.contains('@') && !value.contains(' ') {
-        let name = value.split('@').next().unwrap_or(DEFAULT_EXPORT_AUTHOR.0);
+        let name = value.split('@').next().unwrap_or(value);
         return Some((name.to_string(), value.to_string()));
     }
     None
@@ -146,33 +146,10 @@ fn internal_domains(queue: &QueueState) -> Vec<String> {
     domains.into_iter().collect()
 }
 
-fn resolve_export_author(queue: &QueueState, internal_text: &str) -> (String, String) {
-    if let Some(caps) = EXPORT_AUTHOR_HEADER.captures(internal_text)
-        && let Some(person) = parse_person(Some(&caps[1]))
-    {
-        return person;
-    }
-    if let Some(person) = parse_person(env::var("UPLINK_EXPORT_AUTHOR").ok().as_deref()) {
-        return person;
-    }
-    (
-        queue
-            .config
-            .export_author_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(DEFAULT_EXPORT_AUTHOR.0)
-            .to_string(),
-        queue
-            .config
-            .export_author_email
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(DEFAULT_EXPORT_AUTHOR.1)
-            .to_string(),
-    )
+/// The `Uplink-Export-Author` header below the cutoff, if any.
+fn resolve_co_author(internal_text: &str) -> Option<(String, String)> {
+    let caps = EXPORT_AUTHOR_HEADER.captures(internal_text)?;
+    parse_person(Some(&caps[1]))
 }
 
 fn subject_and_body(public_text: &str, fallback: &str) -> (String, String) {
@@ -279,7 +256,11 @@ pub fn export_commit_message(patch: &Patch) -> String {
         lines.push(String::new());
         lines.push(body);
     }
-    with_trailers(&lines.join("\n"), patch)
+    let message = with_trailers(&lines.join("\n"), patch);
+    match patch.assess.as_ref().and_then(|a| a.co_author.as_deref()) {
+        Some(co_author) => format!("{message}Co-Authored-By: {co_author}\n"),
+        None => message,
+    }
 }
 
 fn format_fenced(message: &str) -> String {
@@ -883,14 +864,14 @@ pub fn assess_from_message(
     }
     let (public_text, internal_text) = split_internal_message(&stored, &marker);
     let (subject, body) = subject_and_body(&public_text, fallback);
-    let author = resolve_export_author(queue, &internal_text);
+    let co_author = resolve_co_author(&internal_text);
     let (original_author, original_email) = head_author(repo, head_ref)?;
 
     let mut checks = message_checks(
         &marker,
         &public_text,
         &internal_text,
-        &author,
+        co_author.as_ref(),
         (original_author.as_deref(), original_email.as_deref()),
     );
     if intent.is_internal_only() {
@@ -912,8 +893,12 @@ pub fn assess_from_message(
                 ":!.uplink",
             ],
         )?;
-        // The export author lands in the public commit, so it is scanned too.
-        let export_surface = format!("{} <{}>\n{subject}\n{body}\n{diff}", author.0, author.1);
+        // The co-author trailer lands in the public commit, so it is scanned too.
+        let trailer = co_author
+            .as_ref()
+            .map(|(name, email)| format!("{name} <{email}>\n"))
+            .unwrap_or_default();
+        let export_surface = format!("{trailer}{subject}\n{body}\n{diff}");
         checks.push(affiliation_check(queue, &export_surface));
         checks.extend(binary_files_check(repo, from_ref, head_ref)?);
     }
@@ -926,8 +911,7 @@ pub fn assess_from_message(
         commit_message: stored,
         public_subject: subject,
         public_body: body,
-        author_name: author.0,
-        author_email: author.1,
+        co_author: co_author.map(|(name, email)| format!("{name} <{email}>")),
         original_author,
         original_email,
         cutoff_found,
@@ -948,12 +932,12 @@ fn head_author(repo: &Path, head_ref: &str) -> Result<(Option<String>, Option<St
     Ok((name, email))
 }
 
-/// Checks on the commit message and author rewrite: message-scrubbed, cutoff-used, author-rewrite.
+/// Checks on the commit message and co-author: message-scrubbed, cutoff-used, co-author.
 fn message_checks(
     marker: &str,
     public_text: &str,
     internal_text: &str,
-    author: &(String, String),
+    co_author: Option<&(String, String)>,
     original: (Option<&str>, Option<&str>),
 ) -> Vec<AssessCheck> {
     let tickets: Vec<&str> = TICKET.find_iter(public_text).map(|m| m.as_str()).collect();
@@ -989,16 +973,21 @@ fn message_checks(
                 )
             },
         },
-        AssessCheck {
-            id: "author-rewrite".into(),
-            status: CheckStatus::Pass,
-            detail: format!(
-                "Export author {} <{}> (was {} <{}>). Company main still records the Uplink bot.",
-                author.0,
-                author.1,
-                original.0.unwrap_or("unknown"),
-                original.1.unwrap_or("")
-            ),
+        match co_author {
+            Some((name, email)) => AssessCheck {
+                id: "co-author".into(),
+                status: CheckStatus::Pass,
+                detail: format!(
+                    "Co-Authored-By: {name} <{email}> (wrote {} <{}>). The commit author is the contrib token's identity.",
+                    original.0.unwrap_or("unknown"),
+                    original.1.unwrap_or("")
+                ),
+            },
+            None => AssessCheck {
+                id: "co-author".into(),
+                status: CheckStatus::Skip,
+                detail: "No Uplink-Export-Author below the cutoff, so no Co-Authored-By trailer. The commit author is the contrib token's identity.".into(),
+            },
         },
     ]
 }
@@ -1101,8 +1090,7 @@ mod tests {
             commit_message: "Use SHA-256\n\nPublic reason.\n\n----- Uplink: internal below this line -----\n\nTicket: PROJ-1\n".into(),
             public_subject: "Use SHA-256".into(),
             public_body: "Public reason.".into(),
-            author_name: "Uplink".into(),
-            author_email: "uplink@example.com".into(),
+            co_author: None,
             original_author: None,
             original_email: None,
             cutoff_found: true,

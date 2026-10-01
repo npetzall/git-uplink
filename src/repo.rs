@@ -214,7 +214,7 @@ pub fn apply_patch_file(
     repo: &Path,
     patch: &Patch,
     patch_file_abs: &Path,
-    export_identity: bool,
+    export_message: bool,
 ) -> Result<ApplyOutcome> {
     if git_succeeds(
         repo,
@@ -244,21 +244,12 @@ pub fn apply_patch_file(
         return Ok(ApplyOutcome::Empty);
     }
 
-    let mut opts = GitOpts::default();
-    if export_identity && let Some(assess) = &patch.assess {
-        opts.extra_env = vec![
-            ("GIT_AUTHOR_NAME".into(), assess.author_name.clone()),
-            ("GIT_AUTHOR_EMAIL".into(), assess.author_email.clone()),
-            ("GIT_COMMITTER_NAME".into(), assess.author_name.clone()),
-            ("GIT_COMMITTER_EMAIL".into(), assess.author_email.clone()),
-        ];
-    }
-    let message = if export_identity {
+    let message = if export_message {
         export_commit_message(patch)
     } else {
         company_commit_message(patch)
     };
-    git(repo, &["commit", "-m", &message], opts)?;
+    git(repo, &["commit", "-m", &message], GitOpts::default())?;
     let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;
     let body = if formatted.ends_with('\n') {
         formatted
