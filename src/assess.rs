@@ -286,67 +286,94 @@ fn format_fenced(message: &str) -> String {
     format!("```\n{}\n```", message.trim_end())
 }
 
-pub fn format_assess_markdown(report: &AssessReport) -> String {
-    let checks = report
+/// Explains the report's checks and how to fix a failure.
+pub const ASSESS_DOCS_URL: &str = "https://npetzall.github.io/git-uplink/day-to-day#assess-fails";
+
+fn assessment_heading(ok: bool) -> String {
+    format!("## Upstream Assessment: {}", if ok { "✅" } else { "❌" })
+}
+
+fn check_emoji(status: CheckStatus) -> &'static str {
+    match status {
+        CheckStatus::Pass => "✅",
+        CheckStatus::Fail => "❌",
+        CheckStatus::Warn => "⚠️",
+        CheckStatus::Skip => "⏭️",
+    }
+}
+
+/// Keeps free text inside one markdown table cell.
+fn table_cell(text: &str) -> String {
+    text.trim().replace('|', "\\|").replace('\n', "<br>")
+}
+
+fn format_checks_table(report: &AssessReport) -> String {
+    let rows = report
         .checks
         .iter()
         .map(|check| {
-            let icon = match check.status {
-                CheckStatus::Fail => "FAIL",
-                other => other.as_str(),
-            };
-            format!("- **{}** ({icon}): {}", check.id, check.detail)
+            format!(
+                "| `{}` | {} | {} |",
+                check.id,
+                table_cell(&check.detail),
+                check_emoji(check.status)
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let public = if report.public_body.is_empty() {
-        report.public_subject.clone()
+    format!("### Checks\n\n| Check | Description | Result |\n| --- | --- | --- |\n{rows}\n")
+}
+
+/// The report as it appears on the PR: the public title and body as they will
+/// leave the company, then one row per check. The company commit message is
+/// deliberately left out.
+pub fn format_assess_markdown(report: &AssessReport) -> String {
+    let body = if report.public_body.trim().is_empty() {
+        "_empty_".to_string()
     } else {
-        format!("{}\n\n{}", report.public_subject, report.public_body)
-    };
-    let company = if report.commit_message.trim().is_empty() {
-        public.clone()
-    } else {
-        report.commit_message.trim().to_string()
+        format_fenced(&report.public_body)
     };
     format!(
-        "## Uplink assess-for-upstream\n\n\
-This is the contribution as it would leave the enterprise. HTML comments from the PR template are stripped. Internal lines below the cutoff stay on company main and are removed before export. Author is rewritten. Approvers can use this report instead of reconstructing the public PR by hand.\n\n\
-**Ready:** {}\n\
-**Public subject:** {}\n\
-**Export author:** {} <{}>\n\
-**Original author:** {} <{}>\n\
-**Cutoff found:** {}\n\n\
-### Company commit message\n\n\
-{}\n\n\
-### Upstream commit message\n\n\
-{}\n\n\
-### Checks\n\n\
-{checks}\n",
-        if report.ok { "yes" } else { "no" },
-        report.public_subject,
-        report.author_name,
-        report.author_email,
-        report.original_author.as_deref().unwrap_or("unknown"),
-        report.original_email.as_deref().unwrap_or(""),
-        if report.cutoff_found {
-            "yes"
-        } else {
-            "no — whole message treated as public"
-        },
-        format_fenced(&company),
-        format_fenced(&public),
+        "{heading}\n\n\
+[What this checks and how to fix a failure]({ASSESS_DOCS_URL})\n\n\
+### Public title\n\n\
+{title}\n\n\
+### Public body\n\n\
+{body}\n\n\
+{checks}",
+        heading = assessment_heading(report.ok),
+        title = report.public_subject,
+        checks = format_checks_table(report),
     )
 }
 
-pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
-    let assessment = patch
+/// The report as it appears in the contribution packet, which already shows
+/// the exact public commit message: the verdict and the checks only.
+pub fn format_assess_checks_markdown(report: &AssessReport) -> String {
+    format!(
+        "{heading}\n\n\
+[What this checks and how to fix a failure]({ASSESS_DOCS_URL})\n\n\
+{checks}",
+        heading = assessment_heading(report.ok),
+        checks = format_checks_table(report),
+    )
+}
+
+fn packet_assessment(patch: &Patch) -> String {
+    patch
         .assess
         .as_ref()
-        .map(format_assess_markdown)
+        .map(format_assess_checks_markdown)
         .unwrap_or_else(|| {
-            "## Uplink assess-for-upstream\n\nNo assess report stored. Run `git uplink assess` on the internal PR first.\n".into()
-        });
+            format!(
+                "{}\n\nNo assess report stored. Run `git uplink assess` on the internal PR first.\n",
+                assessment_heading(false)
+            )
+        })
+}
+
+pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
+    let assessment = packet_assessment(patch);
     let pr = patch
         .source
         .internal_pr_url
@@ -365,20 +392,13 @@ pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
     };
     format!(
         "# Contribution packet — {id}\n\n\
-Review this packet (the same markdown is on the Actions job summary / `GITHUB_STEP_SUMMARY`), then approve the **{env}** GitHub Environment on the waiting Actions run. That approval is the IP gate. GitHub records it in the environment deployment history and the enterprise audit log. After you approve, the same run submits to the upstream-owned private fork.\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
 | Patch | `{id}` |\n\
 | Title | {title} |\n\
-| Queue | {queue} |\n\
-| Queue status | {status} |\n\
 | Depends on | {depends} |\n\
 | Internal PR | {pr} |\n\n\
-## Commit messages that will be used\n\n\
-Company `main` keeps the cutoff and internal notes. The contribution fork does not.\n\n\
-### Company main\n\n\
-{company}\n\n\
-### Upstream contrib\n\n\
+## Upstream commit message\n\n\
 {contrib}\n\n\
 {assessment}\n\
 ## What happens when you approve the {env} environment\n\n\
@@ -389,9 +409,6 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
-        queue = "upstream",
-        status = patch.status,
-        company = format_fenced(&company_commit_message(patch)),
         contrib = format_fenced(&export_commit_message(patch)),
     )
 }
@@ -549,8 +566,6 @@ This contribution was **already IP-approved** and submitted. Review **only the d
 | --- | --- |\n\
 | Patch | `{id}` |\n\
 | Title | {title} |\n\
-| Queue | {queue} |\n\
-| Queue status | {status} |\n\
 | Amendment | {amendment} |\n\
 | Public PR | {pr} |\n\
 | Last approved at | {last_at} |\n\
@@ -558,11 +573,7 @@ This contribution was **already IP-approved** and submitted. Review **only the d
 | Last approval run | {last_run} |\n\n\
 ## Delta since last approval\n\n\
 {delta}\n\n\
-## Commit messages that will be used\n\n\
-Company `main` keeps the cutoff and internal notes. The contribution fork does not. **Upstream contrib** below is the message that will be used on the updated fork commit.\n\n\
-### Company main\n\n\
-{company}\n\n\
-### Upstream contrib\n\n\
+## Upstream commit message\n\n\
 {contrib}\n\n\
 ## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
@@ -573,9 +584,6 @@ Company `main` keeps the cutoff and internal notes. The contribution fork does n
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
-        queue = "upstream",
-        status = patch.status,
-        company = format_fenced(&company_commit_message(patch)),
         contrib = format_fenced(&export_commit_message(patch)),
     ))
 }
@@ -1083,6 +1091,113 @@ pub fn assert_assess_ok(report: &AssessReport, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn report(ok: bool, checks: Vec<AssessCheck>) -> AssessReport {
+        AssessReport {
+            at: "2026-10-01T00:00:00.000Z".into(),
+            ok,
+            commit_message: "Use SHA-256\n\nPublic reason.\n\n----- Uplink: internal below this line -----\n\nTicket: PROJ-1\n".into(),
+            public_subject: "Use SHA-256".into(),
+            public_body: "Public reason.".into(),
+            author_name: "Uplink".into(),
+            author_email: "uplink@example.com".into(),
+            original_author: None,
+            original_email: None,
+            cutoff_found: true,
+            checks,
+        }
+    }
+
+    fn check(id: &str, status: CheckStatus, detail: &str) -> AssessCheck {
+        AssessCheck {
+            id: id.into(),
+            status,
+            detail: detail.into(),
+        }
+    }
+
+    #[test]
+    fn assess_markdown_shows_public_text_and_a_checks_table() {
+        let markdown = format_assess_markdown(&report(
+            true,
+            vec![
+                check("message-scrubbed", CheckStatus::Pass, "Scrubbed."),
+                check("binary-files", CheckStatus::Warn, "logo.png"),
+                check("affiliation-leak", CheckStatus::Skip, "Skipped."),
+            ],
+        ));
+        assert!(
+            markdown.starts_with("## Upstream Assessment: ✅\n"),
+            "{markdown}"
+        );
+        assert!(markdown.contains(ASSESS_DOCS_URL), "{markdown}");
+        assert!(
+            markdown.contains("### Public title\n\nUse SHA-256\n"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("### Public body\n\n```\nPublic reason.\n```"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("| Check | Description | Result |\n| --- | --- | --- |\n"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("| `message-scrubbed` | Scrubbed. | ✅ |"));
+        assert!(markdown.contains("| `binary-files` | logo.png | ⚠️ |"));
+        assert!(markdown.contains("| `affiliation-leak` | Skipped. | ⏭️ |"));
+        assert!(
+            !markdown.contains("PROJ-1") && !markdown.contains("internal below"),
+            "the company commit message must not be shown\n{markdown}"
+        );
+        assert!(!markdown.contains("Export author"), "{markdown}");
+    }
+
+    #[test]
+    fn assess_markdown_marks_failures_and_escapes_table_cells() {
+        let markdown = format_assess_markdown(&report(
+            false,
+            vec![check(
+                "affiliation-leak",
+                CheckStatus::Fail,
+                "Found acme | internal\nin tests",
+            )],
+        ));
+        assert!(
+            markdown.starts_with("## Upstream Assessment: ❌\n"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("| `affiliation-leak` | Found acme \\| internal<br>in tests | ❌ |"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn packet_assessment_shows_checks_without_public_text() {
+        let markdown = format_assess_checks_markdown(&report(
+            true,
+            vec![check("message-scrubbed", CheckStatus::Pass, "Scrubbed.")],
+        ));
+        assert!(
+            markdown.starts_with("## Upstream Assessment: ✅\n"),
+            "{markdown}"
+        );
+        assert!(markdown.contains(ASSESS_DOCS_URL), "{markdown}");
+        assert!(markdown.contains("| `message-scrubbed` | Scrubbed. | ✅ |"));
+        assert!(!markdown.contains("### Public"), "{markdown}");
+    }
+
+    #[test]
+    fn assess_markdown_marks_an_empty_public_body() {
+        let mut empty = report(true, Vec::new());
+        empty.public_body = String::new();
+        let markdown = format_assess_markdown(&empty);
+        assert!(
+            markdown.contains("### Public body\n\n_empty_\n"),
+            "{markdown}"
+        );
+    }
 
     #[test]
     fn domain_hits_ignore_case() {
