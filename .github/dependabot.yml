@@ -38,6 +38,8 @@ updates:
       - "/"
       - "/templates/example-github/.github/workflows"
       - "/templates/github/actions/install-git-uplink"
+      - "/templates/github/actions/uplink-assessment-hook"
+      - "/templates/github/workflows"
       - "/templates/ghec/.github/workflows"
     schedule:
       interval: "weekly"
