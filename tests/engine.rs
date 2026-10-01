@@ -5714,6 +5714,64 @@ fn exports_no_co_author_trailer_without_an_export_author_header() {
 }
 
 #[test]
+fn refuses_approve_and_submit_until_an_upstream_dependency_is_merged() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let first = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/flag"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "FLAG.md", "flag\n");
+    commit_all(company, "add flag");
+    let second = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add flag".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![first.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    approve_patch(company, &first.id).unwrap();
+    submit_patch(company, &first.id).unwrap();
+    let err = approve_patch(company, &second.id).unwrap_err();
+    assert!(err.to_string().contains("not merged upstream"), "{err}");
+    let err = submit_patch(company, &second.id).unwrap_err();
+    assert!(err.to_string().contains("not merged upstream"), "{err}");
+
+    mark_merged(company, &first.id, MergeVia::Manual, None).unwrap();
+    approve_patch(company, &second.id).unwrap();
+    let submitted = submit_patch(company, &second.id).unwrap();
+    let parent = git_ok(company, &["rev-parse", &format!("{}^", submitted.branch)]).unwrap();
+    assert_eq!(parent.trim(), rev_of(company, "uplink/upstream"));
+}
+
+#[test]
 fn reads_a_queue_with_legacy_export_author_fields() {
     let world = setup_world();
     let company = &world.company;

@@ -18,6 +18,7 @@ pub fn approve_patch_at(
                     "{id} is internal-only and cannot be approved for upstream."
                 )));
             }
+            super::submit::ensure_upstream_deps_merged(&queue, get_patch(&queue, id)?, "Approve")?;
             let patch = get_patch_mut(&mut queue, id)?;
             if patch.assess.as_ref().is_some_and(|p| !p.ok) {
                 return Err(Error::msg(format!(
