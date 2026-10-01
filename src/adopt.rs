@@ -461,6 +461,7 @@ fn adopted_patch(
         merged: None,
         conflict: None,
         approvals: Vec::new(),
+        extras: None,
         events: Vec::new(),
         kind: None,
     };

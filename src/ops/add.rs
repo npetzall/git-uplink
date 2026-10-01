@@ -13,9 +13,18 @@ pub struct AddPatchOpts {
     pub internal_pr_number: Option<u64>,
     pub internal_pr_url: Option<String>,
     pub preflight_command: Option<String>,
+    /// Company assessment-hook extras to store with the patch.
+    pub extra_dir: Option<PathBuf>,
+    /// Where the extras came from, such as the hook run URL.
+    pub extra_source: Option<String>,
 }
 
 pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
+    if opts.extra_dir.is_some() && opts.internal_only {
+        return Err(Error::msg(
+            "--extra-dir applies to upstream-bound patches; internal-only patches have no contribution packet",
+        ));
+    }
     let queued = read_queue_file(repo)?;
     let head_ref = opts.head_ref.as_deref().unwrap_or("HEAD");
     let from_ref = opts
@@ -94,6 +103,12 @@ pub(super) fn add_patch_once(
         let _ = fs::remove_file(&candidate_abs);
         return Err(err);
     }
+    if let Some(dir) = &opts.extra_dir
+        && let Err(err) = store_extras(repo, &mut patch, dir, opts.extra_source.clone())
+    {
+        let _ = fs::remove_file(&candidate_abs);
+        return Err(err);
+    }
 
     let rebuild = !opts.internal_only && queue.internal.iter().any(is_active);
     queue.push_patch(patch, opts.internal_only);
@@ -129,6 +144,7 @@ fn new_queued_patch(opts: &AddPatchOpts, depends_on: Vec<String>) -> Patch {
         merged: None,
         conflict: None,
         approvals: Vec::new(),
+        extras: None,
         events: Vec::new(),
         kind: None,
     }

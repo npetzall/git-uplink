@@ -12,6 +12,7 @@ git uplink init [--upstream <url>] [--contrib <url>] [--forge ghec|example-githu
 git uplink add --title <text> [--message <text> | --message-file <path>]
             [--from <ref>] [--head <ref>] [--internal-only]
             [--pr <n>] [--pr-url <url>] [--depends-on <id>]...
+            [--extra-dir <path> [--extra-source <url>]]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
@@ -21,7 +22,8 @@ git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
 git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
             [--internal-only]
-git uplink report <id> [--out <file>] [--extra-dir <path>]
+git uplink report <id> [--out <file>]
+            [--extra-dir <path> [--store-extras [--extra-source <url>]]]
 git uplink status [--json]
 git uplink doctor [--json]
 git uplink approve <id> [--out <file>]
@@ -89,6 +91,7 @@ git uplink rebuild --push
 - `--title` is the queue entry name.
 - `--message` / `--message-file` is the single commit message stored on the patch (PR title, blank line, PR body). HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message.
 - `Uplink-Depends-On: upl_…` lines in that message (after HTML comments are stripped) become `dependsOn`. `--depends-on` is an optional overlay.
+- `--extra-dir` stores the `*.md` company assessment-hook extras with an upstream-bound patch under `.uplink/reports/<id>/extras/`, and `--extra-source` records where they came from. Import passes the result from the PR checks when it matches what was merged.
 
 Merge lands the change on `main`; import records the patch on `uplink/state` (`upstream[]` by default, `internal[]` with `uplink:internal-only`).
 
@@ -105,7 +108,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 
 - **`preflight`** applies a change onto public `main` plus its declared dependencies. Incoming preflight reads `Uplink-Depends-On` trailers from `--message` / `--message-file`.
 - **`assess`** checks the message, cutoff, author, and affiliation of a change.
-- **`report <id>`** writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`. `--extra-dir` prepends company assessment-hook extras.
+- **`report <id>`** writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`. Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). `--extra-dir` prepends those files instead, and `--store-extras` also stores them for later packets. Submit runs the hook from branch `uplink/hooks` only when nothing current is stored (see `.github/uplink-assessment-hook.md`); a failed hook adds a warning note instead of failing submit, and is not stored.
 - **`status`** shows the queue (`--json` for machines).
 - **`doctor`** checks the setup of this clone: queue and recorded URLs, remotes and whether upstream and contrib are reachable, `origin/uplink/state`, the forge tooling patch and workflows on the company branch, `UPLINK_*` credentials, pending adoption, and the company branch against `uplink/upstream`. `--json` prints the report. Credential checks fail on a machine without the `UPLINK_*` variables; that is expected outside CI.
 

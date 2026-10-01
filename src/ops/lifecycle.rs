@@ -357,6 +357,27 @@ pub fn record_gated_pr(
     })
 }
 
+/// Stores company assessment-hook extras for patch `id` on `uplink/state` and
+/// marks them fresh for its current content. The packet reuses them until the
+/// patch changes.
+pub fn store_patch_extras(
+    repo: &Path,
+    id: &str,
+    dir: &Path,
+    source: Option<String>,
+) -> Result<Patch> {
+    with_queue_lock(repo, || {
+        let mut queue = read_queue_file(repo)?;
+        let patch = get_patch_mut(&mut queue, id)?;
+        store_extras(repo, patch, dir, source)?;
+        add_event(patch, "extras", "Stored company assessment-hook extras");
+        let patch = patch.clone();
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, &format!("uplink: store assessment extras {id}"))?;
+        Ok(patch)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

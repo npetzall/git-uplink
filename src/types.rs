@@ -272,6 +272,18 @@ pub struct PatchApproval {
     pub run_url: Option<String>,
 }
 
+/// Company assessment-hook extras stored on `uplink/state` under
+/// `.uplink/reports/<id>/extras/`. They are reused for the packet while the
+/// patch content still matches `patch_id_stable`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchExtras {
+    pub at: String,
+    pub patch_id_stable: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchMerged {
@@ -388,6 +400,8 @@ pub struct Patch {
     pub conflict: Option<PatchConflict>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approvals: Vec<PatchApproval>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<PatchExtras>,
     pub events: Vec<PatchEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,

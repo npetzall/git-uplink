@@ -126,6 +126,7 @@ fn new_tooling_patch(id: &str, forge: Forge, stable: String, assess: AssessRepor
         merged: None,
         conflict: None,
         approvals: Vec::new(),
+        extras: None,
         events: Vec::new(),
         kind: Some(TOOLING_PATCH_KIND.into()),
     };
