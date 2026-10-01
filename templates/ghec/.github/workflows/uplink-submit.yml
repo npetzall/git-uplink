@@ -11,7 +11,9 @@
 #
 # Empty UPLINK_*_AUTH defaults to app.
 # Origin reads and uplink/state fast-forwards use the Actions token
-# (UPLINK_INTERNAL_TOKEN). Contrib force-push mints UPLINK_CONTRIB_*.
+# (UPLINK_INTERNAL_TOKEN). The contrib commit is created through the Git
+# Database API with UPLINK_CONTRIB_* (contents write on the fork); GitHub signs
+# it, and it is Verified only for a GitHub App token.
 # The public pull request is POST /repos/{parent}/pulls with UPLINK_UPSTREAM_*
 # (contents read on the parent and the fork, pull requests write, no contents
 # write on the fork) and maintainer_can_modify false. head is the branch
@@ -246,7 +248,13 @@ jobs:
         run: |
           receipt=$(git uplink approve "$PATCH_ID")
           printf '%s\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
-          submit_json=$(git uplink submit "$PATCH_ID" --push)
+          submit_json=$(git uplink submit "$PATCH_ID")
+          # GitHub creates the contrib commit (Git Database API) and signs it.
+          # It shows as Verified only when UPLINK_CONTRIB_* is a GitHub App token.
+          contrib_json=$(CONTRIB_COMMIT=$(jq -c .contribCommit <<<"$submit_json") \
+            CONTRIB_REPO="$HEAD_REPO" python3 .github/uplink/contrib_commit.py)
+          printf 'Contrib commit %s (verified: %s)\n' \
+            "$(jq -r .sha <<<"$contrib_json")" "$(jq -r .verified <<<"$contrib_json")" >> "$GITHUB_STEP_SUMMARY"
 
           repo=$(jq -r '.gh.prCreate.repo // empty' <<<"$submit_json")
           head=$(jq -r '.gh.prCreate.head // empty' <<<"$submit_json")
