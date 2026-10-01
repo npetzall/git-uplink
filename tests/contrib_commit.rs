@@ -580,3 +580,14 @@ fn fails_without_touching_the_branch_when_the_token_is_rejected() {
         world.base
     );
 }
+
+#[test]
+fn refuses_a_plain_http_api_url_that_is_not_loopback() {
+    let world = world();
+    let out = run_script(&world, "http://api.example.test", TOKEN);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("GITHUB_API_URL must be https"),
+        "{out:?}"
+    );
+}

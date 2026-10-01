@@ -1,0 +1,17 @@
+# Python in this repo: the forge pack's contrib commit script and the
+# release version helpers. Standard library only.
+target-version = "py310"
+
+[lint]
+select = [
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes
+  "I",   # import order
+  "B",   # bugbear
+  "UP",  # pyupgrade
+  "S",   # bandit (security)
+  "SIM", # simplify
+]
+# The formatter owns line length; it leaves long strings intact by design.
+ignore = ["E501"]

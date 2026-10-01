@@ -35,12 +35,16 @@ def update_cargo_toml(text: str, version: str) -> str:
         )
     match = matches[0]
     ending = "\r" if match.group(0).endswith("\r") else ""
-    return text[: match.start()] + f'version = "{version}"{ending}' + text[match.end() :]
+    return (
+        text[: match.start()] + f'version = "{version}"{ending}' + text[match.end() :]
+    )
 
 
 def update_cargo_lock(text: str, version: str) -> str:
     lines = text.splitlines(keepends=True)
-    starts = [index for index, line in enumerate(lines) if line.strip() == "[[package]]"]
+    starts = [
+        index for index, line in enumerate(lines) if line.strip() == "[[package]]"
+    ]
     replacements = []
     for index, start in enumerate(starts):
         end = starts[index + 1] if index + 1 < len(starts) else len(lines)

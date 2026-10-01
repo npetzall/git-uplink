@@ -20,6 +20,9 @@ on:
       - .github/workflows/zizmor.yml
       - .github/workflows/socket.yml
       - .github/codeql/web.yml
+      - .github/*.py
+      - .pre-commit-config.yaml
+      - ruff.toml
 
 permissions: {}
 
