@@ -163,13 +163,13 @@ sequenceDiagram
 const SUBMIT_CHART = `
 sequenceDiagram
   actor Op as Operator
-  participant Packet as packet + finalize jobs
+  participant Packet as extras + packet jobs
   participant Env as to-upstream
   participant Submit as submit job
   participant Fork as contribution fork
   participant Up as upstream
   Op->>Packet: dispatch Uplink submit (id)
-  Packet->>Packet: git uplink report (optional assessment hook extras)
+  Packet->>Packet: git uplink report (extras stored at import, else run the hook)
   Packet->>Submit: needs
   Submit->>Env: wait for IP reviewer
   Env-->>Submit: approved

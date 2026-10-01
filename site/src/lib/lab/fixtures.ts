@@ -160,6 +160,8 @@ export function ttl() {
 
 export const TOOLING_FILES: SimFileMap = {
   ".github/pull_request_template.md": "<!-- installed by git uplink init --forge ghec -->\n",
+  ".github/workflows/uplink-assessment-hook.yml":
+    "# Placeholder: the real hook lives on uplink/hooks.\nname: Uplink assessment hook\n",
 };
 
 export const TOOLING_PATCH: SimPatch = {

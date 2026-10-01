@@ -680,6 +680,12 @@ function RulesetList() {
         branch. Product workflows stay editable. Bypass: the internal App. Sample:{" "}
         <a href={`${GITHUB_BLOB}/templates/github/uplink-pack-files-ruleset.json`}>uplink-pack-files-ruleset.json</a>.
       </li>
+      <li>
+        <strong>Uplink: hooks branch</strong> (<code>uplink/hooks</code>): pull request with one approval, no deletion or
+        force-push. The assessment hook on this branch runs during every submit. Bypass: GitHub Actions, so the
+        placeholder workflow can update <code>assessment-hook.md</code>. Sample:{" "}
+        <a href={`${GITHUB_BLOB}/templates/github/uplink-hooks-ruleset.json`}>uplink-hooks-ruleset.json</a>.
+      </li>
     </ul>
   );
 }

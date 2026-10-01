@@ -38,7 +38,7 @@ Reset all three repos at the start of each story: **Actions → Reset example** 
 | [04 — Upstream conflict](stories/04-upstream-conflict.md) | Sync conflict gated PR, work on `-work`, merge, rebuild |
 | [05 — Cam on two siblings](stories/05-cam-two-deps.md) | Cam depends on Asha and Ben; wait until both merge before submitting Cam |
 | [06 — Internal-only](stories/06-internal-only.md) | Telemetry patch never goes through to-upstream / submit |
-| [07 — Assessment hook](stories/07-assessment-hook.md) | Internal-only uplink-assessment-hook.yml; extras prepended on Asha’s packet |
+| [07 — Assessment hook](stories/07-assessment-hook.md) | Hook on uplink/hooks; one updated PR comment; extras stored at import and reused at submit |
 
 ## Layout
 

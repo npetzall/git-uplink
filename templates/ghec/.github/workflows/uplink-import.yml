@@ -14,6 +14,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  actions: read
 
 jobs:
   import:
@@ -59,16 +60,35 @@ jobs:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: |
           git uplink init
-          extra=""
-          if [ "$INTERNAL_ONLY" = "true" ]; then extra="--internal-only"; fi
+          extra=()
+          if [ "$INTERNAL_ONLY" = "true" ]; then extra+=(--internal-only); fi
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
+          # Keep the company assessment-hook result from the PR checks when it
+          # was made for exactly what was merged (head commit, title, body).
+          # Otherwise submit runs the hook again.
+          if [ "$INTERNAL_ONLY" != "true" ]; then
+            fingerprint=$({ printf '%s\n' "$HEAD_SHA"; cat /tmp/uplink-msg.txt; } | sha256sum | cut -c1-16)
+            runs=$(gh run list --workflow uplink-pr.yml --commit "$HEAD_SHA" --status completed \
+              --limit 10 --json databaseId,createdAt \
+              --jq 'sort_by(.createdAt) | reverse | .[].databaseId' || true)
+            for run in $runs; do
+              dir="$RUNNER_TEMP/uplink-assessment-${run}"
+              gh run download "$run" -n uplink-assessment -D "$dir" 2>/dev/null || continue
+              [ "$(cat "$dir/fingerprint" 2>/dev/null)" = "$fingerprint" ] || continue
+              if [ "$(cat "$dir/hook-status")" = "success" ] && [ -d "$dir/extras" ]; then
+                extra+=(--extra-dir "$dir/extras" --extra-source "$(cat "$dir/hook-run-url")")
+                echo "Storing company extras from PR check run ${run}."
+              fi
+              break
+            done
+          fi
           set +e
           git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" --head "$HEAD_SHA" \
-            --pr "$PR_NUMBER" --pr-url "$PR_URL" $extra > /tmp/uplink-add.out
+            --pr "$PR_NUMBER" --pr-url "$PR_URL" "${extra[@]}" > /tmp/uplink-add.out
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then

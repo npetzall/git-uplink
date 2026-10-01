@@ -61,7 +61,7 @@ export function assessCi(title: string, extra = ""): LabOperation {
       "git uplink init",
       `git uplink assess --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
     ],
-    "Runs when the internal PR is opened or updated. Skipped for uplink:internal-only.",
+    "Runs when the internal PR is opened or updated, with the optional assessment hook (pr). One PR comment, updated in place. Skipped for uplink:internal-only.",
   );
 }
 
@@ -89,7 +89,13 @@ export function importOps(opts: {
     ...(opts.internalOnly
       ? []
       : [assessCi(opts.title), preflightCi(opts.title)]),
-    ciJob("Uplink import", ["git uplink init", add, publish], "Runs after the internal PR is merged."),
+    ciJob(
+      "Uplink import",
+      ["git uplink init", add, publish],
+      opts.internalOnly
+        ? "Runs after the internal PR is merged."
+        : "Runs after the internal PR is merged. Adds --extra-dir with the PR check's hook extras when they match the merged head, title, and body.",
+    ),
   ];
 }
 
@@ -103,13 +109,13 @@ export function submitOps(id: string): LabOperation[] {
     ]),
     ciJob(
       "Uplink submit",
-      ["git uplink init", `git uplink report ${id}`],
-      "Dispatch Uplink submit from company main. Packet job; no environment secrets yet.",
+      [`gh workflow run uplink-assessment-hook.yml --ref uplink/hooks -f patch=${id}`],
+      "Dispatch Uplink submit from company main. Extras job, without the queue lock: extras stored at import are reused while the patch is unchanged; otherwise the optional hook runs. A failed hook is noted in the packet, not fatal, and not stored.",
     ),
     ciJob(
       "Uplink submit",
-      ["git uplink init", `git uplink report ${id} --extra-dir <artifact>`],
-      "Finalize: optional uplink-assessment-hook.yml; extras prepended. Skipped if the file is absent.",
+      ["git uplink init", `git uplink report ${id} --extra-dir <artifact> --store-extras`],
+      "Packet job, under uplink-mutate: writes assessment.md once, extras first. No environment secrets yet.",
     ),
     ciJob(
       "Uplink submit",

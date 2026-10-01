@@ -9,9 +9,11 @@
 # then UPLINK_PREFLIGHT. Fail these instead of opening a contribution
 # later that leaks company text or is missing queued work from main.
 #
-# Company extras for the IP packet are not collected here (no patch id
-# yet). Add `.github/workflows/uplink-assessment-hook.yml` and see
-# templates/ghec/README.md "Assessment hook".
+# Assess also runs the optional company assessment hook from branch
+# uplink/hooks (see .github/uplink-assessment-hook.md). Both results go into
+# one PR comment that is updated in place on every run, and into artifact
+# uplink-assessment, which import stores with the patch. A failed hook is
+# noted in the comment; it does not fail the check.
 #
 # Put both job names in the required status checks for the PR.
 # This workflow does not write uplink/state (not uplink-mutate).
@@ -39,6 +41,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,9 +56,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Assess contribution
+        id: assess
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
           UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
@@ -64,24 +66,89 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -euo pipefail
           git uplink init
+          out="$RUNNER_TEMP/uplink-assessment"
+          mkdir -p "$out"
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
-          } > /tmp/uplink-msg.txt
-          set +e
+          } > "$RUNNER_TEMP/uplink-msg.txt"
+          # Import recomputes this from the merged PR to decide whether the
+          # stored result still matches what was merged.
+          { printf '%s\n' "$HEAD_SHA"; cat "$RUNNER_TEMP/uplink-msg.txt"; } | sha256sum | cut -c1-16 > "$out/fingerprint"
+          code=0
           git uplink assess \
             --title "$TITLE" \
-            --message-file /tmp/uplink-msg.txt \
+            --message-file "$RUNNER_TEMP/uplink-msg.txt" \
             --from "$FROM_SHA" \
-            --head "$HEAD_SHA" > /tmp/uplink-assess.md
-          code=$?
-          set -e
-          printf '%s\n' "$(cat /tmp/uplink-assess.md)" >> "$GITHUB_STEP_SUMMARY"
-          gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-assess.md
-          exit "$code"
+            --head "$HEAD_SHA" > "$RUNNER_TEMP/uplink-assess.md" || code=$?
+          printf '%s\n' "$(cat "$RUNNER_TEMP/uplink-assess.md")" >> "$GITHUB_STEP_SUMMARY"
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+      - name: Run company assessment hook
+        id: hook
+        uses: $/.github/actions/uplink-assessment-hook
+        with:
+          pr: ${{ github.event.pull_request.number }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update the assessment comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HOOK_STATUS: ${{ steps.hook.outputs.status }}
+          HOOK_DIR: ${{ steps.hook.outputs.dir }}
+          HOOK_RUN_URL: ${{ steps.hook.outputs.run_url }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/uplink-assessment"
+          mkdir -p "$out/extras"
+          find "$HOOK_DIR" -maxdepth 1 -type f -name '*.md' -exec cp {} "$out/extras/" \;
+          printf '%s\n' "$HOOK_STATUS" > "$out/hook-status"
+          printf '%s\n' "$HOOK_RUN_URL" > "$out/hook-run-url"
+          marker='<!-- uplink:assessment -->'
+          {
+            echo "$marker"
+            echo "<!-- uplink:fingerprint $(cat "$out/fingerprint") hook=${HOOK_STATUS} -->"
+            extras=$(find "$out/extras" -maxdepth 1 -type f -name '*.md' | sort)
+            if [ -n "$extras" ]; then
+              while IFS= read -r file; do
+                cat "$file"
+                echo
+              done <<<"$extras"
+              echo "---"
+              echo
+            fi
+            cat "$RUNNER_TEMP/uplink-assess.md"
+          } > "$RUNNER_TEMP/uplink-comment.md"
+          # One comment per PR, updated in place on every run.
+          id=$(gh api --paginate "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | .id" \
+            | head -n 1)
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/${GH_REPO}/issues/comments/${id}" \
+              -F "body=@${RUNNER_TEMP}/uplink-comment.md" > /dev/null
+          else
+            gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+              -F "body=@${RUNNER_TEMP}/uplink-comment.md" > /dev/null
+          fi
+
+      # Import stores these extras with the patch when the fingerprint still
+      # matches the merged PR, so submit need not run the hook again.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: uplink-assessment
+          path: ${{ runner.temp }}/uplink-assessment/
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Report assess result
+        env:
+          CODE: ${{ steps.assess.outputs.code }}
+        run: exit "$CODE"
 
   preflight:
     name: Uplink upstream preflight
@@ -115,20 +182,30 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -euo pipefail
           git uplink init
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
-          set +e
+          code=0
           git uplink preflight \
             --title "$TITLE" \
             --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" \
-            --head "$HEAD_SHA" > /tmp/uplink-preflight.md
-          code=$?
-          set -e
-          if [ "$code" -ne 0 ]; then
-            gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-preflight.md
-            exit "$code"
+            --head "$HEAD_SHA" > /tmp/uplink-preflight.md || code=$?
+          # One comment per PR, updated in place. A pass only updates an
+          # earlier failure comment; it does not post a new one.
+          marker='<!-- uplink:preflight -->'
+          id=$(gh api --paginate "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | .id" \
+            | head -n 1)
+          { echo "$marker"; cat /tmp/uplink-preflight.md; } > /tmp/uplink-preflight-comment.md
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/${GH_REPO}/issues/comments/${id}" \
+              -F "body=@/tmp/uplink-preflight-comment.md" > /dev/null
+          elif [ "$code" -ne 0 ]; then
+            gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+              -F "body=@/tmp/uplink-preflight-comment.md" > /dev/null
           fi
+          exit "$code"
