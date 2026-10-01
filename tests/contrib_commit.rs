@@ -118,6 +118,108 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "bad token").into_response()
 }
 
+// Request values are validated, then reach git only through stdin
+// (`cat-file --batch-check`, `update-ref --stdin`, `update-index --index-info`).
+// A command that needs an object name as an argument gets a fixed scratch ref
+// pointing at it, so git's argv never holds request data.
+
+/// A full lowercase hex object id.
+fn valid_oid(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A branch ref: `refs/heads/` then `[A-Za-z0-9._-]` segments, no `..`.
+fn valid_branch_ref(value: &str) -> bool {
+    let Some(name) = value.strip_prefix("refs/heads/") else {
+        return false;
+    };
+    !name.contains("..")
+        && name.split('/').all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with(['-', '.'])
+                && segment
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        })
+}
+
+/// A relative tree path with no control characters or `.`/`..` segments.
+fn valid_tree_path(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && !value.chars().any(char::is_control)
+        && value
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
+
+fn valid_mode(value: &str) -> bool {
+    matches!(value, "100644" | "100755" | "120000" | "160000" | "040000")
+}
+
+/// The API's answer to a malformed request.
+fn invalid(what: &str) -> Response {
+    (StatusCode::UNPROCESSABLE_ENTITY, format!("Invalid {what}")).into_response()
+}
+
+/// Runs git in the bare repo with `input` on stdin. Callers pass a constant argv.
+fn git_stdin(bare: &Path, args: &[&str], envs: &[(&str, &Path)], input: &[u8]) -> Output {
+    use std::io::Write as _;
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(bare)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    let mut child = cmd.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn expect_ok(args: &[&str], out: Output) -> String {
+    assert!(
+        out.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+/// True when `rev` (a validated object id or ref, optionally `^{type}`) resolves.
+fn object_exists(bare: &Path, rev: &str) -> bool {
+    let args = ["cat-file", "--batch-check"];
+    let line = expect_ok(
+        &args,
+        git_stdin(bare, &args, &[], format!("{rev}\n").as_bytes()),
+    );
+    !line.ends_with(" missing") && !line.ends_with(" ambiguous")
+}
+
+/// Applies `update-ref --stdin` commands atomically; false when git refuses them.
+fn update_refs(bare: &Path, commands: &str) -> bool {
+    git_stdin(bare, &["update-ref", "--stdin"], &[], commands.as_bytes())
+        .status
+        .success()
+}
+
+/// Points a fixed scratch ref at a validated `oid`, for commands that need a name.
+fn pin(bare: &Path, scratch: &str, oid: &str) {
+    assert!(
+        update_refs(bare, &format!("update {scratch} {oid}\n")),
+        "cannot pin {oid}"
+    );
+}
+
 async fn get_commit(
     State(fake): State<Fake>,
     headers: HeaderMap,
@@ -127,10 +229,10 @@ async fn get_commit(
         return unauthorized();
     }
     fake.record("GET", format!("commits/{sha}"), Value::Null);
-    if try_git(
-        &fake.bare,
-        &["cat-file", "-e", &format!("{sha}^{{commit}}")],
-    ) {
+    if !valid_oid(&sha) {
+        return invalid("commit sha");
+    }
+    if object_exists(&fake.bare, &format!("{sha}^{{commit}}")) {
         Json(json!({ "sha": sha })).into_response()
     } else {
         (StatusCode::NOT_FOUND, "Not Found").into_response()
@@ -146,15 +248,18 @@ async fn post_blob(
         return unauthorized();
     }
     fake.record("POST", "blobs".into(), body.clone());
-    assert_eq!(body["encoding"], "base64");
-    let content = decode_base64(body["content"].as_str().unwrap());
-    let sha = String::from_utf8(run_git(
-        &fake.bare,
-        &["hash-object", "-w", "--stdin"],
-        Some(&content),
-    ))
-    .unwrap();
-    (StatusCode::CREATED, Json(json!({ "sha": sha.trim() }))).into_response()
+    if body["encoding"] != "base64" {
+        return invalid("encoding");
+    }
+    let Some(content) = body["content"].as_str() else {
+        return invalid("content");
+    };
+    let args = ["hash-object", "-w", "--stdin"];
+    let sha = expect_ok(
+        &args,
+        git_stdin(&fake.bare, &args, &[], &decode_base64(content)),
+    );
+    (StatusCode::CREATED, Json(json!({ "sha": sha }))).into_response()
 }
 
 async fn post_tree(
@@ -166,45 +271,45 @@ async fn post_tree(
         return unauthorized();
     }
     fake.record("POST", "trees".into(), body.clone());
+    let Some(base_tree) = body["base_tree"].as_str().filter(|v| valid_oid(v)) else {
+        return invalid("base_tree");
+    };
+    let Some(entries) = body["tree"].as_array() else {
+        return invalid("tree");
+    };
+    // `<mode> <sha>\t<path>` records, NUL-terminated; mode 0 removes the path.
+    let mut records = Vec::new();
+    for entry in entries {
+        let Some(path) = entry["path"].as_str().filter(|v| valid_tree_path(v)) else {
+            return invalid("tree path");
+        };
+        let record = match (&entry["sha"], entry["mode"].as_str()) {
+            (Value::Null, _) => format!("0 {}\t{path}", "0".repeat(40)),
+            (Value::String(sha), Some(mode)) if valid_oid(sha) && valid_mode(mode) => {
+                format!("{mode} {sha}\t{path}")
+            }
+            _ => return invalid("tree entry"),
+        };
+        records.extend_from_slice(record.as_bytes());
+        records.push(0);
+    }
+
     // A scratch index and empty work tree; update-index refuses a bare repo.
     let scratch = tempfile::tempdir().unwrap();
-    let index_path = scratch.path().join("index").to_str().unwrap().to_string();
-    let with_index = |args: &[&str]| {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(&fake.bare)
-            .env("GIT_INDEX_FILE", &index_path)
-            .env("GIT_DIR", &fake.bare)
-            .env("GIT_WORK_TREE", scratch.path())
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8(out.stdout).unwrap()
-    };
-    with_index(&["read-tree", body["base_tree"].as_str().unwrap()]);
-    for entry in body["tree"].as_array().unwrap() {
-        let path = entry["path"].as_str().unwrap();
-        match entry["sha"].as_str() {
-            None => {
-                with_index(&["update-index", "--force-remove", path]);
-            }
-            Some(sha) => {
-                let mode = entry["mode"].as_str().unwrap();
-                with_index(&[
-                    "update-index",
-                    "--add",
-                    "--cacheinfo",
-                    &format!("{mode},{sha},{path}"),
-                ]);
-            }
-        }
-    }
-    let sha = with_index(&["write-tree"]);
-    (StatusCode::CREATED, Json(json!({ "sha": sha.trim() }))).into_response()
+    let index = scratch.path().join("index");
+    let envs = [
+        ("GIT_INDEX_FILE", index.as_path()),
+        ("GIT_DIR", fake.bare.as_path()),
+        ("GIT_WORK_TREE", scratch.path()),
+    ];
+    pin(&fake.bare, "refs/fake/base-tree", base_tree);
+    let args = ["read-tree", "refs/fake/base-tree"];
+    expect_ok(&args, git_stdin(&fake.bare, &args, &envs, b""));
+    let args = ["update-index", "-z", "--index-info"];
+    expect_ok(&args, git_stdin(&fake.bare, &args, &envs, &records));
+    let args = ["write-tree"];
+    let sha = expect_ok(&args, git_stdin(&fake.bare, &args, &envs, b""));
+    (StatusCode::CREATED, Json(json!({ "sha": sha }))).into_response()
 }
 
 async fn post_commit(
@@ -216,21 +321,29 @@ async fn post_commit(
         return unauthorized();
     }
     fake.record("POST", "commits".into(), body.clone());
-    let mut args = vec![
-        "commit-tree".to_string(),
-        body["tree"].as_str().unwrap().into(),
-    ];
-    for parent in body["parents"].as_array().unwrap() {
-        args.push("-p".into());
-        args.push(parent.as_str().unwrap().into());
-    }
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let message = body["message"].as_str().unwrap().as_bytes().to_vec();
-    let sha = String::from_utf8(run_git(&fake.bare, &args, Some(&message))).unwrap();
+    let Some(tree) = body["tree"].as_str().filter(|v| valid_oid(v)) else {
+        return invalid("tree");
+    };
+    // The script always sends exactly one parent, the upstream base.
+    let Some(parent) = body["parents"]
+        .as_array()
+        .filter(|list| list.len() == 1)
+        .and_then(|list| list[0].as_str())
+        .filter(|v| valid_oid(v))
+    else {
+        return invalid("parents");
+    };
+    let Some(message) = body["message"].as_str() else {
+        return invalid("message");
+    };
+    pin(&fake.bare, "refs/fake/tree", tree);
+    pin(&fake.bare, "refs/fake/parent", parent);
+    let args = ["commit-tree", "refs/fake/tree", "-p", "refs/fake/parent"];
+    let sha = expect_ok(&args, git_stdin(&fake.bare, &args, &[], message.as_bytes()));
     (
         StatusCode::CREATED,
         Json(json!({
-            "sha": sha.trim(),
+            "sha": sha,
             "verification": { "verified": false, "reason": "unsigned" },
         })),
     )
@@ -246,15 +359,16 @@ async fn post_ref(
         return unauthorized();
     }
     fake.record("POST", "refs".into(), body.clone());
-    let name = body["ref"].as_str().unwrap();
-    if try_git(&fake.bare, &["rev-parse", "--verify", "--quiet", name]) {
+    let Some(name) = body["ref"].as_str().filter(|v| valid_branch_ref(v)) else {
+        return invalid("ref");
+    };
+    let Some(sha) = body["sha"].as_str().filter(|v| valid_oid(v)) else {
+        return invalid("sha");
+    };
+    // `create` fails when the ref already exists, like the API's 422.
+    if !update_refs(&fake.bare, &format!("create {name} {sha}\n")) {
         return (StatusCode::UNPROCESSABLE_ENTITY, "Reference already exists").into_response();
     }
-    run_git(
-        &fake.bare,
-        &["update-ref", name, body["sha"].as_str().unwrap()],
-        None,
-    );
     (StatusCode::CREATED, Json(json!({ "ref": name }))).into_response()
 }
 
@@ -269,15 +383,18 @@ async fn patch_ref(
     }
     fake.record("PATCH", format!("refs/{name}"), body.clone());
     let full = format!("refs/{name}");
-    if !try_git(&fake.bare, &["rev-parse", "--verify", "--quiet", &full]) {
+    if !valid_branch_ref(&full) {
+        return invalid("ref");
+    }
+    let Some(sha) = body["sha"].as_str().filter(|v| valid_oid(v)) else {
+        return invalid("sha");
+    };
+    assert_eq!(body["force"], true);
+    // The API answers 422 when the ref to move does not exist.
+    if !object_exists(&fake.bare, &full) {
         return (StatusCode::UNPROCESSABLE_ENTITY, "Reference does not exist").into_response();
     }
-    assert_eq!(body["force"], true);
-    run_git(
-        &fake.bare,
-        &["update-ref", &full, body["sha"].as_str().unwrap()],
-        None,
-    );
+    assert!(update_refs(&fake.bare, &format!("update {full} {sha}\n")));
     Json(json!({ "ref": full })).into_response()
 }
 
@@ -290,11 +407,11 @@ async fn delete_ref(
         return unauthorized();
     }
     fake.record("DELETE", format!("refs/{name}"), Value::Null);
-    run_git(
-        &fake.bare,
-        &["update-ref", "-d", &format!("refs/{name}")],
-        None,
-    );
+    let full = format!("refs/{name}");
+    if !valid_branch_ref(&full) {
+        return invalid("ref");
+    }
+    assert!(update_refs(&fake.bare, &format!("delete {full}\n")));
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -590,4 +707,38 @@ fn refuses_a_plain_http_api_url_that_is_not_loopback() {
         String::from_utf8_lossy(&out.stderr).contains("GITHUB_API_URL must be https"),
         "{out:?}"
     );
+}
+
+#[test]
+fn the_fake_api_rejects_injection_shaped_values() {
+    for oid in [
+        "--output=/tmp/x",
+        "HEAD",
+        "abc",
+        &"A".repeat(40),
+        &format!("{}\n", "a".repeat(40)),
+    ] {
+        assert!(!valid_oid(oid), "{oid:?}");
+    }
+    assert!(valid_oid(&"0a".repeat(20)));
+
+    for name in [
+        "refs/heads/main\ndelete refs/heads/other",
+        "refs/heads/--force",
+        "refs/heads/a/../b",
+        "refs/heads/.hidden",
+        "refs/heads/",
+        "refs/tags/v1",
+        "--stdin",
+    ] {
+        assert!(!valid_branch_ref(name), "{name:?}");
+    }
+    assert!(valid_branch_ref("refs/heads/uplink/upl_0123456789"));
+    assert!(valid_branch_ref("refs/heads/uplink-base/upl_0123456789"));
+
+    for path in ["", "-x", "a\nb", "a\0b", "a/../b", "/abs", "a//b", "./a"] {
+        assert!(!valid_tree_path(path), "{path:?}");
+    }
+    assert!(valid_tree_path("docs/deep/notes.md"));
+    assert!(!valid_mode("100666"));
 }
