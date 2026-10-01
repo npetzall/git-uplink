@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { NavLink } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { ExternalLink, GitFork, Menu, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -43,8 +43,34 @@ function NavLinks({ onClick }: { onClick?: () => void }) {
   );
 }
 
+/**
+ * Scrolls to `#fragment` once the page has rendered it. Links such as the
+ * assess report's `/day-to-day#assess-fails` load before the section exists,
+ * so the browser's own fragment scroll misses it.
+ */
+function useScrollToHash() {
+  const { pathname, hash } = useLocation();
+  useEffect(() => {
+    const id = decodeURIComponent(hash.slice(1));
+    if (!id) return;
+    let frame = 0;
+    let tries = 0;
+    const attempt = () => {
+      const target = document.getElementById(id);
+      if (target) {
+        target.scrollIntoView();
+      } else if (tries++ < 30) {
+        frame = requestAnimationFrame(attempt);
+      }
+    };
+    attempt();
+    return () => cancelAnimationFrame(frame);
+  }, [pathname, hash]);
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  useScrollToHash();
   return (
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-20 border-b border-border/80 bg-background/80 backdrop-blur-md">

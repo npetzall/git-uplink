@@ -27,10 +27,10 @@ pub use assess::{
     ApprovalReceipt, FROM_UPSTREAM_ENVIRONMENT, IncomingFlowedBack, TO_UPSTREAM_ENVIRONMENT,
     assert_assess_ok, assess_from_message, company_commit_message, depends_on_from_message,
     export_commit_message, extras_dir, format_approval_receipt, format_approver_packet,
-    format_assess_markdown, format_contribution_packet, format_contribution_packet_with_extras,
-    format_delta_approver_packet, format_incoming_packet, from_upstream_report_paths,
-    load_extra_markdown, parse_depends_on, prepend_report_extras, report_paths,
-    split_internal_message, store_extras, stored_extras_fresh, strip_html_comments,
+    format_assess_checks_markdown, format_assess_markdown, format_contribution_packet,
+    format_contribution_packet_with_extras, format_delta_approver_packet, format_incoming_packet,
+    from_upstream_report_paths, load_extra_markdown, parse_depends_on, prepend_report_extras,
+    report_paths, split_internal_message, store_extras, stored_extras_fresh, strip_html_comments,
 };
 pub use doctor::{DoctorReport, doctor, format_doctor_summary};
 pub use error::{AssessError, ConflictError, Error, PreflightError, Result};

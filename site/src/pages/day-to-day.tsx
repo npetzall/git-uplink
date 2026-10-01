@@ -127,8 +127,31 @@ git switch -c fix/token-hash origin/main`}</Code>
 
       <Section id="assess-fails" title="My change works, but assess fails">
         <p>
-          Assess reviews the change as it would appear in public. Read the report it posts as a PR comment.
+          Assess reviews the change as it would appear in public and posts an <strong>Upstream Assessment</strong>{" "}
+          comment on the PR, updated on every push or edit. The public title and body in it are exactly what will
+          leave the company: HTML comments from the PR template are stripped, everything below the cutoff is
+          removed, and the author is rewritten to the export identity. Below them, a table lists each check:
         </p>
+        <ul>
+          <li>
+            <code>message-scrubbed</code>: the internal section below the cutoff is removed from the public message.
+          </li>
+          <li>
+            <code>cutoff-used</code>: whether the cutoff line was found. Warns when a ticket id sits in the public
+            part.
+          </li>
+          <li>
+            <code>author-rewrite</code>: the author upstream will see, and who wrote the change internally.
+          </li>
+          <li>
+            <code>affiliation-leak</code>: company keywords, product aliases, and internal email domains in the
+            message and the diff.
+          </li>
+          <li>
+            <code>binary-files</code>: binary files the scan cannot read.
+          </li>
+        </ul>
+        <p>How to fix the common findings:</p>
         <ul>
           <li>
             <strong>Company name, product alias, or internal email found</strong> (fails). Remove it from the code,

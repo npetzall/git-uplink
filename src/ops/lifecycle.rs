@@ -21,7 +21,7 @@ pub fn approve_patch_at(
             let patch = get_patch_mut(&mut queue, id)?;
             if patch.assess.as_ref().is_some_and(|p| !p.ok) {
                 return Err(Error::msg(format!(
-                    "{id} is not ready for contribution. Fix assess-for-upstream findings first."
+                    "{id} is not ready for contribution. Fix the upstream assessment findings first."
                 )));
             }
             let kind = if patch.status == PatchStatus::Queued {

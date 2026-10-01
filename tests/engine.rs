@@ -3777,7 +3777,9 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert!(packet.contains(&format!("Delta packet — {}", ttl_patch.id)));
     assert!(packet.contains("already IP-approved"));
     assert!(packet.contains("Already approved (initial)"));
-    assert!(packet.contains("### Upstream contrib"));
+    assert!(packet.contains("## Upstream commit message"));
+    assert!(!packet.contains("### Company main"));
+    assert!(!packet.contains("Queue status"));
     assert!(packet.contains(&amended.approvals[0].sha));
     assert!(packet.contains("Uplink-Patch-Id"));
 
@@ -5726,6 +5728,9 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
+            message: Some(format!(
+                "Use SHA-256 for tokens\n\nSHA-1 is weak.\n\n{DEFAULT_CUTOFF}\n\nTicket: PROJ-9\n"
+            )),
             from_ref: Some("main".into()),
             internal_pr_number: Some(44),
             ..Default::default()
@@ -5734,14 +5739,29 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
     .unwrap();
 
     let packet = format_approver_packet(&patch);
-    assert!(packet.contains(&format!("Contribution packet — {}", patch.id)));
-    assert!(packet.contains("**to-upstream** GitHub Environment"));
+    assert!(
+        packet.starts_with(&format!(
+            "# Contribution packet — {}\n\n| Field | Value |",
+            patch.id
+        )),
+        "{packet}"
+    );
     assert!(packet.contains("#44"));
-    assert!(packet.contains("GITHUB_STEP_SUMMARY"));
-    assert!(packet.contains("Commit messages that will be used"));
-    assert!(packet.contains("### Company main"));
-    assert!(packet.contains("### Upstream contrib"));
+    assert!(!packet.contains("Review this packet"), "{packet}");
+    assert!(!packet.contains("| Queue"), "{packet}");
+    assert!(packet.contains("## Upstream commit message"));
+    assert!(packet.contains("SHA-1 is weak."));
     assert!(packet.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
+    assert!(
+        !packet.contains("PROJ-9"),
+        "the company commit message must not be in the packet\n{packet}"
+    );
+    assert!(packet.contains("## Upstream Assessment: ✅"), "{packet}");
+    assert!(!packet.contains("### Public title"), "{packet}");
+    assert!(
+        packet.contains("| Check | Description | Result |"),
+        "{packet}"
+    );
 
     let (_, prepare_path, approval_path) = report_paths(&patch.id).unwrap();
     write(company, &prepare_path, &packet);

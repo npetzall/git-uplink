@@ -51,7 +51,7 @@ fn check_ready_to_submit(repo: &Path, queue: &QueueState, patch: &Patch) -> Resu
     }
     if patch.assess.as_ref().is_some_and(|p| !p.ok) {
         return Err(Error::msg(format!(
-            "{id} is not ready for contribution. Fix assess-for-upstream findings first."
+            "{id} is not ready for contribution. Fix the upstream assessment findings first."
         )));
     }
     assert_export_preflight(repo, queue, patch, &repo.join(patch_path(id)?), None)
