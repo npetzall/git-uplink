@@ -485,7 +485,7 @@ mod tests {
         }
         for name in [
             "UPLINK_PREFLIGHT",
-            "UPLINK_EXPORT_AUTHOR",
+            "UPLINK_REDACT_KEYWORDS",
             "PATH",
             "HOME",
             "MY_TOKEN",

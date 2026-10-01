@@ -61,7 +61,6 @@ jobs:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
           UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
-          UPLINK_EXPORT_AUTHOR: ${{ vars.UPLINK_EXPORT_AUTHOR }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}

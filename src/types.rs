@@ -8,9 +8,6 @@ pub const TOOLING_PATCH_KIND: &str = "uplink-tooling";
 pub const TOOLING_PATCH_TITLE: &str = "Uplink tooling";
 pub const QUEUE_VERSION: u32 = 1;
 
-pub const DEFAULT_EXPORT_AUTHOR: (&str, &str) =
-    ("Uplink Contributor", "uplink@users.noreply.github.com");
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PatchStatus {
@@ -224,8 +221,9 @@ pub struct AssessReport {
     pub commit_message: String,
     pub public_subject: String,
     pub public_body: String,
-    pub author_name: String,
-    pub author_email: String,
+    /// `Name <email>` from `Uplink-Export-Author`, exported as a `Co-Authored-By` trailer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub co_author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -433,10 +431,6 @@ pub struct QueueConfig {
     pub preflight_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff_marker: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub export_author_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub export_author_email: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redact_keywords: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -457,8 +451,6 @@ impl Default for QueueConfig {
             trailer_key: "Uplink-Patch-Id".into(),
             preflight_command: None,
             cutoff_marker: Some(DEFAULT_CUTOFF.into()),
-            export_author_name: Some(DEFAULT_EXPORT_AUTHOR.0.into()),
-            export_author_email: Some(DEFAULT_EXPORT_AUTHOR.1.into()),
             redact_keywords: Vec::new(),
             internal_email_domains: Vec::new(),
             forge: None,

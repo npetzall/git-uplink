@@ -5583,7 +5583,7 @@ fn preflight_command_does_not_see_uplink_credentials() {
 }
 
 #[test]
-fn strips_the_internal_commit_section_and_rewrites_export_author() {
+fn strips_the_internal_commit_section_and_adds_a_co_author_trailer() {
     let world = setup_world();
     let company = &world.company;
     git(
@@ -5629,7 +5629,10 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
     let prepare = patch.assess.as_ref().unwrap();
     assert!(prepare.ok);
     assert!(prepare.cutoff_found);
-    assert_eq!(prepare.author_email, "jane@users.noreply.github.com");
+    assert_eq!(
+        prepare.co_author.as_deref(),
+        Some("Jane Public <jane@users.noreply.github.com>")
+    );
     assert!(!patch.commit_message.contains("Visible while writing"));
     assert!(!patch.commit_message.contains("wip: ignore this git log"));
     assert!(patch.commit_message.contains("PROJ-9999"));
@@ -5648,17 +5651,81 @@ fn strips_the_internal_commit_section_and_rewrites_export_author() {
 
     approve_patch(company, &patch.id).unwrap();
     let submitted = submit_patch(company, &patch.id).unwrap();
-    let author = git_ok(
-        company,
-        &["log", "-1", "--format=%an <%ae>", &submitted.branch],
-    )
-    .unwrap();
-    assert_eq!(author, "Jane Public <jane@users.noreply.github.com>");
     let contrib_msg = git_ok(company, &["log", "-1", "--format=%B", &submitted.branch]).unwrap();
     assert!(contrib_msg.contains("Replace SHA-1 in the default hasher."));
     assert!(!contrib_msg.contains("PROJ-9999"));
     assert!(!contrib_msg.contains(DEFAULT_CUTOFF));
-    assert!(contrib_msg.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
+    assert!(!contrib_msg.contains("Uplink-Export-Author"));
+    assert!(contrib_msg.ends_with(&format!(
+        "\n\nUplink-Patch-Id: {}\nCo-Authored-By: Jane Public <jane@users.noreply.github.com>\n",
+        patch.id
+    )), "{contrib_msg:?}");
+    let trailers = git_ok(
+        company,
+        &[
+            "log",
+            "-1",
+            "--format=%(trailers:key=Co-Authored-By,valueonly)",
+            &submitted.branch,
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        trailers.trim(),
+        "Jane Public <jane@users.noreply.github.com>"
+    );
+}
+
+#[test]
+fn exports_no_co_author_trailer_without_an_export_author_header() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            message: Some("Use SHA-256 for tokens\n\nReplace SHA-1.\n".into()),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let assess = patch.assess.as_ref().unwrap();
+    assert_eq!(assess.co_author, None);
+    let check = assess.checks.iter().find(|c| c.id == "co-author").unwrap();
+    assert_eq!(check.status, CheckStatus::Skip);
+
+    approve_patch(company, &patch.id).unwrap();
+    let submitted = submit_patch(company, &patch.id).unwrap();
+    let contrib_msg = git_ok(company, &["log", "-1", "--format=%B", &submitted.branch]).unwrap();
+    assert!(!contrib_msg.contains("Co-Authored-By"), "{contrib_msg}");
+}
+
+#[test]
+fn reads_a_queue_with_legacy_export_author_fields() {
+    let world = setup_world();
+    let company = &world.company;
+    let path = company.join(".uplink/queue.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    value["config"]["exportAuthorName"] = "Uplink Contributor".into();
+    value["config"]["exportAuthorEmail"] = "uplink@users.noreply.github.com".into();
+    fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    let queue = git_uplink::read_queue(company).unwrap();
+    let written = serde_json::to_string(&queue).unwrap();
+    assert!(!written.contains("exportAuthor"), "{written}");
 }
 
 #[test]
