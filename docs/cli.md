@@ -21,7 +21,7 @@ git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--depends-on <id>]...
 git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
-            [--internal-only]
+            [--internal-only | --patch <id>]
 git uplink report <id> [--out <file>]
             [--extra-dir <path> [--store-extras [--extra-source <url>]]]
 git uplink status [--json]
@@ -107,7 +107,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 ## Checks
 
 - **`preflight`** applies a change onto public `main` plus its declared dependencies. Incoming preflight reads `Uplink-Depends-On` trailers from `--message` / `--message-file`.
-- **`assess`** checks the message, cutoff, author, and affiliation of a change.
+- **`assess`** checks the message, cutoff, author, and affiliation of a change. `--patch <id>` takes the title, message, and layer from a queued patch; the gate uses it on conflict-resolution PRs.
 - **`report <id>`** writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`. Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). `--extra-dir` prepends those files instead, and `--store-extras` also stores them for later packets. Submit runs the hook from branch `uplink/hooks` only when nothing current is stored (see `.github/uplink-assessment-hook.md`); a failed hook adds a warning note instead of failing submit, and is not stored.
 - **`status`** shows the queue (`--json` for machines).
 - **`doctor`** checks the setup of this clone: queue and recorded URLs, remotes and whether upstream and contrib are reachable, `origin/uplink/state`, the forge tooling patch and workflows on the company branch, `UPLINK_*` credentials, pending adoption, and the company branch against `uplink/upstream`. `--json` prints the report. Credential checks fail on a machine without the `UPLINK_*` variables; that is expected outside CI.
@@ -119,7 +119,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - **`submit`** exports the patch onto the contrib fork (git only) and prints JSON for `POST /repos/{parent}/pulls`. `head` is the branch from `.branch`; `head_repo` is `<contrib_owner>/<contrib_repo>`.
 - **`submitted`** records the PR URL, commits the queue, and pushes company `uplink/state`.
 
-After a submitted patch is conflict-resolved it becomes **`amended`** until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you.
+Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. After a submitted patch is conflict-resolved it becomes **`amended`** until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you.
 
 ### Merge detection
 

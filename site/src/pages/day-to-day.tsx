@@ -221,6 +221,8 @@ git switch uplink/conflict/<id>-work
 git commit -am "Resolve <id> onto the new upstream"
 git push`}</Code>
         <p>
+          The <strong>Uplink gate</strong> check assesses your resolution with the patch&apos;s message, like the
+          original PR. If it fails (for example the fix mentions the company), change the resolution before merging.
           Get the PR reviewed and merge it. The resolve job updates your patch (same id) and rebuilds{" "}
           <code>main</code>. If a later patch conflicts too, its owner gets the next PR. If your change was already
           submitted, the fix goes to IP as a small delta. After approval, the same public PR is updated.

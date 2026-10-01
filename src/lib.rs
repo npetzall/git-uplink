@@ -30,7 +30,8 @@ pub use assess::{
     format_assess_checks_markdown, format_assess_markdown, format_contribution_packet,
     format_contribution_packet_with_extras, format_delta_approver_packet, format_incoming_packet,
     from_upstream_report_paths, load_extra_markdown, parse_depends_on, prepend_report_extras,
-    report_paths, split_internal_message, store_extras, stored_extras_fresh, strip_html_comments,
+    report_paths, split_internal_message, store_extras, stored_commit_message, stored_extras_fresh,
+    strip_html_comments,
 };
 pub use doctor::{DoctorReport, doctor, format_doctor_summary};
 pub use error::{AssessError, ConflictError, Error, PreflightError, Result};

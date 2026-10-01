@@ -3689,6 +3689,92 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
 }
 
 #[test]
+fn resolve_refuses_a_resolution_that_fails_the_assessment() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(ttl_patch.assess.as_ref().unwrap().ok);
+
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.redact_keywords = vec!["AcmeCorp".into()];
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: redact AcmeCorp").unwrap();
+
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(upstream, "shorten default ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let queued = sync_apply(company);
+    let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
+    assert_eq!(conflicted.status, PatchStatus::Conflict);
+    let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
+    git(
+        company,
+        &["checkout", "--quiet", &conflict_branch],
+        GitOpts::default(),
+    )
+    .unwrap();
+    // The resolution adds company text the original change did not have.
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200; // AcmeCorp SLA"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    let before = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    let err = resolve_conflict(company, &ttl_patch.id).unwrap_err();
+    assert!(
+        err.to_string().contains("Upstream assessment failed"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("affiliation-leak"), "{err}");
+    // Refused: the branch and the staged resolution are as they were, and
+    // the patch is still in conflict.
+    assert_eq!(git_ok(company, &["rev-parse", "HEAD"]).unwrap(), before);
+    let staged = git_ok(company, &["diff", "--cached", "--name-only"]).unwrap();
+    assert_eq!(staged, "src/tokens.js");
+    let queue = status_snapshot(company).unwrap().queue;
+    let still = queue.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
+    assert_eq!(still.status, PatchStatus::Conflict);
+
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    resolve_conflict(company, &ttl_patch.id).unwrap();
+    let queue = status_snapshot(company).unwrap().queue;
+    let resolved = queue.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
+    assert_eq!(resolved.status, PatchStatus::Queued);
+    assert!(resolved.assess.as_ref().unwrap().ok);
+}
+
+#[test]
 fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     let world = setup_world();
     let company = &world.company;
@@ -3780,6 +3866,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert!(packet.contains("## Upstream commit message"));
     assert!(!packet.contains("### Company main"));
     assert!(!packet.contains("Queue status"));
+    assert!(packet.contains("## Upstream Assessment: ✅"), "{packet}");
     assert!(packet.contains(&amended.approvals[0].sha));
     assert!(packet.contains("Uplink-Patch-Id"));
 
@@ -6786,7 +6873,7 @@ fn transfer_to_upstream_gates_on_assess_failure_without_writing_queue() {
             .message
             .as_deref()
             .unwrap_or("")
-            .contains("Assess-for-upstream"),
+            .contains("Upstream assessment failed"),
         "{result:?}"
     );
     let after = git_uplink::read_queue(company).unwrap();

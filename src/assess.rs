@@ -575,6 +575,7 @@ This contribution was **already IP-approved** and submitted. Review **only the d
 {delta}\n\n\
 ## Upstream commit message\n\n\
 {contrib}\n\n\
+{assessment}\n\
 ## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
@@ -585,6 +586,7 @@ This contribution was **already IP-approved** and submitted. Review **only the d
         env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
         contrib = format_fenced(&export_commit_message(patch)),
+        assessment = packet_assessment(patch),
     ))
 }
 
@@ -1082,7 +1084,7 @@ pub fn assert_assess_ok(report: &AssessReport, label: &str) -> Result<()> {
         .join("\n");
     Err(Error::Assess(AssessError::new(
         format!(
-            "Assess-for-upstream failed for {label}. No import/approval/submit until this is clean.\n{failed}"
+            "Upstream assessment failed for {label}. No import, resolve, approval, or submit until this is clean.\n{failed}"
         ),
         report.clone(),
     )))
