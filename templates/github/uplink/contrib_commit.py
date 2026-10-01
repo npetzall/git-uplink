@@ -41,13 +41,18 @@ class ApiError(Exception):
 
 class Api:
     def __init__(self, base_url, repo, token):
+        url = urllib.parse.urlsplit(base_url)
+        loopback = url.hostname in ("127.0.0.1", "localhost", "::1")
+        if url.scheme != "https" and not (url.scheme == "http" and loopback):
+            raise SystemExit(f"GITHUB_API_URL must be https, got {base_url!r}")
         self.base = f"{base_url.rstrip('/')}/repos/{repo}"
         self.token = token
 
     def call(self, method, path, payload=None, attempts=3):
         data = None if payload is None else json.dumps(payload).encode()
         for attempt in range(1, attempts + 1):
-            request = urllib.request.Request(
+            # The scheme is checked in __init__: https, or http on loopback.
+            request = urllib.request.Request(  # noqa: S310
                 self.base + path,
                 data=data,
                 method=method,
@@ -59,7 +64,7 @@ class Api:
                 },
             )
             try:
-                with urllib.request.urlopen(request) as response:
+                with urllib.request.urlopen(request) as response:  # noqa: S310
                     body = response.read()
                     return json.loads(body) if body else None
             except urllib.error.HTTPError as err:
@@ -72,8 +77,9 @@ class Api:
 
 
 def git(*args, input=None, env=None):
-    result = subprocess.run(
-        ["git", *args],
+    # Argument list, no shell; git comes from PATH like every other step.
+    result = subprocess.run(  # noqa: S603
+        ["git", *args],  # noqa: S607
         input=input,
         capture_output=True,
         check=False,
@@ -110,7 +116,9 @@ def tree_entries(api, entries):
             tree.append({"path": path, "mode": old_mode, "type": kind, "sha": None})
             continue
         if new_mode == GITLINK:
-            tree.append({"path": path, "mode": new_mode, "type": "commit", "sha": new_sha})
+            tree.append(
+                {"path": path, "mode": new_mode, "type": "commit", "sha": new_sha}
+            )
             continue
         content = git("cat-file", "blob", new_sha)
         blob = api.call(
@@ -119,7 +127,9 @@ def tree_entries(api, entries):
             {"content": base64.b64encode(content).decode(), "encoding": "base64"},
         )
         if blob["sha"] != new_sha:
-            raise SystemExit(f"blob for {path} came back as {blob['sha']}, expected {new_sha}")
+            raise SystemExit(
+                f"blob for {path} came back as {blob['sha']}, expected {new_sha}"
+            )
         tree.append({"path": path, "mode": new_mode, "type": "blob", "sha": new_sha})
     return tree
 
@@ -177,7 +187,9 @@ def main():
     token = os.environ["UPLINK_CONTRIB_TOKEN"]
     api_url = os.environ.get("GITHUB_API_URL") or "https://api.github.com"
     server_url = os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
-    git_url = os.environ.get("CONTRIB_GIT_URL") or f"{server_url.rstrip('/')}/{repo}.git"
+    git_url = (
+        os.environ.get("CONTRIB_GIT_URL") or f"{server_url.rstrip('/')}/{repo}.git"
+    )
 
     branch = commit["branch"]
     base = commit["baseSha"]
@@ -194,22 +206,32 @@ def main():
     scratch = None
     if not has_commit(api, base):
         scratch = f"uplink-base/{branch.removeprefix('uplink/')}"
-        git("push", "--force", "--quiet", git_url, f"{base}:refs/heads/{scratch}",
-            env=push_env(git_url, token))
+        git(
+            "push",
+            "--force",
+            "--quiet",
+            git_url,
+            f"{base}:refs/heads/{scratch}",
+            env=push_env(git_url, token),
+        )
     try:
         entries = changed_entries(base, local)
         if not entries:
             raise SystemExit(f"{local} has no changes on {base}")
         base_tree = git("rev-parse", f"{base}^{{tree}}").decode().strip()
         tree = api.call(
-            "POST", "/git/trees", {"base_tree": base_tree, "tree": tree_entries(api, entries)}
+            "POST",
+            "/git/trees",
+            {"base_tree": base_tree, "tree": tree_entries(api, entries)},
         )
         if tree["sha"] != expected_tree:
             raise SystemExit(
                 f"contrib tree {tree['sha']} does not match the local export tree {expected_tree}"
             )
         created = api.call(
-            "POST", "/git/commits", {"message": message, "tree": tree["sha"], "parents": [base]}
+            "POST",
+            "/git/commits",
+            {"message": message, "tree": tree["sha"], "parents": [base]},
         )
         set_branch(api, branch, created["sha"])
     finally:
