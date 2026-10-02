@@ -122,12 +122,21 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 ## Assessment hook
 
 - **Optional and company-owned.** The real hook lives on the orphan branch `uplink/hooks`, which is never queued, replayed, or contributed.
-- **Placeholder in the pack:** `.github/workflows/uplink-assessment-hook.yml` on `main`. GitHub only dispatches a workflow whose file exists on the default branch, so submit needs this file there. Run it by hand: it prints the setup guide, creates `uplink/hooks` if it is missing, and keeps `assessment-hook.md` there current.
+- **Created by `git uplink init`:** the local orphan branch `uplink/hooks` with `assessment-hook.md`, `toolchain-hook.md`, a toolchain hook stub, and a starter `.github/workflows/uplink-assessment-hook-example.yml`. `git uplink push` publishes it with `uplink/state`. `init` never changes an existing file on it; `init --upgrade` creates the branch when it is missing and adds files a newer pack brings. `git uplink doctor` reports when it is missing, lacks the toolchain hook, or is not pushed.
+- **Placeholder in the pack:** `.github/workflows/uplink-assessment-hook.yml` on `main`. GitHub only dispatches a workflow whose file exists on the default branch, so submit needs this file there. Run it by hand to print `assessment-hook.md` from `uplink/hooks`. It writes nothing.
 - **Runs on:** dispatch with `--ref uplink/hooks` by the PR checks (input `pr`) and by submit's extras job (input `patch`) when no current result is stored. `caller_run_id` must appear in `run-name`. If `uplink/hooks` has no `.github/workflows/uplink-assessment-hook.yml`, callers skip the hook.
 - **Does:** whatever company scans must reach the IP packet. It uploads `*.md` files as artifact `uplink-packet-extra`. The PR comment shows them, import stores them with the patch, and the packet prepends them to `assessment.md` before IP is asked. A failed hook fails neither the PR check nor submit: the run shows a warning, and the comment or `assessment.md` starts with a note that links to the failed hook run. A failed result is never stored.
 - **Requires:**
-  - `.github/workflows/uplink-assessment-hook.yml` on `uplink/hooks`. Adding it needs workflows write;
+  - `.github/workflows/uplink-assessment-hook.yml` on `uplink/hooks` (copy the `-example` starter). Adding it needs workflows write;
   - it must not push `uplink/state`;
   - with `pr`, the checked-out code is unmerged. Do not run it with secrets;
-  - recommended: import [`uplink-hooks-ruleset.json`](../github/uplink-hooks-ruleset.json), so changes to `uplink/hooks` need a reviewed pull request. Its code runs during every submit. GitHub Actions bypasses, so the placeholder can update `assessment-hook.md`.
-- Guide and starter YAML: [`uplink-assessment-hook.md`](../github/uplink-assessment-hook.md). Walkthrough: [story 07](../../examples/github/stories/07-assessment-hook.md).
+  - recommended: import [`uplink-hooks-ruleset.json`](../github/uplink-hooks-ruleset.json), so changes to `uplink/hooks` need a reviewed pull request. Its code runs on every PR check and submit.
+- Guide: [`assessment-hook.md`](../github-hooks/assessment-hook.md), starter: [`uplink-assessment-hook-example.yml`](../github-hooks/.github/workflows/uplink-assessment-hook-example.yml). Walkthrough: [story 07](../../examples/github/stories/07-assessment-hook.md).
+
+## Toolchain hook
+
+- **Company-owned.** A composite action at `.github/actions/uplink-toolchain-hook/action.yml` on `uplink/hooks` that installs what `UPLINK_PREFLIGHT` needs (runtimes, package managers, system packages). `init` creates a stub that only prints `toolchain-hook.md` to the job summary.
+- **Runs in:** every job that runs preflight, right before its Uplink step: PR checks (**Uplink upstream preflight**), gate, import, submit, amend, and transfer (start and complete). The pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `uplink/hooks` into `.uplink-hooks/` and runs the hook from there.
+- **Missing hook:** the job shows a notice and continues. **A failed hook fails the job**, since preflight without its toolchain would fail anyway.
+- **Requires:** keep it to installing pinned tools; import, submit, amend, and transfer hold write tokens and Environment secrets. Do not build or run product code in it.
+- Guide and examples: [`toolchain-hook.md`](../github-hooks/toolchain-hook.md).

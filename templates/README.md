@@ -7,4 +7,6 @@
 | `ghec` | [`ghec/`](ghec/) | [GitHub Enterprise Cloud setup](ghec/README.md) |
 | `example-github` | [`example-github/`](example-github/) | [GitHub example workflows](example-github/README.md) |
 
-[`github/`](github/) holds files shared by every GitHub-family pack: the pull request template, the `install-git-uplink` action, and a sample pack-files ruleset.
+[`github/`](github/) holds files shared by every GitHub-family pack: the pull request template, the `install-git-uplink` action, the actions that call the company hooks, and sample rulesets.
+
+[`github-hooks/`](github-hooks/) is not installed on `main`. `git uplink init` commits it as the local orphan branch `uplink/hooks`, which `git uplink push` publishes: the [assessment hook guide](github-hooks/assessment-hook.md) and starter, and the [toolchain hook](github-hooks/toolchain-hook.md) stub that preflight jobs call to set up the runner.

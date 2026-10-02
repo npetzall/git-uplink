@@ -58,9 +58,10 @@ git uplink version
 - `--forge` is required when creating a queue: `ghec` for GitHub Enterprise Cloud, `example-github` for the worked example.
 - First-time init also installs that forge's workflows plus the shared GitHub pull request template as the dedicated **tooling** patch.
 - `--upgrade` refreshes the tooling patch in its dedicated slot. Re-run it after upgrading the binary.
+- Init also creates the local orphan branch `uplink/hooks` for company hooks (assessment hook guide and starter, toolchain hook stub) when neither this clone nor `origin` has it. Init never pushes it and never changes an existing file on it. `--upgrade` creates it for queues initialized before it existed, and adds files a newer pack brings as one commit on top.
 - `--json` prints the stored config.
 
-A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `uplink/upstream`, and the configured company branch, materializes that local ref without checking it out, and reconstitutes the remotes from the stored URLs. It does not rewrite workflows.
+A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `uplink/upstream`, and the configured company branch, materializes that local ref (and `uplink/hooks` when origin has it) without checking it out, and reconstitutes the remotes from the stored URLs. It does not rewrite workflows.
 
 ### Adopting an existing `main`
 
@@ -101,7 +102,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 
 ### `push`, `refresh`, `reset`
 
-- **`push`** publishes `uplink/state` (`--push-remote` defaults to `origin`). If origin moved, it appends local-only patches onto the remote tip and carries those patch files.
+- **`push`** publishes `uplink/state` (`--push-remote` defaults to `origin`). If origin moved, it appends local-only patches onto the remote tip and carries those patch files. Then it publishes a local `uplink/hooks` that is new or ahead of origin, never with force. A refused hooks push (for example by the hooks ruleset, or a token without workflows scope) is a warning; open a pull request against `uplink/hooks` instead.
 - **`refresh`** fetches origin tracking refs (`uplink/state`, `uplink/upstream`, company main) without moving local branches.
 - **`reset`** fetches origin and hard-resets company `main`, `uplink/state`, and `uplink/upstream` so the clone matches origin and `.uplink/` is restored.
 
@@ -109,9 +110,9 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 
 - **`preflight`** applies a change onto public `main` plus its declared dependencies. Incoming preflight reads `Uplink-Depends-On` trailers from `--message` / `--message-file`.
 - **`assess`** checks the message, cutoff, author, and affiliation of a change. `--patch <id>` takes the title, message, and layer from a queued patch; the gate uses it on conflict-resolution PRs.
-- **`report <id>`** writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`. Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). `--extra-dir` prepends those files instead, and `--store-extras` also stores them for later packets. Submit runs the hook from branch `uplink/hooks` only when nothing current is stored (see `.github/uplink-assessment-hook.md`); a failed hook adds a warning note instead of failing submit, and is not stored.
+- **`report <id>`** writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`. Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). `--extra-dir` prepends those files instead, and `--store-extras` also stores them for later packets. Submit runs the hook from branch `uplink/hooks` only when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
 - **`status`** shows the queue (`--json` for machines).
-- **`doctor`** checks the setup of this clone: queue and recorded URLs, remotes and whether upstream and contrib are reachable, `origin/uplink/state`, the forge tooling patch and workflows on the company branch, `UPLINK_*` credentials, pending adoption, and the company branch against `uplink/upstream`. `--json` prints the report. Credential checks fail on a machine without the `UPLINK_*` variables; that is expected outside CI.
+- **`doctor`** checks the setup of this clone: queue and recorded URLs, remotes and whether upstream and contrib are reachable, `origin/uplink/state`, the forge tooling patch and workflows on the company branch, `uplink/hooks` (present locally, has the toolchain hook, pushed to origin), `UPLINK_*` credentials, pending adoption, and the company branch against `uplink/upstream`. `--json` prints the report. Credential checks fail on a machine without the `UPLINK_*` variables; that is expected outside CI.
 
 ## Contributing upstream
 
