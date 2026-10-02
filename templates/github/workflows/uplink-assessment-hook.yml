@@ -1,10 +1,9 @@
 # Placeholder for the company assessment hook. Do not edit it here.
 # GitHub only dispatches a workflow whose file exists on the default branch,
-# so this file lets Uplink submit run the real hook with --ref uplink/hooks.
+# so this file lets Uplink run the real hook with --ref uplink/hooks.
 #
-# Run it by hand from main. It prints the setup guide, creates the orphan
-# branch uplink/hooks if it is missing, and keeps assessment-hook.md there
-# current. Other files on uplink/hooks are left alone.
+# Run it by hand from main. It prints assessment-hook.md from the orphan
+# branch uplink/hooks, which git uplink init creates. It writes nothing.
 name: Uplink assessment hook
 
 on:
@@ -13,58 +12,32 @@ on:
 permissions: {}
 
 jobs:
-  setup:
-    name: Set up uplink/hooks
+  guide:
+    name: Show the assessment hook guide
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: main
-          persist-credentials: true
-
-      - name: Show the setup guide
-        run: cat .github/uplink-assessment-hook.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Create or update uplink/hooks
+      - name: Print assessment-hook.md from uplink/hooks
         env:
-          GIT_AUTHOR_NAME: github-actions[bot]
-          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
-          GIT_COMMITTER_NAME: github-actions[bot]
-          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          doc=assessment-hook.md
-          blob=$(git hash-object -w .github/uplink-assessment-hook.md)
-          status=0
-          git ls-remote --exit-code --heads origin refs/heads/uplink/hooks >/dev/null || status=$?
-          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
-            echo "Could not read uplink/hooks from origin (git ls-remote exit ${status})."
+          if ! guide=$(gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/${GH_REPO}/contents/assessment-hook.md?ref=uplink%2Fhooks" 2>&1); then
+            if grep -q "HTTP 404" <<<"$guide"; then
+              {
+                echo "> [!WARNING]"
+                echo "> \`uplink/hooks\` or its \`assessment-hook.md\` is missing on origin."
+                echo "> Run \`git uplink init --upgrade\`, then \`git uplink push\`."
+                echo "> \`git uplink doctor\` checks the branch (refs/heads/uplink/hooks)."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error title=uplink/hooks missing::Run git uplink init --upgrade, then git uplink push."
+              exit 1
+            fi
+            echo "::error title=Could not read uplink/hooks::${guide}"
             exit 1
           fi
-          if [ "$status" -eq 0 ]; then
-            git fetch --no-tags origin "refs/heads/uplink/hooks:refs/remotes/origin/uplink/hooks"
-            parent=$(git rev-parse refs/remotes/origin/uplink/hooks)
-            current=$(git rev-parse --verify --quiet "${parent}:${doc}" || true)
-            if [ "$current" = "$blob" ]; then
-              echo "uplink/hooks already has the current ${doc}; nothing to do."
-              printf '\n---\n\n`uplink/hooks` is up to date.\n' >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            index=$(mktemp)
-            GIT_INDEX_FILE=$index git read-tree "$parent"
-            GIT_INDEX_FILE=$index git update-index --add --cacheinfo "100644,${blob},${doc}"
-            tree=$(GIT_INDEX_FILE=$index git write-tree)
-            rm -f "$index"
-            commit=$(git commit-tree "$tree" -p "$parent" -m "uplink: update ${doc}")
-            outcome=updated
-          else
-            tree=$(printf '100644 blob %s\t%s\n' "$blob" "$doc" | git mktree)
-            commit=$(git commit-tree "$tree" -m "uplink: create uplink/hooks")
-            outcome=created
-          fi
-          git push origin "${commit}:refs/heads/uplink/hooks"
-          echo "uplink/hooks ${outcome} at ${commit}."
-          printf '\n---\n\n`uplink/hooks` %s at `%s`.\n' "$outcome" "$commit" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$guide" >> "$GITHUB_STEP_SUMMARY"

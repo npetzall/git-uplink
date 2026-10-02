@@ -5,9 +5,9 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, AmendMessage, ApprovalReceipt, CheckStatus, ConflictError,
-    DEFAULT_CUTOFF, Error, Forge, GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch,
-    PatchIntent, PatchStatus, ProgressMode, PushOpts, QueueConfig, QueueState, RebuildOpts, Result,
-    STATE_BRANCH, StepOutcome, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
+    DEFAULT_CUTOFF, Error, Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
+    Patch, PatchIntent, PatchStatus, ProgressMode, PushOpts, QueueConfig, QueueState, RebuildOpts,
+    Result, STATE_BRANCH, StepOutcome, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
     accept_upstream, add_patch, amend_patch, approve_patch, doctor, drop_patch, extras_dir,
     format_approval_receipt, format_approver_packet, format_contribution_packet,
     format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
@@ -1493,7 +1493,7 @@ fn init_upgrade_cli_reports_already_up_to_date() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "Uplink init: ready\nalready up-to-date\n"
+        "Uplink init: ready\nalready up-to-date\nPublish hooks: git uplink push\n"
     );
     let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
     assert_eq!(before, after);
@@ -1545,7 +1545,8 @@ tooling has been updated\n\
 Company main was rebuilt locally. Nothing was pushed.\n\
 Inspect with: git diff origin/main main\n\
 Publish state: git uplink push\n\
-Publish main: git uplink rebuild --push\n"
+Publish main: git uplink rebuild --push\n\
+Publish hooks: git uplink push\n"
     );
 }
 
@@ -7541,6 +7542,380 @@ fn doctor_fails_when_queue_is_missing() {
             .checks
             .iter()
             .any(|check| check.id == "initialized" && check.status == CheckStatus::Fail)
+    );
+}
+
+fn hooks_check(repo: &Path) -> git_uplink::DoctorReport {
+    doctor(repo, ProgressMode::Disabled).unwrap()
+}
+
+fn hooks_status(report: &git_uplink::DoctorReport) -> (CheckStatus, String) {
+    let check = report
+        .checks
+        .iter()
+        .find(|check| check.id == "hooks-branch")
+        .expect("hooks-branch check");
+    (check.status, check.detail.clone())
+}
+
+fn hooks_paths(repo: &Path) -> Vec<String> {
+    git_ok(repo, &["ls-tree", "-r", "--name-only", "uplink/hooks"])
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn init_creates_the_hooks_branch_locally_as_an_orphan() {
+    let world = setup_uninitialized();
+    let origin = add_origin(&world.company);
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    assert!(has_git_ref(company, "refs/heads/uplink/hooks"));
+    assert!(!has_git_ref(company, "uplink/hooks^"), "must be an orphan");
+    assert_eq!(
+        hooks_paths(company),
+        [
+            ".github/actions/uplink-toolchain-hook/action.yml",
+            ".github/workflows/uplink-assessment-hook-example.yml",
+            "assessment-hook.md",
+            "toolchain-hook.md",
+        ]
+    );
+    assert!(!has_git_object(company, "main:toolchain-hook.md"));
+    assert!(!has_git_object(
+        company,
+        "main:.github/uplink-assessment-hook.md"
+    ));
+    assert!(has_git_object(
+        company,
+        "main:.github/actions/uplink-toolchain-hook/action.yml"
+    ));
+    assert!(!has_git_ref(&origin, "refs/heads/uplink/hooks"));
+}
+
+/// Commit `edit` on `uplink/hooks` through a throwaway worktree.
+fn edit_hooks(company: &Path, message: &str, edit: impl FnOnce(&Path)) -> String {
+    let dir = keep_dir().join("hooks");
+    git(
+        company,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            dir.to_str().unwrap(),
+            "uplink/hooks",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    edit(&dir);
+    commit_all(&dir, message);
+    git(
+        company,
+        &["worktree", "remove", "--force", dir.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    rev_of(company, "uplink/hooks")
+}
+
+#[test]
+fn init_without_upgrade_never_changes_an_existing_hooks_branch() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let edited = edit_hooks(company, "drop the guide", |dir| {
+        fs::remove_file(dir.join("toolchain-hook.md")).unwrap();
+    });
+    init(
+        company,
+        InitOpts {
+            forge: Some(Forge::Ghec),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(rev_of(company, "uplink/hooks"), edited);
+}
+
+#[test]
+fn init_upgrade_adds_missing_hook_files_without_overwriting() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let edited = edit_hooks(company, "company edits", |dir| {
+        fs::remove_file(dir.join("toolchain-hook.md")).unwrap();
+        fs::remove_file(dir.join(".github/actions/uplink-toolchain-hook/action.yml")).unwrap();
+        write(dir, "assessment-hook.md", "# Our own notes\n");
+    });
+    let result = init(
+        company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(rev_of(company, "uplink/hooks^"), edited);
+    assert!(has_git_object(company, "uplink/hooks:toolchain-hook.md"));
+    assert!(has_git_object(
+        company,
+        "uplink/hooks:.github/actions/uplink-toolchain-hook/action.yml"
+    ));
+    assert_eq!(
+        git_ok(company, &["show", "uplink/hooks:assessment-hook.md"]).unwrap(),
+        "# Our own notes"
+    );
+    let step = result
+        .report
+        .checks
+        .iter()
+        .find(|c| c.id == "hooks-branch")
+        .unwrap();
+    assert!(step.detail.contains("toolchain-hook.md"), "{}", step.detail);
+    assert!(step.detail.contains("git uplink push"), "{}", step.detail);
+
+    let again = rev_of(company, "uplink/hooks");
+    init(
+        company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        rev_of(company, "uplink/hooks"),
+        again,
+        "nothing left to add"
+    );
+}
+
+#[test]
+fn uplink_push_publishes_the_hooks_branch() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let origin = publish_origin(company);
+    let result = push_queue(company, PushOpts::default()).unwrap();
+    assert_eq!(result.hooks, HooksPushAction::Pushed);
+    assert_eq!(
+        rev_of(&origin, "refs/heads/uplink/hooks"),
+        rev_of(company, "uplink/hooks")
+    );
+    let again = push_queue(company, PushOpts::default()).unwrap();
+    assert_eq!(again.hooks, HooksPushAction::UpToDate);
+
+    let ahead = edit_hooks(company, "tune the toolchain", |dir| {
+        write(dir, "toolchain-hook.md", "# Tuned\n");
+    });
+    let pushed = push_queue(company, PushOpts::default()).unwrap();
+    assert_eq!(pushed.hooks, HooksPushAction::Pushed);
+    assert_eq!(rev_of(&origin, "refs/heads/uplink/hooks"), ahead);
+}
+
+#[test]
+fn uplink_push_never_force_pushes_the_hooks_branch() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let origin = publish_origin(company);
+    push_queue(company, PushOpts::default()).unwrap();
+    let published = rev_of(&origin, "refs/heads/uplink/hooks");
+    let root = rev_of(company, "uplink/hooks");
+    let empty_tree = git_ok(company, &["hash-object", "-t", "tree", "/dev/null"]).unwrap();
+    let other = git_ok(
+        company,
+        &["commit-tree", &empty_tree, "-p", &root, "-m", "local"],
+    )
+    .unwrap();
+    git(
+        company,
+        &[
+            "push",
+            "--quiet",
+            "origin",
+            &format!("{other}:refs/heads/uplink/hooks"),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let local = edit_hooks(company, "diverge", |dir| {
+        write(dir, "toolchain-hook.md", "# Mine\n");
+    });
+    let result = push_queue(company, PushOpts::default()).unwrap();
+    assert_eq!(result.hooks, HooksPushAction::Diverged);
+    assert_eq!(rev_of(&origin, "refs/heads/uplink/hooks"), other);
+    assert_eq!(rev_of(company, "uplink/hooks"), local);
+    assert_ne!(published, other);
+}
+
+#[test]
+fn init_upgrade_creates_a_missing_hooks_branch() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    git(
+        company,
+        &["branch", "-D", "uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let result = init(
+        company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(has_git_ref(company, "refs/heads/uplink/hooks"));
+    assert!(
+        result
+            .report
+            .checks
+            .iter()
+            .any(|c| c.id == "hooks-branch" && c.detail.contains("git uplink push")),
+        "{:?}",
+        result.report.checks
+    );
+}
+
+#[test]
+fn init_without_args_fetches_the_hooks_branch_from_origin() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let origin = publish_origin(&world.company);
+    git(
+        &world.company,
+        &["push", "--quiet", "origin", "uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone_parent = keep_dir();
+    git(
+        &clone_parent,
+        &["clone", "--quiet", origin.to_str().unwrap(), "product"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let clone = clone_parent.join("product");
+    init(&clone, InitOpts::default()).unwrap();
+    assert_eq!(
+        rev_of(&clone, "refs/heads/uplink/hooks"),
+        rev_of(&world.company, "uplink/hooks")
+    );
+}
+
+#[test]
+fn doctor_tells_you_to_push_the_hooks_branch() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    publish_origin(company);
+
+    let (status, detail) = hooks_status(&hooks_check(company));
+    assert_eq!(status, CheckStatus::Fail, "{detail}");
+    assert!(detail.contains("git uplink push"), "{detail}");
+
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let (status, detail) = hooks_status(&hooks_check(company));
+    assert_eq!(status, CheckStatus::Pass, "{detail}");
+
+    let tree = git_ok(company, &["rev-parse", "uplink/hooks^{tree}"]).unwrap();
+    let ahead = git_ok(
+        company,
+        &["commit-tree", &tree, "-p", "uplink/hooks", "-m", "tweak"],
+    )
+    .unwrap();
+    git(
+        company,
+        &["update-ref", "refs/heads/uplink/hooks", &ahead],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let (status, detail) = hooks_status(&hooks_check(company));
+    assert_eq!(status, CheckStatus::Warn, "{detail}");
+    assert!(detail.contains("git uplink push"), "{detail}");
+}
+
+#[test]
+fn doctor_fails_when_the_hooks_branch_lacks_the_toolchain_hook() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let empty_tree = git_ok(company, &["hash-object", "-t", "tree", "/dev/null"]).unwrap();
+    let emptied = git_ok(
+        company,
+        &[
+            "commit-tree",
+            &empty_tree,
+            "-p",
+            "uplink/hooks",
+            "-m",
+            "drop",
+        ],
+    )
+    .unwrap();
+    git(
+        company,
+        &["update-ref", "refs/heads/uplink/hooks", &emptied],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let (status, detail) = hooks_status(&hooks_check(company));
+    assert_eq!(status, CheckStatus::Fail, "{detail}");
+    assert!(
+        detail.contains(git_uplink::TOOLCHAIN_ACTION_PATH),
+        "{detail}"
+    );
+}
+
+#[test]
+fn doctor_fails_when_the_hooks_branch_is_missing() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    git(
+        &world.company,
+        &["branch", "-D", "uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let report = hooks_check(&world.company);
+    assert!(!report.ok);
+    let (status, detail) = hooks_status(&report);
+    assert_eq!(status, CheckStatus::Fail, "{detail}");
+    assert!(detail.contains("git uplink init --upgrade"), "{detail}");
+}
+
+#[test]
+fn init_cli_prints_how_to_publish_the_hooks_branch() {
+    let world = setup_uninitialized();
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args([
+            "init",
+            "--upstream",
+            world.upstream.to_str().unwrap(),
+            "--contrib",
+            &remote_get_url(&world.company, "contrib"),
+            "--forge",
+            "ghec",
+        ])
+        .current_dir(&world.company)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Publish hooks: git uplink push"),
+        "{stdout}"
     );
 }
 

@@ -9,6 +9,7 @@ mod error;
 mod gate;
 mod git;
 mod github;
+mod hooks;
 mod init_report;
 mod inspect;
 mod lock;
@@ -37,6 +38,7 @@ pub use doctor::{DoctorReport, doctor, format_doctor_summary};
 pub use error::{AssessError, ConflictError, Error, PreflightError, Result};
 pub use git::{GitError, GitOpts, GitResult, git, git_ok, git_succeeds};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
+pub use hooks::{HOOKS_BRANCH, HooksPushAction, TOOLCHAIN_ACTION_PATH, hooks_publish_hint};
 pub use init_report::{InitReport, format_init_summary};
 pub use ops::{
     AddPatchOpts, AmendMessage, AmendResult, InitOpts, InitResult, PushOpts, PushResult,

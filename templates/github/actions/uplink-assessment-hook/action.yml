@@ -51,7 +51,7 @@ runs:
         }
         if ! probe=$(gh api "repos/${GH_REPO}/contents/${hook}?ref=uplink%2Fhooks" --jq .path 2>&1); then
           if grep -q "HTTP 404" <<<"$probe"; then
-            echo "No ${hook} on uplink/hooks; skipping extras. See .github/uplink-assessment-hook.md to add one."
+            echo "No ${hook} on uplink/hooks; skipping extras. See assessment-hook.md on uplink/hooks to add one."
             echo "status=skipped" >> "$GITHUB_OUTPUT"
             exit 0
           fi

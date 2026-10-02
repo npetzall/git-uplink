@@ -236,6 +236,11 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Record approval, export, and record the public PR
         env:
           GH_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}

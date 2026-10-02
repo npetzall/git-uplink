@@ -108,6 +108,7 @@ pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
     config.forge = Some(forge);
     init_repo_with_progress(repo, config, &mut progress)?;
     let queue = finish_first_init(repo, &opts, &mut progress)?;
+    ensure_hooks_step(repo, &queue, HooksMode::Create, &mut progress)?;
     append_init_health_checks(repo, &queue, &mut progress);
     Ok(settled(queue, &progress))
 }
@@ -119,7 +120,28 @@ pub(super) fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
     ensure_configured_remotes(repo, &queue.config)?;
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
     ensure_company_branch_ref(repo, COMPANY_REMOTE, &queue.config.internal_branch)?;
+    if let Some(forge) = queue.config.forge {
+        ensure_hooks_branch(repo, forge, HooksMode::FetchOnly)?;
+    }
     Ok(queue)
+}
+
+/// Create `uplink/hooks` locally when neither this clone nor origin has it.
+/// With [`HooksMode::Upgrade`], also add pack files the branch lacks. Existing
+/// files are never changed.
+pub(super) fn ensure_hooks_step(
+    repo: &Path,
+    queue: &QueueState,
+    mode: HooksMode,
+    progress: &mut StepProgress,
+) -> Result<()> {
+    progress.run_step("hooks-branch", "uplink/hooks branch", || {
+        let Some(forge) = queue.config.forge else {
+            return Ok(((), StepOutcome::skip("no forge recorded")));
+        };
+        let outcome = ensure_hooks_branch(repo, forge, mode)?;
+        Ok(((), hooks_step_outcome(outcome)))
+    })
 }
 
 pub(super) fn missing_forge_error() -> Error {
@@ -326,7 +348,14 @@ pub(super) fn init_existing(
         },
     )?;
     resume_incomplete_init(repo, opts, progress)?;
-    read_queue_file(repo)
+    let queue = read_queue_file(repo)?;
+    let mode = if opts.upgrade {
+        HooksMode::Upgrade
+    } else {
+        HooksMode::Create
+    };
+    ensure_hooks_step(repo, &queue, mode, progress)?;
+    Ok(queue)
 }
 
 pub(super) fn init_upgrade(

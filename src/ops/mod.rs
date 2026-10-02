@@ -17,6 +17,9 @@ use crate::gate::{
     format_patch_at_head, recover_onto,
 };
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
+use crate::hooks::{
+    HooksMode, HooksPushAction, ensure_hooks_branch, hooks_step_outcome, push_hooks_branch,
+};
 use crate::init_report::InitReport;
 use crate::inspect::{
     check_forge_tooling, check_remotes_configured, check_upstream_ref, check_urls_recorded,
