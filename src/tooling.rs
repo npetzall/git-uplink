@@ -603,6 +603,7 @@ mod embed_tests {
                 "uplink-gate.yml",
                 "uplink-resolve.yml",
                 "uplink-transfer.yml",
+                "uplink-amend.yml",
             ] {
                 let text = files
                     .iter()
@@ -638,6 +639,11 @@ mod embed_tests {
             assert!(
                 gate.contains("git uplink assess --patch \"${BASE_REF#uplink/conflict/}\""),
                 "{forge:?} gate must assess conflict resolutions\n{gate}"
+            );
+            assert!(
+                gate.contains("\"uplink/amend/**\"")
+                    && gate.contains("git uplink assess --patch \"${BASE_REF#uplink/amend/}\""),
+                "{forge:?} gate must assess amends\n{gate}"
             );
             assert!(
                 !gate.contains("pull-requests: write"),

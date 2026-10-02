@@ -85,6 +85,22 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
   - labels `uplink:transfer-to-upstream` and `uplink:transfer-to-internal`;
   - concurrency group `uplink-mutate`.
 
+## `uplink-amend.yml` — Uplink amend
+
+- **Runs on:** manual dispatch with `patch_id`, and closed pull requests into `uplink/amend/**`.
+- **Does:**
+  - **Start:** refuses if `uplink/amend/<id>` already exists. Runs `git uplink amend`, which replays the queue up to and including the patch. Pushes that as the protected base plus a `-work` branch, and opens a draft PR. Its title and description are the patch title and message.
+  - Push the change to `-work` and edit the PR title and description as needed. Mark it ready and merge.
+  - **Complete:** merging runs `--complete` with the PR title and description, rebuilds `main`, and deletes both branches. A submitted patch becomes `amended`, and the job dispatches **Uplink submit** for the delta. If the rebuild stops on a later patch, it opens that conflict PR the same way sync does.
+  - **Abort:** closing the PR without merging deletes both branches. The queue is unchanged.
+- **Requires:**
+  - the internal App or PAT (contents, workflows, and pull requests write), which opens the amend PR;
+  - the upstream App or PAT for fetch;
+  - variable `UPLINK_PREFLIGHT`;
+  - the Actions token (actions write to dispatch submit);
+  - label `uplink:amend`;
+  - concurrency group `uplink-mutate`.
+
 ## `uplink-abandon.yml` — Uplink abandon contrib
 
 - **Runs on:** dispatch by transfer after `--to-internal` of a submitted patch.
@@ -96,8 +112,8 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 ## `uplink-gate.yml` — Uplink gate
 
-- **Runs on:** pull requests into `uplink/conflict/**`, `uplink/transfer-to-upstream/**`, and `uplink/transfer-to-internal/**` (`pull_request_target`).
-- **Does:** job **Uplink gate** fails if conflict markers remain or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`). For conflict PRs it also runs the upstream assessment on the resolution with the patch's stored message, so a resolution that would leak company text cannot merge. For transfer-to-upstream PRs it runs export preflight.
+- **Runs on:** pull requests into `uplink/conflict/**`, `uplink/transfer-to-upstream/**`, `uplink/transfer-to-internal/**`, and `uplink/amend/**` (`pull_request_target`), including title and description edits.
+- **Does:** job **Uplink gate** fails if conflict markers remain or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`). For conflict PRs it also runs the upstream assessment on the resolution with the patch's stored message, so a resolution that would leak company text cannot merge. For transfer-to-upstream PRs it runs export preflight. For amend PRs it assesses the whole amended patch with the PR title and description as its message.
 - **Requires:**
   - variable `UPLINK_PREFLIGHT`;
   - the Actions token (contents read);

@@ -14,7 +14,8 @@
       "include": [
         "refs/heads/uplink/conflict/**",
         "refs/heads/uplink/transfer-to-upstream/**",
-        "refs/heads/uplink/transfer-to-internal/**"
+        "refs/heads/uplink/transfer-to-internal/**",
+        "refs/heads/uplink/amend/**"
       ],
       "exclude": []
     }

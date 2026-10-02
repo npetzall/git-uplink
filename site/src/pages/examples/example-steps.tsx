@@ -21,6 +21,7 @@ const LABELS = [
   ["uplink:conflict", "B60205", "Uplink sync conflict; resolve via the gated work PR"],
   ["uplink:transfer-to-upstream", "1D76DB", "Uplink gated transfer to the upstream queue"],
   ["uplink:transfer-to-internal", "1D76DB", "Uplink gated transfer to the internal queue"],
+  ["uplink:amend", "0E8A16", "Uplink gated amend of a patch"],
 ];
 
 const VARIABLES = [
@@ -39,7 +40,7 @@ const TOKENS = [
     "internal",
     INTERNAL,
     "Contents: read and write · Workflows: read and write · Pull requests: read and write",
-    "Import, sync, resolve, and transfer push company main and the gated branches (including workflow files) and open the gated PRs",
+    "Import, sync, resolve, transfer, and amend push company main and the gated branches (including workflow files) and open the gated PRs",
   ],
   [
     "upstream",

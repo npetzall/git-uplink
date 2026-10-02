@@ -39,14 +39,14 @@ pub use git::{GitError, GitOpts, GitResult, git, git_ok, git_succeeds};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use init_report::{InitReport, format_init_summary};
 pub use ops::{
-    AddPatchOpts, InitOpts, InitResult, PushOpts, PushResult, QueueCounts, RebuildOpts,
-    RebuildResult, RefreshResult, ResetResult, StateStatus, StatusReport, StatusSnapshot,
-    SubmitResult, SyncResult, TransferResult, accept_upstream, add_patch, approve_patch,
-    approve_patch_at, drop_patch, format_status_table, init, init_repo, init_repo_with_progress,
-    mark_merged, push_queue, read_queue, rebuild, rebuild_with, record_gated_pr,
-    record_pull_request, refresh_from_origin, reset_from_origin, resolve_conflict, state_status_at,
-    status_report, status_snapshot, store_patch_extras, submit_patch, summarize_queue, sync,
-    transfer_patch, write_queue,
+    AddPatchOpts, AmendMessage, AmendResult, InitOpts, InitResult, PushOpts, PushResult,
+    QueueCounts, RebuildOpts, RebuildResult, RefreshResult, ResetResult, StateStatus, StatusReport,
+    StatusSnapshot, SubmitResult, SyncResult, TransferResult, accept_upstream, add_patch,
+    amend_patch, approve_patch, approve_patch_at, drop_patch, format_status_table, init, init_repo,
+    init_repo_with_progress, mark_merged, push_queue, read_queue, rebuild, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, reset_from_origin, resolve_conflict,
+    state_status_at, status_report, status_snapshot, store_patch_extras, submit_patch,
+    summarize_queue, sync, transfer_patch, write_queue,
 };
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,

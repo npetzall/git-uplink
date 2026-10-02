@@ -6,17 +6,17 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use git_uplink::{
-    AddPatchOpts, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight,
-    InitOpts, MergeVia, PreflightError, ProgressMode, PushOpts, RebuildOpts, STATE_BRANCH,
-    TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch, adopted_next_steps, approve_patch_at,
-    assess_from_message, commit_queue, doctor, drop_patch, format_approval_receipt,
-    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
-    format_init_summary, format_status_table, from_upstream_report_paths, git_ok, init,
-    load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
-    preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, status_report, status_snapshot, store_patch_extras, stored_commit_message,
-    submit_patch, sync, transfer_patch,
+    AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT,
+    Forge, IncomingPreflight, InitOpts, MergeVia, PreflightError, ProgressMode, PushOpts,
+    RebuildOpts, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch,
+    adopted_next_steps, amend_patch, approve_patch_at, assess_from_message, commit_queue, doctor,
+    drop_patch, format_approval_receipt, format_assess_markdown,
+    format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
+    format_status_table, from_upstream_report_paths, git_ok, init, load_groups_file, mark_merged,
+    parse_github_repo, parse_pull_request_url, preflight_existing_patch, preflight_incoming_change,
+    push_queue, read_queue, rebuild_with, record_gated_pr, record_pull_request,
+    refresh_from_origin, report_paths, reset_from_origin, resolve_conflict, status_report,
+    status_snapshot, store_patch_extras, stored_commit_message, submit_patch, sync, transfer_patch,
 };
 use git_uplink::{
     Patch, PatchIntent, PatchStatus, QueueState, SubmitResult, SyncResult, TransferDirection,
@@ -148,8 +148,8 @@ enum Commands {
         internal_only: bool,
         #[arg(
             long,
-            conflicts_with_all = ["title", "message", "message_file", "internal_only"],
-            help = "Assess a queued patch with its stored title, message, and layer (for example a conflict resolution)"
+            conflicts_with = "internal_only",
+            help = "Assess a queued patch in its layer, with its stored title and message unless --title or --message[-file] is given (for example a conflict resolution or amend)"
         )]
         patch: Option<String>,
     },
@@ -260,6 +260,22 @@ enum Commands {
         to_internal: bool,
         #[arg(long, help = "Finish a gated transfer after the work PR is merged")]
         complete: bool,
+    },
+    /// Revise a patch through a gated PR from uplink/amend/<id>-work.
+    Amend {
+        id: String,
+        #[arg(long, help = "Fold the merged amend PR into the patch")]
+        complete: bool,
+        #[arg(long, requires = "complete", help = "New patch title")]
+        title: Option<String>,
+        #[arg(long, requires = "title", conflicts_with = "message_file")]
+        message: Option<String>,
+        #[arg(
+            long = "message-file",
+            requires = "title",
+            help = "New commit message, as the PR title and body (- reads stdin)"
+        )]
+        message_file: Option<PathBuf>,
     },
     /// Start the embedded operator dashboard on 127.0.0.1 and open a browser.
     #[command(name = "web-ui")]
@@ -593,6 +609,20 @@ fn print_resolve_artifact(
     queue: &QueueState,
     follow_on_conflict: bool,
 ) -> Result<(), Error> {
+    println!(
+        "{}",
+        resolve_artifact(repo, resolved_id, queue, follow_on_conflict)?
+    );
+    Ok(())
+}
+
+/// `{id, status}` plus the follow-on conflict and its PR, if rebuild stopped.
+fn resolve_artifact(
+    repo: &Path,
+    resolved_id: &str,
+    queue: &QueueState,
+    follow_on_conflict: bool,
+) -> Result<serde_json::Value, Error> {
     let mut gh = serde_json::Map::new();
     let conflict = find_conflict(queue);
     if follow_on_conflict && let Some(patch) = conflict {
@@ -616,6 +646,70 @@ fn print_resolve_artifact(
     if !gh.is_empty() {
         value["gh"] = serde_json::Value::Object(gh);
     }
+    Ok(value)
+}
+
+/// The amend PR description: instructions in a comment (stripped on merge),
+/// then the stored message body, which the author may edit.
+fn amend_body(patch: &Patch, work: &str, base: &str) -> String {
+    let stored = stored_commit_message(patch);
+    let body = match stored.split_once('\n') {
+        Some((subject, rest)) if subject.trim() == patch.title.trim() => rest.trim(),
+        None if stored.trim() == patch.title.trim() => "",
+        _ => stored.trim(),
+    };
+    format!(
+        "<!--\n\
+Uplink amend for `{id}`. Push the change to `{work}`, mark this PR ready, and merge it into `{base}`.\n\
+On merge, the PR title and this description become the patch title and commit message. Text below the internal cutoff line stays internal.\n\
+Closing without merging leaves the patch unchanged.\n\
+-->\n\n{body}\n",
+        id = patch.id,
+    )
+}
+
+fn print_amend_artifact(repo: &Path, result: &AmendResult) -> Result<(), Error> {
+    if result.completed {
+        let mut value = resolve_artifact(repo, &result.id, &result.queue, false)?;
+        value["completed"] = serde_json::Value::Bool(true);
+        value["changed"] = serde_json::Value::Bool(result.changed);
+        println!("{value}");
+        return Ok(());
+    }
+    let patch = result
+        .queue
+        .all_patches()
+        .find(|p| p.id == result.id)
+        .ok_or_else(|| Error::msg(format!("unknown patch {}", result.id)))?;
+    let base = result.base_branch.clone().unwrap_or_default();
+    let work = result.work_branch.clone().unwrap_or_default();
+    let body_file = match report_paths(&result.id) {
+        Ok((dir, _, _)) => format!("{dir}/amend.md"),
+        Err(_) => "amend.md".into(),
+    };
+    write_markdown_file(
+        repo,
+        Path::new(&body_file),
+        &amend_body(patch, &work, &base),
+    )?;
+    let value = serde_json::json!({
+        "id": result.id,
+        "completed": false,
+        "gated": true,
+        "base": base,
+        "work": work,
+        "onto": result.onto,
+        "gh": {
+            "prCreate": {
+                "title": patch.title,
+                "bodyFile": body_file,
+                "head": work,
+                "base": base,
+                "labels": [git_uplink::GateKind::Amend.label()],
+                "draft": true
+            }
+        }
+    });
     println!("{value}");
     Ok(())
 }
@@ -1082,6 +1176,39 @@ fn cmd_resolve(repo: &Path, id: &str) -> Result<(), Error> {
     }
 }
 
+fn cmd_amend(
+    repo: &Path,
+    id: &str,
+    complete: bool,
+    change: Option<AmendMessage>,
+) -> Result<(), Error> {
+    match amend_patch(repo, id, complete, change) {
+        Ok(result) => {
+            print_amend_artifact(repo, &result)?;
+            if !result.completed {
+                eprintln!(
+                    "AMEND {} on {}",
+                    result.id,
+                    result.work_branch.as_deref().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        Err(Error::Conflict(_)) if complete => {
+            let queue = read_queue(repo)?;
+            let mut value = resolve_artifact(repo, id, &queue, true)?;
+            value["completed"] = serde_json::Value::Bool(true);
+            value["changed"] = serde_json::Value::Bool(true);
+            println!("{value}");
+            if let Some(conflict) = find_conflict(&queue) {
+                eprint_conflict(conflict);
+            }
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
 fn cmd_transfer(
     repo: &Path,
     id: &str,
@@ -1192,16 +1319,14 @@ fn run() -> Result<(), Error> {
                     .all_patches()
                     .find(|p| p.id == id)
                     .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
-                let message = stored_commit_message(stored);
+                let title = title.unwrap_or_else(|| stored.title.clone());
+                let message = if message.is_some() || message_file.is_some() {
+                    read_commit_message(message, message_file, &title)?
+                } else {
+                    stored_commit_message(stored)
+                };
                 let internal_only = !queue.is_upstream(&id);
-                return cmd_assess(
-                    &repo,
-                    from,
-                    head,
-                    stored.title.clone(),
-                    message,
-                    internal_only,
-                );
+                return cmd_assess(&repo, from, head, title, message, internal_only);
             }
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
@@ -1278,6 +1403,26 @@ fn run() -> Result<(), Error> {
                 TransferDirection::ToInternal
             };
             cmd_transfer(&repo, &id, direction, complete)
+        }
+        Commands::Amend {
+            id,
+            complete,
+            title,
+            message,
+            message_file,
+        } => {
+            let change = match title {
+                Some(title) => {
+                    let message = if message.is_some() || message_file.is_some() {
+                        Some(read_commit_message(message, message_file, &title)?)
+                    } else {
+                        None
+                    };
+                    Some(AmendMessage { title, message })
+                }
+                None => None,
+            };
+            cmd_amend(&repo, &id, complete, change)
         }
         Commands::WebUi { port, no_open } => cmd_web_ui(repo, port, no_open),
         Commands::Version => {
@@ -1383,6 +1528,46 @@ mod tests {
         assert!(!parse(&["--to-upstream", "--to-internal"]));
         assert!(parse(&["--to-upstream"]));
         assert!(parse(&["--to-internal", "--complete"]));
+    }
+
+    #[test]
+    fn amend_message_flags_need_complete_and_title() {
+        let parse = |args: &[&str]| {
+            let argv = ["git-uplink", "amend", "upl_x"].iter().chain(args);
+            Cli::try_parse_from(argv).is_ok()
+        };
+        assert!(parse(&[]));
+        assert!(parse(&["--complete"]));
+        assert!(parse(&[
+            "--complete",
+            "--title",
+            "T",
+            "--message-file",
+            "m.txt"
+        ]));
+        assert!(!parse(&["--title", "T"]));
+        assert!(!parse(&["--complete", "--message-file", "m.txt"]));
+        assert!(!parse(&[
+            "--complete",
+            "--title",
+            "T",
+            "--message",
+            "m",
+            "--message-file",
+            "f"
+        ]));
+    }
+
+    #[test]
+    fn assess_patch_accepts_a_message_override() {
+        let parse = |args: &[&str]| {
+            let argv = ["git-uplink", "assess", "--patch", "upl_x"]
+                .iter()
+                .chain(args);
+            Cli::try_parse_from(argv).is_ok()
+        };
+        assert!(parse(&["--title", "T", "--message-file", "m.txt"]));
+        assert!(!parse(&["--internal-only"]));
     }
 
     #[test]

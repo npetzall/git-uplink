@@ -35,6 +35,32 @@ pub fn cut_gated_work(
     Ok((base, work))
 }
 
+/// Cuts the amend base at `after` (the patch applied) and a `-work` branch
+/// one empty commit ahead, so a PR can be opened before any change exists.
+/// Leaves HEAD on the work branch.
+pub fn cut_amend_work(repo: &Path, id: &str, after: &str) -> Result<(String, String)> {
+    let base = GateKind::Amend.base_branch(id);
+    let work = GateKind::Amend.work_branch(id);
+    git(repo, &["branch", "-f", &base, after], GitOpts::default())?;
+    git(
+        repo,
+        &["checkout", "-f", "--quiet", "-B", &work, after],
+        GitOpts::default(),
+    )?;
+    git(
+        repo,
+        &[
+            "commit",
+            "--allow-empty",
+            "--quiet",
+            "-m",
+            &format!("uplink: amend {id}"),
+        ],
+        GitOpts::default(),
+    )?;
+    Ok((base, work))
+}
+
 pub fn assert_resolution_clean(repo: &Path) -> Result<()> {
     let unmerged = conflicted_files(repo)?;
     if !unmerged.is_empty() {

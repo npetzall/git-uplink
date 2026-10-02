@@ -296,6 +296,7 @@ pub enum GateKind {
     Conflict,
     TransferToUpstream,
     TransferToInternal,
+    Amend,
 }
 
 impl GateKind {
@@ -304,6 +305,7 @@ impl GateKind {
             Self::Conflict => "conflict",
             Self::TransferToUpstream => "transfer-to-upstream",
             Self::TransferToInternal => "transfer-to-internal",
+            Self::Amend => "amend",
         }
     }
 
@@ -312,6 +314,7 @@ impl GateKind {
             Self::Conflict => "uplink/conflict",
             Self::TransferToUpstream => "uplink/transfer-to-upstream",
             Self::TransferToInternal => "uplink/transfer-to-internal",
+            Self::Amend => "uplink/amend",
         }
     }
 
@@ -328,6 +331,7 @@ impl GateKind {
             Self::Conflict => "uplink:conflict",
             Self::TransferToUpstream => "uplink:transfer-to-upstream",
             Self::TransferToInternal => "uplink:transfer-to-internal",
+            Self::Amend => "uplink:amend",
         }
     }
 }
