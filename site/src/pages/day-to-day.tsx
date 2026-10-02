@@ -228,6 +228,7 @@ git push`}</Code>
         <p>
           The <strong>Uplink gate</strong> check assesses your resolution with the patch&apos;s message, like the
           original PR. If it fails (for example the fix mentions the company), change the resolution before merging.
+          A company-only patch is not assessed; the check runs only the preflight command.
           Get the PR reviewed and merge it. The resolve job updates your patch (same id) and rebuilds{" "}
           <code>main</code>. If a later patch conflicts too, its owner gets the next PR. If your change was already
           submitted, the fix goes to IP as a small delta. After approval, the same public PR is updated.
@@ -249,7 +250,8 @@ git commit -am "Address review on <id>"
 git push`}</Code>
         <p>
           The PR title and description are the patch title and commit message. Edit them if the message should
-          change. The <strong>Uplink gate</strong> check assesses the whole amended patch with that message. Mark
+          change. The <strong>Uplink gate</strong> check assesses the whole amended patch with that message. A
+          company-only patch is not assessed and needs no IP approval; the check runs only the preflight command. Mark
           the PR ready, get it reviewed, and merge it. The patch keeps its id and <code>main</code> is rebuilt. If it
           was already submitted, the change goes to IP as a small delta. After approval, the same public PR is
           updated. Close the PR without merging to cancel.

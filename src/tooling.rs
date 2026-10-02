@@ -646,6 +646,11 @@ mod embed_tests {
                 "{forge:?} gate must assess amends\n{gate}"
             );
             assert!(
+                gate.contains("is_internal \"${BASE_REF#uplink/conflict/}\"")
+                    && gate.contains("is_internal \"${BASE_REF#uplink/amend/}\""),
+                "{forge:?} gate must skip assess for internal-only patches\n{gate}"
+            );
+            assert!(
                 !gate.contains("pull-requests: write"),
                 "{forge:?} gate must not request pull-requests: write\n{gate}"
             );
