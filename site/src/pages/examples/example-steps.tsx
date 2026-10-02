@@ -491,7 +491,7 @@ git checkout -B main upstream/main
 git uplink init --upstream ${repoUrl(UPSTREAM)} --contrib ${repoUrl(CONTRIB)} --forge example-github
 git uplink status
 git push -u origin main
-git push origin uplink/state uplink/upstream
+git push origin uplink/state uplink/upstream uplink/hooks
 git branch seed main && git branch seed-state uplink/state && git branch seed-upstream uplink/upstream
 git push origin seed seed-state seed-upstream`}</Command>
       <p>

@@ -682,15 +682,16 @@ function RulesetList() {
       </li>
       <li>
         <strong>Uplink: pack files</strong> (same refs, including <code>*-work</code>): nobody but the bots may change{" "}
-        <code>.github/workflows/uplink-*.yml</code>, <code>.github/actions/install-git-uplink/**</code>, or{" "}
+        <code>.github/workflows/uplink-*.yml</code>, <code>.github/actions/install-git-uplink/**</code>,{" "}
+        <code>.github/actions/uplink-*/**</code>, or{" "}
         <code>.github/uplink/**</code> on a gated
         branch. Product workflows stay editable. Bypass: the internal App. Sample:{" "}
         <a href={`${GITHUB_BLOB}/templates/github/uplink-pack-files-ruleset.json`}>uplink-pack-files-ruleset.json</a>.
       </li>
       <li>
         <strong>Uplink: hooks branch</strong> (<code>uplink/hooks</code>): pull request with one approval, no deletion or
-        force-push. The assessment hook on this branch runs during every submit. Bypass: GitHub Actions, so the
-        placeholder workflow can update <code>assessment-hook.md</code>. Sample:{" "}
+        force-push. The assessment and toolchain hooks on this branch run on every PR check and submit. No bypass:
+        nothing in Actions writes this branch. Sample:{" "}
         <a href={`${GITHUB_BLOB}/templates/github/uplink-hooks-ruleset.json`}>uplink-hooks-ruleset.json</a>.
       </li>
     </ul>
@@ -727,11 +728,18 @@ function InitBody() {
       <Command>{`git uplink init --upstream {{upstreamUrl}} --contrib {{contribUrl}} --forge ghec
 git uplink status
 git push -u origin main
-git push origin uplink/state uplink/upstream`}</Command>
+git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
       <p>
         <code>status</code> should show <strong>Uplink tooling</strong> in the tooling slot and an empty queue. If
         upstream&apos;s default branch is not <code>main</code>, add <code>--upstream-branch &lt;name&gt;</code> to{" "}
         <code>init</code>.
+      </p>
+      <p>
+        <code>init</code> also creates the orphan branch <code>uplink/hooks</code> locally: the assessment hook guide and
+        starter, and the toolchain hook that sets up the runner before preflight. Edit{" "}
+        <code>.github/actions/uplink-toolchain-hook/action.yml</code> there to install what{" "}
+        <code>UPLINK_PREFLIGHT</code> needs (see <code>toolchain-hook.md</code> on that branch).{" "}
+        <code>git uplink doctor</code> reports if it is not pushed.
       </p>
       <details className="rounded-lg border border-border px-4 py-2">
         <summary className="cursor-pointer text-sm text-foreground">
