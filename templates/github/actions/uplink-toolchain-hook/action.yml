@@ -1,0 +1,62 @@
+name: Uplink toolchain hook
+description: >-
+  Run the company toolchain hook from branch uplink/hooks so preflight can
+  build and test on this runner. A missing hook is skipped with a notice. A
+  failed hook fails the caller: preflight without its toolchain would fail
+  anyway, with a less clear error.
+inputs:
+  token:
+    description: Token with contents read on this repository. Workflows pass secrets.GITHUB_TOKEN.
+    required: true
+outputs:
+  status:
+    description: skipped or success
+    value: ${{ steps.probe.outputs.status }}
+runs:
+  using: composite
+  steps:
+    - name: Look for the hook on uplink/hooks
+      id: probe
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        hook=.github/actions/uplink-toolchain-hook/action.yml
+        # Code from the checked-out ref must never stand in for the hook.
+        rm -rf .uplink-hooks
+        if ! probe=$(gh api "repos/${GH_REPO}/contents/${hook}?ref=uplink%2Fhooks" --jq .path 2>&1); then
+          if grep -q "HTTP 404" <<<"$probe"; then
+            echo "::notice title=Uplink toolchain hook skipped::No ${hook} on uplink/hooks. Run git uplink init --upgrade, then git uplink push."
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error title=Uplink toolchain hook::could not read uplink/hooks: ${probe}"
+          exit 1
+        fi
+        echo "status=success" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      if: steps.probe.outputs.status == 'success'
+      with:
+        ref: uplink/hooks
+        path: .uplink-hooks
+        persist-credentials: false
+        token: ${{ inputs.token }}
+
+    - name: Keep the hook checkout out of git status
+      if: steps.probe.outputs.status == 'success'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if exclude=$(git rev-parse --git-path info/exclude 2>/dev/null); then
+          mkdir -p "$(dirname "$exclude")"
+          grep -qxF '/.uplink-hooks/' "$exclude" 2>/dev/null || echo '/.uplink-hooks/' >> "$exclude"
+        fi
+
+    # $/ would load from this workflow's commit; the hook lives on the
+    # protected orphan branch uplink/hooks, checked out just above.
+    - name: Run the company toolchain hook
+      if: steps.probe.outputs.status == 'success'
+      uses: ./.uplink-hooks/.github/actions/uplink-toolchain-hook # zizmor: ignore[self-repository]

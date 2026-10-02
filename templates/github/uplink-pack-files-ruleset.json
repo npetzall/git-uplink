@@ -27,6 +27,7 @@
         "restricted_file_paths": [
           ".github/workflows/uplink-*.yml",
           ".github/actions/install-git-uplink/**",
+          ".github/actions/uplink-*/**",
           ".github/uplink/**"
         ]
       }

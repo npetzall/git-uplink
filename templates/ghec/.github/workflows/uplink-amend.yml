@@ -250,6 +250,11 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Amend patch and rebuild main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

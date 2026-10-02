@@ -45,6 +45,11 @@ jobs:
           permission-contents: write
           permission-workflows: write
 
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Import as a queued patch
         env:
           TITLE: ${{ github.event.pull_request.title }}

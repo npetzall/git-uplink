@@ -10,7 +10,7 @@
 # later that leaks company text or is missing queued work from main.
 #
 # Assess also runs the optional company assessment hook from branch
-# uplink/hooks (see .github/uplink-assessment-hook.md). Both results go into
+# uplink/hooks (see assessment-hook.md on that branch). Both results go into
 # one PR comment that is updated in place on every run, and into artifact
 # uplink-assessment, which import stores with the patch. A failed hook is
 # noted in the comment; it does not fail the check.
@@ -167,6 +167,11 @@ jobs:
         with:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Export preflight

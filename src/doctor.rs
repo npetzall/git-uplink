@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::error::Result;
+use crate::hooks::check_hooks_branch;
 use crate::init_report::InitReport;
 use crate::inspect::{
     check_adopt_pending, check_branch_sync, check_credentials_contrib, check_credentials_internal,
@@ -71,6 +72,9 @@ pub fn doctor(repo: &Path, mode: ProgressMode) -> Result<DoctorReport> {
     progress.run_check("workflows-on-main", "Workflows on company branch", || {
         check_workflows_on_main(repo, &queue)
             .unwrap_or_else(|err| crate::progress::StepOutcome::fail(err.to_string()))
+    });
+    progress.run_check("hooks-branch", "uplink/hooks branch", || {
+        check_hooks_branch(repo, &queue)
     });
     progress.run_check("credentials-internal", "Internal credentials", || {
         check_credentials_internal(repo)

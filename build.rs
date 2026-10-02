@@ -13,6 +13,7 @@ fn main() {
     println!("cargo:rerun-if-changed=web/vite.config.ts");
     println!("cargo:rerun-if-changed=web/src");
     println!("cargo:rerun-if-changed=templates/github");
+    println!("cargo:rerun-if-changed=templates/github-hooks");
     println!("cargo:rerun-if-changed=templates/ghec");
     println!("cargo:rerun-if-changed=templates/example-github");
     println!("cargo:rerun-if-env-changed=GIT_UPLINK_SKIP_WEB_BUILD");

@@ -30,6 +30,10 @@ struct ExampleGithubPack;
 #[folder = "templates/github"]
 struct GithubFamilyPack;
 
+#[derive(RustEmbed)]
+#[folder = "templates/github-hooks"]
+struct GithubHooksPack;
+
 pub struct ToolingRefresh {
     pub changed: bool,
 }
@@ -188,6 +192,16 @@ pub fn composed_files(forge: Forge) -> Result<Vec<(String, Vec<u8>)>> {
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files.dedup_by(|a, b| a.0 == b.0);
     Ok(files)
+}
+
+/// Files for the orphan branch `uplink/hooks`, which `init` creates locally.
+pub fn hooks_files(forge: Forge) -> Vec<(String, Vec<u8>)> {
+    let mut files = Vec::new();
+    match forge.family() {
+        ForgeFamily::Github => collect_pack::<GithubHooksPack>(&mut files),
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
 }
 
 /// Pack documentation for operators. It is rendered on the site and must not
@@ -450,8 +464,8 @@ mod embed_tests {
             let files = composed_files(forge).unwrap();
             let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
             assert!(
-                paths.contains(&".github/uplink-assessment-hook.md"),
-                "{forge:?} {paths:?}"
+                !paths.contains(&".github/uplink-assessment-hook.md"),
+                "{forge:?} the guide lives on uplink/hooks now {paths:?}"
             );
             assert!(
                 paths.contains(&".github/uplink-hooks-ruleset.json"),
@@ -563,6 +577,77 @@ mod embed_tests {
                 !paths.contains(&".github/workflows/uplink-preflight.yml"),
                 "{forge:?} {paths:?}"
             );
+        }
+    }
+
+    #[test]
+    fn hooks_pack_holds_guides_stub_and_example() {
+        let files = hooks_files(Forge::Ghec);
+        let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                ".github/actions/uplink-toolchain-hook/action.yml",
+                ".github/workflows/uplink-assessment-hook-example.yml",
+                "assessment-hook.md",
+                "toolchain-hook.md",
+            ]
+        );
+        let text = |path: &str| {
+            files
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap()
+        };
+        let stub = text(".github/actions/uplink-toolchain-hook/action.yml");
+        assert!(stub.contains("using: composite"), "{stub}");
+        assert!(stub.contains("toolchain-hook.md"), "{stub}");
+        let example = text(".github/workflows/uplink-assessment-hook-example.yml");
+        assert!(example.contains("caller_run_id"), "{example}");
+        assert!(example.contains("uplink-packet-extra"), "{example}");
+        assert!(
+            !example.contains("\n  push:") && !example.contains("pull_request"),
+            "the example must only run when dispatched\n{example}"
+        );
+        assert_eq!(hooks_files(Forge::ExampleGithub), files);
+    }
+
+    #[test]
+    fn every_preflight_job_runs_the_toolchain_hook_first() {
+        let hook = "uses: $/.github/actions/uplink-toolchain-hook";
+        let preflight = "UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}";
+        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+            let files = composed_files(forge).unwrap();
+            for (path, bytes) in files.iter().filter(|(p, _)| p.ends_with(".yml")) {
+                let text = String::from_utf8_lossy(bytes);
+                let steps: Vec<&str> = text.split("\n      - ").collect();
+                for (i, step) in steps.iter().enumerate() {
+                    if !step.contains(preflight) {
+                        continue;
+                    }
+                    assert!(
+                        i > 0 && steps[i - 1].contains(hook),
+                        "{forge:?} {path}: step before {:?} must run the toolchain hook",
+                        step.lines().next()
+                    );
+                }
+            }
+            let wrapper = files
+                .iter()
+                .find(|(p, _)| p == ".github/actions/uplink-toolchain-hook/action.yml")
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing toolchain hook wrapper"));
+            assert!(wrapper.contains("ref: uplink/hooks"), "{wrapper}");
+            assert!(
+                wrapper.contains("uses: ./.uplink-hooks/.github/actions/uplink-toolchain-hook"),
+                "{wrapper}"
+            );
+            assert!(
+                !wrapper.contains("continue-on-error"),
+                "a failed toolchain hook must fail the job\n{wrapper}"
+            );
+            assert!(wrapper.contains("persist-credentials: false"), "{wrapper}");
         }
     }
 

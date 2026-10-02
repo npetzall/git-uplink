@@ -14,7 +14,8 @@ A failed hook never fails the PR check or submit. It shows as a warning, and the
 
 ## How it is wired
 
-- The forge pack installs a placeholder `.github/workflows/uplink-assessment-hook.yml` on `main`. GitHub only dispatches a workflow whose file exists on the default branch, so the placeholder has to be there. Run it by hand from the Actions tab. It creates `uplink/hooks` if the branch is missing, and writes this file there as `assessment-hook.md`.
+- `git uplink init` creates `uplink/hooks` locally with this file, `toolchain-hook.md`, the toolchain hook stub, and a starter assessment hook. `git uplink push` publishes it with `uplink/state`. `git uplink init --upgrade` adds files a newer pack brings, without changing the ones you have. `git uplink doctor` reports when it is missing or not pushed.
+- The forge pack installs a placeholder `.github/workflows/uplink-assessment-hook.yml` on `main`. GitHub only dispatches a workflow whose file exists on the default branch, so the placeholder has to be there. Running it by hand from the Actions tab prints this file from `uplink/hooks`.
 - Your real hook is `.github/workflows/uplink-assessment-hook.yml` on `uplink/hooks`. Callers look for it there and run it with `--ref uplink/hooks`. If it is missing, they skip the hook.
 
 ## Contract
@@ -34,64 +35,8 @@ A failed hook never fails the PR check or submit. It shows as a warning, and the
 
 ## Add the hook
 
-Save this workflow to `.github/workflows/uplink-assessment-hook.yml` on `uplink/hooks`. Change the "Write company extras" step to run your checks. A push that adds or changes a workflow file needs `workflows` write, so push with your own account or open a pull request against `uplink/hooks`.
-
-```yaml
-name: Uplink assessment hook
-run-name: Uplink assessment hook ${{ inputs.pr }} ${{ inputs.patch }} ${{ inputs.caller_run_id }}
-
-on:
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: Internal pull request number
-        required: false
-        type: string
-      patch:
-        description: Patch id (upl_…)
-        required: false
-        type: string
-      caller_run_id:
-        description: Caller run id (used to match this hook run)
-        required: true
-        type: string
-
-permissions:
-  contents: read
-
-jobs:
-  extra:
-    if: github.ref == 'refs/heads/uplink/hooks'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || 'main' }}
-
-      - name: Write company extras
-        env:
-          PR: ${{ inputs.pr }}
-          PATCH: ${{ inputs.patch }}
-        run: |
-          set -euo pipefail
-          mkdir -p extras
-          subject=${PATCH:-PR #${PR}}
-          cat > extras/10-company.md <<EOF
-          ## Company review notes
-
-          Extra details for ${subject}. Replace this step with Jira,
-          license, or classification output.
-          EOF
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: uplink-packet-extra
-          path: extras/*.md
-          if-no-files-found: error
-```
+Copy `.github/workflows/uplink-assessment-hook-example.yml` to `.github/workflows/uplink-assessment-hook.yml` on `uplink/hooks`. The `-example` name keeps the starter from running. Change its "Write company extras" step to run your checks. A push that adds or changes a workflow file needs `workflows` write, so push with your own account or open a pull request against `uplink/hooks`.
 
 ## Protect the branch
 
-Code on `uplink/hooks` runs on every PR check and submit. Import `.github/uplink-hooks-ruleset.json` as a repository ruleset. Changes to `uplink/hooks` then need a reviewed pull request. GitHub Actions can still push, so the placeholder can keep this file current. The Actions token can never change a workflow file, so it cannot change the hook itself.
+Code on `uplink/hooks` runs on every PR check and submit. Import `.github/uplink-hooks-ruleset.json` from `main` as a repository ruleset. Changes to `uplink/hooks` then need a reviewed pull request.

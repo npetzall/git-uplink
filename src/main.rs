@@ -12,15 +12,16 @@ use git_uplink::{
     adopted_next_steps, amend_patch, approve_patch_at, assess_from_message, commit_queue, doctor,
     drop_patch, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
-    format_status_table, from_upstream_report_paths, git_ok, init, load_groups_file, mark_merged,
-    parse_github_repo, parse_pull_request_url, preflight_existing_patch, preflight_incoming_change,
-    push_queue, read_queue, rebuild_with, record_gated_pr, record_pull_request,
-    refresh_from_origin, report_paths, reset_from_origin, resolve_conflict, status_report,
-    status_snapshot, store_patch_extras, stored_commit_message, submit_patch, sync, transfer_patch,
+    format_status_table, from_upstream_report_paths, git_ok, hooks_publish_hint, init,
+    load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
+    preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
+    resolve_conflict, status_report, status_snapshot, store_patch_extras, stored_commit_message,
+    submit_patch, sync, transfer_patch,
 };
 use git_uplink::{
-    Patch, PatchIntent, PatchStatus, QueueState, SubmitResult, SyncResult, TransferDirection,
-    TransferResult,
+    HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SubmitResult,
+    SyncResult, TransferDirection, TransferResult,
 };
 
 const VERSION: &str = concat!(
@@ -866,6 +867,9 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
                 println!("already up-to-date");
             }
         }
+        if let Some(hint) = hooks_publish_hint(repo) {
+            println!("{hint}");
+        }
     }
     if !result.report.ok {
         return Err(Error::msg(format_init_summary(&result.report)));
@@ -921,6 +925,25 @@ fn cmd_push(repo: &Path, push_remote: Option<String>) -> Result<(), Error> {
         "{} {} to {} at {}",
         result.action, result.branch, result.remote, result.sha
     );
+    let remote = &result.remote;
+    match &result.hooks {
+        HooksPushAction::Absent => {}
+        HooksPushAction::UpToDate => println!("up-to-date {HOOKS_BRANCH} on {remote}"),
+        HooksPushAction::Pushed => println!("pushed {HOOKS_BRANCH} to {remote}"),
+        HooksPushAction::Behind => println!(
+            "{HOOKS_BRANCH} on {remote} is ahead of the local branch; not pushed. \
+Update it with: git fetch {remote} {HOOKS_BRANCH}:{HOOKS_BRANCH}"
+        ),
+        HooksPushAction::Diverged => eprintln!(
+            "warning: {HOOKS_BRANCH} differs from {remote}; not pushed. \
+Fetch it, reconcile, and run git uplink push again."
+        ),
+        HooksPushAction::Rejected(err) => eprintln!(
+            "warning: {remote} refused {HOOKS_BRANCH}: {err}\n\
+If a ruleset protects {HOOKS_BRANCH}, push it to a topic branch and open a pull request against it. \
+Adding workflow files also needs a token with workflows scope."
+        ),
+    }
     Ok(())
 }
 

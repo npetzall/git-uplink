@@ -48,6 +48,8 @@ pub struct PushResult {
     pub remote: String,
     pub branch: String,
     pub sha: String,
+    /// What happened to `uplink/hooks`, pushed after `uplink/state`.
+    pub hooks: HooksPushAction,
 }
 
 pub fn push_queue(repo: &Path, opts: PushOpts) -> Result<PushResult> {
@@ -59,7 +61,10 @@ pub fn push_queue(repo: &Path, opts: PushOpts) -> Result<PushResult> {
         let mut last_error = None;
         for attempt in 0..8 {
             match push_queue_once(repo, &remote) {
-                Ok(result) => return Ok(result),
+                Ok(mut result) => {
+                    result.hooks = push_hooks_branch(repo, &remote)?;
+                    return Ok(result);
+                }
                 Err(err) => {
                     let retry = is_push_lease_rejected(&err) && attempt + 1 < 8;
                     if !retry {
@@ -90,6 +95,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
             remote: remote.into(),
             branch,
             sha: rev_parse(repo, STATE_BRANCH)?,
+            hooks: HooksPushAction::Absent,
         });
     };
 
@@ -99,6 +105,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
             remote: remote.into(),
             branch,
             sha: local_sha,
+            hooks: HooksPushAction::Absent,
         });
     }
 
@@ -109,6 +116,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
             remote: remote.into(),
             branch,
             sha: local_sha,
+            hooks: HooksPushAction::Absent,
         });
     }
 
@@ -119,6 +127,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
             remote: remote.into(),
             branch,
             sha: remote_sha,
+            hooks: HooksPushAction::Absent,
         });
     }
 
@@ -135,6 +144,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
         remote: remote.into(),
         branch,
         sha: rev_parse(repo, STATE_BRANCH)?,
+        hooks: HooksPushAction::Absent,
     })
 }
 
