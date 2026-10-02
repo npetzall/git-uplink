@@ -28,4 +28,4 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 type(scope): imperative subject
 ```
 
-Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`. Scopes when useful: `cli`, `web`, `site`, `ci`. Subject is lowercase imperative, with no trailing period. Breaking changes use `!` or a `BREAKING CHANGE:` footer.
+Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`. Scopes when useful: `cli`, `web`, `site`, `ci`, `forge`. Subject is lowercase imperative, with no trailing period. Breaking changes use `!` or a `BREAKING CHANGE:` footer. Type and Scope `ci` is only for this project. If changes are done in templates it's scope is most likely `forge`.
