@@ -15,10 +15,11 @@ They are the [GitHub Enterprise Cloud workflows](../ghec/README.md) with two dif
 | `uplink-sync.yml` — Uplink sync | **Actions → Uplink sync** after upstream moves; foreign commits wait for your approval on `from-upstream`; a conflict opens a gated PR | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; Environment `from-upstream`; label `uplink:conflict` |
 | `uplink-resolve.yml` — Uplink resolve | Runs when you merge a gated conflict PR (story 04) | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; label `uplink:conflict` |
 | `uplink-transfer.yml` — Uplink transfer | **Actions → Uplink transfer** to move a patch between queues | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; labels `uplink:transfer-to-upstream`, `uplink:transfer-to-internal` |
+| `uplink-amend.yml` — Uplink amend | **Actions → Uplink amend** with a patch id opens a draft PR to revise it; merging updates the patch (and re-submits a submitted one) | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; label `uplink:amend` |
 | `uplink-abandon.yml` — Uplink abandon contrib | Dispatched by transfer after moving a submitted patch to internal; waits on `abandon-contrib` | `UPLINK_CONTRIB_TOKEN` on Environment `abandon-contrib`; `UPLINK_UPSTREAM_TOKEN` |
-| `uplink-gate.yml` — Uplink gate | Required check on gated conflict and transfer PRs | Variable `UPLINK_PREFLIGHT` |
+| `uplink-gate.yml` — Uplink gate | Required check on gated conflict, transfer, and amend PRs | Variable `UPLINK_PREFLIGHT` |
 
-The internal token opens the gated conflict and transfer PRs, so it needs **Pull requests: read and write** besides Contents and Workflows.
+The internal token opens the gated conflict, transfer, and amend PRs, so it needs **Pull requests: read and write** besides Contents and Workflows.
 
 ## Reset example
 

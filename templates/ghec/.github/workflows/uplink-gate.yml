@@ -7,11 +7,12 @@ name: Uplink gate
 
 on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data; contents: read; persist-credentials: false
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
     branches:
       - "uplink/conflict/**"
       - "uplink/transfer-to-upstream/**"
       - "uplink/transfer-to-internal/**"
+      - "uplink/amend/**"
 
 concurrency:
   group: uplink-gate-${{ github.event.pull_request.number }}
@@ -49,11 +50,12 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: |
           git uplink init
+          # Depth 2 keeps the base's parent: an amend assesses from it.
           auth=$(printf 'x-access-token:%s' "$UPLINK_INTERNAL_TOKEN" | base64 -w0)
           git \
             -c "http.${GITHUB_SERVER_URL}/.extraheader=" \
             -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
-            fetch origin "$BASE_REF" --depth=1
+            fetch origin "$BASE_REF" --depth=2
           if git diff --name-only "$FROM_SHA" "$HEAD_SHA" | grep -E \
             -q '^(\.github/workflows/uplink-.*\.yml|\.github/actions/install-git-uplink/)'; then
             echo "Gated PRs must not change Uplink pack files (uplink-*.yml / install-git-uplink)."
@@ -69,6 +71,18 @@ jobs:
             # message, as resolve will after merge. A failure blocks the merge.
             git uplink assess --patch "${BASE_REF#uplink/conflict/}" \
               --from "$FROM_SHA" \
+              --head "$HEAD_SHA"
+          elif [[ "$BASE_REF" == uplink/amend/* ]]; then
+            # The PR title and description become the patch message on merge.
+            # Assess the whole amended patch (base^ is the commit before it).
+            {
+              printf '%s\n\n' "$TITLE"
+              printf '%s\n' "${BODY:-}"
+            } > /tmp/uplink-msg.txt
+            git uplink assess --patch "${BASE_REF#uplink/amend/}" \
+              --title "$TITLE" \
+              --message-file /tmp/uplink-msg.txt \
+              --from "${FROM_SHA}^" \
               --head "$HEAD_SHA"
           elif [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
             {

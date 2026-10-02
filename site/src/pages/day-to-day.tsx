@@ -17,6 +17,7 @@ const SCENARIOS = [
   ["preflight-fails", "Preflight fails"],
   ["main-moved", "Main moved under my PR"],
   ["conflict", "My change conflicts with upstream"],
+  ["amend", "Change a patch that is already queued or submitted"],
   ["transfer", "Move a change between internal and upstream"],
   ["where-is-it", "Where is my change?"],
 ];
@@ -232,6 +233,27 @@ git push`}</Code>
           submitted, the fix goes to IP as a small delta. After approval, the same public PR is updated.
         </p>
         <Lab scenario="upstream-conflict">Upstream conflict</Lab>
+      </Section>
+
+      <Section id="amend" title="Change a patch that is already queued or submitted">
+        <p>
+          Use this to fix a company-only patch, rework an upstream patch before it is submitted, or answer a
+          maintainer who asked for changes on the public PR. Dispatch <strong>Uplink amend</strong> with the patch id.
+          You get a draft PR labelled <code>uplink:amend</code> from <code>uplink/amend/&lt;id&gt;-work</code>. Its
+          base already has the queue applied up to and including your patch.
+        </p>
+        <Code>{`git fetch origin
+git switch uplink/amend/<id>-work
+# make the change
+git commit -am "Address review on <id>"
+git push`}</Code>
+        <p>
+          The PR title and description are the patch title and commit message. Edit them if the message should
+          change. The <strong>Uplink gate</strong> check assesses the whole amended patch with that message. Mark
+          the PR ready, get it reviewed, and merge it. The patch keeps its id and <code>main</code> is rebuilt. If it
+          was already submitted, the change goes to IP as a small delta. After approval, the same public PR is
+          updated. Close the PR without merging to cancel.
+        </p>
       </Section>
 
       <Section id="transfer" title="Move a change between internal and upstream">

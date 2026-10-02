@@ -4,17 +4,18 @@ use std::process::Command;
 use std::thread;
 
 use git_uplink::{
-    AddPatchOpts, AdoptGroup, ApprovalReceipt, CheckStatus, ConflictError, DEFAULT_CUTOFF, Error,
-    Forge, GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch, PatchIntent, PatchStatus,
-    ProgressMode, PushOpts, QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH,
-    StepOutcome, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream,
-    add_patch, approve_patch, doctor, drop_patch, extras_dir, format_approval_receipt,
-    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
-    format_step_line, from_upstream_report_paths, git, git_ok, init, init_repo,
-    load_extra_markdown, mark_merged, parse_depends_on, preflight_incoming_change, push_queue,
-    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
-    reset_from_origin, resolve_conflict, status_snapshot, store_patch_extras, stored_extras_fresh,
-    strip_html_comments, submit_patch, summarize_queue, sync, transfer_patch, write_queue,
+    AddPatchOpts, AdoptGroup, AmendMessage, ApprovalReceipt, CheckStatus, ConflictError,
+    DEFAULT_CUTOFF, Error, Forge, GitOpts, IncomingPreflight, InitOpts, MergeVia, Patch,
+    PatchIntent, PatchStatus, ProgressMode, PushOpts, QueueConfig, QueueState, RebuildOpts, Result,
+    STATE_BRANCH, StepOutcome, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
+    accept_upstream, add_patch, amend_patch, approve_patch, doctor, drop_patch, extras_dir,
+    format_approval_receipt, format_approver_packet, format_contribution_packet,
+    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
+    git_ok, init, init_repo, load_extra_markdown, mark_merged, parse_depends_on,
+    preflight_incoming_change, push_queue, rebuild, rebuild_with, record_gated_pr,
+    record_pull_request, refresh_from_origin, report_paths, reset_from_origin, resolve_conflict,
+    status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch,
+    summarize_queue, sync, transfer_patch, write_queue,
 };
 use tempfile::TempDir;
 
@@ -7620,5 +7621,259 @@ fn preflight_keeps_uncommitted_work_and_rebuild_refuses_it() {
     assert_eq!(
         git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
         "feat/hash"
+    );
+}
+
+fn add_ttl_patch(company: &Path) -> Patch {
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+/// Commits `file = contents` on the amend work branch and squash-merges it
+/// into the base, as the gated PR would. Leaves HEAD on the base.
+fn amend_on_work_and_squash(company: &Path, id: &str, file: &str, contents: &str) {
+    let base = format!("uplink/amend/{id}");
+    let work = format!("{base}-work");
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, file, contents);
+    commit_all(company, "address review");
+    git(company, &["checkout", "--quiet", &base], GitOpts::default()).unwrap();
+    git(company, &["merge", "--squash", &work], GitOpts::default()).unwrap();
+    git(company, &["commit", "-m", "Amend (#7)"], GitOpts::default()).unwrap();
+}
+
+fn patch_of(company: &Path, id: &str) -> Patch {
+    git_uplink::read_queue(company)
+        .unwrap()
+        .all_patches()
+        .find(|p| p.id == id)
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn amend_start_cuts_the_patch_and_a_seeded_work_branch_without_touching_the_queue() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let state_before = rev_of(company, STATE_BRANCH);
+    let result = amend_patch(company, &patch.id, false, None).unwrap();
+    assert!(!result.completed);
+    let base = result.base_branch.unwrap();
+    let work = result.work_branch.unwrap();
+    assert_eq!(base, format!("uplink/amend/{}", patch.id));
+    assert_eq!(work, format!("{base}-work"));
+    assert_eq!(
+        git_ok(company, &["show", &format!("{base}:NOTES.md")]).unwrap(),
+        "internal-notes"
+    );
+    assert_eq!(rev_of(company, &format!("{work}^")), rev_of(company, &base));
+    assert_eq!(
+        rev_of(company, &format!("{work}^{{tree}}")),
+        rev_of(company, &format!("{base}^{{tree}}"))
+    );
+    assert_eq!(
+        rev_of(company, &format!("{base}^")),
+        result.onto.unwrap(),
+        "base is onto plus the patch"
+    );
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+}
+
+#[test]
+fn amend_refuses_dropped_patches_and_a_message_without_complete() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let early = amend_patch(
+        company,
+        &patch.id,
+        false,
+        Some(AmendMessage {
+            title: "x".into(),
+            message: None,
+        }),
+    )
+    .unwrap_err();
+    assert!(early.to_string().contains("--complete"), "{early}");
+    drop_patch(company, &patch.id, "not needed").unwrap();
+    let err = amend_patch(company, &patch.id, false, None).unwrap_err();
+    assert!(err.to_string().contains("dropped"), "{err}");
+}
+
+#[test]
+fn amend_complete_refreshes_an_internal_patch_and_rebuilds_main() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    amend_patch(company, &patch.id, false, None).unwrap();
+    amend_on_work_and_squash(company, &patch.id, "NOTES.md", "internal-notes\nreviewed\n");
+    let done = amend_patch(company, &patch.id, true, None).unwrap();
+    assert!(done.completed && done.changed, "{done:?}");
+    let after = patch_of(company, &patch.id);
+    assert_eq!(after.status, PatchStatus::Queued);
+    assert_eq!(after.title, patch.title);
+    assert_ne!(after.patch_id_stable, patch.patch_id_stable);
+    assert!(after.events.iter().any(|e| e.kind == "amended"));
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    assert_eq!(
+        git_ok(company, &["show", "main:NOTES.md"]).unwrap(),
+        "internal-notes\nreviewed"
+    );
+    let stored = git_ok(
+        company,
+        &[
+            "show",
+            &format!("{STATE_BRANCH}:.uplink/patches/{}.patch", patch.id),
+        ],
+    )
+    .unwrap();
+    assert!(stored.contains("+reviewed"), "{stored}");
+    assert_eq!(
+        git_ok(company, &["log", "-1", "--format=%s", "main"]).unwrap(),
+        "Internal notes"
+    );
+}
+
+#[test]
+fn amend_complete_of_a_submitted_patch_takes_the_pr_message_and_is_amended() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_ttl_patch(company);
+    commit_contribution_packet(company, &patch);
+    approve_patch(company, &patch.id).unwrap();
+    let submitted = submit_patch(company, &patch.id, true).unwrap();
+    record_pull_request(
+        company,
+        &patch.id,
+        99,
+        "https://github.com/upstream/tokenkit/pull/99",
+        &submitted.branch,
+        None,
+    )
+    .unwrap();
+
+    amend_patch(company, &patch.id, false, None).unwrap();
+    // A merge commit instead of a squash: the patch commit stays first-parent.
+    let base = format!("uplink/amend/{}", patch.id);
+    let work = format!("{base}-work");
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 5400;"),
+    );
+    commit_all(company, "maintainer asked for 5400");
+    git(company, &["checkout", "--quiet", &base], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["merge", "--no-ff", "--no-edit", &work],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let done = amend_patch(
+        company,
+        &patch.id,
+        true,
+        Some(AmendMessage {
+            title: "Extend TTL to 90 minutes".into(),
+            message: Some(
+                "Extend TTL to 90 minutes\n\n<!-- instructions -->\nPer review.\n".into(),
+            ),
+        }),
+    )
+    .unwrap();
+    assert!(done.changed);
+    let after = patch_of(company, &patch.id);
+    assert_eq!(after.status, PatchStatus::Amended);
+    assert_eq!(after.title, "Extend TTL to 90 minutes");
+    assert!(after.commit_message.contains("Per review."), "{after:?}");
+    assert!(!after.commit_message.contains("instructions"));
+    assert!(after.assess.as_ref().unwrap().ok);
+    assert!(
+        git_ok(company, &["show", "main:src/tokens.js"])
+            .unwrap()
+            .contains("return 5400;")
+    );
+    let delta = approve_patch(company, &patch.id).unwrap();
+    assert_eq!(delta.approvals.last().unwrap().kind, "delta");
+}
+
+#[test]
+fn amend_complete_refuses_a_leaking_message_and_keeps_the_branch() {
+    let world = setup_world();
+    let company = &world.company;
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.config.redact_keywords = vec!["AcmeCorp".into()];
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: redact keywords").unwrap();
+    let patch = add_ttl_patch(company);
+    amend_patch(company, &patch.id, false, None).unwrap();
+    amend_on_work_and_squash(
+        company,
+        &patch.id,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 5400;"),
+    );
+    let base = format!("uplink/amend/{}", patch.id);
+    let before = rev_of(company, &base);
+    let err = amend_patch(
+        company,
+        &patch.id,
+        true,
+        Some(AmendMessage {
+            title: "AcmeCorp TTL".into(),
+            message: None,
+        }),
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::Assess(_)), "{err}");
+    assert_eq!(rev_of(company, &base), before);
+    assert_eq!(patch_of(company, &patch.id).title, patch.title);
+}
+
+#[test]
+fn amend_complete_without_changes_leaves_the_queue() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    amend_patch(company, &patch.id, false, None).unwrap();
+    let base = format!("uplink/amend/{}", patch.id);
+    git(company, &["checkout", "--quiet", &base], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["merge", "--no-ff", "--no-edit", &format!("{base}-work")],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let state_before = rev_of(company, STATE_BRANCH);
+    let done = amend_patch(company, &patch.id, true, None).unwrap();
+    assert!(done.completed && !done.changed, "{done:?}");
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
     );
 }

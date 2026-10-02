@@ -37,6 +37,7 @@ git uplink drop <id> [--reason <text>]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
 git uplink resolve <id>
 git uplink transfer <id> --to-upstream|--to-internal [--complete]
+git uplink amend <id> [--complete [--title <text> [--message <text>|--message-file <file>]]]
 git uplink web-ui [--port 43721] [--no-open]
 git uplink version
 ```
@@ -142,6 +143,10 @@ Resolve re-runs the upstream assessment on the resolution and refuses an upstrea
 - **`transfer`** moves a patch between queues, or prints gated branches for a transfer PR when apply, assess (`--to-upstream`), or preflight fails (also exit 0).
   - `--to-internal` refuses while an active upstream patch still depends on this id.
   - A successful `--to-internal` of a submitted patch prints `gh.prClose` (`url`, `contribBranch`) so Actions can dispatch **Uplink abandon contrib**.
+- **`amend`** revises a patch through a gated PR: an internal-only patch, an upstream patch not yet submitted, or a submitted one a maintainer asked to change.
+  - Without `--complete` it replays the queue on `uplink/upstream` up to and including the patch, cuts protected `uplink/amend/<id>` there, and cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can open at once. The queue is not touched. It prints `base`, `work`, and `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the stored message after an HTML-comment instruction block).
+  - `--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight command (internal). A failing upstream assessment is refused and the branch is left as it was. A submitted patch becomes **`amended`** (IP approves the delta, then submit force-pushes the contrib branch); otherwise it is `queued`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was.
+  - Conflicted, merged, dropped, and tooling patches cannot be amended.
 - **`drop`** removes a patch. `--reason` defaults to `dropped by operator`.
 - **`rebuild`** replays `main` from the queue, optionally onto `--branch` for preview, and `--push` publishes it.
 

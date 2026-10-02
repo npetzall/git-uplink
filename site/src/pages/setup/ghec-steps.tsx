@@ -38,6 +38,7 @@ const LABELS = [
   ["uplink:conflict", "B60205", "Uplink sync conflict; resolve via the gated work PR"],
   ["uplink:transfer-to-upstream", "1D76DB", "Uplink gated transfer to the upstream queue"],
   ["uplink:transfer-to-internal", "1D76DB", "Uplink gated transfer to the internal queue"],
+  ["uplink:amend", "0E8A16", "Uplink gated amend of a patch"],
 ];
 
 const VARIABLES = [
@@ -114,8 +115,8 @@ const GATED_RULESET = `{
     { "actor_id": {{internalAppId}}, "actor_type": "Integration", "bypass_mode": "always" }
   ],
   "conditions": { "ref_name": {
-    "include": ["refs/heads/uplink/conflict/**", "refs/heads/uplink/transfer-to-upstream/**", "refs/heads/uplink/transfer-to-internal/**"],
-    "exclude": ["refs/heads/uplink/conflict/*-work", "refs/heads/uplink/transfer-to-upstream/*-work", "refs/heads/uplink/transfer-to-internal/*-work"] } },
+    "include": ["refs/heads/uplink/conflict/**", "refs/heads/uplink/transfer-to-upstream/**", "refs/heads/uplink/transfer-to-internal/**", "refs/heads/uplink/amend/**"],
+    "exclude": ["refs/heads/uplink/conflict/*-work", "refs/heads/uplink/transfer-to-upstream/*-work", "refs/heads/uplink/transfer-to-internal/*-work", "refs/heads/uplink/amend/*-work"] } },
   "rules": [
     { "type": "creation" },
     { "type": "deletion" },
@@ -140,7 +141,7 @@ const PACK_RULESET = `{
     { "actor_id": {{internalAppId}}, "actor_type": "Integration", "bypass_mode": "always" }
   ],
   "conditions": { "ref_name": {
-    "include": ["refs/heads/uplink/conflict/**", "refs/heads/uplink/transfer-to-upstream/**", "refs/heads/uplink/transfer-to-internal/**"],
+    "include": ["refs/heads/uplink/conflict/**", "refs/heads/uplink/transfer-to-upstream/**", "refs/heads/uplink/transfer-to-internal/**", "refs/heads/uplink/amend/**"],
     "exclude": [] } },
   "rules": [
     { "type": "file_path_restriction", "parameters": {
@@ -676,7 +677,7 @@ function RulesetList() {
         the internal App, which rebuilds <code>main</code>.
       </li>
       <li>
-        <strong>Uplink: gated bases</strong> (<code>uplink/conflict/**</code>, <code>uplink/transfer-to-*/**</code>,
+        <strong>Uplink: gated bases</strong> (<code>uplink/conflict/**</code>, <code>uplink/transfer-to-*/**</code>, <code>uplink/amend/**</code>,
         excluding <code>*-work</code>): pull request with one approval, required check <code>Uplink gate</code>, no direct creation, deletion, or force-push. Bypass: the internal App, which creates and deletes these branches.
       </li>
       <li>

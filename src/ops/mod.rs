@@ -48,6 +48,7 @@ use crate::types::{
 };
 
 mod add;
+mod amend;
 mod init;
 mod lifecycle;
 mod push;
@@ -58,6 +59,7 @@ mod sync;
 mod transfer;
 
 pub use add::*;
+pub use amend::*;
 pub use init::*;
 pub use lifecycle::*;
 pub use push::*;

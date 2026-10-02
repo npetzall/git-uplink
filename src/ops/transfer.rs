@@ -160,7 +160,7 @@ pub(super) fn start_transfer(
             &["checkout", "-f", "--quiet", "--detach", upstream_ref],
             GitOpts::default(),
         )?;
-        let target = match apply_transfer_preview(repo, &preview, &snapshot, id)? {
+        let target = match apply_queue_preview(repo, &preview, &snapshot, id, false)? {
             PreviewOutcome::Conflict { onto, files } => {
                 return gate_transfer(
                     repo,
@@ -229,17 +229,17 @@ pub(super) fn start_transfer(
     }
 }
 
-/// Commits around the transferred patch in the preview apply.
+/// Commits around the target patch in the preview apply.
 #[derive(Default)]
-struct TransferTarget {
-    /// HEAD before the transferred patch applied.
-    onto: Option<String>,
+pub(super) struct TransferTarget {
+    /// HEAD before the target patch applied.
+    pub(super) onto: Option<String>,
     /// HEAD after it applied.
-    after: Option<String>,
+    pub(super) after: Option<String>,
 }
 
-enum PreviewOutcome {
-    /// The transferred patch itself did not apply on `onto`.
+pub(super) enum PreviewOutcome {
+    /// The target patch itself did not apply on `onto`.
     Conflict {
         onto: String,
         files: Vec<String>,
@@ -247,17 +247,19 @@ enum PreviewOutcome {
     Applied(TransferTarget),
 }
 
-fn not_previewed(id: &str) -> Error {
+pub(super) fn not_previewed(id: &str) -> Error {
     Error::msg(format!("{id} was not applied during transfer preview"))
 }
 
-/// Applies the queue as it would look after the move, from a detached
-/// upstream checkout. Only a conflict in the transferred patch can be gated.
-fn apply_transfer_preview(
+/// Applies `preview` in order from a detached upstream checkout. Only a
+/// conflict in the target patch `id` can be gated. With `stop_after_target`,
+/// HEAD is left on the target patch's commit.
+pub(super) fn apply_queue_preview(
     repo: &Path,
     preview: &QueueState,
     snapshot: &Path,
     id: &str,
+    stop_after_target: bool,
 ) -> Result<PreviewOutcome> {
     let mut target = TransferTarget::default();
     for item in apply_order_active(preview)? {
@@ -272,9 +274,20 @@ fn apply_transfer_preview(
         let result = apply_patch_file(repo, &item, &patch_file, false)?;
         if result == ApplyOutcome::Conflict {
             if item.id != id {
+                let why = if stop_after_target {
+                    "does not apply; run sync or resolve first"
+                } else {
+                    "would not apply after the move"
+                };
                 return Err(Error::msg(format!(
-                    "Cannot transfer {id}: {} (\"{}\") would not apply after the move.",
-                    item.id, item.title
+                    "Cannot {} {id}: {} (\"{}\") {why}.",
+                    if stop_after_target {
+                        "amend"
+                    } else {
+                        "transfer"
+                    },
+                    item.id,
+                    item.title
                 )));
             }
             return Ok(PreviewOutcome::Conflict {
@@ -285,6 +298,9 @@ fn apply_transfer_preview(
         if item.id == id {
             target.onto = Some(onto_here);
             target.after = Some(rev_parse(repo, "HEAD")?);
+            if stop_after_target {
+                break;
+            }
         }
     }
     Ok(PreviewOutcome::Applied(target))

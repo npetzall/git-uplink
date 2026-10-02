@@ -95,6 +95,11 @@ const BRANCHES = [
     role: "Protected transfer bases (to-upstream / to-internal). Not recorded on the queue until the move succeeds. Close the PR without merging to abort.",
   },
   {
+    ref: "uplink/amend/<id>",
+    where: "Private forge",
+    role: "Protected amend base: upstream plus the queue up to and including the patch. The -work branch starts one empty commit ahead so the draft PR opens at once. Merging runs amend --complete; closing aborts.",
+  },
+  {
     ref: "feat/*",
     where: "Private forge",
     role: "Ordinary internal PR branches. One branch per change.",
@@ -231,6 +236,7 @@ const GATES = [
   ["Inbound upstream", "git uplink sync", "from-upstream Environment", "git uplink accept-upstream"],
   ["Conflict", "git uplink sync / resolve", "gated PR into uplink/conflict/<id>", "git uplink resolve"],
   ["Transfer", "git uplink transfer", "transfer PR", "git uplink transfer --complete"],
+  ["Amend", "git uplink amend", "draft PR into uplink/amend/<id>", "git uplink amend --complete"],
   ["Withdraw contribution", "git uplink transfer --to-internal", "abandon-contrib Environment", "close public PR, delete fork branch"],
 ];
 
