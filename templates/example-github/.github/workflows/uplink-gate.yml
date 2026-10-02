@@ -69,7 +69,24 @@ jobs:
             echo "Conflict markers still present; remove them before merge."
             exit 1
           fi
-          if [[ "$BASE_REF" == uplink/conflict/* ]]; then
+          # Internal-only patches never leave the company: skip the upstream
+          # assessment and run only the preflight command, as for
+          # transfer-to-internal. If the queue cannot be read, assess.
+          is_internal() {
+            local queue
+            queue=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json 2>/dev/null) || return 1
+            jq -e --arg id "$1" 'any(.internal[]?; .id == $id)' <<<"$queue" >/dev/null
+          }
+          run_preflight() {
+            if [ -n "$UPLINK_PREFLIGHT" ]; then
+              sh -c "$UPLINK_PREFLIGHT"
+            fi
+          }
+          if [[ "$BASE_REF" == uplink/conflict/* ]] && is_internal "${BASE_REF#uplink/conflict/}"; then
+            run_preflight
+          elif [[ "$BASE_REF" == uplink/amend/* ]] && is_internal "${BASE_REF#uplink/amend/}"; then
+            run_preflight
+          elif [[ "$BASE_REF" == uplink/conflict/* ]]; then
             # The resolution is new code: assess it with the patch's stored
             # message, as resolve will after merge. A failure blocks the merge.
             git uplink assess --patch "${BASE_REF#uplink/conflict/}" \
@@ -98,7 +115,5 @@ jobs:
               --from "$FROM_SHA" \
               --head "$HEAD_SHA"
           elif [[ "$BASE_REF" == uplink/transfer-to-internal/* ]]; then
-            if [ -n "$UPLINK_PREFLIGHT" ]; then
-              sh -c "$UPLINK_PREFLIGHT"
-            fi
+            run_preflight
           fi

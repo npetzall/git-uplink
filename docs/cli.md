@@ -120,7 +120,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - **`submit`** exports the patch onto the contrib fork (git only) and prints JSON for `POST /repos/{parent}/pulls`. `head` is the branch from `.branch`; `head_repo` is `<contrib_owner>/<contrib_repo>`.
 - **`submitted`** records the PR URL, commits the queue, and pushes company `uplink/state`.
 
-Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. After a submitted patch is conflict-resolved it becomes **`amended`** until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you.
+Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only `UPLINK_PREFLIGHT`. After a submitted patch is conflict-resolved it becomes **`amended`** until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you.
 
 ### Merge detection
 
