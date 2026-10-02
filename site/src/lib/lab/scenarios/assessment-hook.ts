@@ -13,29 +13,28 @@ export const assessmentHook: LabScenario = {
   id: "assessment-hook",
   title: "07 — Assessment hook",
   blurb:
-    "Create uplink/hooks from the pack placeholder and add the hook there. Submit Asha; extras prepend onto the packet. The hook never enters the queue or leaves the private forge.",
+    "Turn on the starter hook on uplink/hooks, which git uplink init created. Submit Asha; extras prepend onto the packet. The hook never enters the queue or leaves the private forge.",
   highlight: "Uplink assessment hook",
   initial: exampleSeed,
   startOperations: startExample(),
   steps: [
     {
       id: "set-up-hooks",
-      title: "Create uplink/hooks and add the hook",
+      title: "Add the hook on uplink/hooks",
       summary:
-        "Run the pack's Uplink assessment hook placeholder on main. It creates the orphan branch uplink/hooks with assessment-hook.md. Copy the starter YAML from that guide to .github/workflows/uplink-assessment-hook.yml on uplink/hooks. Pushing a workflow file needs workflows write.",
+        "git uplink init created the orphan branch uplink/hooks with assessment-hook.md and a starter hook, and you pushed it at setup. Copy .github/workflows/uplink-assessment-hook-example.yml to .github/workflows/uplink-assessment-hook.yml there. Pushing a workflow file needs workflows write.",
       why: "Hooks are company-only, so they stay off main and out of the queue. GitHub only dispatches workflows whose file is on the default branch; the placeholder lets submit run the uplink/hooks version.",
       operations: [
         ciJob(
           "Uplink assessment hook",
           ["gh workflow run uplink-assessment-hook.yml --ref main"],
-          "Placeholder on main. Creates the orphan branch uplink/hooks if missing; otherwise updates assessment-hook.md only when it changed.",
+          "Placeholder on main. Prints assessment-hook.md from uplink/hooks; writes nothing.",
         ),
         you(
           [
-            "git fetch origin uplink/hooks",
             "git switch uplink/hooks",
-            "mkdir -p .github/workflows",
-            "# copy the YAML block from assessment-hook.md",
+            "git pull --ff-only origin uplink/hooks",
+            "cp .github/workflows/uplink-assessment-hook-example.yml .github/workflows/uplink-assessment-hook.yml",
             "git add .github/workflows/uplink-assessment-hook.yml",
             'git commit -m "Add Uplink assessment hook"',
             "git push origin uplink/hooks",
@@ -48,7 +47,7 @@ export const assessmentHook: LabScenario = {
         stepId: "set-up-hooks",
         log: [
           ...state.log,
-          "Created orphan branch uplink/hooks with assessment-hook.md and the hook workflow. The queue is unchanged.",
+          "Added the hook workflow on uplink/hooks. The queue is unchanged.",
         ],
       }),
     },
@@ -115,6 +114,33 @@ export const assessmentHook: LabScenario = {
           ],
         };
       },
+    },
+    {
+      id: "remove-hook",
+      title: "Remove the hook",
+      summary:
+        "Reset example does not touch uplink/hooks. Revert every commit on uplink/hooks since init created it, so the hook workflow disappears and the stubs are back.",
+      why: "Later stories assume no assessment hook. Reverting keeps the branch history; uplink/hooks rejects force-pushes under its ruleset.",
+      operations: [
+        you(
+          [
+            "git switch uplink/hooks",
+            "git pull --ff-only origin uplink/hooks",
+            'git revert --no-edit "$(git rev-list --max-parents=0 HEAD)..HEAD"',
+            "git push origin uplink/hooks",
+            "git switch main",
+          ],
+          "With uplink-hooks-ruleset.json imported, push the reverts to a topic branch and open a pull request against uplink/hooks instead.",
+        ),
+      ],
+      apply: (state) => ({
+        ...state,
+        stepId: "remove-hook",
+        log: [
+          ...state.log,
+          "Reverted the hook commits on uplink/hooks. PR checks and submit skip the assessment hook again. The queue is unchanged.",
+        ],
+      }),
     },
   ],
 };
