@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Release version from the latest vX.Y.Z tag and conventional commits since that tag.
-# No tag starts at 0.0.0. Commits are applied oldest-first, excluding merges.
-# Breaking increments major and resets minor and patch. feat increments minor and
-# resets patch. Every other commit increments patch.
+# No tag starts at 0.0.0. Merges are excluded. Each run bumps at most once,
+# by the highest-ranking commit: any breaking commit increments major and resets
+# minor and patch, else any feat increments minor and resets patch, else any
+# other commit increments patch. No commits leaves the version unchanged.
 # A normal run prints current_tag, current_version, next_tag, and next_version.
 set -euo pipefail
 
@@ -53,33 +54,66 @@ is_feat_subject() {
   return 1
 }
 
-bump_message() {
-  local version="$1"
-  local message="$2"
-  local major minor patch subject
-  IFS=. read -r major minor patch <<<"$version"
-  subject="${message%%$'\n'*}"
+# Prints major, minor, or patch for one commit message.
+bump_kind() {
+  local message="$1"
   if is_breaking_message "$message"; then
-    major=$((major + 1))
-    minor=0
-    patch=0
-  elif is_feat_subject "$subject"; then
-    minor=$((minor + 1))
-    patch=0
+    printf 'major\n'
+  elif is_feat_subject "${message%%$'\n'*}"; then
+    printf 'minor\n'
   else
-    patch=$((patch + 1))
+    printf 'patch\n'
   fi
+}
+
+# Prints the higher of two kinds (none < patch < minor < major).
+max_kind() {
+  local a="$1"
+  local b="$2"
+  local kind
+  for kind in major minor patch; do
+    if [[ "$a" == "$kind" || "$b" == "$kind" ]]; then
+      printf '%s\n' "$kind"
+      return 0
+    fi
+  done
+  printf 'none\n'
+}
+
+bump_version() {
+  local version="$1"
+  local kind="$2"
+  local major minor patch
+  IFS=. read -r major minor patch <<<"$version"
+  case "$kind" in
+    major)
+      major=$((major + 1))
+      minor=0
+      patch=0
+      ;;
+    minor)
+      minor=$((minor + 1))
+      patch=0
+      ;;
+    patch)
+      patch=$((patch + 1))
+      ;;
+  esac
   printf '%d.%d.%d\n' "$major" "$minor" "$patch"
 }
 
 apply_messages() {
   local version="$1"
   shift
+  local kind="none"
   local message
   for message in "$@"; do
-    version="$(bump_message "$version" "$message")"
+    kind="$(max_kind "$kind" "$(bump_kind "$message")")"
+    if [[ "$kind" == "major" ]]; then
+      break
+    fi
   done
-  printf '%s\n' "$version"
+  bump_version "$version" "$kind"
 }
 
 expect_version() {
@@ -93,12 +127,16 @@ expect_version() {
 }
 
 self_check() {
-  expect_version "$(apply_messages 0.0.0 "docs: readme" "fix: bug")" "0.0.2" "no tag, docs then fix"
+  expect_version "$(apply_messages 1.2.3)" "1.2.3" "no commits"
+  expect_version "$(apply_messages 0.0.0 "docs: readme" "fix: bug")" "0.0.1" "no tag, docs then fix"
+  expect_version "$(apply_messages 0.0.0 "fix: a" "fix: b")" "0.0.1" "patch bumps once"
   expect_version "$(apply_messages 0.1.3 "feat: add")" "0.2.0" "v0.1.3 plus feat"
   expect_version "$(apply_messages 1.2.3 "feat!: break api")" "2.0.0" "v1.2.3 plus breaking"
-  expect_version "$(apply_messages 0.1.3 "feat: add" "fix: bug")" "0.2.1" "feat resets patch"
-  expect_version "$(apply_messages 0.1.3 "fix: bug" "feat: add")" "0.2.0" "later feat resets patch"
-  expect_version "$(apply_messages 1.2.3 "feat: add" "$(printf 'fix: x\n\nBREAKING CHANGE: drop api')")" "2.0.0" "breaking footer resets"
+  expect_version "$(apply_messages 0.1.3 "feat: add" "fix: bug")" "0.2.0" "feat wins over later fix"
+  expect_version "$(apply_messages 0.1.3 "fix: bug" "feat: add")" "0.2.0" "feat wins over earlier fix"
+  expect_version "$(apply_messages 0.1.3 "feat: a" "feat: b")" "0.2.0" "minor bumps once"
+  expect_version "$(apply_messages 1.2.3 "feat!: a" "feat: b" "fix: c")" "2.0.0" "breaking wins"
+  expect_version "$(apply_messages 1.2.3 "feat: add" "$(printf 'fix: x\n\nBREAKING CHANGE: drop api')")" "2.0.0" "breaking footer wins"
   printf 'self-check ok\n'
 }
 
@@ -109,8 +147,9 @@ semver_tag() {
 apply_log() {
   local version="$1"
   local remaining="$2"
+  local kind="none"
   local message
-  while [[ -n "$remaining" ]]; do
+  while [[ -n "$remaining" && "$kind" != "major" ]]; do
     message="${remaining%%$'\x1e'*}"
     if [[ "$remaining" == *$'\x1e'* ]]; then
       remaining="${remaining#*$'\x1e'}"
@@ -123,9 +162,9 @@ apply_log() {
     if [[ -z "${message//[[:space:]]/}" ]]; then
       continue
     fi
-    version="$(bump_message "$version" "$message")"
+    kind="$(max_kind "$kind" "$(bump_kind "$message")")"
   done
-  printf '%s\n' "$version"
+  bump_version "$version" "$kind"
 }
 
 is_semver() {
@@ -138,11 +177,11 @@ compute_from_git() {
   if [[ -n "$base_tag" ]]; then
     current_tag="$base_tag"
     current_version="${base_tag#v}"
-    log="$(git log --reverse --no-merges --pretty=format:%B%x1e "${base_tag}..HEAD")"
+    log="$(git log --no-merges --pretty=format:%B%x1e "${base_tag}..HEAD")"
   else
     current_tag=""
     current_version="0.0.0"
-    log="$(git log --reverse --no-merges --pretty=format:%B%x1e)"
+    log="$(git log --no-merges --pretty=format:%B%x1e)"
   fi
   next_version="$(apply_log "$current_version" "$log")"
   if ! is_semver "$current_version" || ! is_semver "$next_version"; then
