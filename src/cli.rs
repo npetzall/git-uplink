@@ -10,7 +10,7 @@ Developers open PRs and merge them; they never push main. `add` records a merged
 
 On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment; `approve` and `submit` run after that review. git uplink talks to git only; workflows use gh for GitHub and follow-up commands (`submitted`, `gated`) to record results.
 
-The binary is `git-uplink`, so Git treats it as `git uplink`. Use `git-uplink -h` or `git uplink -h` for a summary, and `git uplink <command> --help` for one command. Plain `git uplink --help` goes through Git's man-page path, not clap.";
+The binary is `git-uplink`, so Git treats it as `git uplink`. Use `git-uplink -h` or `git uplink -h` for a summary, and `git uplink <command> --help` for one command. Plain `git uplink --help` goes through Git's man-page path; install the pages with `git uplink man`.";
 
 /// Cross-cutting topics, as (title, body). They follow the commands in the long
 /// help, the man page, and `docs/cli.md`.
@@ -648,6 +648,18 @@ pub enum Commands {
         /// Do not launch a browser.
         #[arg(long)]
         no_open: bool,
+    },
+    /// Write the man pages into a directory.
+    ///
+    /// Writes `git-uplink.1` and one page per command, generated from this
+    /// help text when the binary was built. Give it a `man1` directory on the
+    /// man path, for example `git uplink man ~/.local/share/man/man1`. After
+    /// that, `git uplink --help` shows the manual through Git, and `man
+    /// git-uplink-<command>` the page of one command.
+    Man {
+        /// Directory to write the pages into; created when missing.
+        #[arg(value_name = "dir")]
+        dir: PathBuf,
     },
     /// Print the git uplink version and the commit it was built from.
     ///
