@@ -10,7 +10,7 @@ The workflows themselves are identical. The setup sets the repository variables 
 
 | Workflow | In the walkthrough | Needs |
 | --- | --- | --- |
-| `uplink-pr.yml` — Uplink PR checks | Runs on every story PR to `main`: **Uplink upstream assess** and **Uplink upstream preflight** | Variables `UPLINK_REDACT_KEYWORDS`, `UPLINK_INTERNAL_DOMAINS`, `UPLINK_PREFLIGHT`; label `uplink:internal-only` |
+| `uplink-pr.yml` — Uplink PR checks | Runs on every story PR to `main`: **Uplink upstream assess** and **Uplink upstream preflight** | `uplink.toml` on `uplink/hooks` (written by `init` in the setup); label `uplink:internal-only` |
 | `uplink-import.yml` — Uplink import | Runs when you merge a story PR; records the patch as `queued` | `UPLINK_INTERNAL_TOKEN` |
 | `uplink-submit.yml` — Uplink submit | **Actions → Uplink submit** with a patch id; stops early if an upstream dependency is not merged; waits for your approval on `to-upstream`, then GitHub creates the signed commit on the fork (`.github/uplink/contrib_commit.py`) and the upstream PR is opened. With a PAT the commit is not shown as Verified | `UPLINK_CONTRIB_TOKEN` on Environment `to-upstream`; `UPLINK_UPSTREAM_TOKEN` |
 | `uplink-sync.yml` — Uplink sync | **Actions → Uplink sync** after upstream moves; foreign commits wait for your approval on `from-upstream`; a conflict opens a gated PR | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; Environment `from-upstream`; label `uplink:conflict` |
@@ -18,7 +18,7 @@ The workflows themselves are identical. The setup sets the repository variables 
 | `uplink-transfer.yml` — Uplink transfer | **Actions → Uplink transfer** to move a patch between queues | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; labels `uplink:transfer-to-upstream`, `uplink:transfer-to-internal` |
 | `uplink-amend.yml` — Uplink amend | **Actions → Uplink amend** with a patch id opens a draft PR to revise it; merging updates the patch (and re-submits a submitted one) | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; label `uplink:amend` |
 | `uplink-abandon.yml` — Uplink abandon contrib | Dispatched by transfer after moving a submitted patch to internal; waits on `abandon-contrib` | `UPLINK_CONTRIB_TOKEN` on Environment `abandon-contrib`; `UPLINK_UPSTREAM_TOKEN` |
-| `uplink-gate.yml` — Uplink gate | Required check on gated conflict, transfer, and amend PRs | Variable `UPLINK_PREFLIGHT` |
+| `uplink-gate.yml` — Uplink gate | Required check on gated conflict, transfer, and amend PRs | `preflight` in `uplink.toml` |
 
 The internal token opens the gated conflict, transfer, and amend PRs, so it needs **Pull requests: read and write** besides Contents and Workflows.
 

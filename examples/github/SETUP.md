@@ -45,4 +45,4 @@ git switch -C main origin/main
 
 Actions clears remotes; `git fetch origin --prune` drops stale remote-tracking branches, and `git switch -C <branch> main` recreates a clean local feature branch from company `main` (even if that branch name already exists from a previous story).
 
-The repository variables the stories rely on (for example `UPLINK_REDACT_KEYWORDS`) are set in the setup's **Repository variables** step.
+The settings the stories rely on (for example `redact_keywords`) are written to `uplink.toml` on `uplink/hooks` by `git uplink init` in the setup.
