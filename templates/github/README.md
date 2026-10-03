@@ -44,13 +44,14 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 - **Runs on:** manual dispatch. `uplink-sync-schedule.yml` (**Uplink sync schedule**) dispatches it every hour with the Actions token (actions write); that is all it does.
 - **Does:**
-  - **Inspect:** `git uplink sync` fetches public upstream without moving `uplink/upstream`. Commits that are our own merged patches apply at once: promote, mark merged, rebuild. Anything else writes `.uplink/reports/from-upstream/incoming.md`.
-  - **Wait:** holds on Environment `from-upstream`.
-  - **Apply:** after approval, `git uplink accept-upstream` promotes and rebuilds.
+  - **Merged PRs:** before sync, the job asks the upstream repository whether the public PR recorded for each active upstream patch is merged, and passes each merge commit as `git uplink sync --merged-pr <id>=<sha>`.
+  - **Inspect:** `git uplink sync` fetches public upstream without moving `uplink/upstream`. A patch is merged when a commit has its stable patch id or its public PR is merged; an `Uplink-Patch-Id` trailer alone is not enough. When the merged patches explain the whole range, sync promotes, marks them merged, and rebuilds at once. Otherwise it writes the remaining diff to `.uplink/reports/from-upstream/incoming.md`.
+  - **Wait:** holds on Environment `from-upstream`. The packet lists the patches that approval marks merged, any that the maintainer changed, and commits whose trailer names a patch they do not match.
+  - **Apply:** after approval, `git uplink accept-upstream --sha <reviewed sha>` promotes, marks those patches merged, and rebuilds. It stops if the pending upstream is no longer the reviewed one.
   - **Conflict:** a conflict pushes `uplink/conflict/<id>` plus `-work` and opens a gated PR labelled `uplink:conflict`. The run stays green.
 - **Requires:**
   - the internal App or PAT (contents, workflows, and pull requests write), which also opens the gated PR;
-  - the upstream App or PAT, optional for an `https://` upstream;
+  - the upstream App or PAT, optional for an `https://` upstream. It also reads the public PRs (pull requests read); without it a merged patch is still found by its patch id or an empty apply;
   - Environment `from-upstream` with inbound reviewers and no secrets;
   - label `uplink:conflict`;
   - concurrency group `uplink-sync` for the workflow and `uplink-mutate` for inspect and apply.

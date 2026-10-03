@@ -682,6 +682,39 @@ mod embed_tests {
     }
 
     #[test]
+    fn sync_passes_merged_prs_and_accepts_only_the_reviewed_upstream() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-sync.yml"))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing uplink-sync.yml"));
+            let lookup = text
+                .find("name: Find merged public pull requests")
+                .unwrap_or_else(|| panic!("{forge:?} sync must look up merged PRs\n{text}"));
+            let sync = text.find("git uplink sync \"${merged[@]}\"").unwrap();
+            assert!(lookup < sync, "{forge:?}\n{text}");
+            assert!(
+                text.contains("merged+=(--merged-pr \"$item\")"),
+                "{forge:?}"
+            );
+            assert!(
+                text.contains("pulls/${number}") && !text.contains(".upstream.prUrl"),
+                "{forge:?} the PR is looked up by number on the configured upstream\n{text}"
+            );
+            assert!(
+                text.contains("git uplink accept-upstream --sha \"$PENDING_SHA\""),
+                "{forge:?} apply must name the reviewed upstream\n{text}"
+            );
+            assert!(
+                text.contains("PENDING_SHA: ${{ needs.inspect.outputs.pending_sha }}"),
+                "{forge:?}\n{text}"
+            );
+        }
+    }
+
+    #[test]
     fn abandon_contrib_is_detached_from_uplink_mutate() {
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();

@@ -2,11 +2,16 @@
 # Installs git-uplink from a GitHub release.
 # Empty UPLINK_*_AUTH defaults to app.
 #
-# Inspect fetches public upstream without moving uplink/upstream. Flowed-back
-# patches (trailer / patch-id) apply immediately. Foreign commits write
-# .uplink/reports/from-upstream/incoming.md and wait on Environment
-# `from-upstream`. After approval, accept-upstream promotes uplink/upstream
-# and rebuilds company main. Queue history lives on uplink/state (FF-only).
+# Inspect fetches public upstream without moving uplink/upstream. A patch is
+# merged when a commit has its stable patch id, or when its recorded public
+# pull request is merged (looked up here and passed as --merged-pr). When the
+# merged patches explain the whole range, sync applies it immediately.
+# Otherwise the remaining diff goes to
+# .uplink/reports/from-upstream/incoming.md and waits on Environment
+# `from-upstream`. After approval, accept-upstream promotes uplink/upstream,
+# marks those patches merged, and rebuilds company main. It refuses a pending
+# upstream other than the reviewed one. Queue history lives on uplink/state
+# (FF-only).
 # On apply failure it records the patch as conflict on uplink/state,
 # pushes uplink/conflict/<id> (protected base) and <id>-work, and opens
 # a gated PR. Do not push the protected base directly.
@@ -36,6 +41,7 @@ jobs:
       queue: max
     outputs:
       needs_approval: ${{ steps.sync.outputs.needs_approval }}
+      pending_sha: ${{ steps.sync.outputs.pending_sha }}
     steps:
       - uses: $/.github/actions/install-git-uplink
         with:
@@ -109,6 +115,41 @@ jobs:
           owner: ${{ steps.queue.outputs.upstream_owner }}
           repositories: ${{ steps.queue.outputs.upstream_repo }}
           permission-contents: read
+          permission-pull-requests: read
+
+      # Proof that a patch merged: the public PR recorded on the queue is
+      # merged. Sync checks the merge commit against the range it fetches.
+      # The upstream repository comes from the queue config and the PR by
+      # number, not from the stored PR URL.
+      - name: Find merged public pull requests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          UPSTREAM_REPO: ${{ steps.queue.outputs.upstream_owner }}/${{ steps.queue.outputs.upstream_repo }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/uplink-merged-prs"
+          : > "$out"
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
+          open=$(jq -r '
+            .upstream[]?
+            | select(.status != "merged" and .status != "dropped")
+            | select(.upstream.prNumber != null)
+            | "\(.id) \(.upstream.prNumber)"
+          ' <<<"$queue")
+          while read -r id number; do
+            [ -n "$id" ] || continue
+            if ! sha=$(GH_TOKEN="$UPSTREAM_TOKEN" gh api "repos/${UPSTREAM_REPO}/pulls/${number}" \
+              --jq 'select(.merged) | .merge_commit_sha // empty' 2>&1); then
+              echo "::warning title=Uplink sync::could not read public PR #${number} for ${id}: ${sha}"
+              continue
+            fi
+            if [[ "$sha" =~ ^[0-9a-f]{40,64}$ ]]; then
+              printf '%s=%s\n' "$id" "$sha" >> "$out"
+              echo "${id}: public PR #${number} merged at ${sha}"
+            fi
+          done <<<"$open"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,10 +168,15 @@ jobs:
           git uplink init
           main_before=$(git rev-parse HEAD)
 
-          sync_json=$(git uplink sync)
+          merged=()
+          while IFS= read -r item; do
+            if [ -n "$item" ]; then merged+=(--merged-pr "$item"); fi
+          done < "$RUNNER_TEMP/uplink-merged-prs"
+          sync_json=$(git uplink sync "${merged[@]}")
 
           needs_approval=$(jq -r '.needsApproval // false' <<<"$sync_json")
           echo "needs_approval=${needs_approval}" >> "$GITHUB_OUTPUT"
+          echo "pending_sha=$(jq -r '.pendingSha // empty' <<<"$sync_json")" >> "$GITHUB_OUTPUT"
           summary=$(jq -r '.summary // empty' <<<"$sync_json")
           if [ -n "$summary" ]; then
             printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
@@ -198,7 +244,7 @@ jobs:
 
   apply:
     name: Apply accepted upstream
-    needs: wait-from-upstream
+    needs: [inspect, wait-from-upstream]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -295,11 +341,13 @@ jobs:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
           UPLINK_FROM_UPSTREAM_ENVIRONMENT: from-upstream
+          PENDING_SHA: ${{ needs.inspect.outputs.pending_sha }}
         run: |
           git uplink init
           main_before=$(git rev-parse HEAD)
 
-          sync_json=$(git uplink accept-upstream)
+          # Only the pending upstream that was reviewed is accepted.
+          sync_json=$(git uplink accept-upstream --sha "$PENDING_SHA")
           summary=$(jq -r '.summary // empty' <<<"$sync_json")
           if [ -n "$summary" ]; then
             printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
