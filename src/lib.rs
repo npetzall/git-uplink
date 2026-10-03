@@ -14,6 +14,7 @@ mod hooks;
 mod init_report;
 mod inspect;
 mod lock;
+mod man;
 mod ops;
 mod preflight;
 mod progress;
@@ -43,6 +44,7 @@ pub use git::{GitError, GitOpts, GitResult, git, git_ok, git_succeeds};
 pub use github::{parse_github_repo, parse_issue_url, parse_pull_request_url};
 pub use hooks::{HOOKS_BRANCH, HooksPushAction, TOOLCHAIN_ACTION_PATH, hooks_publish_hint};
 pub use init_report::{InitReport, format_init_summary};
+pub use man::write_man_pages;
 pub use ops::{
     AddPatchOpts, AmendMessage, AmendResult, InitOpts, InitResult, PushOpts, PushResult,
     QueueCounts, RebuildOpts, RebuildResult, RefreshResult, ResetResult, StateStatus, StatusReport,

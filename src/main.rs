@@ -18,7 +18,7 @@ use git_uplink::{
     preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
     resolve_conflict, status_report, status_snapshot, store_patch_extras, stored_commit_message,
-    submit_patch, sync, transfer_patch,
+    submit_patch, sync, transfer_patch, write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
@@ -1232,6 +1232,12 @@ fn run() -> Result<(), Error> {
             cmd_amend(&repo, &id, complete, change)
         }
         Commands::WebUi { port, no_open } => cmd_web_ui(repo, port, no_open),
+        Commands::Man { dir } => {
+            for path in write_man_pages(&dir)? {
+                println!("{}", path.display());
+            }
+            Ok(())
+        }
         Commands::Version => {
             println!("git-uplink {VERSION}");
             Ok(())

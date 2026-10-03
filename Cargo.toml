@@ -37,6 +37,11 @@ indicatif = "=0.18.6"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 toml = "=1.1.6"
 
+[build-dependencies]
+clap = { version = "=4.6.7", features = ["derive", "env"] }
+clap_mangen = "=0.3.3"
+roff = "=1.1.1"
+
 [dev-dependencies]
 tempfile = "=3.27.0"
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }
