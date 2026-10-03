@@ -23,7 +23,7 @@ export function startExample(): LabOperation[] {
 export function startLifecycle(): LabOperation[] {
   return [
     you(
-      ["git uplink init --upstream <url> --contrib <url> --forge ghec"],
+      ["git uplink init --upstream <url> --contrib <url> --forge github"],
       "Greenfield: company main matches public upstream. Init installs the tooling pack.",
     ),
   ];

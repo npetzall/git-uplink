@@ -6,8 +6,8 @@ import { SetupGuide } from "../components/setup/guide";
 import type { Mode } from "../components/setup/step";
 import type { Derive, Field } from "../components/setup/values";
 import { renderRepoMarkdown } from "../lib/markdown";
-import { GHEC_FIELDS, GhecSteps, ghecDerive } from "./setup/ghec-steps";
-import ghecWorkflows from "../../../templates/ghec/README.md?raw";
+import { GITHUB_FIELDS, GithubSteps, githubDerive } from "./setup/github-steps";
+import githubWorkflows from "../../../templates/github/README.md?raw";
 
 /** One entry per production-ready forge. Add a forge by adding an entry. */
 const FORGES: {
@@ -20,13 +20,13 @@ const FORGES: {
   source: string;
 }[] = [
   {
-    id: "ghec",
-    label: "GitHub Enterprise Cloud",
-    Steps: GhecSteps,
-    fields: GHEC_FIELDS,
-    derive: ghecDerive,
-    workflows: ghecWorkflows,
-    source: "templates/ghec/README.md",
+    id: "github",
+    label: "GitHub",
+    Steps: GithubSteps,
+    fields: GITHUB_FIELDS,
+    derive: githubDerive,
+    workflows: githubWorkflows,
+    source: "templates/github/README.md",
   },
 ];
 

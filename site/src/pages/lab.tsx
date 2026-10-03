@@ -10,7 +10,7 @@ export function LabPage() {
         <p className="text-lg leading-8 text-muted-foreground">
           Pick a scenario and step through the same lifecycle the git uplink engine tests against
           real git. Toggle Manual to see every CLI command you would type, or CI for only the git
-          uplink (and gh) lines the GHEC workflows run.
+          uplink (and gh) lines the GitHub workflows run.
         </p>
       </div>
       <LabClient />

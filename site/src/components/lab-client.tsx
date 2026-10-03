@@ -244,7 +244,7 @@ export function LabClient() {
               </CardTitle>
               <p className="text-xs text-muted-foreground">
                 {mode === "ci"
-                  ? "What the matching GHEC workflow runs. GitHub UI (open PR, merge, dispatch, approve environment) is the trigger, not extra shell."
+                  ? "What the matching GitHub workflow runs. GitHub UI (open PR, merge, dispatch, approve environment) is the trigger, not extra shell."
                   : "Everything you would type locally: git plus git uplink. No Actions."}
               </p>
             </CardHeader>

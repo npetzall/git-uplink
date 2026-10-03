@@ -265,7 +265,7 @@ export function InternalsPage() {
     >
       <Section title="What init does">
         <p>
-          <code>git uplink init --upstream &lt;url&gt; --contrib &lt;url&gt; --forge ghec</code> runs once per
+          <code>git uplink init --upstream &lt;url&gt; --contrib &lt;url&gt; --forge github</code> runs once per
           product repository. Every CI job then runs a bare <code>git uplink init</code> to hydrate its checkout.
         </p>
         <MermaidDiagram chart={INIT_CHART} title="init: create, adopt, hydrate, or upgrade" />
