@@ -6,7 +6,7 @@
 # author, keyword / internal-email scan) and posts the report. Preflight
 # applies the unique diff onto public upstream plus declared
 # Uplink-Depends-On, then tooling + queued upstream (internal omitted),
-# then UPLINK_PREFLIGHT. Fail these instead of opening a contribution
+# then the preflight command from uplink.toml on uplink/hooks. Fail these instead of opening a contribution
 # later that leaks company text or is missing queued work from main.
 #
 # Assess also runs the optional company assessment hook from branch
@@ -59,8 +59,6 @@ jobs:
         id: assess
         env:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UPLINK_REDACT_KEYWORDS: ${{ vars.UPLINK_REDACT_KEYWORDS }}
-          UPLINK_INTERNAL_DOMAINS: ${{ vars.UPLINK_INTERNAL_DOMAINS }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
@@ -179,7 +177,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}

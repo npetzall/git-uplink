@@ -7,15 +7,15 @@ use git_uplink::{
     AddPatchOpts, AdoptGroup, AmendMessage, ApprovalReceipt, CheckStatus, ConflictError,
     DEFAULT_CUTOFF, Error, Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
     Patch, PatchIntent, PatchStatus, ProgressMode, PushOpts, QueueConfig, QueueState, RebuildOpts,
-    Result, STATE_BRANCH, StepOutcome, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
-    accept_upstream, add_patch, amend_patch, approve_patch, doctor, drop_patch, extras_dir,
-    format_approval_receipt, format_approver_packet, format_contribution_packet,
-    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
-    git_ok, init, init_repo, load_extra_markdown, mark_merged, parse_depends_on,
-    preflight_incoming_change, push_queue, rebuild, rebuild_with, record_gated_pr,
-    record_pull_request, refresh_from_origin, report_paths, reset_from_origin, resolve_conflict,
-    status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch,
-    summarize_queue, sync, transfer_patch, write_queue,
+    Result, STATE_BRANCH, Settings, SettingsFlags, StepOutcome, TOOLING_PATCH_KIND,
+    TOOLING_PATCH_TITLE, TransferDirection, accept_upstream, add_patch, amend_patch, approve_patch,
+    doctor, drop_patch, extras_dir, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
+    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
+    parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
+    resolve_conflict, status_snapshot, store_patch_extras, stored_extras_fresh,
+    strip_html_comments, submit_patch, summarize_queue, sync, transfer_patch, write_queue,
 };
 use tempfile::TempDir;
 
@@ -171,6 +171,59 @@ fn keep_dir() -> PathBuf {
     let path = dir.path().to_path_buf();
     std::mem::forget(dir);
     path
+}
+
+/// Commit `uplink.toml` with `edit` applied on `uplink/hooks`, creating the
+/// branch in worlds that have none.
+fn set_settings(repo: &Path, edit: impl FnOnce(&mut Settings)) {
+    let mut settings = Settings::default();
+    edit(&mut settings);
+    let blob = git(
+        repo,
+        &["hash-object", "-w", "--stdin"],
+        GitOpts {
+            input: Some(settings.render().as_bytes()),
+            ..GitOpts::default()
+        },
+    )
+    .unwrap()
+    .stdout;
+    let index = keep_dir().join("index");
+    let with_index = || GitOpts {
+        extra_env: vec![(
+            "GIT_INDEX_FILE".into(),
+            index.to_string_lossy().into_owned(),
+        )],
+        ..GitOpts::default()
+    };
+    let parent = has_git_ref(repo, "refs/heads/uplink/hooks").then(|| rev_of(repo, "uplink/hooks"));
+    match &parent {
+        Some(parent) => git(repo, &["read-tree", parent], with_index()).unwrap(),
+        None => git(repo, &["read-tree", "--empty"], with_index()).unwrap(),
+    };
+    git(
+        repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{blob},uplink.toml"),
+        ],
+        with_index(),
+    )
+    .unwrap();
+    let tree = git(repo, &["write-tree"], with_index()).unwrap().stdout;
+    let mut args = vec!["commit-tree", tree.as_str(), "-m", "settings"];
+    if let Some(parent) = &parent {
+        args.extend_from_slice(&["-p", parent]);
+    }
+    let commit = git_ok(repo, &args).unwrap();
+    git(
+        repo,
+        &["update-ref", "refs/heads/uplink/hooks", &commit],
+        GitOpts::default(),
+    )
+    .unwrap();
 }
 
 fn tree_has_uplink(repo: &Path, git_ref: &str) -> bool {
@@ -3757,10 +3810,7 @@ fn resolve_refuses_a_resolution_that_fails_the_assessment() {
     .unwrap();
     assert!(ttl_patch.assess.as_ref().unwrap().ok);
 
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.redact_keywords = vec!["AcmeCorp".into()];
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: redact AcmeCorp").unwrap();
+    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
 
     write(
         upstream,
@@ -5511,12 +5561,8 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     .unwrap();
     approve_patch(company, &hash_patch.id).unwrap();
 
-    // Isolate the failing command on this repo's queue config. Do not set
-    // UPLINK_PREFLIGHT here: cargo test runs cases in parallel and a process-wide
-    // env override leaks into other adds.
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.preflight_command = Some("exit 1".into());
-    write_queue(company, &queue).unwrap();
+    // The failing command lives in this repo's uplink.toml only.
+    set_settings(company, |s| s.preflight = Some("exit 1".into()));
     let err = submit_patch(company, &hash_patch.id, true);
     assert!(matches!(err, Err(Error::Preflight(_))));
 
@@ -5584,11 +5630,10 @@ fn user_git_config_and_hooks_do_not_change_the_imported_patch() {
 fn preflight_command_does_not_see_uplink_credentials() {
     let world = setup_world();
     let company = &world.company;
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.preflight_command =
-        Some(r#"test -z "$UPLINK_CONTRIB_TOKEN$UPLINK_INTERNAL_KEY$GITHUB_TOKEN""#.into());
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: preflight command").unwrap();
+    set_settings(company, |s| {
+        s.preflight =
+            Some(r#"test -z "$UPLINK_CONTRIB_TOKEN$UPLINK_INTERNAL_KEY$GITHUB_TOKEN""#.into())
+    });
 
     git(
         company,
@@ -5614,7 +5659,6 @@ fn preflight_command_does_not_see_uplink_credentials() {
             "Use SHA-256 for tokens",
         ])
         .current_dir(company)
-        .env_remove("UPLINK_PREFLIGHT")
         .env("UPLINK_CONTRIB_TOKEN", "contrib-secret")
         .env("UPLINK_INTERNAL_KEY", "internal-secret")
         .env("GITHUB_TOKEN", "github-secret")
@@ -6052,9 +6096,7 @@ Uplink-Depends-On: upl_asha\n"
 fn refuses_import_when_the_export_diff_names_the_company() {
     let world = setup_world();
     let company = &world.company;
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.redact_keywords = vec!["AcmeCorp".into()];
-    write_queue(company, &queue).unwrap();
+    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
 
     git(
         company,
@@ -7052,10 +7094,9 @@ fn assess_warns_about_binary_files_in_the_export() {
 fn assess_fails_an_export_author_at_an_internal_domain() {
     let world = setup_world();
     let company = &world.company;
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.internal_email_domains = vec!["acme.com".into()];
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: internal domains").unwrap();
+    set_settings(company, |s| {
+        s.internal_email_domains = vec!["acme.com".into()]
+    });
 
     git(
         company,
@@ -7122,10 +7163,7 @@ fn transfer_to_upstream_moves_immediately_when_apply_and_preflight_pass() {
 fn transfer_to_upstream_gates_on_assess_failure_without_writing_queue() {
     let world = setup_world();
     let company = &world.company;
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.redact_keywords = vec!["AcmeCorp".into()];
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: redact keywords").unwrap();
+    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
 
     git(
         company,
@@ -7185,10 +7223,7 @@ fn transfer_to_upstream_gates_on_preflight_failure_without_writing_queue() {
     let world = setup_world();
     let company = &world.company;
     let patch = add_internal_notes(company);
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.preflight_command = Some("exit 1".into());
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: failing preflight").unwrap();
+    set_settings(company, |s| s.preflight = Some("exit 1".into()));
 
     let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
     assert!(result.gated, "{result:?}");
@@ -7229,10 +7264,7 @@ fn transfer_abort_deletes_branches_and_leaves_the_source_queue() {
     let world = setup_world();
     let company = &world.company;
     let patch = add_internal_notes(company);
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.preflight_command = Some("exit 1".into());
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: failing preflight").unwrap();
+    set_settings(company, |s| s.preflight = Some("exit 1".into()));
     let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
     assert!(result.gated);
     let base = result.base_branch.unwrap();
@@ -7255,10 +7287,9 @@ fn transfer_complete_applies_work_and_moves_the_patch() {
     let world = setup_world();
     let company = &world.company;
     let patch = add_internal_notes(company);
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.preflight_command = Some("grep -q ready NOTES.md".into());
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: notes preflight").unwrap();
+    set_settings(company, |s| {
+        s.preflight = Some("grep -q ready NOTES.md".into())
+    });
     let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
     assert!(result.gated, "{result:?}");
     let work = result.work_branch.unwrap();
@@ -7625,8 +7656,10 @@ fn init_creates_the_hooks_branch_locally_as_an_orphan() {
             ".github/workflows/uplink-assessment-hook-example.yml",
             "assessment-hook.md",
             "toolchain-hook.md",
+            "uplink.toml",
         ]
     );
+    assert!(!has_git_object(company, "main:uplink.toml"));
     assert!(!has_git_object(company, "main:toolchain-hook.md"));
     assert!(!has_git_object(
         company,
@@ -7939,6 +7972,264 @@ fn doctor_fails_when_the_hooks_branch_is_missing() {
     assert!(detail.contains("git uplink init --upgrade"), "{detail}");
 }
 
+fn hooks_toml(repo: &Path) -> String {
+    git_ok(repo, &["show", "uplink/hooks:uplink.toml"]).unwrap()
+}
+
+fn init_opts_with_settings(world: &World, settings: SettingsFlags) -> InitOpts {
+    InitOpts {
+        upstream_url: Some(world.upstream.to_str().unwrap().into()),
+        contrib_url: Some(remote_get_url(&world.company, "contrib")),
+        forge: Some(Forge::Github),
+        settings,
+        ..Default::default()
+    }
+}
+
+fn hooks_step_detail(result: &git_uplink::InitResult) -> String {
+    result
+        .report
+        .checks
+        .iter()
+        .find(|c| c.id == "hooks-branch")
+        .expect("hooks-branch step")
+        .detail
+        .clone()
+}
+
+#[test]
+fn init_writes_the_answers_to_uplink_toml_on_the_hooks_branch() {
+    let world = setup_uninitialized();
+    let result = init(
+        &world.company,
+        init_opts_with_settings(
+            &world,
+            SettingsFlags {
+                preflight: Some("npm ci && npm test".into()),
+                redact_keywords: Some(vec!["AcmeCorp,companyTelemetry".into()]),
+                internal_domains: Some(vec!["acme.example".into()]),
+            },
+        ),
+    )
+    .unwrap();
+    let text = hooks_toml(&world.company);
+    assert!(
+        text.contains("preflight = \"npm ci && npm test\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("redact_keywords = [\"AcmeCorp\", \"companyTelemetry\"]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("internal_email_domains = [\"acme.example\"]"),
+        "{text}"
+    );
+    assert!(!hooks_step_detail(&result).contains("Left empty"));
+
+    let settings = git_uplink::read_queue(&world.company).unwrap().settings;
+    assert_eq!(settings.preflight.as_deref(), Some("npm ci && npm test"));
+    assert_eq!(settings.redact_keywords, ["AcmeCorp", "companyTelemetry"]);
+    assert_eq!(settings.internal_email_domains, ["acme.example"]);
+    assert!(settings.problem.is_none());
+
+    // The settings live on uplink/hooks only, never in queue.json.
+    let stored = fs::read_to_string(world.company.join(".uplink/queue.json")).unwrap();
+    for key in ["preflightCommand", "redactKeywords", "internalEmailDomains"] {
+        assert!(!stored.contains(key), "{stored}");
+    }
+}
+
+#[test]
+fn init_without_answers_writes_empty_settings_and_says_so() {
+    let world = setup_uninitialized();
+    let result = init(
+        &world.company,
+        init_opts_with_settings(&world, SettingsFlags::default()),
+    )
+    .unwrap();
+    let text = hooks_toml(&world.company);
+    assert!(text.contains("preflight = \"\""), "{text}");
+    assert!(text.contains("redact_keywords = []"), "{text}");
+    let detail = hooks_step_detail(&result);
+    assert!(
+        detail.contains(
+            "Left empty in uplink.toml: preflight, redact_keywords, internal_email_domains"
+        ),
+        "{detail}"
+    );
+    assert!(result.report.ok, "{:?}", result.report.checks);
+}
+
+#[test]
+fn init_upgrade_adds_a_missing_uplink_toml_from_flags_and_the_old_queue() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    edit_hooks(company, "drop settings", |dir| {
+        fs::remove_file(dir.join("uplink.toml")).unwrap();
+    });
+    // An older binary kept these in queue.json.
+    let path = company.join(".uplink/queue.json");
+    let stored = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        stored.replacen(
+            "\"config\": {",
+            "\"config\": {\n    \"redactKeywords\": [\"LegacyCo\"],",
+            1,
+        ),
+    )
+    .unwrap();
+    git_uplink::commit_queue(company, "uplink: old settings").unwrap();
+    assert!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .settings
+            .problem
+            .is_some()
+    );
+
+    let result = init(
+        company,
+        InitOpts {
+            upgrade: true,
+            settings: SettingsFlags {
+                preflight: Some("make check".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let text = hooks_toml(company);
+    assert!(text.contains("preflight = \"make check\""), "{text}");
+    assert!(text.contains("redact_keywords = [\"LegacyCo\"]"), "{text}");
+    let detail = hooks_step_detail(&result);
+    assert!(detail.contains("uplink.toml"), "{detail}");
+    assert!(
+        detail.contains("Left empty in uplink.toml: internal_email_domains"),
+        "{detail}"
+    );
+    assert_eq!(result.queue.settings.redact_keywords, ["LegacyCo"]);
+}
+
+#[test]
+fn init_upgrade_appends_missing_settings_and_keeps_the_rest() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let ours = "# ours\nredact_keywords = [\"Mine\"]\n";
+    edit_hooks(company, "partial settings", |dir| {
+        write(dir, "uplink.toml", ours);
+    });
+    let upgrade = |settings: SettingsFlags| {
+        init(
+            company,
+            InitOpts {
+                upgrade: true,
+                settings,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    upgrade(SettingsFlags {
+        preflight: Some("make check".into()),
+        redact_keywords: Some(vec!["Ignored".into()]),
+        internal_domains: None,
+    });
+    let text = format!("{}\n", hooks_toml(company));
+    assert!(text.starts_with(ours), "{text}");
+    assert!(text.contains("preflight = \"make check\""), "{text}");
+    assert!(
+        !text.contains("Ignored"),
+        "existing values are never changed\n{text}"
+    );
+    assert!(text.contains("internal_email_domains = []"), "{text}");
+
+    let tip = rev_of(company, "uplink/hooks");
+    upgrade(SettingsFlags {
+        preflight: Some("something else".into()),
+        ..Default::default()
+    });
+    assert_eq!(rev_of(company, "uplink/hooks"), tip, "nothing left to add");
+}
+
+#[test]
+fn a_forge_queue_without_uplink_toml_fails_closed() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    publish_origin(company);
+    edit_hooks(company, "drop settings", |dir| {
+        fs::remove_file(dir.join("uplink.toml")).unwrap();
+    });
+
+    let (status, detail) = hooks_status(&hooks_check(company));
+    assert_eq!(status, CheckStatus::Fail, "{detail}");
+    assert!(detail.contains("uplink.toml"), "{detail}");
+    assert!(detail.contains("git uplink init --upgrade"), "{detail}");
+
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let err = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    let text = err.to_string();
+    assert!(matches!(err, Error::Assess(_)), "{text}");
+    assert!(text.contains("uplink.toml is missing"), "{text}");
+}
+
+#[test]
+fn preflight_command_only_runs_the_command_from_uplink_toml() {
+    let world = setup_world();
+    let company = &world.company;
+    let run = |old_variable: &str| {
+        Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(["preflight", "--command-only"])
+            .env("UPLINK_PREFLIGHT", old_variable)
+            .current_dir(company)
+            .output()
+            .unwrap()
+    };
+    // No uplink.toml: nothing to run, and the old variable is not read.
+    let output = run("exit 9");
+    assert!(output.status.success(), "{output:?}");
+
+    set_settings(company, |s| {
+        s.preflight = Some("test -f src/tokens.js".into())
+    });
+    let output = run("exit 9");
+    assert!(output.status.success(), "{output:?}");
+
+    set_settings(company, |s| s.preflight = Some("exit 3".into()));
+    let output = run("true");
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        format!("{stdout}{stderr}").contains("exit 3"),
+        "{stdout}\n{stderr}"
+    );
+}
+
 #[test]
 fn init_cli_prints_how_to_publish_the_hooks_branch() {
     let world = setup_uninitialized();
@@ -8244,10 +8535,7 @@ fn amend_complete_of_a_submitted_patch_takes_the_pr_message_and_is_amended() {
 fn amend_complete_refuses_a_leaking_message_and_keeps_the_branch() {
     let world = setup_world();
     let company = &world.company;
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue.config.redact_keywords = vec!["AcmeCorp".into()];
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: redact keywords").unwrap();
+    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
     let patch = add_ttl_patch(company);
     amend_patch(company, &patch.id, false, None).unwrap();
     amend_on_work_and_squash(

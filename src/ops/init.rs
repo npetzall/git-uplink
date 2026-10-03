@@ -14,6 +14,12 @@ pub struct InitOpts {
     /// `None` detects a TTY. Tests set `Some(false)` so adopt never opens the TUI.
     pub interactive: Option<bool>,
     pub progress: ProgressMode,
+    /// Answers for `uplink.toml`.
+    pub settings: SettingsFlags,
+    /// Ask on the terminal for settings without an answer. Off by default so
+    /// library callers and tests never block on stdin; the CLI turns it on
+    /// when it has a terminal.
+    pub ask_settings: bool,
 }
 
 /// Queue produced by `init`. `tooling_changed` is set only by `--upgrade` when
@@ -106,9 +112,10 @@ pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
     let forge = opts.forge.ok_or_else(missing_forge_error)?;
     let mut config = config_from_opts(&opts);
     config.forge = Some(forge);
-    init_repo_with_progress(repo, config, &mut progress)?;
+    let created = init_repo_with_progress(repo, config, &mut progress)?;
+    // Before adoption: assessing adopted patches reads uplink.toml.
+    ensure_hooks_step(repo, &created, HooksMode::Create, &opts, &mut progress)?;
     let queue = finish_first_init(repo, &opts, &mut progress)?;
-    ensure_hooks_step(repo, &queue, HooksMode::Create, &mut progress)?;
     append_init_health_checks(repo, &queue, &mut progress);
     Ok(settled(queue, &progress))
 }
@@ -121,26 +128,49 @@ pub(super) fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
     ensure_company_branch_ref(repo, COMPANY_REMOTE, &queue.config.internal_branch)?;
     if let Some(forge) = queue.config.forge {
-        ensure_hooks_branch(repo, forge, HooksMode::FetchOnly)?;
+        ensure_hooks_branch(repo, forge, HooksMode::FetchOnly, &Settings::default())?;
     }
-    Ok(queue)
+    read_queue_file(repo)
 }
 
 /// Create `uplink/hooks` locally when neither this clone nor origin has it.
-/// With [`HooksMode::Upgrade`], also add pack files the branch lacks. Existing
-/// files are never changed.
+/// With [`HooksMode::Upgrade`], also add pack files and settings the branch
+/// lacks. Settings to write are asked for first; existing values never change.
 pub(super) fn ensure_hooks_step(
     repo: &Path,
     queue: &QueueState,
     mode: HooksMode,
+    opts: &InitOpts,
     progress: &mut StepProgress,
 ) -> Result<()> {
+    let Some(forge) = queue.config.forge else {
+        return progress.run_step("hooks-branch", "uplink/hooks branch", || {
+            Ok(((), StepOutcome::skip("no forge recorded")))
+        });
+    };
+    let keys = settings_to_ask(repo, mode)?;
+    let legacy = Settings {
+        preflight: queue.config.preflight_command.clone(),
+        redact_keywords: queue.config.redact_keywords.clone(),
+        internal_email_domains: queue.config.internal_email_domains.clone(),
+        problem: None,
+    };
+    let (answers, unanswered) = answer_settings(&keys, &opts.settings, &legacy, opts.ask_settings)?;
     progress.run_step("hooks-branch", "uplink/hooks branch", || {
-        let Some(forge) = queue.config.forge else {
-            return Ok(((), StepOutcome::skip("no forge recorded")));
+        let outcome = ensure_hooks_branch(repo, forge, mode, &answers)?;
+        let wrote_settings = match &outcome {
+            HooksOutcome::Created => true,
+            HooksOutcome::Completed(paths) => paths.iter().any(|p| p == SETTINGS_PATH),
+            _ => false,
         };
-        let outcome = ensure_hooks_branch(repo, forge, mode)?;
-        Ok(((), hooks_step_outcome(outcome)))
+        let mut step = hooks_step_outcome(outcome);
+        if wrote_settings && !unanswered.is_empty() {
+            step.detail.push_str(&format!(
+                ". Left empty in {SETTINGS_PATH}: {}; edit it on uplink/hooks or re-run with flags",
+                unanswered.join(", ")
+            ));
+        }
+        Ok(((), step))
     })
 }
 
@@ -347,15 +377,15 @@ pub(super) fn init_existing(
             ))
         },
     )?;
-    resume_incomplete_init(repo, opts, progress)?;
-    let queue = read_queue_file(repo)?;
     let mode = if opts.upgrade {
         HooksMode::Upgrade
     } else {
         HooksMode::Create
     };
-    ensure_hooks_step(repo, &queue, mode, progress)?;
-    Ok(queue)
+    // Before resuming adoption: assessing adopted patches reads uplink.toml.
+    ensure_hooks_step(repo, &queue, mode, opts, progress)?;
+    resume_incomplete_init(repo, opts, progress)?;
+    read_queue_file(repo)
 }
 
 pub(super) fn init_upgrade(

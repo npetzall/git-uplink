@@ -34,7 +34,8 @@ pub fn read_queue(repo: &Path) -> Result<QueueState> {
         crate::repo::ensure_state_worktree(repo)?;
     }
     let raw = fs::read_to_string(repo.join(QUEUE_PATH))?;
-    let queue: QueueState = serde_json::from_str(&raw)?;
+    let mut queue: QueueState = serde_json::from_str(&raw)?;
+    queue.settings = crate::settings::load_settings(repo, queue.config.forge);
     Ok(queue)
 }
 

@@ -108,20 +108,9 @@ fn apply_deps(
     Ok(ApplyOutcome::Applied)
 }
 
-pub fn preflight_command_for(queue: &QueueState) -> Option<String> {
-    if let Ok(env_cmd) = env::var("UPLINK_PREFLIGHT") {
-        let trimmed = env_cmd.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    queue
-        .config
-        .preflight_command
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+/// The `preflight` command from `uplink.toml` on `uplink/hooks`.
+pub fn preflight_command_for(queue: &QueueState) -> Result<Option<String>> {
+    Ok(queue.settings.usable()?.preflight.clone())
 }
 
 fn format_suggestion(ids: &[String]) -> String {
@@ -187,7 +176,7 @@ pub fn assert_export_preflight(
     let command = match command_override {
         Some(None) => None,
         Some(Some(cmd)) => Some(cmd),
-        None => preflight_command_for(queue),
+        None => preflight_command_for(queue)?,
     };
 
     with_upstream_worktree(repo, |dir| {
@@ -312,7 +301,7 @@ pub struct IncomingPreflight {
 }
 
 pub fn run_preflight_command_in(queue: &QueueState, cwd: &Path) -> Result<()> {
-    let Some(command) = preflight_command_for(queue) else {
+    let Some(command) = preflight_command_for(queue)? else {
         return Ok(());
     };
     let (code, output) = run_shell(&command, cwd);
@@ -483,13 +472,7 @@ mod tests {
         ] {
             assert!(is_credential_env(name), "{name}");
         }
-        for name in [
-            "UPLINK_PREFLIGHT",
-            "UPLINK_REDACT_KEYWORDS",
-            "PATH",
-            "HOME",
-            "MY_TOKEN",
-        ] {
+        for name in ["UPLINK_SRC", "UPLINK_VERSION", "PATH", "HOME", "MY_TOKEN"] {
             assert!(!is_credential_env(name), "{name}");
         }
     }

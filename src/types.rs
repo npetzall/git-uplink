@@ -1,5 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::settings::Settings;
+
 pub const QUEUE_PATH: &str = ".uplink/queue.json";
 pub const PATCH_DIR: &str = ".uplink/patches";
 pub const STATE_BRANCH: &str = "uplink/state";
@@ -448,13 +450,17 @@ pub struct QueueConfig {
     #[serde(default, skip_serializing_if = "skip_empty_option")]
     pub contrib_url: Option<String>,
     pub trailer_key: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Legacy: moved to `uplink.toml` on `uplink/hooks`. Still read from an
+    /// old `queue.json` to offer as a default when `init --upgrade` asks.
+    #[serde(default, skip_serializing)]
     pub preflight_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cutoff_marker: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Legacy, as `preflight_command`.
+    #[serde(default, skip_serializing)]
     pub redact_keywords: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Legacy, as `preflight_command`.
+    #[serde(default, skip_serializing)]
     pub internal_email_domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forge: Option<Forge>,
@@ -516,11 +522,16 @@ pub struct QueueState {
     pub upstream: Vec<Patch>,
     #[serde(default)]
     pub internal: Vec<Patch>,
+    /// From `uplink.toml` on `uplink/hooks`, not from `queue.json`. Filled
+    /// when the queue is read from a repository.
+    #[serde(skip)]
+    pub settings: Settings,
 }
 
 impl QueueState {
     pub fn empty(config: QueueConfig) -> Self {
         Self {
+            settings: Settings::default(),
             version: QUEUE_VERSION,
             config,
             last_sync: None,
@@ -616,6 +627,7 @@ impl QueueStateWire {
             tooling: self.tooling,
             upstream: self.upstream,
             internal: self.internal,
+            settings: Settings::default(),
         }
     }
 }

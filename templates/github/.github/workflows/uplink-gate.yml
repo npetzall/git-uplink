@@ -47,7 +47,6 @@ jobs:
       - name: Validate gated work
         env:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -80,9 +79,7 @@ jobs:
             jq -e --arg id "$1" 'any(.internal[]?; .id == $id)' <<<"$queue" >/dev/null
           }
           run_preflight() {
-            if [ -n "$UPLINK_PREFLIGHT" ]; then
-              sh -c "$UPLINK_PREFLIGHT"
-            fi
+            git uplink preflight --command-only
           }
           if [[ "$BASE_REF" == uplink/conflict/* ]] && is_internal "${BASE_REF#uplink/conflict/}"; then
             run_preflight

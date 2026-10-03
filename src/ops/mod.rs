@@ -18,7 +18,8 @@ use crate::gate::{
 };
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::hooks::{
-    HooksMode, HooksPushAction, ensure_hooks_branch, hooks_step_outcome, push_hooks_branch,
+    HooksMode, HooksOutcome, HooksPushAction, ensure_hooks_branch, hooks_step_outcome,
+    push_hooks_branch, settings_to_ask,
 };
 use crate::init_report::InitReport;
 use crate::inspect::{
@@ -44,6 +45,7 @@ use crate::repo::{
     stable_patch_id_from_contents, stamp, state_exists, try_replace_state_from_origin,
     uplink_uncommitted_paths, write_product_patch,
 };
+use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings};
 use crate::types::{
     ApplyOutcome, AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval,
     PatchConflict, PatchEvent, PatchIntent, PatchLayer, PatchMerged, PatchSource, PatchStatus,

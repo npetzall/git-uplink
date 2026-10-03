@@ -16,14 +16,16 @@ mod lock;
 mod ops;
 mod preflight;
 mod progress;
+mod prompt;
 mod queue;
 mod repo;
+mod settings;
 mod tooling;
 mod tui;
 mod types;
 pub mod webui;
 
-pub use adopt::{AdoptGroup, adopted_next_steps, load_groups_file};
+pub use adopt::{AdoptGroup, adopted_next_steps, load_groups_file, stdin_is_tty};
 pub use assess::{
     ApprovalReceipt, FROM_UPSTREAM_ENVIRONMENT, IncomingFlowedBack, TO_UPSTREAM_ENVIRONMENT,
     assert_assess_ok, assess_from_message, company_commit_message, depends_on_from_message,
@@ -51,10 +53,12 @@ pub use ops::{
     summarize_queue, sync, transfer_patch, write_queue,
 };
 pub use preflight::{
-    IncomingPreflight, assert_export_preflight, preflight_existing_patch, preflight_incoming_change,
+    IncomingPreflight, assert_export_preflight, preflight_existing_patch,
+    preflight_incoming_change, run_preflight_command_in,
 };
 pub use progress::{ProgressMode, StepOutcome, StepProgress, format_step_line};
 pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};
+pub use settings::{SETTINGS_PATH, Settings, SettingsFlags};
 pub use types::{
     AssessReport, CheckStatus, DEFAULT_CUTOFF, Forge, GateKind, MergeVia, Patch, PatchApproval,
     PatchExtras, PatchIntent, PatchLayer, PatchStatus, PendingUpstream, QUEUE_PATH, QUEUE_VERSION,

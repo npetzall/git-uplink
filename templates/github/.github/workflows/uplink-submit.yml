@@ -246,7 +246,6 @@ jobs:
           GH_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
-          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream
           PATCH_ID: ${{ inputs.patch_id }}
           HEAD_REPO: ${{ steps.queue.outputs.contrib_owner }}/${{ steps.queue.outputs.contrib_repo }}
