@@ -12,7 +12,6 @@ pub struct AddPatchOpts {
     pub note: Option<String>,
     pub internal_pr_number: Option<u64>,
     pub internal_pr_url: Option<String>,
-    pub preflight_command: Option<String>,
     /// Company assessment-hook extras to store with the patch.
     pub extra_dir: Option<PathBuf>,
     /// Where the extras came from, such as the hook run URL.
@@ -225,13 +224,7 @@ fn validate_candidate(
     head_sha: &str,
 ) -> Result<()> {
     if !opts.internal_only {
-        assert_export_preflight(
-            repo,
-            queue,
-            patch,
-            candidate_abs,
-            opts.preflight_command.clone().map(Some),
-        )?;
+        assert_export_preflight(repo, queue, patch, candidate_abs, None)?;
     }
     let explicit_range = opts.from_ref.is_some() && opts.head_ref.is_some();
     if !explicit_range {

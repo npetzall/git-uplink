@@ -14,7 +14,7 @@ A failed hook never fails the PR check or submit. It shows as a warning, and the
 
 ## How it is wired
 
-- `git uplink init` creates `uplink/hooks` locally with this file, `toolchain-hook.md`, the toolchain hook stub, a starter assessment hook, and `uplink.toml` (the CLI's settings). `git uplink push` publishes it with `uplink/state`. `git uplink init --upgrade` adds files a newer pack brings, without changing the ones you have. `git uplink doctor` reports when it is missing or not pushed.
+- `git uplink init` creates `uplink/hooks` locally with this file, `toolchain-hook.md`, the toolchain hook stub, `preflight.sh`, a starter assessment hook, and `uplink.toml` (the CLI's settings). `git uplink push` publishes it with `uplink/state`. `git uplink init --upgrade` adds files a newer pack brings, without changing the ones you have. `git uplink doctor` reports when it is missing or not pushed.
 - The forge pack installs a placeholder `.github/workflows/uplink-assessment-hook.yml` on `main`. GitHub only dispatches a workflow whose file exists on the default branch, so the placeholder has to be there. Running it by hand from the Actions tab prints this file from `uplink/hooks`.
 - Your real hook is `.github/workflows/uplink-assessment-hook.yml` on `uplink/hooks`. Callers look for it there and run it with `--ref uplink/hooks`. If it is missing, they skip the hook.
 

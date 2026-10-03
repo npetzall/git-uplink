@@ -307,7 +307,7 @@ pub(super) fn apply_queue_preview(
 }
 
 /// To upstream: assess the change `onto..after`, export preflight of `patch_abs`,
-/// and upstream-layer apply. To internal: the configured preflight command.
+/// and upstream-layer apply. To internal: `preflight.sh`.
 /// Returns the new assess report for an upstream move.
 fn transfer_checks(
     repo: &Path,
@@ -327,7 +327,9 @@ fn transfer_checks(
             assert_upstream_layer_applies(repo, preview)?;
             Ok(Some(report))
         }
-        TransferDirection::ToInternal => run_preflight_command_in(preview, repo).map(|_| None),
+        TransferDirection::ToInternal => {
+            run_preflight_command_in(preview, repo, None).map(|_| None)
+        }
     }
 }
 

@@ -21,21 +21,15 @@ const SOURCES: [&str; 2] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingKey {
-    Preflight,
     RedactKeywords,
     InternalEmailDomains,
 }
 
 impl SettingKey {
-    pub const ALL: [SettingKey; 3] = [
-        SettingKey::Preflight,
-        SettingKey::RedactKeywords,
-        SettingKey::InternalEmailDomains,
-    ];
+    pub const ALL: [SettingKey; 2] = [SettingKey::RedactKeywords, SettingKey::InternalEmailDomains];
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Preflight => "preflight",
             Self::RedactKeywords => "redact_keywords",
             Self::InternalEmailDomains => "internal_email_domains",
         }
@@ -43,7 +37,6 @@ impl SettingKey {
 
     fn comment(self) -> &'static str {
         match self {
-            Self::Preflight => "Command preflight runs on the export tree. Empty: no command.",
             Self::RedactKeywords => "Words that must not appear in a contribution.",
             Self::InternalEmailDomains => "Email domains flagged in the export.",
         }
@@ -52,7 +45,6 @@ impl SettingKey {
     /// The question `init` asks for this setting.
     pub fn question(self) -> &'static str {
         match self {
-            Self::Preflight => "Preflight command, run on the export tree (empty for none)",
             Self::RedactKeywords => {
                 "Words that must not appear in a contribution (comma-separated, empty for none)"
             }
@@ -67,7 +59,6 @@ impl SettingKey {
 /// should exist but is missing or does not parse; see [`Settings::usable`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
-    pub preflight: Option<String>,
     pub redact_keywords: Vec<String>,
     pub internal_email_domains: Vec<String>,
     pub problem: Option<String>,
@@ -88,9 +79,6 @@ impl Settings {
             toml::Value::Array(items.iter().cloned().map(toml::Value::String).collect())
         };
         match key {
-            SettingKey::Preflight => {
-                toml::Value::String(self.preflight.clone().unwrap_or_default())
-            }
             SettingKey::RedactKeywords => list(&self.redact_keywords),
             SettingKey::InternalEmailDomains => list(&self.internal_email_domains),
         }
@@ -138,9 +126,10 @@ appended safely. Add {} above the first table by hand.",
     }
 }
 
-/// Answers given on the command line (`init --preflight …`).
+/// Answers given on the command line (`init --redact-keyword …`).
 #[derive(Debug, Clone, Default)]
 pub struct SettingsFlags {
+    /// Not a setting: the command `init` seeds `preflight.sh` with.
     pub preflight: Option<String>,
     pub redact_keywords: Option<Vec<String>>,
     pub internal_domains: Option<Vec<String>>,
@@ -159,12 +148,10 @@ pub fn answer_settings(
     let mut unanswered = Vec::new();
     for key in keys {
         let flag = match key {
-            SettingKey::Preflight => flags.preflight.clone().map(|cmd| vec![cmd]),
             SettingKey::RedactKeywords => flags.redact_keywords.clone(),
             SettingKey::InternalEmailDomains => flags.internal_domains.clone(),
         };
         let default = match key {
-            SettingKey::Preflight => legacy.preflight.clone().into_iter().collect(),
             SettingKey::RedactKeywords => legacy.redact_keywords.clone(),
             SettingKey::InternalEmailDomains => legacy.internal_email_domains.clone(),
         };
@@ -180,17 +167,12 @@ pub fn answer_settings(
             None => default,
         };
         match key {
-            // A command may contain commas; it is one value, never a list.
-            SettingKey::Preflight => {
-                answers.preflight = clean(items.first().map(String::as_str).unwrap_or_default());
-            }
             SettingKey::RedactKeywords => answers.redact_keywords = clean_list(items),
             SettingKey::InternalEmailDomains => {
                 answers.internal_email_domains = clean_list(items);
             }
         }
         let empty = match key {
-            SettingKey::Preflight => answers.preflight.is_none(),
             SettingKey::RedactKeywords => answers.redact_keywords.is_empty(),
             SettingKey::InternalEmailDomains => answers.internal_email_domains.is_empty(),
         };
@@ -205,7 +187,6 @@ pub fn answer_settings(
 /// binary still parses, and the missing keys can be asked for.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SettingsFile {
-    preflight: Option<String>,
     redact_keywords: Option<Vec<String>>,
     internal_email_domains: Option<Vec<String>>,
 }
@@ -222,9 +203,6 @@ impl SettingsFile {
 
     pub fn missing_keys(&self) -> Vec<SettingKey> {
         let mut missing = Vec::new();
-        if self.preflight.is_none() {
-            missing.push(SettingKey::Preflight);
-        }
         if self.redact_keywords.is_none() {
             missing.push(SettingKey::RedactKeywords);
         }
@@ -236,17 +214,11 @@ impl SettingsFile {
 
     pub fn into_settings(self) -> Settings {
         Settings {
-            preflight: clean(self.preflight.as_deref().unwrap_or_default()),
             redact_keywords: clean_list(self.redact_keywords.unwrap_or_default()),
             internal_email_domains: clean_list(self.internal_email_domains.unwrap_or_default()),
             problem: None,
         }
     }
-}
-
-fn clean(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string())
 }
 
 /// Trims, drops empties, and splits comma-separated items, so a flag given
@@ -308,7 +280,6 @@ mod tests {
 
     fn sample() -> Settings {
         Settings {
-            preflight: Some("npm ci && npm test".into()),
             redact_keywords: vec!["AcmeCorp".into(), "say \"hi\"".into()],
             internal_email_domains: vec!["acme.example".into()],
             problem: None,
@@ -320,7 +291,7 @@ mod tests {
         let text = sample().render();
         assert!(text.starts_with(HEADER), "{text}");
         assert!(
-            text.contains("preflight = \"npm ci && npm test\""),
+            text.contains("internal_email_domains = [\"acme.example\"]"),
             "{text}"
         );
         let file = SettingsFile::parse(&text).unwrap();
@@ -331,7 +302,6 @@ mod tests {
     #[test]
     fn empty_answers_render_as_empty_values() {
         let text = Settings::default().render();
-        assert!(text.contains("preflight = \"\""), "{text}");
         assert!(text.contains("redact_keywords = []"), "{text}");
         let file = SettingsFile::parse(&text).unwrap();
         assert!(file.missing_keys().is_empty());
@@ -341,20 +311,23 @@ mod tests {
     #[test]
     fn a_partial_file_reports_its_missing_keys() {
         let file = SettingsFile::parse("redact_keywords = [\"Acme\"]\n").unwrap();
-        assert_eq!(
-            file.missing_keys(),
-            [SettingKey::Preflight, SettingKey::InternalEmailDomains]
-        );
+        assert_eq!(file.missing_keys(), [SettingKey::InternalEmailDomains]);
         let settings = file.into_settings();
         assert_eq!(settings.redact_keywords, ["Acme"]);
-        assert_eq!(settings.preflight, None);
+        assert!(settings.internal_email_domains.is_empty());
+    }
+
+    #[test]
+    fn a_key_that_is_no_longer_a_setting_is_ignored() {
+        let file = SettingsFile::parse("preflight = \"npm test\"\nredact_keywords = []\n").unwrap();
+        assert_eq!(file.missing_keys(), [SettingKey::InternalEmailDomains]);
     }
 
     #[test]
     fn appending_keeps_the_existing_text() {
         let existing = "# ours\nredact_keywords = [\"Acme\"]";
         let text = sample()
-            .append_to(existing, &[SettingKey::Preflight])
+            .append_to(existing, &[SettingKey::InternalEmailDomains])
             .unwrap();
         assert!(
             text.starts_with("# ours\nredact_keywords = [\"Acme\"]\n"),
@@ -362,22 +335,22 @@ mod tests {
         );
         let settings = SettingsFile::parse(&text).unwrap().into_settings();
         assert_eq!(settings.redact_keywords, ["Acme"]);
-        assert_eq!(settings.preflight.as_deref(), Some("npm ci && npm test"));
+        assert_eq!(settings.internal_email_domains, ["acme.example"]);
     }
 
     #[test]
     fn appending_refuses_a_file_with_tables() {
         let err = sample()
-            .append_to("[extra]\nkey = 1\n", &[SettingKey::Preflight])
+            .append_to("[extra]\nkey = 1\n", &[SettingKey::InternalEmailDomains])
             .unwrap_err()
             .to_string();
         assert!(err.contains("table header"), "{err}");
-        assert!(err.contains("preflight"), "{err}");
+        assert!(err.contains("internal_email_domains"), "{err}");
     }
 
     #[test]
     fn a_broken_file_is_an_error_that_names_it() {
-        let err = SettingsFile::parse("preflight = [\n")
+        let err = SettingsFile::parse("redact_keywords = [\n")
             .unwrap_err()
             .to_string();
         assert!(err.contains(SETTINGS_PATH), "{err}");

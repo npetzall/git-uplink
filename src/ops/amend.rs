@@ -271,7 +271,7 @@ fn complete_amend(
         current.commit_message = updated.commit_message.clone();
     }
     let layer_checks = if intent.is_internal_only() {
-        run_preflight_command_in(&queue, repo)
+        run_preflight_command_in(&queue, repo, None)
     } else {
         assert_export_preflight(repo, &queue, get_patch(&queue, id)?, &patch_abs, None)
             .and_then(|_| assert_upstream_layer_applies(repo, &queue))

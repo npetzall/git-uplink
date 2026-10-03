@@ -21,6 +21,8 @@ use crate::types::{Forge, ForgeFamily, QueueState};
 
 pub const HOOKS_BRANCH: &str = "uplink/hooks";
 pub const TOOLCHAIN_ACTION_PATH: &str = ".github/actions/uplink-toolchain-hook/action.yml";
+/// The script preflight runs on the tree under test.
+pub const PREFLIGHT_SCRIPT_PATH: &str = "preflight.sh";
 
 const HOOKS_REF: &str = "refs/heads/uplink/hooks";
 const HOOKS_TRACKING_REF: &str = "refs/remotes/origin/uplink/hooks";
@@ -48,11 +50,31 @@ pub enum HooksOutcome {
     Skipped(String),
 }
 
-/// The settings [`ensure_hooks_branch`] would write for `mode`, so `init` can
-/// ask for them before the step (and its spinner) starts.
-pub fn settings_to_ask(repo: &Path, mode: HooksMode) -> Result<Vec<SettingKey>> {
+/// The commit of the local `uplink/hooks`, else of origin's.
+pub fn hooks_source(repo: &Path) -> Result<Option<String>> {
+    for source in [HOOKS_REF, HOOKS_TRACKING_REF] {
+        if has_ref(repo, source)? {
+            return Ok(Some(git_ok(repo, &["rev-parse", source])?));
+        }
+    }
+    Ok(None)
+}
+
+/// What `init` has to ask before [`ensure_hooks_branch`] can write.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HooksQuestions {
+    /// Settings `uplink.toml` lacks.
+    pub settings: Vec<SettingKey>,
+    /// `preflight.sh` will be created, so its command can be seeded.
+    pub preflight_script: bool,
+}
+
+/// What [`ensure_hooks_branch`] would write for `mode`, so `init` can ask for
+/// it before the step (and its spinner) starts.
+pub fn hooks_questions(repo: &Path, mode: HooksMode) -> Result<HooksQuestions> {
+    let nothing = HooksQuestions::default();
     if mode == HooksMode::FetchOnly {
-        return Ok(Vec::new());
+        return Ok(nothing);
     }
     let local = if has_ref(repo, HOOKS_REF)? {
         Some(git_ok(repo, &["rev-parse", HOOKS_REF])?)
@@ -61,16 +83,39 @@ pub fn settings_to_ask(repo: &Path, mode: HooksMode) -> Result<Vec<SettingKey>> 
     };
     let remote = fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)?;
     let base = match (local, remote) {
-        (None, None) => return Ok(SettingKey::ALL.to_vec()),
-        _ if mode != HooksMode::Upgrade => return Ok(Vec::new()),
+        (None, None) => {
+            return Ok(HooksQuestions {
+                settings: SettingKey::ALL.to_vec(),
+                preflight_script: true,
+            });
+        }
+        _ if mode != HooksMode::Upgrade => return Ok(nothing),
         (None, Some(remote)) => remote,
         (Some(local), remote) => match upgrade_base(repo, &local, remote)? {
             Some(base) => base,
-            None => return Ok(Vec::new()),
+            None => return Ok(nothing),
         },
     };
-    // A file that does not parse is reported by the step; nothing to ask.
-    Ok(missing_settings(repo, &base).unwrap_or_default())
+    Ok(HooksQuestions {
+        // A file that does not parse is reported by the step; nothing to ask.
+        settings: missing_settings(repo, &base).unwrap_or_default(),
+        preflight_script: !path_exists_at(repo, &base, PREFLIGHT_SCRIPT_PATH)?,
+    })
+}
+
+/// The hooks pack, with `seed` as the command of its `preflight.sh`.
+fn seeded_hooks_files(forge: Forge, seed: Option<&str>) -> Vec<(String, Vec<u8>)> {
+    let mut files = hooks_files(forge);
+    if let Some(seed) = seed
+        && let Some((_, script)) = files
+            .iter_mut()
+            .find(|(rel, _)| rel == PREFLIGHT_SCRIPT_PATH)
+    {
+        script.push(b'\n');
+        script.extend_from_slice(seed.as_bytes());
+        script.push(b'\n');
+    }
+    files
 }
 
 /// The newest of the local branch and origin's, or `None` when they diverged.
@@ -94,24 +139,26 @@ fn missing_settings(repo: &Path, base: &str) -> Result<Vec<SettingKey>> {
 
 /// Make `uplink/hooks` available locally: keep an existing branch, else take
 /// origin's, else (by `mode`) commit the embedded hooks pack and `uplink.toml`
-/// as an orphan. `answers` holds the settings from [`settings_to_ask`].
-/// Never pushes, never changes an existing value, never touches the working tree.
+/// as an orphan. `answers` and `preflight_seed` answer [`hooks_questions`].
+/// Never pushes, never changes an existing value or file, never touches the
+/// working tree.
 pub fn ensure_hooks_branch(
     repo: &Path,
     forge: Forge,
     mode: HooksMode,
     answers: &Settings,
+    preflight_seed: Option<&str>,
 ) -> Result<HooksOutcome> {
     if has_ref(repo, HOOKS_REF)? {
         if mode == HooksMode::Upgrade {
-            return complete_hooks_branch(repo, forge, answers);
+            return complete_hooks_branch(repo, forge, answers, preflight_seed);
         }
         return Ok(HooksOutcome::Existing);
     }
     if let Some(sha) = fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)? {
         point_branch_at(repo, HOOKS_BRANCH, &sha)?;
         if mode == HooksMode::Upgrade {
-            return match complete_hooks_branch(repo, forge, answers)? {
+            return match complete_hooks_branch(repo, forge, answers, preflight_seed)? {
                 HooksOutcome::Existing => Ok(HooksOutcome::FromOrigin),
                 other => Ok(other),
             };
@@ -121,7 +168,7 @@ pub fn ensure_hooks_branch(
     if mode == HooksMode::FetchOnly {
         return Ok(HooksOutcome::Missing);
     }
-    let mut files = hooks_files(forge);
+    let mut files = seeded_hooks_files(forge, preflight_seed);
     files.push((SETTINGS_PATH.to_string(), answers.render().into_bytes()));
     let tree = build_tree(repo, None, &files)?;
     let commit = git_ok(
@@ -140,7 +187,12 @@ pub fn ensure_hooks_branch(
 /// Add pack files and settings missing from `uplink/hooks` in one commit on
 /// top of the newest of the local branch and origin's. Existing files are
 /// kept as is, except that missing settings are appended to `uplink.toml`.
-fn complete_hooks_branch(repo: &Path, forge: Forge, answers: &Settings) -> Result<HooksOutcome> {
+fn complete_hooks_branch(
+    repo: &Path,
+    forge: Forge,
+    answers: &Settings,
+    preflight_seed: Option<&str>,
+) -> Result<HooksOutcome> {
     let local = git_ok(repo, &["rev-parse", HOOKS_REF])?;
     let remote = fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)?;
     let Some(base) = upgrade_base(repo, &local, remote)? else {
@@ -149,7 +201,7 @@ fn complete_hooks_branch(repo: &Path, forge: Forge, answers: &Settings) -> Resul
 reconcile, and re-run git uplink init --upgrade"
         )));
     };
-    let mut missing: Vec<(String, Vec<u8>)> = hooks_files(forge)
+    let mut missing: Vec<(String, Vec<u8>)> = seeded_hooks_files(forge, preflight_seed)
         .into_iter()
         .filter(|(rel, _)| !path_exists_at(repo, &base, rel).unwrap_or(false))
         .collect();
@@ -354,8 +406,8 @@ Add it back (see toolchain-hook.md on uplink/hooks)"
     let incomplete = match missing_settings(repo, &local) {
         Ok(keys) if keys.len() == SettingKey::ALL.len() => {
             return StepOutcome::fail(format!(
-                "uplink/hooks has no {SETTINGS_PATH}; assess and preflight read their settings \
-from it. Run git uplink init --upgrade, then {push}"
+                "uplink/hooks has no {SETTINGS_PATH}; assess reads its settings from it. \
+Run git uplink init --upgrade, then {push}"
             ));
         }
         Ok(keys) => keys,

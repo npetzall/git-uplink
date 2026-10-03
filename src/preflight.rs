@@ -6,12 +6,14 @@ use uuid::Uuid;
 
 use crate::assess::{depends_on_from_message, export_commit_message};
 use crate::error::{Error, PreflightError, Result};
-use crate::git::{GitOpts, git, git_succeeds};
+use crate::git::{GitOpts, git, git_ok, git_succeeds};
+use crate::hooks::{PREFLIGHT_SCRIPT_PATH, hooks_source};
 use crate::queue::{
     active_upstream, apply_order_upstream_layer, get_patch, patch_path, read_queue,
 };
 use crate::repo::{
-    TempWorktree, ensure_revs, ensure_upstream_ref, has_ref, rev_parse, write_product_patch,
+    TempWorktree, ensure_revs, ensure_upstream_ref, has_ref, path_exists_at, rev_parse,
+    write_product_patch,
 };
 use crate::types::{ApplyOutcome, Patch, PatchStatus, QueueState};
 
@@ -23,22 +25,64 @@ fn is_credential_env(name: &str) -> bool {
         || (name.starts_with("UPLINK_") && (name.ends_with("_TOKEN") || name.ends_with("_KEY")))
 }
 
-fn run_shell(command: &str, cwd: &Path) -> (i32, String) {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(command).current_dir(cwd);
-    for (name, _) in env::vars_os() {
-        if name.to_str().is_some_and(is_credential_env) {
-            cmd.env_remove(name);
+/// `preflight.sh` from `uplink/hooks`, checked out with the rest of that
+/// commit so the script can reach the files next to it.
+struct PreflightScript<'a> {
+    path: PathBuf,
+    // Dropped with the script, which removes the checkout.
+    _hooks: TempWorktree<'a>,
+}
+
+impl<'a> PreflightScript<'a> {
+    /// `None` when there is no script to run. `hooks_ref` stands in for
+    /// `uplink/hooks`, to try a change to the script before it lands there.
+    fn materialise(
+        repo: &'a Path,
+        queue: &QueueState,
+        hooks_ref: Option<&str>,
+    ) -> Result<Option<Self>> {
+        let sha = match hooks_ref {
+            Some(rev) => ensure_revs(repo, &[rev])?.remove(0),
+            None => match hooks_source(repo)? {
+                Some(sha) => sha,
+                // Never pass because there was nothing to run.
+                None if queue.config.forge.is_some() => {
+                    return Err(Error::msg(
+                        "uplink/hooks is missing, so preflight has no preflight.sh to run; \
+run git uplink init --upgrade to create it, then git uplink push",
+                    ));
+                }
+                None => return Ok(None),
+            },
+        };
+        if !path_exists_at(repo, &sha, PREFLIGHT_SCRIPT_PATH)? {
+            return Ok(None);
         }
+        let hooks = TempWorktree::add(repo, "uplink-hooks", &sha)?;
+        Ok(Some(Self {
+            path: hooks.dir.join(PREFLIGHT_SCRIPT_PATH),
+            _hooks: hooks,
+        }))
     }
-    let output = cmd.output();
-    match output {
-        Ok(output) => {
-            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&output.stderr));
-            (output.status.code().unwrap_or(1), text.trim().to_string())
+
+    /// Runs the script with `cwd`, the root of the tree under test, as its
+    /// working directory.
+    fn run(&self, cwd: &Path) -> (i32, String) {
+        let mut cmd = Command::new("sh");
+        cmd.arg(&self.path).current_dir(cwd);
+        for (name, _) in env::vars_os() {
+            if name.to_str().is_some_and(is_credential_env) {
+                cmd.env_remove(name);
+            }
         }
-        Err(err) => (1, err.to_string()),
+        match cmd.output() {
+            Ok(output) => {
+                let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+                text.push_str(&String::from_utf8_lossy(&output.stderr));
+                (output.status.code().unwrap_or(1), text.trim().to_string())
+            }
+            Err(err) => (1, err.to_string()),
+        }
     }
 }
 
@@ -108,11 +152,6 @@ fn apply_deps(
     Ok(ApplyOutcome::Applied)
 }
 
-/// The `preflight` command from `uplink.toml` on `uplink/hooks`.
-pub fn preflight_command_for(queue: &QueueState) -> Result<Option<String>> {
-    Ok(queue.settings.usable()?.preflight.clone())
-}
-
 fn format_suggestion(ids: &[String]) -> String {
     if ids.is_empty() {
         " Record --depends-on for every queued patch this change actually uses, or rewrite it so it stands on public main.".into()
@@ -168,16 +207,12 @@ pub fn assert_export_preflight(
     queue: &QueueState,
     patch: &Patch,
     candidate_abs: &Path,
-    command_override: Option<Option<String>>,
+    hooks_ref: Option<&str>,
 ) -> Result<()> {
     if queue.is_internal(&patch.id) || queue.is_tooling(&patch.id) {
         return Ok(());
     }
-    let command = match command_override {
-        Some(None) => None,
-        Some(Some(cmd)) => Some(cmd),
-        None => preflight_command_for(queue)?,
-    };
+    let script = PreflightScript::materialise(repo, queue, hooks_ref)?;
 
     with_upstream_worktree(repo, |dir| {
         let deps = apply_deps(dir, repo, queue, &patch.depends_on)?;
@@ -220,14 +255,14 @@ pub fn assert_export_preflight(
             )));
         }
 
-        let Some(command) = command else {
+        let Some(script) = &script else {
             return Ok(());
         };
-        let (code, output) = run_shell(&command, dir);
+        let (code, output) = script.run(dir);
         if code == 0 {
             return Ok(());
         }
-        let suggested = suggest_command_deps(repo, queue, candidate_abs, patch, &command, dir)?;
+        let suggested = suggest_command_deps(repo, queue, candidate_abs, patch, script, dir)?;
         let extra = if patch.depends_on.is_empty() {
             String::new()
         } else {
@@ -240,7 +275,7 @@ pub fn assert_export_preflight(
         };
         Err(Error::Preflight(PreflightError::new(
             format!(
-                "Export preflight failed on public upstream{extra} ({command}, exit {code}). No upstream PR should be opened until this passes.{}{output_suffix}",
+                "Export preflight failed on public upstream{extra} ({PREFLIGHT_SCRIPT_PATH}, exit {code}). No upstream PR should be opened until this passes.{}{output_suffix}",
                 format_suggestion(&suggested)
             ),
             suggested,
@@ -259,7 +294,7 @@ fn suggest_command_deps(
     queue: &QueueState,
     candidate_abs: &Path,
     patch: &Patch,
-    command: &str,
+    script: &PreflightScript,
     dir: &Path,
 ) -> Result<Vec<String>> {
     let candidates: Vec<String> = active_upstream(queue)
@@ -277,7 +312,7 @@ fn suggest_command_deps(
         if apply_abs(dir, candidate_abs, &patch.title)? == ApplyOutcome::Conflict {
             continue;
         }
-        let (code, _) = run_shell(command, dir);
+        let (code, _) = script.run(dir);
         if code == 0 {
             return Ok(prefix);
         }
@@ -285,9 +320,14 @@ fn suggest_command_deps(
     Ok(Vec::new())
 }
 
-pub fn preflight_existing_patch(repo: &Path, queue: &QueueState, id: &str) -> Result<()> {
+pub fn preflight_existing_patch(
+    repo: &Path,
+    queue: &QueueState,
+    id: &str,
+    hooks_ref: Option<&str>,
+) -> Result<()> {
     let patch = get_patch(queue, id)?.clone();
-    assert_export_preflight(repo, queue, &patch, &repo.join(patch_path(id)?), None)
+    assert_export_preflight(repo, queue, &patch, &repo.join(patch_path(id)?), hooks_ref)
 }
 
 pub struct IncomingPreflight {
@@ -296,15 +336,23 @@ pub struct IncomingPreflight {
     pub head_ref: String,
     pub depends_on: Vec<String>,
     pub message: Option<String>,
-    pub preflight_command: Option<String>,
+    /// Read `preflight.sh` from this revision instead of `uplink/hooks`.
+    pub hooks_ref: Option<String>,
     pub internal_only: bool,
 }
 
-pub fn run_preflight_command_in(queue: &QueueState, cwd: &Path) -> Result<()> {
-    let Some(command) = preflight_command_for(queue)? else {
+/// Runs `preflight.sh` on the checkout `cwd` is in, from its root, with
+/// nothing applied.
+pub fn run_preflight_command_in(
+    queue: &QueueState,
+    cwd: &Path,
+    hooks_ref: Option<&str>,
+) -> Result<()> {
+    let Some(script) = PreflightScript::materialise(cwd, queue, hooks_ref)? else {
         return Ok(());
     };
-    let (code, output) = run_shell(&command, cwd);
+    let root = git_ok(cwd, &["rev-parse", "--show-toplevel"])?;
+    let (code, output) = script.run(Path::new(&root));
     if code == 0 {
         return Ok(());
     }
@@ -314,7 +362,7 @@ pub fn run_preflight_command_in(queue: &QueueState, cwd: &Path) -> Result<()> {
         format!("\n\n{output}")
     };
     Err(Error::Preflight(PreflightError::new(
-        format!("Preflight failed ({command}, exit {code}).{output_suffix}"),
+        format!("Preflight failed ({PREFLIGHT_SCRIPT_PATH}, exit {code}).{output_suffix}"),
         Vec::new(),
         "command",
         if output.is_empty() {
@@ -428,7 +476,7 @@ pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result
             &queue,
             &patch,
             &candidate_abs,
-            opts.preflight_command.map(Some),
+            opts.hooks_ref.as_deref(),
         )?;
         assert_upstream_layer_preflight(repo, &queue, &candidate_abs, &opts.title)
     })();
