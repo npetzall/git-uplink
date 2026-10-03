@@ -114,6 +114,17 @@ jobs:
         with:
           path: site/dist
 
+  merge-gate:
+    name: Merge gate
+    if: github.ref != 'refs/heads/main'
+    needs: [build, codeql, zizmor, socket]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Ok to merge
+        run: |
+          echo "OK to merge"
+
   deploy:
     if: github.ref == 'refs/heads/main'
     needs: [build, codeql, zizmor, socket]
