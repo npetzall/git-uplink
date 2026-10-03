@@ -29,6 +29,13 @@ repos:
         language: system
         pass_filenames: false
         types: [rust]
+      # Rewrites docs/cli.md from the help text; stage the result and commit again.
+      - id: cli-docs
+        name: generate docs/cli.md
+        entry: env UPLINK_BLESS=1 sfw cargo test --locked --test cli_docs
+        language: system
+        pass_filenames: false
+        files: ^(src/cli\.rs|docs/cli\.md|tests/cli_docs\.rs)$
       - id: cargo-deny
         name: cargo deny
         entry: sfw cargo deny check
