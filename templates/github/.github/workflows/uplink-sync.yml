@@ -1,4 +1,4 @@
-# ghec forge pack (`git uplink init --forge ghec`).
+# GitHub forge pack (`git uplink init --forge github`).
 # Installs git-uplink from a GitHub release.
 # Empty UPLINK_*_AUTH defaults to app.
 #
@@ -10,11 +10,11 @@
 # On apply failure it records the patch as conflict on uplink/state,
 # pushes uplink/conflict/<id> (protected base) and <id>-work, and opens
 # a gated PR. Do not push the protected base directly.
+#
+# Dispatch only. uplink-sync-schedule.yml runs it hourly.
 name: Uplink sync
 
 on:
-  schedule:
-    - cron: "17 * * * *"
   workflow_dispatch:
 
 concurrency:

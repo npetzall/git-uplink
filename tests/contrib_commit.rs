@@ -20,7 +20,7 @@ use tempfile::TempDir;
 
 const SCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/templates/github/uplink/contrib_commit.py"
+    "/templates/github/.github/uplink/contrib_commit.py"
 );
 const TOKEN: &str = "test-token";
 

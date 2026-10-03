@@ -130,7 +130,7 @@ pub fn check_forge_recorded(queue: &QueueState) -> StepOutcome {
         StepOutcome::pass(format!("forge {forge} recorded"))
     } else {
         StepOutcome::fail(
-            "queue.json has no forge; re-run with --forge ghec or --forge example-github",
+            "queue.json has no forge; re-run with --forge github or --forge try-it-on-github",
         )
     }
 }

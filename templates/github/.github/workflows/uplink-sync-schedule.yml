@@ -1,0 +1,24 @@
+# GitHub forge pack (`git uplink init --forge github`).
+# Dispatches Uplink sync every hour. The schedule is its own file so a pack
+# overlay can leave it out. try-it-on-github does, so nothing races a
+# walkthrough.
+name: Uplink sync schedule
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Dispatch Uplink sync
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Run Uplink sync on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run uplink-sync.yml --ref main

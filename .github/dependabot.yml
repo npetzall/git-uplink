@@ -36,11 +36,12 @@ updates:
   - package-ecosystem: "github-actions"
     directories:
       - "/"
-      - "/templates/example-github/.github/workflows"
-      - "/templates/github/actions/install-git-uplink"
-      - "/templates/github/actions/uplink-assessment-hook"
-      - "/templates/github/workflows"
-      - "/templates/ghec/.github/workflows"
+      - "/templates/github/.github/actions/install-git-uplink"
+      - "/templates/github/.github/actions/uplink-assessment-hook"
+      - "/templates/github/.github/actions/uplink-toolchain-hook"
+      - "/templates/github/.github/workflows"
+      - "/templates/github-hooks/.github/actions/uplink-toolchain-hook"
+      - "/templates/github-hooks/.github/workflows"
     schedule:
       interval: "weekly"
     cooldown:

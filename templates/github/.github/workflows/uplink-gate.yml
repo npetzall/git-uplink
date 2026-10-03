@@ -1,4 +1,4 @@
-# ghec forge pack (`git uplink init --forge ghec`).
+# GitHub forge pack (`git uplink init --forge github`).
 # Required check on PRs into protected uplink bases. These PRs are not imports.
 # YAML is loaded from the default branch so *-work cannot replace this sidecar.
 # Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).

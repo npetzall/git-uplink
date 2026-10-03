@@ -112,15 +112,32 @@ impl PatchLayer {
 #[serde(rename_all = "kebab-case")]
 #[value(rename_all = "kebab-case")]
 pub enum Forge {
-    Ghec,
-    ExampleGithub,
+    /// The base GitHub pack, for github.com and GitHub Enterprise Cloud.
+    /// `ghec` is its former name, still read from stored queues and the CLI.
+    #[serde(alias = "ghec")]
+    #[value(alias = "ghec")]
+    Github,
+    /// The base pack adjusted for the worked example. Formerly `example-github`.
+    #[serde(alias = "example-github")]
+    #[value(alias = "example-github")]
+    TryItOnGithub,
 }
 
 impl Forge {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Ghec => "ghec",
-            Self::ExampleGithub => "example-github",
+            Self::Github => "github",
+            Self::TryItOnGithub => "try-it-on-github",
+        }
+    }
+
+    /// Base-pack files this forge leaves out. An overlay can add or overwrite
+    /// files by path; this is how it removes one.
+    pub fn omitted_paths(self) -> &'static [&'static str] {
+        match self {
+            Self::Github => &[],
+            // No hourly sync, so nothing races a walkthrough.
+            Self::TryItOnGithub => &[".github/workflows/uplink-sync-schedule.yml"],
         }
     }
 
