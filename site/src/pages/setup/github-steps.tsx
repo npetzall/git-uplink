@@ -3,7 +3,7 @@ import { Command, Step, V } from "../../components/setup/step";
 import type { Derive, Field } from "../../components/setup/values";
 import { GITHUB_BLOB } from "../../lib/links";
 
-export const GHEC_FIELDS: Field[] = [
+export const GITHUB_FIELDS: Field[] = [
   { key: "host", label: "Company GitHub host", token: "COMPANY_HOST", initial: "github.com", help: "github.com, or your GHE.com subdomain" },
   { key: "companyOrg", label: "Company organization", token: "COMPANY_ORG", initial: "" },
   { key: "productRepo", label: "Product repository", token: "PRODUCT_REPO", initial: "" },
@@ -24,7 +24,7 @@ function upstreamSlug(url: string): string {
   return m ? `${m[1]}/${m[2]}` : "";
 }
 
-export const ghecDerive: Derive = (get, values) => ({
+export const githubDerive: Derive = (get, values) => ({
   companyRepo: `${get("companyOrg")}/${get("productRepo")}`,
   ghRepo:
     (values.host && values.host !== "github.com" ? `${values.host}/` : "") + `${get("companyOrg")}/${get("productRepo")}`,
@@ -151,7 +151,7 @@ const PACK_RULESET = `{
 
 const API = "gh api --hostname {{host}}";
 
-export function GhecSteps() {
+export function GithubSteps() {
   return (
     <div className="space-y-12">
       <Step
@@ -686,13 +686,13 @@ function RulesetList() {
         <code>.github/actions/uplink-*/**</code>, or{" "}
         <code>.github/uplink/**</code> on a gated
         branch. Product workflows stay editable. Bypass: the internal App. Sample:{" "}
-        <a href={`${GITHUB_BLOB}/templates/github/uplink-pack-files-ruleset.json`}>uplink-pack-files-ruleset.json</a>.
+        <a href={`${GITHUB_BLOB}/templates/github/.github/uplink-pack-files-ruleset.json`}>uplink-pack-files-ruleset.json</a>.
       </li>
       <li>
         <strong>Uplink: hooks branch</strong> (<code>uplink/hooks</code>): pull request with one approval, no deletion or
         force-push. The assessment and toolchain hooks on this branch run on every PR check and submit. No bypass:
         nothing in Actions writes this branch. Sample:{" "}
-        <a href={`${GITHUB_BLOB}/templates/github/uplink-hooks-ruleset.json`}>uplink-hooks-ruleset.json</a>.
+        <a href={`${GITHUB_BLOB}/templates/github/.github/uplink-hooks-ruleset.json`}>uplink-hooks-ruleset.json</a>.
       </li>
     </ul>
   );
@@ -725,7 +725,7 @@ function InitBody() {
         In your local copy from step 3, record the queue, install the pack as the tooling patch, and push. This is the
         only time a person pushes <code>main</code>.
       </p>
-      <Command>{`git uplink init --upstream {{upstreamUrl}} --contrib {{contribUrl}} --forge ghec
+      <Command>{`git uplink init --upstream {{upstreamUrl}} --contrib {{contribUrl}} --forge github
 git uplink status
 git push -u origin main
 git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
@@ -750,7 +750,7 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
             <code>init</code> leaves <code>main</code> alone and turns each first-parent commit (or group you choose) into
             a queued patch after the tooling. Preview the rebuilt tree, compare, then publish:
           </p>
-          <Command>{`git uplink init --upstream {{upstreamUrl}} --contrib {{contribUrl}} --forge ghec
+          <Command>{`git uplink init --upstream {{upstreamUrl}} --contrib {{contribUrl}} --forge github
 git uplink rebuild --branch uplink/preview/verify
 git diff main uplink/preview/verify
 git uplink rebuild --push

@@ -15,7 +15,7 @@ import story04 from "../../../examples/github/stories/04-upstream-conflict.md?ra
 import story05 from "../../../examples/github/stories/05-cam-two-deps.md?raw";
 import story06 from "../../../examples/github/stories/06-internal-only.md?raw";
 import story07 from "../../../examples/github/stories/07-assessment-hook.md?raw";
-import exampleWorkflows from "../../../templates/example-github/README.md?raw";
+import exampleWorkflows from "../../../templates/try-it-on-github/README.md?raw";
 
 const STORIES = [
   {
@@ -185,7 +185,7 @@ export function ExamplesPage() {
               <div
                 className="markdown-body"
                 dangerouslySetInnerHTML={{
-                  __html: renderRepoMarkdown(exampleWorkflows, "templates/example-github/README.md"),
+                  __html: renderRepoMarkdown(exampleWorkflows, "templates/try-it-on-github/README.md"),
                 }}
               />
             ),
