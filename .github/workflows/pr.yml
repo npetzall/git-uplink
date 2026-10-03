@@ -5,6 +5,7 @@ on:
     paths:
       - src/**
       - tests/**
+      - docs/cli.md
       - web/**
       - templates/**
       - Cargo.toml
