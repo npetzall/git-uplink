@@ -111,6 +111,36 @@ SSH upstream, origin, and contrib without the matching role's creds fail instead
     ),
 ];
 
+/// Command groups, as (heading, command names), in the order they are listed in
+/// `-h`, the man page, and `docs/cli.md`. Every command is in exactly one.
+pub const GROUPS: &[(&str, &[&str])] = &[
+    ("Setup", &["init"]),
+    ("Recording changes", &["add", "push", "refresh", "reset"]),
+    (
+        "Checks",
+        &["preflight", "assess", "report", "status", "doctor"],
+    ),
+    (
+        "Contributing upstream",
+        &["approve", "submit", "submitted", "merged"],
+    ),
+    (
+        "Upstream moves and conflicts",
+        &["sync", "accept-upstream", "gated", "resolve"],
+    ),
+    (
+        "Moving and removing patches",
+        &["transfer", "amend", "drop", "rebuild"],
+    ),
+    ("Tools", &["web-ui", "man", "version"]),
+];
+
+// clap's own heading style, for the headings the template writes itself. clap
+// drops the escapes when the output is not a terminal.
+const HEADING: &str = "\x1b[1m\x1b[4m";
+const RESET: &str = "\x1b[0m";
+const HELP_ABOUT: &str = "Print this message or the help of the given subcommand(s)";
+
 /// The parser with `version` filled in. The version carries the build commit,
 /// which `build.rs` computes, so it is passed in instead of read here.
 pub fn command(version: &'static str) -> clap::Command {
@@ -118,9 +148,44 @@ pub fn command(version: &'static str) -> clap::Command {
         .iter()
         .map(|(title, body)| format!("{title}:\n\n{body}"))
         .collect();
-    Cli::command()
+    let command = Cli::command();
+    let template = help_template(&command);
+    command
         .version(version)
+        .help_template(template)
         .after_long_help(topics.join("\n\n"))
+}
+
+/// clap lists every command under one heading, so the top-level help writes
+/// the list itself, grouped by `GROUPS`.
+fn help_template(command: &clap::Command) -> String {
+    let width = GROUPS
+        .iter()
+        .flat_map(|(_, names)| names.iter())
+        .map(|name| name.len())
+        .max()
+        .unwrap_or(0);
+    let row = |name: &str, about: &str| format!("  {name:width$}  {about}\n");
+    let mut groups = Vec::new();
+    for (heading, names) in GROUPS {
+        let mut group = format!("{HEADING}{heading}:{RESET}\n");
+        for name in *names {
+            let about = command
+                .find_subcommand(name)
+                .and_then(|sub| sub.get_about())
+                .unwrap_or_else(|| panic!("GROUPS names an unknown command: {name}"));
+            group.push_str(&row(name, &about.to_string()));
+        }
+        groups.push(group);
+    }
+    if let Some(last) = groups.last_mut() {
+        last.push_str(&row("help", HELP_ABOUT));
+    }
+    format!(
+        "{{before-help}}{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{}\n\
+         {HEADING}Options:{RESET}\n{{options}}{{after-help}}",
+        groups.join("\n")
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

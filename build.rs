@@ -87,9 +87,11 @@ fn generate_man_pages(commit: &str) {
     std::fs::write(out.join("man_pages.rs"), table).unwrap();
 }
 
-/// The top-level page, with each of `cli::TOPICS` as a section of its own
-/// instead of clap_mangen's single EXTRA section.
+/// The top-level page, with the commands grouped by `cli::GROUPS` and each of
+/// `cli::TOPICS` as a section of its own instead of clap_mangen's single EXTRA
+/// section.
 fn main_page(command: clap::Command) -> Vec<u8> {
+    let man_command = command.clone();
     let man = clap_mangen::Man::new(command);
     let mut page = Vec::new();
     man.render_title(&mut page).unwrap();
@@ -97,7 +99,18 @@ fn main_page(command: clap::Command) -> Vec<u8> {
     man.render_synopsis_section(&mut page).unwrap();
     man.render_description_section(&mut page).unwrap();
     man.render_options_section(&mut page).unwrap();
-    man.render_subcommands_section(&mut page).unwrap();
+    let mut commands = roff::Roff::new();
+    commands.control("SH", ["SUBCOMMANDS"]);
+    for (heading, names) in cli::GROUPS {
+        commands.control("SS", [*heading]);
+        for name in *names {
+            let about = man_command.find_subcommand(name).unwrap().get_about();
+            commands.control("TP", []);
+            commands.text([roff::roman(format!("git-uplink-{name}(1)"))]);
+            commands.text([roff::roman(about.unwrap().to_string())]);
+        }
+    }
+    commands.to_writer(&mut page).unwrap();
     for (title, body) in cli::TOPICS {
         let mut section = roff::Roff::new();
         section.control("SH", [title.to_uppercase().as_str()]);

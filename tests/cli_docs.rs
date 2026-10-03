@@ -172,33 +172,36 @@ fn render() -> String {
     for sub in root.get_subcommands() {
         out.push_str(&synopsis(sub));
     }
-    writeln!(out, "```\n\n## Commands").unwrap();
+    writeln!(out, "```").unwrap();
 
-    for sub in root.get_subcommands() {
-        writeln!(out, "\n### `{}`\n", sub.get_name()).unwrap();
-        let about = sub
-            .get_long_about()
-            .or_else(|| sub.get_about())
-            .unwrap_or_else(|| panic!("{} has no help text", sub.get_name()))
-            .to_string();
-        let end = if about.ends_with('.') || about.contains("\n\n") {
-            ""
-        } else {
-            "."
-        };
-        writeln!(out, "{}{end}", markdown(&about)).unwrap();
-        let mut arguments = sub.get_arguments().peekable();
-        if arguments.peek().is_some() {
-            out.push('\n');
-        }
-        for arg in arguments {
-            assert!(
-                arg.get_help().is_some(),
-                "{} {} has no help text",
-                sub.get_name(),
-                arg.get_id()
-            );
-            out.push_str(&argument(arg));
+    for (heading, names) in cli::GROUPS {
+        writeln!(out, "\n## {heading}").unwrap();
+        for name in *names {
+            let sub = root.find_subcommand(name).unwrap();
+            writeln!(out, "\n### `{name}`\n").unwrap();
+            let about = sub
+                .get_long_about()
+                .or_else(|| sub.get_about())
+                .unwrap()
+                .to_string();
+            let end = if about.ends_with('.') || about.contains("\n\n") {
+                ""
+            } else {
+                "."
+            };
+            writeln!(out, "{}{end}", markdown(&about)).unwrap();
+            let mut arguments = sub.get_arguments().peekable();
+            if arguments.peek().is_some() {
+                out.push('\n');
+            }
+            for arg in arguments {
+                assert!(
+                    arg.get_help().is_some(),
+                    "{name} {} has no help text",
+                    arg.get_id()
+                );
+                out.push_str(&argument(arg));
+            }
         }
     }
 
@@ -206,6 +209,22 @@ fn render() -> String {
         writeln!(out, "\n## {}\n\n{}", markdown(title), markdown(body)).unwrap();
     }
     out
+}
+
+#[test]
+fn every_command_is_in_exactly_one_group() {
+    let mut grouped: Vec<&str> = cli::GROUPS
+        .iter()
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect();
+    let mut commands: Vec<&str> = Vec::new();
+    let root = cli::command("");
+    for sub in root.get_subcommands() {
+        commands.push(sub.get_name());
+    }
+    grouped.sort_unstable();
+    commands.sort_unstable();
+    assert_eq!(grouped, commands);
 }
 
 #[test]
