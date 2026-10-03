@@ -1,5 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::cli::{ForgeArg, MergeViaArg};
 use crate::settings::Settings;
 
 pub const QUEUE_PATH: &str = ".uplink/queue.json";
@@ -49,7 +50,7 @@ impl std::fmt::Display for PatchStatus {
 
 /// Where a new patch is bound: the upstream queue (exported after IP review)
 /// or the internal queue (never exported, leak scan skipped).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PatchIntent {
     #[default]
@@ -110,18 +111,15 @@ impl PatchLayer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-#[value(rename_all = "kebab-case")]
 pub enum Forge {
     /// The base GitHub pack, for github.com and GitHub Enterprise Cloud.
     /// `ghec` is its former name, still read from stored queues and the CLI.
     #[serde(alias = "ghec")]
-    #[value(alias = "ghec")]
     Github,
     /// The base pack adjusted for the worked example. Formerly `example-github`.
     #[serde(alias = "example-github")]
-    #[value(alias = "example-github")]
     TryItOnGithub,
 }
 
@@ -148,6 +146,15 @@ impl Forge {
     }
 }
 
+impl From<ForgeArg> for Forge {
+    fn from(arg: ForgeArg) -> Self {
+        match arg {
+            ForgeArg::Github => Self::Github,
+            ForgeArg::TryItOnGithub => Self::TryItOnGithub,
+        }
+    }
+}
+
 impl std::fmt::Display for Forge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -159,9 +166,8 @@ pub enum ForgeFamily {
     Github,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[value(rename_all = "kebab-case")]
 pub enum MergeVia {
     Pr,
     Trailer,
@@ -180,6 +186,18 @@ impl MergeVia {
             Self::PatchId => "patch-id",
             Self::EmptyRebase => "empty-rebase",
             Self::Manual => "manual",
+        }
+    }
+}
+
+impl From<MergeViaArg> for MergeVia {
+    fn from(arg: MergeViaArg) -> Self {
+        match arg {
+            MergeViaArg::Pr => Self::Pr,
+            MergeViaArg::Trailer => Self::Trailer,
+            MergeViaArg::PatchId => Self::PatchId,
+            MergeViaArg::EmptyRebase => Self::EmptyRebase,
+            MergeViaArg::Manual => Self::Manual,
         }
     }
 }
