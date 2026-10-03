@@ -495,7 +495,7 @@ git push origin seed seed-state seed-upstream`}</Command>
       <p>
         <code>git uplink status</code> shows <strong>Uplink tooling</strong> in the tooling slot. The three{" "}
         <code>init</code> flags are the stories&apos; settings; <code>init</code> writes them to{" "}
-        <code>uplink.toml</code> on <code>uplink/hooks</code>.
+        <code>preflight.sh</code> and <code>uplink.toml</code> on <code>uplink/hooks</code>.
       </p>
       <ResetBranch script="internal" />
     </>

@@ -732,19 +732,19 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
         <code>init</code>.
       </p>
       <p>
-        <code>init</code> asks three questions and writes the answers to <code>uplink.toml</code> on{" "}
-        <code>uplink/hooks</code>: the preflight command run on the export tree (for example{" "}
-        <code>npm ci &amp;&amp; npm test</code>), the words that must not appear in a contribution (company and
-        product names), and your internal email domains. In a script, pass{" "}
+        <code>init</code> asks three questions and writes the answers to <code>uplink/hooks</code>: the preflight
+        command run on the export tree (for example <code>npm ci &amp;&amp; npm test</code>) goes into the script{" "}
+        <code>preflight.sh</code>; the words that must not appear in a contribution (company and product names) and
+        your internal email domains go into <code>uplink.toml</code>. In a script, pass{" "}
         <code>--preflight</code>, <code>--redact-keyword</code>, and <code>--internal-domain</code> instead. These
-        are not repository variables: the CLI reads the file from the branch, on your machine and in CI alike. To
-        change them later, edit <code>uplink.toml</code> on <code>uplink/hooks</code>.
+        are not repository variables: the CLI reads both files from the branch, on your machine and in CI alike. To
+        change them later, edit the files on <code>uplink/hooks</code>.
       </p>
       <p>
         <code>init</code> also creates the orphan branch <code>uplink/hooks</code> locally: the assessment hook guide and
         starter, and the toolchain hook that sets up the runner before preflight. Edit{" "}
         <code>.github/actions/uplink-toolchain-hook/action.yml</code> there to install what{" "}
-        the <code>preflight</code> command needs (see <code>toolchain-hook.md</code> on that branch).{" "}
+        <code>preflight.sh</code> needs (see <code>toolchain-hook.md</code> on that branch).{" "}
         <code>git uplink doctor</code> reports if it is not pushed.
       </p>
       <p>

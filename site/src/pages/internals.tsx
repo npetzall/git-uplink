@@ -145,7 +145,7 @@ sequenceDiagram
     Note right of CI: message, cutoff, co-author,<br/>keyword and email scan
   and preflight
     CI->>CI: git uplink preflight
-    Note right of CI: apply on upstream + declared deps<br/>+ tooling + queued upstream,<br/>run the preflight command
+    Note right of CI: apply on upstream + declared deps<br/>+ tooling + queued upstream,<br/>run preflight.sh
   end
   CI-->>PR: report comment, required checks
 `;
