@@ -715,6 +715,29 @@ mod embed_tests {
     }
 
     #[test]
+    fn import_runs_only_for_pull_requests_merged_into_main() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-import.yml"))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing uplink-import.yml"));
+            assert!(
+                text.contains(
+                    "  pull_request:\n    types: [closed]\n    branches:\n      - main\n"
+                ),
+                "{forge:?} import must be limited to main\n{text}"
+            );
+            assert!(
+                text.contains("BASE_REF: ${{ github.event.pull_request.base.ref }}")
+                    && text.contains("--base-branch \"$BASE_REF\""),
+                "{forge:?} import must tell add where the PR merged\n{text}"
+            );
+        }
+    }
+
+    #[test]
     fn abandon_contrib_is_detached_from_uplink_mutate() {
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
