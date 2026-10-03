@@ -58,7 +58,7 @@ No GitHub account handy? The [live lab](https://npetzall.github.io/git-uplink/la
 | What developers do | [Day to day](https://npetzall.github.io/git-uplink/day-to-day) | `site/` |
 | Every command and flag, credentials | [CLI](https://npetzall.github.io/git-uplink/cli) | [docs/cli.md](docs/cli.md) |
 | Try it on three GitHub repos | [Try it yourself](https://npetzall.github.io/git-uplink/examples) | [examples/github/](examples/github/) |
-| Step-by-step setup; what each workflow does and needs | [Production setup](https://npetzall.github.io/git-uplink/setup) | [templates/ghec/README.md](templates/ghec/README.md) (workflows) |
+| Step-by-step setup; what each workflow does and needs | [Production setup](https://npetzall.github.io/git-uplink/setup) | [templates/github/README.md](templates/github/README.md) (workflows) |
 | From init to sync, gates, diagrams | [Internals](https://npetzall.github.io/git-uplink/internals) | `site/` |
 
 ## Contributing

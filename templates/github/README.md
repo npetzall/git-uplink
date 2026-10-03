@@ -1,8 +1,8 @@
-# GitHub Enterprise Cloud workflows (`--forge ghec`)
+# GitHub workflows (`--forge github`)
 
-`git uplink init --forge ghec` installs the workflows in [`.github/workflows/`](.github/workflows/) as the tooling patch on company `main`, together with the shared [pull request template](../github/pull_request_template.md) and the [`install-git-uplink`](../github/actions/install-git-uplink/action.yml) action. `git uplink init --upgrade` refreshes them from the binary. Do not edit them by hand.
+`git uplink init --forge github` installs everything under [`.github/`](.github/) as the tooling patch on company `main`: the workflows in [`.github/workflows/`](.github/workflows/), the [pull request template](.github/pull_request_template.md), the [`install-git-uplink`](.github/actions/install-git-uplink/action.yml) action, the actions that call the company hooks, and sample rulesets. `git uplink init --upgrade` refreshes them from the binary. Do not edit them by hand. The pack is the same for github.com and GitHub Enterprise Cloud.
 
-For setting up a repository step by step, see [Production setup](https://npetzall.github.io/git-uplink/setup?forge=ghec&view=steps).
+For setting up a repository step by step, see [Production setup](https://npetzall.github.io/git-uplink/setup?forge=github&view=steps).
 
 Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERSION`, then runs `git uplink init` to hydrate its checkout from `origin`. Gated pull requests are opened with the internal App or PAT, not `GITHUB_TOKEN`, so the repository setting "Allow GitHub Actions to create and approve pull requests" can stay off, and the Uplink gate check runs as soon as the PR opens. `UPLINK_*_AUTH` selects `app` (mint an installation token from `UPLINK_*_APP_ID` + `UPLINK_*_APP_PRIVATE_KEY`, the default) or `pat` (use `UPLINK_*_TOKEN`). Workflows that write the queue share the concurrency group `uplink-mutate` with `queue: max`, so they run one at a time and none is dropped. Jobs that wait on an Environment never hold that group.
 
@@ -42,7 +42,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 ## `uplink-sync.yml` — Uplink sync
 
-- **Runs on:** hourly schedule and manual dispatch.
+- **Runs on:** manual dispatch. `uplink-sync-schedule.yml` (**Uplink sync schedule**) dispatches it every hour with the Actions token (actions write); that is all it does.
 - **Does:**
   - **Inspect:** `git uplink sync` fetches public upstream without moving `uplink/upstream`. Commits that are our own merged patches apply at once: promote, mark merged, rebuild. Anything else writes `.uplink/reports/from-upstream/incoming.md`.
   - **Wait:** holds on Environment `from-upstream`.
@@ -130,7 +130,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
   - `.github/workflows/uplink-assessment-hook.yml` on `uplink/hooks` (copy the `-example` starter). Adding it needs workflows write;
   - it must not push `uplink/state`;
   - with `pr`, the checked-out code is unmerged. Do not run it with secrets;
-  - recommended: import [`uplink-hooks-ruleset.json`](../github/uplink-hooks-ruleset.json), so changes to `uplink/hooks` need a reviewed pull request. Its code runs on every PR check and submit.
+  - recommended: import [`uplink-hooks-ruleset.json`](.github/uplink-hooks-ruleset.json), so changes to `uplink/hooks` need a reviewed pull request. Its code runs on every PR check and submit.
 - Guide: [`assessment-hook.md`](../github-hooks/assessment-hook.md), starter: [`uplink-assessment-hook-example.yml`](../github-hooks/.github/workflows/uplink-assessment-hook-example.yml). Walkthrough: [story 07](../../examples/github/stories/07-assessment-hook.md).
 
 ## Toolchain hook

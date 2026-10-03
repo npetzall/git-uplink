@@ -2,7 +2,7 @@
 
 Company scans that belong in the contribution packet run **after** `git uplink report` and **before** Environment **to-upstream**. Hooks are company-only, so they live on the orphan branch `uplink/hooks`, not on `main`. The forge pack ships a placeholder `.github/workflows/uplink-assessment-hook.yml` on `main`, because GitHub only dispatches workflows whose file is on the default branch. Submit's extras job runs the real hook with `--ref uplink/hooks` and prepends artifact `uplink-packet-extra` onto `assessment.md`.
 
-This is the walkthrough for [templates/ghec/README.md](../../../templates/ghec/README.md) **Assessment hook**. The guide is [`assessment-hook.md`](../../../templates/github-hooks/assessment-hook.md) and the starter is [`uplink-assessment-hook-example.yml`](../../../templates/github-hooks/.github/workflows/uplink-assessment-hook-example.yml). `git uplink init` put both on the orphan branch `uplink/hooks` during setup.
+This is the walkthrough for [templates/github/README.md](../../../templates/github/README.md) **Assessment hook**. The guide is [`assessment-hook.md`](../../../templates/github-hooks/assessment-hook.md) and the starter is [`uplink-assessment-hook-example.yml`](../../../templates/github-hooks/.github/workflows/uplink-assessment-hook-example.yml). `git uplink init` put both on the orphan branch `uplink/hooks` during setup.
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github

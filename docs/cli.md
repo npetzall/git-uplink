@@ -5,7 +5,7 @@ The binary is **`git-uplink`**, so Git treats it as `git uplink`. Use `git-uplin
 ## Synopsis
 
 ```text
-git uplink init [--upstream <url>] [--contrib <url>] [--forge ghec|example-github]
+git uplink init [--upstream <url>] [--contrib <url>] [--forge github|try-it-on-github]
             [--json] [--upgrade] [--adopt-groups <file>]
             [--upstream-remote-name <name>] [--upstream-branch <branch>]
             [--contrib-remote-name <name>] [--internal-branch <branch>]
@@ -55,7 +55,7 @@ git uplink version
 `init` writes `.uplink/queue.json` on `uplink/state`, including remote URLs, branch names, and `forge`.
 
 - `--upstream` / `--contrib` record those URLs and add the remotes.
-- `--forge` is required when creating a queue: `ghec` for GitHub Enterprise Cloud, `example-github` for the worked example.
+- `--forge` is required when creating a queue: `github` for github.com and GitHub Enterprise Cloud, `try-it-on-github` for the worked example. The former names `ghec` and `example-github` are still accepted, and are read from queues that stored them.
 - First-time init also installs that forge's workflows plus the shared GitHub pull request template as the dedicated **tooling** patch.
 - `--upgrade` refreshes the tooling patch in its dedicated slot. Re-run it after upgrading the binary.
 - Init also creates the local orphan branch `uplink/hooks` for company hooks (assessment hook guide and starter, toolchain hook stub) when neither this clone nor `origin` has it. Init never pushes it and never changes an existing file on it. `--upgrade` creates it for queues initialized before it existed, and adds files a newer pack brings as one commit on top.

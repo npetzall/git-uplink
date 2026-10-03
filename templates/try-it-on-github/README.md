@@ -1,11 +1,12 @@
-# GitHub example workflows (`--forge example-github`)
+# Try it on GitHub (`--forge try-it-on-github`)
 
-`git uplink init --forge example-github` installs the workflows in [`.github/workflows/`](.github/workflows/) into `uplink-example-internal` as the tooling patch, with the shared [pull request template](../github/pull_request_template.md) and [`install-git-uplink`](../github/actions/install-git-uplink/action.yml) action. For setting up the example step by step, see [Try it yourself](https://npetzall.github.io/git-uplink/examples?view=setup).
+`git uplink init --forge try-it-on-github` installs the [GitHub pack](../github/README.md) into `uplink-example-internal` as the tooling patch, adjusted for a walkthrough. For setting up the example step by step, see [Try it yourself](https://npetzall.github.io/git-uplink/examples?view=setup).
 
-They are the [GitHub Enterprise Cloud workflows](../ghec/README.md) with two differences for a walkthrough:
+This folder is an overlay on [`../github/`](../github/): a file here with the same path replaces the one in the GitHub pack, a new path is added, and `Forge::omitted_paths` in `src/types.rs` lists the files left out. Today it only leaves one out:
 
-- `UPLINK_*_AUTH` defaults to `pat`, so each role is one fine-grained token (`UPLINK_*_TOKEN`) instead of a GitHub App.
-- **Uplink sync** has no hourly schedule. You dispatch it when a story says so, so nothing races the walkthrough.
+- **No `uplink-sync-schedule.yml`.** Nothing dispatches **Uplink sync** hourly. You dispatch it when a story says so, so nothing races the walkthrough.
+
+The workflows themselves are identical. The setup sets the repository variables `UPLINK_INTERNAL_AUTH`, `UPLINK_UPSTREAM_AUTH`, and `UPLINK_CONTRIB_AUTH` to `pat`, so each role is one fine-grained token (`UPLINK_*_TOKEN`) instead of a GitHub App, which is the pack's default.
 
 | Workflow | In the walkthrough | Needs |
 | --- | --- | --- |
