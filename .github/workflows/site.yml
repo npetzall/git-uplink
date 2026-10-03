@@ -64,6 +64,15 @@ jobs:
       actions: read
       contents: read
 
+  socket:
+    uses: $/.github/workflows/socket.yml
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+    permissions:
+      issues: write
+      contents: read
+      pull-requests: write
+
   zizmor:
     uses: $/.github/workflows/zizmor.yml
     permissions:
@@ -107,7 +116,7 @@ jobs:
 
   deploy:
     if: github.ref == 'refs/heads/main'
-    needs: [build, codeql, zizmor]
+    needs: [build, codeql, zizmor, socket]
     runs-on: ubuntu-latest
     permissions:
       pages: write
