@@ -1,4 +1,4 @@
-# ghec forge pack (`git uplink init --forge ghec`).
+# GitHub forge pack (`git uplink init --forge github`).
 # Installs git-uplink from a GitHub release.
 # Empty UPLINK_*_AUTH defaults to app.
 #

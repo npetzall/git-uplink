@@ -145,7 +145,7 @@ pub(super) fn ensure_hooks_step(
 }
 
 pub(super) fn missing_forge_error() -> Error {
-    Error::msg("pass --forge ghec or --forge example-github when creating an uplink queue")
+    Error::msg("pass --forge github or --forge try-it-on-github when creating an uplink queue")
 }
 
 pub(super) fn require_stored_urls(config: &QueueConfig) -> Result<()> {
@@ -380,8 +380,8 @@ pub(super) fn init_upgrade(
     if queue.config.forge.is_none() {
         let forge = opts.forge.ok_or_else(|| {
             Error::msg(
-                "queue.json has no forge. Re-run `git uplink init --upgrade --forge ghec` \
-(or --forge example-github) to record it.",
+                "queue.json has no forge. Re-run `git uplink init --upgrade --forge github` \
+(or --forge try-it-on-github) to record it.",
             )
         })?;
         progress.run_step("record-forge", "Record forge in queue", || {

@@ -19,12 +19,8 @@ use crate::types::{
 };
 
 #[derive(RustEmbed)]
-#[folder = "templates/ghec"]
-struct GhecPack;
-
-#[derive(RustEmbed)]
-#[folder = "templates/example-github"]
-struct ExampleGithubPack;
+#[folder = "templates/try-it-on-github"]
+struct TryItOnGithubPack;
 
 #[derive(RustEmbed)]
 #[folder = "templates/github"]
@@ -48,8 +44,8 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
     let queue = read_queue_file(repo)?;
     let forge = queue.config.forge.ok_or_else(|| {
         Error::msg(
-            "queue.json has no forge. Re-run `git uplink init --upgrade --forge ghec` \
-(or --forge example-github) to record it.",
+            "queue.json has no forge. Re-run `git uplink init --upgrade --forge github` \
+(or --forge try-it-on-github) to record it.",
         )
     })?;
     let files = composed_files(forge)?;
@@ -172,25 +168,22 @@ fn upgrade_tooling_patch(
     }
 }
 
+/// The forge's overlay laid over the family base pack. Both hold repo-relative
+/// paths. A path in both comes from the overlay; `Forge::omitted_paths` are
+/// dropped.
 pub fn composed_files(forge: Forge) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = Vec::new();
     match forge {
-        Forge::Ghec => collect_pack::<GhecPack>(&mut files),
-        Forge::ExampleGithub => collect_pack::<ExampleGithubPack>(&mut files),
+        Forge::Github => {}
+        Forge::TryItOnGithub => collect_pack::<TryItOnGithubPack>(&mut files),
     }
     match forge.family() {
-        ForgeFamily::Github => {
-            for name in GithubFamilyPack::iter() {
-                let rel = name.as_ref().replace('\\', "/");
-                let Some(file) = GithubFamilyPack::get(name.as_ref()) else {
-                    continue;
-                };
-                files.push((format!(".github/{rel}"), file.data.into_owned()));
-            }
-        }
+        ForgeFamily::Github => collect_pack::<GithubFamilyPack>(&mut files),
     }
+    // The sort is stable, so the overlay's copy of a path stays first.
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files.dedup_by(|a, b| a.0 == b.0);
+    files.retain(|(path, _)| !forge.omitted_paths().contains(&path.as_str()));
     Ok(files)
 }
 
@@ -359,8 +352,8 @@ mod embed_tests {
     use super::*;
 
     #[test]
-    fn ghec_pack_embeds_workflows_and_shared_pr_template() {
-        let files = composed_files(Forge::Ghec).unwrap();
+    fn github_pack_embeds_workflows_and_shared_pr_template() {
+        let files = composed_files(Forge::Github).unwrap();
         let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
         assert!(
             paths.contains(&".github/workflows/uplink-pr.yml"),
@@ -395,7 +388,7 @@ mod embed_tests {
 
     #[test]
     fn github_packs_install_the_contrib_commit_script_their_submit_runs() {
-        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
             let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
             assert!(
@@ -423,44 +416,48 @@ mod embed_tests {
 
     #[test]
     fn pack_readme_is_not_installed_into_the_product_repo() {
-        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
             assert!(
-                files.iter().all(|(p, _)| p != PACK_README),
+                files
+                    .iter()
+                    .all(|(p, _)| p != PACK_README && p != ".github/README.md"),
                 "{forge:?} pack would overwrite the product README"
             );
         }
     }
 
     #[test]
-    fn example_github_pack_embeds_install_action_and_shared_pr_template() {
-        let files = composed_files(Forge::ExampleGithub).unwrap();
-        let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+    fn try_it_on_github_is_the_github_pack_without_the_sync_schedule() {
+        let schedule = ".github/workflows/uplink-sync-schedule.yml";
+        let mut base = composed_files(Forge::Github).unwrap();
+        let text = |path: &str| {
+            base.iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("github pack is missing {path}"))
+        };
+        let scheduled = text(schedule);
+        assert!(scheduled.contains("schedule:"), "{scheduled}");
         assert!(
-            paths.contains(&".github/actions/install-git-uplink/action.yml"),
-            "{paths:?}"
+            scheduled.contains("gh workflow run uplink-sync.yml"),
+            "{scheduled}"
         );
+        let sync = text(".github/workflows/uplink-sync.yml");
+        assert!(sync.contains("workflow_dispatch:"), "{sync}");
         assert!(
-            paths.contains(&".github/pull_request_template.md"),
-            "{paths:?}"
+            !sync.contains("schedule:"),
+            "the schedule lives in its own file so an overlay can drop it\n{sync}"
         );
-        let ghec_pr = composed_files(Forge::Ghec)
-            .unwrap()
-            .into_iter()
-            .find(|(p, _)| p == ".github/pull_request_template.md")
-            .unwrap()
-            .1;
-        let example_pr = files
-            .into_iter()
-            .find(|(p, _)| p == ".github/pull_request_template.md")
-            .unwrap()
-            .1;
-        assert_eq!(ghec_pr, example_pr);
+
+        // Anything else that differs must be a deliberate overlay file.
+        base.retain(|(path, _)| path != schedule);
+        assert_eq!(composed_files(Forge::TryItOnGithub).unwrap(), base);
     }
 
     #[test]
     fn submit_workflows_run_optional_hooks_before_to_upstream() {
-        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
             let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
             assert!(
@@ -582,7 +579,7 @@ mod embed_tests {
 
     #[test]
     fn hooks_pack_holds_guides_stub_and_example() {
-        let files = hooks_files(Forge::Ghec);
+        let files = hooks_files(Forge::Github);
         let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(
             paths,
@@ -610,14 +607,14 @@ mod embed_tests {
             !example.contains("\n  push:") && !example.contains("pull_request"),
             "the example must only run when dispatched\n{example}"
         );
-        assert_eq!(hooks_files(Forge::ExampleGithub), files);
+        assert_eq!(hooks_files(Forge::TryItOnGithub), files);
     }
 
     #[test]
     fn every_preflight_job_runs_the_toolchain_hook_first() {
         let hook = "uses: $/.github/actions/uplink-toolchain-hook";
         let preflight = "UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}";
-        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
             for (path, bytes) in files.iter().filter(|(p, _)| p.ends_with(".yml")) {
                 let text = String::from_utf8_lossy(bytes);
@@ -653,7 +650,7 @@ mod embed_tests {
 
     #[test]
     fn abandon_contrib_is_detached_from_uplink_mutate() {
-        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
             let text = files
                 .iter()
@@ -677,7 +674,7 @@ mod embed_tests {
 
     #[test]
     fn gated_branch_sidecars_load_from_default_branch() {
-        for forge in [Forge::Ghec, Forge::ExampleGithub] {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
             let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
             assert!(

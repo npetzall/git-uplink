@@ -298,7 +298,7 @@ fn init_with_recorded_urls(world: &World) -> QueueState {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             ..Default::default()
         },
     )
@@ -584,7 +584,7 @@ fn init_cli_does_not_push() {
             "--contrib",
             contrib.to_str().unwrap(),
             "--forge",
-            "ghec",
+            "github",
         ])
         .current_dir(&world.company)
         .output()
@@ -618,9 +618,9 @@ fn init_records_remote_urls_and_internal_branch() {
     assert!(stored.contains("\"internalBranch\": \"main\""));
     assert!(stored.contains("\"upstreamUrl\""));
     assert!(stored.contains("\"contribUrl\""));
-    assert!(stored.contains("\"forge\": \"ghec\""));
+    assert!(stored.contains("\"forge\": \"github\""));
     assert!(!stored.contains("companyBranch"));
-    assert_eq!(queue.config.forge, Some(Forge::Ghec));
+    assert_eq!(queue.config.forge, Some(Forge::Github));
     assert_eq!(queue.all_patches().count(), 1);
     assert_eq!(
         queue.patch_refs()[0].kind.as_deref(),
@@ -1315,23 +1315,24 @@ fn init_example_github_includes_install_action_and_shared_pr_template() {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
-            forge: Some(Forge::ExampleGithub),
+            forge: Some(Forge::TryItOnGithub),
             ..Default::default()
         },
     )
     .unwrap()
     .queue;
-    assert_eq!(queue.config.forge, Some(Forge::ExampleGithub));
+    assert_eq!(queue.config.forge, Some(Forge::TryItOnGithub));
     assert!(
         world
             .company
             .join(".github/actions/install-git-uplink/action.yml")
             .is_file()
     );
-    let ghec_template = fs::read_to_string("templates/github/pull_request_template.md").unwrap();
+    let pack_template =
+        fs::read_to_string("templates/github/.github/pull_request_template.md").unwrap();
     let installed =
         fs::read_to_string(world.company.join(".github/pull_request_template.md")).unwrap();
-    assert_eq!(installed, ghec_template);
+    assert_eq!(installed, pack_template);
 }
 
 #[test]
@@ -1354,21 +1355,64 @@ fn init_without_args_does_not_rewrite_workflows() {
 }
 
 #[test]
+fn former_forge_names_still_work() {
+    let world = setup_uninitialized();
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args([
+            "init",
+            "--upstream",
+            world.upstream.to_str().unwrap(),
+            "--contrib",
+            &remote_get_url(&world.company, "contrib"),
+            "--forge",
+            "ghec",
+        ])
+        .current_dir(&world.company)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let company = &world.company;
+
+    // A queue written by an older binary names the forge `ghec`.
+    let path = company.join(".uplink/queue.json");
+    let stored = fs::read_to_string(&path).unwrap();
+    assert!(stored.contains("\"forge\": \"github\""), "{stored}");
+    fs::write(
+        &path,
+        stored.replace("\"forge\": \"github\"", "\"forge\": \"ghec\""),
+    )
+    .unwrap();
+    git_uplink::commit_queue(company, "uplink: old forge name").unwrap();
+
+    let upgraded = init(
+        company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(upgraded.queue.config.forge, Some(Forge::Github));
+    let example: Forge = serde_json::from_str("\"example-github\"").unwrap();
+    assert_eq!(example, Forge::TryItOnGithub);
+}
+
+#[test]
 fn init_rejects_forge_renames_on_an_existing_queue() {
     let world = setup_uninitialized();
     init_with_recorded_urls(&world);
     let err = init(
         &world.company,
         InitOpts {
-            forge: Some(Forge::ExampleGithub),
+            forge: Some(Forge::TryItOnGithub),
             ..Default::default()
         },
     )
     .unwrap_err()
     .to_string();
     assert!(err.contains("forge"), "{err}");
-    assert!(err.contains("ghec"), "{err}");
-    assert!(err.contains("example-github"), "{err}");
+    assert!(err.contains("\"github\""), "{err}");
+    assert!(err.contains("try-it-on-github"), "{err}");
 }
 
 /// Replace the stored tooling patch with one that writes a stale workflow, so
@@ -1714,7 +1758,7 @@ fn init_adopt(world: &World, groups: Vec<AdoptGroup>) -> QueueState {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             adopt_groups: Some(groups),
             interactive: Some(false),
             ..Default::default()
@@ -1977,7 +2021,7 @@ fn init_adopts_each_merge_commit_as_a_patch() {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             adopt_groups: Some(vec![adopt_group(&[&side], "Side", PatchIntent::Upstream)]),
             interactive: Some(false),
             ..Default::default()
@@ -2093,7 +2137,7 @@ fn init_rejects_incomplete_and_noncontiguous_adopt_groups() {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             adopt_groups: Some(vec![adopt_group(
                 &[&a, &b],
                 "Partial",
@@ -2113,7 +2157,7 @@ fn init_rejects_incomplete_and_noncontiguous_adopt_groups() {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             adopt_groups: Some(vec![
                 adopt_group(&[&a, &c], "Split", PatchIntent::Upstream),
                 adopt_group(&[&b], "Mid", PatchIntent::Upstream),
@@ -2148,7 +2192,7 @@ fn init_rejects_history_that_is_ahead_and_behind() {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             adopt_groups: Some(vec![adopt_group(&["HEAD"], "Nope", PatchIntent::Upstream)]),
             interactive: Some(false),
             ..Default::default()
@@ -2169,7 +2213,7 @@ fn init_ahead_without_groups_fails_closed() {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             interactive: Some(false),
             ..Default::default()
         },
@@ -7495,7 +7539,7 @@ fn init_resumes_after_partial_upstream_seed_failure() {
         InitOpts {
             upstream_url: Some("https://example.invalid/repo.git".into()),
             contrib_url: Some(contrib.clone()),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             ..Default::default()
         },
     );
@@ -7508,7 +7552,7 @@ fn init_resumes_after_partial_upstream_seed_failure() {
         InitOpts {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(contrib),
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             ..Default::default()
         },
     )
@@ -7632,7 +7676,7 @@ fn init_without_upgrade_never_changes_an_existing_hooks_branch() {
     init(
         company,
         InitOpts {
-            forge: Some(Forge::Ghec),
+            forge: Some(Forge::Github),
             ..Default::default()
         },
     )
@@ -7906,7 +7950,7 @@ fn init_cli_prints_how_to_publish_the_hooks_branch() {
             "--contrib",
             &remote_get_url(&world.company, "contrib"),
             "--forge",
-            "ghec",
+            "github",
         ])
         .current_dir(&world.company)
         .output()
@@ -7930,7 +7974,7 @@ fn init_prints_summary_not_full_queue_json() {
             "--contrib",
             &remote_get_url(&world.company, "contrib"),
             "--forge",
-            "ghec",
+            "github",
         ])
         .current_dir(&world.company)
         .output()

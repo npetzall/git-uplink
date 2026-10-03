@@ -1,15 +1,23 @@
-# example-github forge pack (`git uplink init --forge example-github`).
-# Installs git-uplink on the runner.
+# GitHub forge pack (`git uplink init --forge github`).
 #
 # Parallel required checks on every internal PR to company main except
-# uplink:internal-only. See templates/ghec/.github/workflows/uplink-pr.yml.
-# Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
+# uplink:internal-only. Assess rewrites the contribution as it would leave
+# the enterprise (PR title/body as the commit message, cutoff, export
+# author, keyword / internal-email scan) and posts the report. Preflight
+# applies the unique diff onto public upstream plus declared
+# Uplink-Depends-On, then tooling + queued upstream (internal omitted),
+# then UPLINK_PREFLIGHT. Fail these instead of opening a contribution
+# later that leaks company text or is missing queued work from main.
 #
 # Assess also runs the optional company assessment hook from branch
 # uplink/hooks (see assessment-hook.md on that branch). Both results go into
 # one PR comment that is updated in place on every run, and into artifact
 # uplink-assessment, which import stores with the patch. A failed hook is
 # noted in the comment; it does not fail the check.
+#
+# Put both job names in the required status checks for the PR.
+# This workflow does not write uplink/state (not uplink-mutate).
+# Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
 name: Uplink PR checks
 
 on:
@@ -40,11 +48,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.base.ref }}
+
       - uses: $/.github/actions/install-git-uplink
         with:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Assess contribution
         id: assess
         env:
@@ -152,6 +162,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.base.ref }}
+
       - uses: $/.github/actions/install-git-uplink
         with:
           repo: ${{ vars.UPLINK_SRC }}
