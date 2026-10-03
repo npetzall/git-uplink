@@ -19,7 +19,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 ## `uplink-import.yml` — Uplink import
 
-- **Runs on:** a merged pull request.
+- **Runs on:** a pull request merged into `main`. A merge into any other branch is not imported; `git uplink add --base-branch` refuses it as well.
 - **Does:** `git uplink add` records the merged change on `uplink/state` as `queued`, in `internal[]` when labelled `uplink:internal-only`, otherwise in `upstream[]`. An upstream import rebuilds `main` so the patch sits under `internal[]`. Then `git uplink push`.
   - For an upstream patch, import keeps the assessment-hook result from the PR checks when it was made for exactly what was merged (head commit, title and body). It is stored under `.uplink/reports/<id>/extras/`.
 - **Requires:**

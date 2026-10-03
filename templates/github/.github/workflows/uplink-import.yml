@@ -1,11 +1,19 @@
 # GitHub forge pack (`git uplink init --forge github`).
 # Installs git-uplink from a GitHub release.
 # Empty UPLINK_*_AUTH defaults to app.
+#
+# Only a pull request merged into main is imported. A merge into any other
+# branch, including the gated uplink/conflict, uplink/amend and
+# uplink/transfer-* bases, has not passed main's review and is handled by its
+# own workflow or not at all. `add --base-branch` refuses it again, in case
+# the filter below is edited.
 name: Uplink import
 
 on:
   pull_request:
     types: [closed]
+    branches:
+      - main
 
 concurrency:
   group: uplink-mutate
@@ -57,6 +65,7 @@ jobs:
           INTERNAL_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'uplink:internal-only') }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,7 +100,7 @@ jobs:
           fi
           set +e
           git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
-            --from "$FROM_SHA" --head "$HEAD_SHA" \
+            --from "$FROM_SHA" --head "$HEAD_SHA" --base-branch "$BASE_REF" \
             --pr "$PR_NUMBER" --pr-url "$PR_URL" "${extra[@]}" > /tmp/uplink-add.out
           code=$?
           set -e
