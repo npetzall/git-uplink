@@ -34,8 +34,8 @@ git uplink doctor [--json]
 git uplink approve <id> [--out <path>]
 git uplink submit <id> [--push]
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
-git uplink sync
-git uplink accept-upstream
+git uplink sync [--merged-pr <id=sha>]...
+git uplink accept-upstream [--sha <sha>]
 git uplink gated <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink merged <id> [--via <how>] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
@@ -229,21 +229,27 @@ Records the PR URL, commits the queue, and pushes company `uplink/state`.
 
 ### `sync`
 
-Classify new public commits and rebuild main when upstream moved.
+Account for new public commits and rebuild main when upstream moved.
 
-Matching company patches apply immediately; unmatched commits write a from-upstream packet and wait for `accept-upstream`. Sync rebuilds `main` only when upstream moved.
+A patch is merged when a commit has its `git patch-id --stable`, or when `--merged-pr` reports its public pull request merged. An `Uplink-Patch-Id` trailer alone is not enough. The merged patches are applied on `uplink/upstream` and compared with the new public main. When nothing else changed, `uplink/upstream` moves and `main` is rebuilt. Otherwise the remaining diff is written to a from-upstream packet and waits for `accept-upstream`; patches are marked merged only then.
 
 On a conflict it prints `gh.prCreate` JSON for the gated conflict PR and exits 0.
+
+- `--merged-pr <id=sha>`: A recorded public pull request the forge reports as merged, with its merge commit. Repeat it per patch; the sync workflow passes these. One that names a commit outside the new range is ignored.
 
 ### `accept-upstream`
 
 Promote a pending public main after from-upstream environment approval.
 
+Moves `uplink/upstream`, marks the patches the packet listed as merged, and rebuilds `main`.
+
+- `--sha <sha>`: The pending public main that was reviewed. Refuses when the queue now holds a different one.
+
 ### `merged`
 
 Record that upstream merged a patch.
 
-`merged` records it explicitly with `--via`. Otherwise `sync` detects a merge in this order: the recorded GitHub PR on the queue, the `Uplink-Patch-Id` trailer, `git patch-id --stable`, then an empty apply.
+`merged` records it explicitly with `--via`. Otherwise `sync` detects a merge from a commit with the patch's `git patch-id --stable`, from the recorded public PR reported with `sync --merged-pr`, or from an empty apply. An `Uplink-Patch-Id` trailer alone does not count: use `merged` when upstream took the patch in another form.
 
 - `<id>`: Patch that was merged.
 - `--via <how>`: How the merge was detected. Default: `manual`.

@@ -7,11 +7,12 @@ use regex::{Regex, RegexSet};
 
 use crate::error::{AssessError, Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
+use crate::ops::IncomingClaim;
 use crate::queue::now_iso;
 use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
 use crate::types::{
-    AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, PATCH_DIR, Patch, PatchExtras,
-    PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
+    AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, MergeVia, PATCH_DIR, Patch,
+    PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
 };
 
 static HTML_COMMENT: LazyLock<Regex> =
@@ -231,8 +232,12 @@ pub fn export_commit_message(patch: &Patch) -> String {
     }
 }
 
+/// A fenced block the content cannot close: the fence is longer than any
+/// run of backticks inside it.
 fn format_fenced(message: &str) -> String {
-    format!("```\n{}\n```", message.trim_end())
+    let longest = message.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    format!("{fence}\n{}\n{fence}", message.trim_end())
 }
 
 /// Explains the report's checks and how to fix a failure.
@@ -736,30 +741,60 @@ pub fn from_upstream_report_paths() -> (String, String, String) {
     )
 }
 
-pub struct IncomingFlowedBack<'a> {
-    pub id: &'a str,
-    pub via: &'a str,
-    pub title: &'a str,
-    pub sha: &'a str,
+/// A patch the packet says will be marked merged on approval.
+pub struct IncomingMergeRow {
+    pub id: String,
+    pub title: String,
+    pub via: MergeVia,
+    pub sha: String,
+    pub modified: bool,
 }
 
-pub fn format_incoming_packet(
-    repo: &Path,
-    from_sha: Option<&str>,
-    pending_sha: &str,
-    flowed_back: &[IncomingFlowedBack<'_>],
-    foreign_shas: &[String],
-) -> Result<String> {
+/// One commit of the pending range, for the packet's commit table.
+pub struct IncomingCommitRow {
+    pub sha: String,
+    pub author: String,
+    pub subject: String,
+    /// Markdown: how sync classified the commit.
+    pub class: String,
+}
+
+pub struct IncomingPacket<'a> {
+    pub from_sha: Option<&'a str>,
+    pub pending_sha: &'a str,
+    pub trailer_key: &'a str,
+    pub merges: &'a [IncomingMergeRow],
+    pub claims: &'a [IncomingClaim],
+    pub commits: &'a [IncomingCommitRow],
+    /// `git diff --stat` and the diff of the unaccounted changes.
+    pub stat: &'a str,
+    pub diff: &'a str,
+}
+
+/// Text written by someone outside the company, kept inside one table cell
+/// and unable to start markup.
+fn foreign_cell(text: &str) -> String {
+    table_cell(text).replace('<', "&lt;").replace('`', "'")
+}
+
+pub fn format_incoming_packet(packet: &IncomingPacket<'_>) -> String {
     let env = FROM_UPSTREAM_ENVIRONMENT;
-    let current = from_sha.unwrap_or("not recorded");
-    let flowed_list = if flowed_back.is_empty() {
+    let pending = packet.pending_sha;
+    let current = packet.from_sha.unwrap_or("not recorded");
+    let merges = if packet.merges.is_empty() {
         "None.\n".to_string()
     } else {
-        flowed_back
+        packet
+            .merges
             .iter()
             .map(|item| {
+                let note = if item.modified {
+                    " **Modified by the maintainer**: the public PR merged, but this commit does not contain the patch as we hold it. The difference is part of the unaccounted changes below."
+                } else {
+                    ""
+                };
                 format!(
-                    "- `{id}` via {via} at `{sha}` — {title}\n",
+                    "- `{id}` via {via} at `{sha}` — {title}.{note}\n",
                     id = item.id,
                     via = item.via,
                     sha = item.sha,
@@ -768,48 +803,70 @@ pub fn format_incoming_packet(
             })
             .collect()
     };
-    let mut foreign = String::new();
-    if foreign_shas.is_empty() {
-        foreign.push_str("None.\n");
+    let claims = if packet.claims.is_empty() {
+        "None.\n".to_string()
     } else {
-        for sha in foreign_shas {
-            let shown = git(
-                repo,
-                &["show", "--pretty=fuller", "--diff-merges=first-parent", sha],
-                GitOpts::allow_fail(),
-            )?;
-            let body = if shown.stdout.trim().is_empty() {
-                format!("(no `git show` output for `{sha}`)\n")
-            } else {
-                format_fenced(&shown.stdout)
-            };
-            foreign.push_str(&format!("### `{sha}`\n\n{body}\n\n"));
-        }
-    }
-    Ok(format!(
+        packet
+            .claims
+            .iter()
+            .map(|claim| {
+                format!(
+                    "- `{sha}` carries `{key}: {id}`, but its diff is not that patch. Approving does **not** mark `{id}` merged; it is applied again on the new upstream. If upstream did take it in another form, run `git uplink merged {id} --sha {sha}`.\n",
+                    sha = claim.sha,
+                    key = packet.trailer_key,
+                    id = claim.id,
+                )
+            })
+            .collect()
+    };
+    let commits = packet
+        .commits
+        .iter()
+        .map(|commit| {
+            format!(
+                "| `{}` | {} | {} | {} |\n",
+                commit.sha,
+                foreign_cell(&commit.author),
+                foreign_cell(&commit.subject),
+                commit.class
+            )
+        })
+        .collect::<String>();
+    format!(
         "# Incoming upstream — {env}\n\n\
-These commits on public main are not matched to any company patch. Review this packet (the same markdown is on the Actions job summary / `GITHUB_STEP_SUMMARY`), then approve the **{env}** GitHub Environment on the waiting Actions run. That approval updates `uplink/upstream` and rebuilds company main. GitHub records it in the environment deployment history and the enterprise audit log.\n\n\
+Public main moved, and company patches do not explain all of it. Review the unaccounted changes below (the same markdown is on the Actions job summary / `GITHUB_STEP_SUMMARY`), then approve the **{env}** GitHub Environment on the waiting Actions run. That approval updates `uplink/upstream` and rebuilds company main. GitHub records it in the environment deployment history and the enterprise audit log.\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
 | Current `uplink/upstream` | `{current}` |\n\
 | Pending public main | `{pending}` |\n\
-| Flowed back | {flowed_n} |\n\
-| Foreign commits | {foreign_n} |\n\n\
-## Flowed back (no extra review)\n\n\
-These commits match a company patch by `git patch-id --stable` (with or without the `{trailer}` trailer). A trailer alone is not enough; a commit whose diff differs is listed as foreign. They will be marked `merged` when you approve.\n\n\
-{flowed_list}\n\
-## Foreign commits\n\n\
-{foreign}\
+| Commits | {commit_n} |\n\
+| Patches merged | {merge_n} |\n\
+| Unproven claims | {claim_n} |\n\n\
+## Marked merged when you approve\n\n\
+A patch is merged when a commit has its `git patch-id --stable`, or when its recorded public pull request is merged. The `{key}` trailer alone is not enough.\n\n\
+{merges}\n\
+## Claims without proof\n\n\
+{claims}\n\
+## Commits\n\n\
+| Commit | Author | Subject | Classified |\n\
+| --- | --- | --- | --- |\n\
+{commits}\n\
+## Unaccounted changes\n\n\
+The diff from `uplink/upstream` with the merged patches applied to pending public main. This is what the approval is for.\n\n\
+{stat}\n\n\
+{diff}\n\n\
 ## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/from-upstream/approval.md` on `uplink/state`.\n\
 3. `git uplink accept-upstream` moves `uplink/upstream` to `{pending}` and rebuilds company main.\n\
-4. Flowed-back patches are marked merged and are not applied again. Remaining patches replay onto the new upstream.\n",
-        trailer = "Uplink-Patch-Id",
-        pending = pending_sha,
-        flowed_n = flowed_back.len(),
-        foreign_n = foreign_shas.len(),
-    ))
+4. The patches listed above are marked merged and are not applied again. Remaining patches replay onto the new upstream; one that applies empty is marked merged too.\n",
+        key = packet.trailer_key,
+        commit_n = packet.commits.len(),
+        merge_n = packet.merges.len(),
+        claim_n = packet.claims.len(),
+        stat = format_fenced(packet.stat),
+        diff = format_fenced(packet.diff),
+    )
 }
 
 pub fn assess_from_message(

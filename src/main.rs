@@ -9,7 +9,7 @@ use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
     AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT,
     Forge, IncomingPreflight, InitOpts, MergeVia, PreflightError, ProgressMode, PushOpts,
-    RebuildOpts, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream, add_patch,
+    RebuildOpts, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream_at, add_patch,
     adopted_next_steps, amend_patch, approve_patch_at, assess_from_message, commit_queue, doctor,
     drop_patch, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
@@ -18,12 +18,12 @@ use git_uplink::{
     preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
     resolve_conflict, status_report, status_snapshot, store_patch_extras, stored_commit_message,
-    submit_patch, sync, transfer_patch, write_man_pages,
+    submit_patch, sync_with, transfer_patch, write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
-    SubmitResult, SyncResult, TransferDirection, TransferResult, run_preflight_command_in,
-    stdin_is_tty,
+    SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult,
+    run_preflight_command_in, stdin_is_tty,
 };
 
 const VERSION: &str = concat!(
@@ -265,6 +265,8 @@ fn print_sync_artifact(
         "pendingSha": result.pending_sha,
         "flowedBack": result.flowed_back,
         "foreignCommits": result.foreign_commits,
+        "merges": result.merges,
+        "claims": result.claims,
         "reportPath": result.report_path,
         "summary": summary,
     });
@@ -865,18 +867,40 @@ fn cmd_submitted(
     Ok(())
 }
 
-fn cmd_sync(repo: &Path) -> Result<(), Error> {
-    let result = sync(repo)?;
+fn cmd_sync(repo: &Path, merged_pr: Vec<String>) -> Result<(), Error> {
+    let mut merged_prs = Vec::new();
+    for item in merged_pr {
+        match item.split_once('=') {
+            Some((id, sha)) if !id.is_empty() && !sha.is_empty() => {
+                merged_prs.push((id.to_string(), sha.to_string()));
+            }
+            _ => {
+                return Err(Error::msg(format!(
+                    "--merged-pr takes <id>=<sha>, got {item}"
+                )));
+            }
+        }
+    }
+    let result = sync_with(repo, SyncOpts { merged_prs })?;
     let summary = result.report.clone();
     finish_sync(repo, result, summary.as_deref())
 }
 
-fn cmd_accept_upstream(repo: &Path) -> Result<(), Error> {
+fn cmd_accept_upstream(repo: &Path, sha: Option<&str>) -> Result<(), Error> {
     let queue = read_queue(repo)?;
-    if queue.pending_upstream.is_none() {
+    let Some(pending) = &queue.pending_upstream else {
         return Err(Error::msg(
             "No pending upstream to accept. Run `git uplink sync` first.",
         ));
+    };
+    // Checked before the receipt is written, and again under the lock.
+    if let Some(expected) = sha
+        && expected != pending.sha
+    {
+        return Err(Error::msg(format!(
+            "Pending upstream is {}, not the reviewed {expected}; review the new packet and approve again.",
+            pending.sha
+        )));
     }
     let receipt = build_receipt(
         repo,
@@ -886,7 +910,7 @@ fn cmd_accept_upstream(repo: &Path) -> Result<(), Error> {
     );
     let dest = PathBuf::from(from_upstream_report_paths().2);
     write_markdown_file(repo, &dest, &receipt.text)?;
-    finish_sync(repo, accept_upstream(repo)?, Some(&receipt.text))
+    finish_sync(repo, accept_upstream_at(repo, sha)?, Some(&receipt.text))
 }
 
 fn cmd_gated(
@@ -1181,8 +1205,8 @@ fn run() -> Result<(), Error> {
             pr,
             push_remote,
         } => cmd_submitted(&repo, &id, &pr_url, pr, &push_remote),
-        Commands::Sync => cmd_sync(&repo),
-        Commands::AcceptUpstream => cmd_accept_upstream(&repo),
+        Commands::Sync { merged_pr } => cmd_sync(&repo, merged_pr),
+        Commands::AcceptUpstream { sha } => cmd_accept_upstream(&repo, sha.as_deref()),
         Commands::Gated {
             id,
             pr_url,
