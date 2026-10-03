@@ -49,7 +49,7 @@ git uplink man <dir>
 git uplink version
 ```
 
-## Commands
+## Setup
 
 ### `init`
 
@@ -80,6 +80,8 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
 - `--preflight <cmd>`: Command a new preflight.sh on uplink/hooks starts with (asked in a terminal when omitted).
 - `--redact-keyword <word>`: uplink.toml: word that must not appear in a contribution (repeatable, or comma-separated).
 - `--internal-domain <domain>`: uplink.toml: internal email domain to flag in the export (repeatable, or comma-separated).
+
+## Recording changes
 
 ### `add`
 
@@ -124,6 +126,8 @@ The refs are `uplink/state`, `uplink/upstream`, and company main.
 Fetch origin and hard-reset company main, uplink/state, and uplink/upstream.
 
 Afterwards the clone matches origin and `.uplink/` is restored.
+
+## Checks
 
 ### `preflight`
 
@@ -190,6 +194,8 @@ Credential checks fail on a machine without the `UPLINK_*` variables; that is ex
 
 - `--json`: Print the doctor report as JSON.
 
+## Contributing upstream
+
 ### `approve`
 
 Record the to-upstream approval of a patch and write its receipt.
@@ -219,6 +225,23 @@ Records the PR URL, commits the queue, and pushes company `uplink/state`.
 - `--pr <n>`: Pull request number, read from the URL when omitted.
 - `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
 
+### `merged`
+
+Record that upstream merged a patch.
+
+`merged` records it explicitly with `--via`. Otherwise `sync` detects a merge in this order: the recorded GitHub PR on the queue, the `Uplink-Patch-Id` trailer, `git patch-id --stable`, then an empty apply.
+
+- `<id>`: Patch that was merged.
+- `--via <how>`: How the merge was detected. Default: `manual`.
+  - `pr`: The GitHub PR recorded on the queue was merged.
+  - `trailer`: An upstream commit carries the `Uplink-Patch-Id` trailer.
+  - `patch-id`: `git patch-id --stable` matches an upstream commit.
+  - `empty-rebase`: The patch applies empty on upstream.
+  - `manual`: Recorded by an operator.
+- `--sha <sha>`: Upstream commit that carries the patch.
+
+## Upstream moves and conflicts
+
 ### `sync`
 
 Classify new public commits and rebuild main when upstream moved.
@@ -240,36 +263,6 @@ Record the company PR that gates a conflict.
 - `--pr <n>`: Pull request number, read from the URL when omitted.
 - `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
 
-### `merged`
-
-Record that upstream merged a patch.
-
-`merged` records it explicitly with `--via`. Otherwise `sync` detects a merge in this order: the recorded GitHub PR on the queue, the `Uplink-Patch-Id` trailer, `git patch-id --stable`, then an empty apply.
-
-- `<id>`: Patch that was merged.
-- `--via <how>`: How the merge was detected. Default: `manual`.
-  - `pr`: The GitHub PR recorded on the queue was merged.
-  - `trailer`: An upstream commit carries the `Uplink-Patch-Id` trailer.
-  - `patch-id`: `git patch-id --stable` matches an upstream commit.
-  - `empty-rebase`: The patch applies empty on upstream.
-  - `manual`: Recorded by an operator.
-- `--sha <sha>`: Upstream commit that carries the patch.
-
-### `drop`
-
-Remove a patch from the queue.
-
-- `<id>`: Patch to drop.
-- `--reason <text>`: Why it was dropped; "dropped by operator" when omitted.
-
-### `rebuild`
-
-Replay main from the queue.
-
-- `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
-- `--push`: Push uplink/state and the rebuilt branch after rebuild.
-- `--push-remote <remote>`: Remote for --push, origin by default.
-
 ### `resolve`
 
 Finish a conflict resolution and put the patch back in the queue.
@@ -279,6 +272,8 @@ Resolve re-runs the upstream assessment on the resolution and refuses an upstrea
 After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0.
 
 - `<id>`: Patch whose conflict was resolved.
+
+## Moving and removing patches
 
 ### `transfer`
 
@@ -308,6 +303,23 @@ Without `--complete` it replays the queue on `uplink/upstream` up to and includi
 - `--title <text>`: New patch title.
 - `--message <text>`: New commit message, as the PR title and body.
 - `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
+
+### `drop`
+
+Remove a patch from the queue.
+
+- `<id>`: Patch to drop.
+- `--reason <text>`: Why it was dropped; "dropped by operator" when omitted.
+
+### `rebuild`
+
+Replay main from the queue.
+
+- `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
+- `--push`: Push uplink/state and the rebuilt branch after rebuild.
+- `--push-remote <remote>`: Remote for --push, origin by default.
+
+## Tools
 
 ### `web-ui`
 
