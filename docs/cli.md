@@ -225,22 +225,7 @@ Records the PR URL, commits the queue, and pushes company `uplink/state`.
 - `--pr <n>`: Pull request number, read from the URL when omitted.
 - `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
 
-### `merged`
-
-Record that upstream merged a patch.
-
-`merged` records it explicitly with `--via`. Otherwise `sync` detects a merge in this order: the recorded GitHub PR on the queue, the `Uplink-Patch-Id` trailer, `git patch-id --stable`, then an empty apply.
-
-- `<id>`: Patch that was merged.
-- `--via <how>`: How the merge was detected. Default: `manual`.
-  - `pr`: The GitHub PR recorded on the queue was merged.
-  - `trailer`: An upstream commit carries the `Uplink-Patch-Id` trailer.
-  - `patch-id`: `git patch-id --stable` matches an upstream commit.
-  - `empty-rebase`: The patch applies empty on upstream.
-  - `manual`: Recorded by an operator.
-- `--sha <sha>`: Upstream commit that carries the patch.
-
-## Upstream moves and conflicts
+## Ingesting upstream
 
 ### `sync`
 
@@ -263,17 +248,22 @@ Record the company PR that gates a conflict.
 - `--pr <n>`: Pull request number, read from the URL when omitted.
 - `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
 
-### `resolve`
+### `merged`
 
-Finish a conflict resolution and put the patch back in the queue.
+Record that upstream merged a patch.
 
-Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`).
+`merged` records it explicitly with `--via`. Otherwise `sync` detects a merge in this order: the recorded GitHub PR on the queue, the `Uplink-Patch-Id` trailer, `git patch-id --stable`, then an empty apply.
 
-After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0.
+- `<id>`: Patch that was merged.
+- `--via <how>`: How the merge was detected. Default: `manual`.
+  - `pr`: The GitHub PR recorded on the queue was merged.
+  - `trailer`: An upstream commit carries the `Uplink-Patch-Id` trailer.
+  - `patch-id`: `git patch-id --stable` matches an upstream commit.
+  - `empty-rebase`: The patch applies empty on upstream.
+  - `manual`: Recorded by an operator.
+- `--sha <sha>`: Upstream commit that carries the patch.
 
-- `<id>`: Patch whose conflict was resolved.
-
-## Moving and removing patches
+## Edit
 
 ### `transfer`
 
@@ -318,6 +308,16 @@ Replay main from the queue.
 - `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
 - `--push`: Push uplink/state and the rebuilt branch after rebuild.
 - `--push-remote <remote>`: Remote for --push, origin by default.
+
+### `resolve`
+
+Finish a conflict resolution and put the patch back in the queue.
+
+Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`).
+
+After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0.
+
+- `<id>`: Patch whose conflict was resolved.
 
 ## Tools
 
