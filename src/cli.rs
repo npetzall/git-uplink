@@ -12,17 +12,21 @@ On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment
 
 The binary is `git-uplink`, so Git treats it as `git uplink`. Use `git-uplink -h` or `git uplink -h` for a summary, and `git uplink <command> --help` for one command. Plain `git uplink --help` goes through Git's man-page path, not clap.";
 
-const TOPICS: &str = "\
-Where state lives:
-
+/// Cross-cutting topics, as (title, body). They follow the commands in the long
+/// help, the man page, and `docs/cli.md`.
+pub const TOPICS: &[(&str, &str)] = &[
+    (
+        "Where state lives",
+        "\
 Queue state lives on the orphan branch `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`.
 
 Company `main` is product-only: public upstream, then the tooling patch, then every active `upstream[]` and `internal[]` patch.
 
-Reports live under `.uplink/reports/<id>/` on `uplink/state`, so a product rebuild never drops them.
-
-Settings in uplink.toml:
-
+Reports live under `.uplink/reports/<id>/` on `uplink/state`, so a product rebuild never drops them.",
+    ),
+    (
+        "Settings in uplink.toml",
+        "\
 The leak scan's keywords and internal email domains live in `uplink.toml` on `uplink/hooks`, not in environment or repository variables. Every command reads the file from the local `uplink/hooks`, else `origin/uplink/hooks`, so a developer's machine and CI agree.
 
     # Words that must not appear in a contribution.
@@ -37,10 +41,11 @@ When `init` creates `uplink/hooks` it asks for each setting in a terminal. A fla
 
 With a forge recorded, a missing or unparseable `uplink.toml` fails upstream-bound `assess` instead of scanning for nothing.
 
-Moving from repository variables: run `git uplink init --upgrade`, answer with the values of `UPLINK_PREFLIGHT`, `UPLINK_REDACT_KEYWORDS`, and `UPLINK_INTERNAL_DOMAINS`, run `git uplink push`, then delete the three variables. They are no longer read.
-
-Preflight script preflight.sh:
-
+Moving from repository variables: run `git uplink init --upgrade`, answer with the values of `UPLINK_PREFLIGHT`, `UPLINK_REDACT_KEYWORDS`, and `UPLINK_INTERNAL_DOMAINS`, run `git uplink push`, then delete the three variables. They are no longer read.",
+    ),
+    (
+        "Preflight script preflight.sh",
+        "\
 What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, read from the local branch, else `origin/uplink/hooks`.
 
 - How it runs: `sh preflight.sh`, with the root of the tree under test as the working directory: the export tree, or the current checkout for `--command-only`. A non-zero exit fails preflight.
@@ -53,10 +58,11 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
 
 - No script means preflight runs no command. With a forge recorded, a missing `uplink/hooks` fails preflight.
 
-- Trying a change: commit it on a branch made from `uplink/hooks`, then run `git uplink preflight --command-only --hooks <branch>`. `--hooks` works with every form of `preflight`.
-
-Adopting an existing main:
-
+- Trying a change: commit it on a branch made from `uplink/hooks`, then run `git uplink preflight --command-only --hooks <branch>`. `--hooks` works with every form of `preflight`.",
+    ),
+    (
+        "Adopting an existing main",
+        "\
 If company `main` already matches public upstream, init rebuilds `main` with the tooling patch.
 
 If `main` is fast-forward ahead, init leaves `main` alone and records the unique first-parent commits as patches after tooling.
@@ -71,14 +77,16 @@ Then preview and publish:
 
     git uplink rebuild --branch uplink/preview/verify
     git diff main uplink/preview/verify
-    git uplink rebuild --push
-
-Gated PRs:
-
-`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs.
-
-Credentials and identity:
-
+    git uplink rebuild --push",
+    ),
+    (
+        "Gated PRs",
+        "\
+`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs.",
+    ),
+    (
+        "Credentials and identity",
+        "\
 git-uplink shells out to `git`, but it does not use the operator's commit signer, default SSH key, or `GITHUB_TOKEN`.
 
 Bot identity and `commit.gpgsign=false` are process-scoped (`git -c`), so `git uplink init` does not rewrite `user.name` / `commit.gpgsign` in the clone. Your own `git commit` in that repo still follows global signing.
@@ -99,12 +107,20 @@ A TOKEN rewrites SSH remotes to HTTPS for that invocation and is sent when prese
 
 Local `file://` remotes need neither.
 
-SSH upstream, origin, and contrib without the matching role's creds fail instead of opening ssh-agent / Touch ID.";
+SSH upstream, origin, and contrib without the matching role's creds fail instead of opening ssh-agent / Touch ID.",
+    ),
+];
 
 /// The parser with `version` filled in. The version carries the build commit,
 /// which `build.rs` computes, so it is passed in instead of read here.
 pub fn command(version: &'static str) -> clap::Command {
-    Cli::command().version(version)
+    let topics: Vec<String> = TOPICS
+        .iter()
+        .map(|(title, body)| format!("{title}:\n\n{body}"))
+        .collect();
+    Cli::command()
+        .version(version)
+        .after_long_help(topics.join("\n\n"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -138,8 +154,7 @@ pub enum MergeViaArg {
     name = "git-uplink",
     bin_name = "git uplink",
     about = "Carry internal patches on upstream, contribute once, drop when merged.",
-    long_about = OVERVIEW,
-    after_long_help = TOPICS
+    long_about = OVERVIEW
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -351,7 +366,7 @@ pub enum Commands {
         #[arg(long = "message-file", value_name = "path", conflicts_with = "message")]
         message_file: Option<PathBuf>,
         /// Assess as an internal-only change: never exported, leak scan skipped.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "patch")]
         internal_only: bool,
         /// Assess a queued patch in its layer, with its stored title and message.
         ///
@@ -415,7 +430,7 @@ pub enum Commands {
     ///
     /// `approve` and `submit` are the IP gate. On GitHub Enterprise Cloud,
     /// dispatch the to-upstream Environment workflow instead of calling them
-    /// by hand; see Forge packs at <https://npetzall.github.io/git-uplink/setup>.
+    /// by hand; see Forge packs at https://npetzall.github.io/git-uplink/setup
     Approve {
         /// Patch to approve.
         #[arg(value_name = "id")]
@@ -611,7 +626,12 @@ pub enum Commands {
         )]
         message: Option<String>,
         /// New commit message, as the PR title and body (- reads stdin).
-        #[arg(long = "message-file", value_name = "path", requires = "title")]
+        #[arg(
+            long = "message-file",
+            value_name = "path",
+            requires = "title",
+            conflicts_with = "message"
+        )]
         message_file: Option<PathBuf>,
     },
     /// Start the embedded operator dashboard on 127.0.0.1 and open a browser.
