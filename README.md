@@ -37,6 +37,12 @@ git uplink version
 
 Make sure `~/.local/bin` is on your `PATH`. On Windows, download `git-uplink-x86_64-pc-windows-msvc.exe`, rename it to `git-uplink.exe`, and place it in a directory on `PATH`.
 
+The man pages are in the binary. To make `git uplink --help` and `man git-uplink` work, write them to a `man1` directory on your man path:
+
+```bash
+git uplink man ~/.local/share/man/man1
+```
+
 Installing only adds the command. Using it needs a set of repositories wired together — pick one of the paths below. To build from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Try it for yourself
