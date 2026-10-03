@@ -613,20 +613,47 @@ mod embed_tests {
     #[test]
     fn every_preflight_job_runs_the_toolchain_hook_first() {
         let hook = "uses: $/.github/actions/uplink-toolchain-hook";
-        let preflight = "UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}";
+        // The steps that run the preflight command from uplink.toml.
+        let preflight_steps = [
+            ("uplink-pr.yml", "name: Export preflight"),
+            ("uplink-gate.yml", "name: Validate gated work"),
+            ("uplink-import.yml", "name: Import as a queued patch"),
+            (
+                "uplink-submit.yml",
+                "name: Record approval, export, and record the public PR",
+            ),
+            ("uplink-amend.yml", "name: Amend patch and rebuild main"),
+            ("uplink-transfer.yml", "name: Transfer patch"),
+            ("uplink-transfer.yml", "name: Complete gated transfer"),
+        ];
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
-            for (path, bytes) in files.iter().filter(|(p, _)| p.ends_with(".yml")) {
-                let text = String::from_utf8_lossy(bytes);
+            for (workflow, name) in preflight_steps {
+                let text = files
+                    .iter()
+                    .find(|(p, _)| p.ends_with(workflow))
+                    .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_else(|| panic!("{forge:?} missing {workflow}"));
                 let steps: Vec<&str> = text.split("\n      - ").collect();
-                for (i, step) in steps.iter().enumerate() {
-                    if !step.contains(preflight) {
-                        continue;
-                    }
+                let i = steps
+                    .iter()
+                    .position(|step| step.starts_with(name))
+                    .unwrap_or_else(|| panic!("{forge:?} {workflow} has no step {name:?}"));
+                assert!(
+                    steps[i - 1].contains(hook),
+                    "{forge:?} {workflow}: the step before {name:?} must run the toolchain hook"
+                );
+            }
+            for (path, bytes) in &files {
+                let text = String::from_utf8_lossy(bytes);
+                for variable in [
+                    "UPLINK_PREFLIGHT",
+                    "UPLINK_REDACT_KEYWORDS",
+                    "UPLINK_INTERNAL_DOMAINS",
+                ] {
                     assert!(
-                        i > 0 && steps[i - 1].contains(hook),
-                        "{forge:?} {path}: step before {:?} must run the toolchain hook",
-                        step.lines().next()
+                        !text.contains(variable),
+                        "{forge:?} {path} still uses {variable}; it lives in uplink.toml now"
                     );
                 }
             }

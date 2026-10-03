@@ -20,8 +20,9 @@ use git_uplink::{
     submit_patch, sync, transfer_patch,
 };
 use git_uplink::{
-    HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SubmitResult,
-    SyncResult, TransferDirection, TransferResult,
+    HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
+    SubmitResult, SyncResult, TransferDirection, TransferResult, run_preflight_command_in,
+    stdin_is_tty,
 };
 
 const VERSION: &str = concat!(
@@ -76,6 +77,23 @@ enum Commands {
         adopt_groups: Option<PathBuf>,
         #[arg(long, help = "Print queue config as JSON")]
         json: bool,
+        #[arg(
+            long,
+            help = "uplink.toml: command preflight runs on the export tree (asked in a terminal when omitted)"
+        )]
+        preflight: Option<String>,
+        #[arg(
+            long = "redact-keyword",
+            value_name = "WORD",
+            help = "uplink.toml: word that must not appear in a contribution (repeatable, or comma-separated)"
+        )]
+        redact_keyword: Option<Vec<String>>,
+        #[arg(
+            long = "internal-domain",
+            value_name = "DOMAIN",
+            help = "uplink.toml: internal email domain to flag in the export (repeatable, or comma-separated)"
+        )]
+        internal_domain: Option<Vec<String>>,
     },
     Add {
         #[arg(long)]
@@ -133,6 +151,12 @@ enum Commands {
         depends_on: Vec<String>,
         #[arg(long)]
         internal_only: bool,
+        #[arg(
+            long = "command-only",
+            conflicts_with_all = ["id", "from", "head"],
+            help = "Only run the preflight command from uplink.toml in the current tree"
+        )]
+        command_only: bool,
     },
     Assess {
         #[arg(long, help = "Base revision (fetched from origin if missing)")]
@@ -813,6 +837,7 @@ struct InitArgs {
     upgrade: bool,
     adopt_groups: Option<PathBuf>,
     json: bool,
+    settings: SettingsFlags,
 }
 
 fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
@@ -840,6 +865,8 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
         upgrade: args.upgrade,
         adopt_groups,
         interactive: None,
+        settings: args.settings,
+        ask_settings: stdin_is_tty(),
         progress: if hydrate {
             ProgressMode::Disabled
         } else {
@@ -1029,6 +1056,22 @@ fn cmd_preflight(
     match result {
         Ok(()) => {
             println!("export preflight passed");
+            Ok(())
+        }
+        Err(err) => {
+            print_failure_comment(&err);
+            Err(err)
+        }
+    }
+}
+
+/// Runs the `preflight` command from `uplink.toml` in the current tree, with
+/// nothing applied. The gate uses it for internal-only patches.
+fn cmd_preflight_command(repo: &Path) -> Result<(), Error> {
+    let queue = read_queue(repo)?;
+    match run_preflight_command_in(&queue, repo) {
+        Ok(()) => {
+            println!("preflight command passed");
             Ok(())
         }
         Err(err) => {
@@ -1276,6 +1319,9 @@ fn run() -> Result<(), Error> {
             upgrade,
             adopt_groups,
             json,
+            preflight,
+            redact_keyword,
+            internal_domain,
         } => cmd_init(
             &repo,
             InitArgs {
@@ -1289,6 +1335,11 @@ fn run() -> Result<(), Error> {
                 upgrade,
                 adopt_groups,
                 json,
+                settings: SettingsFlags {
+                    preflight,
+                    redact_keywords: redact_keyword,
+                    internal_domains: internal_domain,
+                },
             },
         ),
         Commands::Doctor { json } => cmd_doctor(&repo, json),
@@ -1371,7 +1422,11 @@ fn run() -> Result<(), Error> {
             message_file,
             depends_on,
             internal_only,
+            command_only,
         } => {
+            if command_only {
+                return cmd_preflight_command(&repo);
+            }
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
             cmd_preflight(

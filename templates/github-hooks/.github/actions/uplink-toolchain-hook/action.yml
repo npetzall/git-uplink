@@ -1,5 +1,6 @@
-# Company toolchain hook. Replace these steps with what UPLINK_PREFLIGHT
-# needs on the runner. See toolchain-hook.md on this branch.
+# Company toolchain hook. Replace these steps with what the preflight
+# command in uplink.toml needs on the runner. See toolchain-hook.md on this
+# branch.
 name: Uplink toolchain hook
 description: >-
   Set up the build and test toolchain for Uplink preflight. This stub only

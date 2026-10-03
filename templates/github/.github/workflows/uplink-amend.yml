@@ -261,7 +261,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
-          UPLINK_PREFLIGHT: ${{ vars.UPLINK_PREFLIGHT }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}

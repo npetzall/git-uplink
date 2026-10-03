@@ -15,6 +15,7 @@ use crate::repo::{
     COMPANY_REMOTE, fetch_state_tracking, has_ref, is_ancestor, path_exists_at, point_branch_at,
     push_state_branch,
 };
+use crate::settings::{SETTINGS_PATH, SettingKey, Settings, SettingsFile, settings_text_at};
 use crate::tooling::hooks_files;
 use crate::types::{Forge, ForgeFamily, QueueState};
 
@@ -47,20 +48,70 @@ pub enum HooksOutcome {
     Skipped(String),
 }
 
+/// The settings [`ensure_hooks_branch`] would write for `mode`, so `init` can
+/// ask for them before the step (and its spinner) starts.
+pub fn settings_to_ask(repo: &Path, mode: HooksMode) -> Result<Vec<SettingKey>> {
+    if mode == HooksMode::FetchOnly {
+        return Ok(Vec::new());
+    }
+    let local = if has_ref(repo, HOOKS_REF)? {
+        Some(git_ok(repo, &["rev-parse", HOOKS_REF])?)
+    } else {
+        None
+    };
+    let remote = fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)?;
+    let base = match (local, remote) {
+        (None, None) => return Ok(SettingKey::ALL.to_vec()),
+        _ if mode != HooksMode::Upgrade => return Ok(Vec::new()),
+        (None, Some(remote)) => remote,
+        (Some(local), remote) => match upgrade_base(repo, &local, remote)? {
+            Some(base) => base,
+            None => return Ok(Vec::new()),
+        },
+    };
+    // A file that does not parse is reported by the step; nothing to ask.
+    Ok(missing_settings(repo, &base).unwrap_or_default())
+}
+
+/// The newest of the local branch and origin's, or `None` when they diverged.
+fn upgrade_base(repo: &Path, local: &str, remote: Option<String>) -> Result<Option<String>> {
+    Ok(match remote {
+        Some(remote) if remote == local || is_ancestor(repo, &remote, local)? => {
+            Some(local.to_string())
+        }
+        Some(remote) if is_ancestor(repo, local, &remote)? => Some(remote),
+        Some(_) => None,
+        None => Some(local.to_string()),
+    })
+}
+
+fn missing_settings(repo: &Path, base: &str) -> Result<Vec<SettingKey>> {
+    match settings_text_at(repo, &format!("{base}:{SETTINGS_PATH}")) {
+        None => Ok(SettingKey::ALL.to_vec()),
+        Some(text) => Ok(SettingsFile::parse(&text)?.missing_keys()),
+    }
+}
+
 /// Make `uplink/hooks` available locally: keep an existing branch, else take
-/// origin's, else (by `mode`) commit the embedded hooks pack as an orphan.
-/// Never pushes, never changes an existing file, never touches the working tree.
-pub fn ensure_hooks_branch(repo: &Path, forge: Forge, mode: HooksMode) -> Result<HooksOutcome> {
+/// origin's, else (by `mode`) commit the embedded hooks pack and `uplink.toml`
+/// as an orphan. `answers` holds the settings from [`settings_to_ask`].
+/// Never pushes, never changes an existing value, never touches the working tree.
+pub fn ensure_hooks_branch(
+    repo: &Path,
+    forge: Forge,
+    mode: HooksMode,
+    answers: &Settings,
+) -> Result<HooksOutcome> {
     if has_ref(repo, HOOKS_REF)? {
         if mode == HooksMode::Upgrade {
-            return complete_hooks_branch(repo, forge);
+            return complete_hooks_branch(repo, forge, answers);
         }
         return Ok(HooksOutcome::Existing);
     }
     if let Some(sha) = fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)? {
         point_branch_at(repo, HOOKS_BRANCH, &sha)?;
         if mode == HooksMode::Upgrade {
-            return match complete_hooks_branch(repo, forge)? {
+            return match complete_hooks_branch(repo, forge, answers)? {
                 HooksOutcome::Existing => Ok(HooksOutcome::FromOrigin),
                 other => Ok(other),
             };
@@ -70,7 +121,9 @@ pub fn ensure_hooks_branch(repo: &Path, forge: Forge, mode: HooksMode) -> Result
     if mode == HooksMode::FetchOnly {
         return Ok(HooksOutcome::Missing);
     }
-    let tree = build_tree(repo, None, &hooks_files(forge))?;
+    let mut files = hooks_files(forge);
+    files.push((SETTINGS_PATH.to_string(), answers.render().into_bytes()));
+    let tree = build_tree(repo, None, &files)?;
     let commit = git_ok(
         repo,
         &["commit-tree", &tree, "-m", "uplink: create uplink/hooks"],
@@ -84,25 +137,35 @@ pub fn ensure_hooks_branch(repo: &Path, forge: Forge, mode: HooksMode) -> Result
     Ok(HooksOutcome::Created)
 }
 
-/// Add pack files missing from `uplink/hooks` in one commit on top of the
-/// newest of the local branch and origin's. Existing files are kept as is.
-fn complete_hooks_branch(repo: &Path, forge: Forge) -> Result<HooksOutcome> {
+/// Add pack files and settings missing from `uplink/hooks` in one commit on
+/// top of the newest of the local branch and origin's. Existing files are
+/// kept as is, except that missing settings are appended to `uplink.toml`.
+fn complete_hooks_branch(repo: &Path, forge: Forge, answers: &Settings) -> Result<HooksOutcome> {
     let local = git_ok(repo, &["rev-parse", HOOKS_REF])?;
-    let base = match fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)? {
-        Some(remote) if remote == local || is_ancestor(repo, &remote, &local)? => local.clone(),
-        Some(remote) if is_ancestor(repo, &local, &remote)? => remote,
-        Some(_) => {
-            return Ok(HooksOutcome::Skipped(format!(
-                "uplink/hooks differs from origin; run git fetch {COMPANY_REMOTE} {HOOKS_BRANCH}, \
+    let remote = fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)?;
+    let Some(base) = upgrade_base(repo, &local, remote)? else {
+        return Ok(HooksOutcome::Skipped(format!(
+            "uplink/hooks differs from origin; run git fetch {COMPANY_REMOTE} {HOOKS_BRANCH}, \
 reconcile, and re-run git uplink init --upgrade"
-            )));
-        }
-        None => local.clone(),
+        )));
     };
-    let missing: Vec<(String, Vec<u8>)> = hooks_files(forge)
+    let mut missing: Vec<(String, Vec<u8>)> = hooks_files(forge)
         .into_iter()
         .filter(|(rel, _)| !path_exists_at(repo, &base, rel).unwrap_or(false))
         .collect();
+    match settings_text_at(repo, &format!("{base}:{SETTINGS_PATH}")) {
+        None => missing.push((SETTINGS_PATH.to_string(), answers.render().into_bytes())),
+        Some(text) => {
+            let keys = match SettingsFile::parse(&text) {
+                Ok(file) => file.missing_keys(),
+                Err(err) => return Ok(HooksOutcome::Skipped(err.to_string())),
+            };
+            if !keys.is_empty() {
+                let appended = answers.append_to(&text, &keys)?;
+                missing.push((SETTINGS_PATH.to_string(), appended.into_bytes()));
+            }
+        }
+    }
     if missing.is_empty() && base == local {
         return Ok(HooksOutcome::Existing);
     }
@@ -288,6 +351,16 @@ fn check_github_hooks_branch(repo: &Path) -> StepOutcome {
 Add it back (see toolchain-hook.md on uplink/hooks)"
         ));
     }
+    let incomplete = match missing_settings(repo, &local) {
+        Ok(keys) if keys.len() == SettingKey::ALL.len() => {
+            return StepOutcome::fail(format!(
+                "uplink/hooks has no {SETTINGS_PATH}; assess and preflight read their settings \
+from it. Run git uplink init --upgrade, then {push}"
+            ));
+        }
+        Ok(keys) => keys,
+        Err(err) => return StepOutcome::fail(err.to_string()),
+    };
     let short = &local[..local.len().min(7)];
     match remote {
         // Like origin/uplink/state: unverifiable is a warning, not a failure.
@@ -297,6 +370,16 @@ Add it back (see toolchain-hook.md on uplink/hooks)"
         Ok(None) => StepOutcome::fail(format!(
             "uplink/hooks at {short} is not on origin; push it with: {push}"
         )),
+        Ok(Some(remote)) if remote == local && !incomplete.is_empty() => {
+            StepOutcome::warn(format!(
+                "{SETTINGS_PATH} on uplink/hooks lacks {}; run git uplink init --upgrade",
+                incomplete
+                    .iter()
+                    .map(|key| key.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        }
         Ok(Some(remote)) if remote == local => {
             StepOutcome::pass(format!("uplink/hooks at {short}, pushed"))
         }

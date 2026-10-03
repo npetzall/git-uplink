@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -113,37 +112,6 @@ pub fn parse_person(value: Option<&str>) -> Option<(String, String)> {
         return Some((name.to_string(), value.to_string()));
     }
     None
-}
-
-fn keywords_for(queue: &QueueState) -> Vec<String> {
-    let mut keys: BTreeSet<String> = queue.config.redact_keywords.iter().cloned().collect();
-    if let Ok(from_env) = env::var("UPLINK_REDACT_KEYWORDS") {
-        for item in from_env.split(',') {
-            let item = item.trim();
-            if !item.is_empty() {
-                keys.insert(item.to_string());
-            }
-        }
-    }
-    keys.into_iter().collect()
-}
-
-fn internal_domains(queue: &QueueState) -> Vec<String> {
-    let mut domains: BTreeSet<String> = queue
-        .config
-        .internal_email_domains
-        .iter()
-        .map(|d| d.to_lowercase())
-        .collect();
-    if let Ok(from_env) = env::var("UPLINK_INTERNAL_DOMAINS") {
-        for item in from_env.split(',') {
-            let item = item.trim().to_lowercase();
-            if !item.is_empty() {
-                domains.insert(item);
-            }
-        }
-    }
-    domains.into_iter().collect()
 }
 
 /// The `Uplink-Export-Author` header below the cutoff, if any.
@@ -994,16 +962,31 @@ fn message_checks(
 
 /// Scans the export surface for configured company keywords and internal email domains.
 fn affiliation_check(queue: &QueueState, export_surface: &str) -> AssessCheck {
-    let keys = keywords_for(queue);
-    let domains = internal_domains(queue);
+    let settings = match queue.settings.usable() {
+        Ok(settings) => settings,
+        // Fail closed: without the settings there is nothing to scan for.
+        Err(err) => {
+            return AssessCheck {
+                id: "affiliation-leak".into(),
+                status: CheckStatus::Fail,
+                detail: format!("Cannot scan for company keywords: {err}."),
+            };
+        }
+    };
+    let keys = &settings.redact_keywords;
+    let domains: Vec<String> = settings
+        .internal_email_domains
+        .iter()
+        .map(|d| d.to_lowercase())
+        .collect();
     if keys.is_empty() && domains.is_empty() {
         return AssessCheck {
             id: "affiliation-leak".into(),
             status: CheckStatus::Warn,
-            detail: "No redactKeywords / internalEmailDomains configured. Set them (or UPLINK_REDACT_KEYWORDS) so tests cannot mention the company.".into(),
+            detail: "No redact_keywords / internal_email_domains configured. Set them in uplink.toml on uplink/hooks so tests cannot mention the company.".into(),
         };
     }
-    let mut hits = find_keyword_hits(export_surface, &keys);
+    let mut hits = find_keyword_hits(export_surface, keys);
     hits.extend(find_domain_hits(export_surface, &domains));
     AssessCheck {
         id: "affiliation-leak".into(),

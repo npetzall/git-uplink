@@ -1,6 +1,6 @@
 # Uplink toolchain hook
 
-Preflight applies a change onto public upstream and runs `UPLINK_PREFLIGHT` on the runner. The toolchain hook installs what that command needs: language runtimes, package managers, system packages, caches.
+Preflight applies a change onto public upstream and runs the `preflight` command from `uplink.toml` on the runner. The toolchain hook installs what that command needs: language runtimes, package managers, system packages, caches.
 
 Hooks are company-only. They live on the orphan branch `uplink/hooks`, never on `main`, so they are never queued, replayed, or contributed.
 
@@ -16,14 +16,14 @@ The forge pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `u
 
 ## How it is wired
 
-- `git uplink init` creates `uplink/hooks` locally with this file and a stub hook that only prints it. `git uplink push` publishes it with `uplink/state`. `git uplink init --upgrade` adds files a newer pack brings, without changing the ones you have. `git uplink doctor` reports when it is missing, lacks the hook, or is not pushed.
+- `git uplink init` creates `uplink/hooks` locally with this file, a stub hook that only prints it, and `uplink.toml`, which holds the `preflight` command. `git uplink push` publishes it with `uplink/state`. `git uplink init --upgrade` adds files a newer pack brings, without changing the ones you have. `git uplink doctor` reports when it is missing, lacks the hook, or is not pushed.
 - Your hook is `.github/actions/uplink-toolchain-hook/action.yml` on `uplink/hooks`. Edit it there.
 
 ## Contract
 
 - A [composite action](https://docs.github.com/actions/sharing-automations/creating-actions/creating-a-composite-action) with no inputs.
 - It runs in the caller's job, after the product is checked out in the workspace. Paths in the action are relative to the workspace; use `${{ github.action_path }}` for files that sit next to it on `uplink/hooks`.
-- Install tools, set `PATH` through `$GITHUB_PATH`, and set environment through `$GITHUB_ENV`. Later steps, including `UPLINK_PREFLIGHT`, see them.
+- Install tools, set `PATH` through `$GITHUB_PATH`, and set environment through `$GITHUB_ENV`. Later steps, including the preflight command, see them.
 - Do not build, test, or run product code here. Preflight does that, on the change it applies.
 - Do not change the workspace checkout or push anything.
 
@@ -75,7 +75,7 @@ runs:
       run: rustup toolchain install stable --profile minimal
 ```
 
-Then set `UPLINK_PREFLIGHT` (repository variable), for example `npm ci && npm test`, `./gradlew check`, or `cargo test --locked`.
+Then set `preflight` in `uplink.toml` on this branch, for example `npm ci && npm test`, `./gradlew check`, or `cargo test --locked`. `git uplink init` asked for it when it created the file.
 
 ## Change the hook
 
