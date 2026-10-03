@@ -1104,6 +1104,7 @@ fn run() -> Result<(), Error> {
             internal_only,
             pr,
             pr_url,
+            base_branch,
             depends_on,
             extra_dir,
             extra_source,
@@ -1121,6 +1122,7 @@ fn run() -> Result<(), Error> {
                     author: env::var("GIT_AUTHOR_NAME").ok(),
                     internal_pr_number: pr,
                     internal_pr_url: pr_url,
+                    base_branch,
                     extra_dir,
                     extra_source,
                     ..Default::default()

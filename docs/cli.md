@@ -18,7 +18,8 @@ git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <na
             [--redact-keyword <word>]... [--internal-domain <domain>]...
 git uplink add --title <text> [--message <text> | --message-file <path>] [--from <ref>]
             [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
-            [--depends-on <id>]... [--extra-dir <path>] [--extra-source <url>]
+            [--base-branch <branch>] [--depends-on <id>]... [--extra-dir <path>]
+            [--extra-source <url>]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
@@ -101,6 +102,9 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - `--internal-only`: Record on the internal queue: never exported, leak scan skipped.
 - `--pr <n>`: Number of the company PR that merged the change.
 - `--pr-url <url>`: URL of the company PR that merged the change.
+- `--base-branch <branch>`: Branch the company PR merged into.
+
+  Refused unless it is the company branch: a change merged into any other branch has not passed the company branch's review. Import passes the PR's base branch.
 - `--depends-on <id>`: Patch this one depends on, on top of the message trailers (repeatable).
 - `--extra-dir <path>`: Directory of company assessment-hook \*.md extras to store with the patch.
 
