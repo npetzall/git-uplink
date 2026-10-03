@@ -18,8 +18,8 @@ use crate::gate::{
 };
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::hooks::{
-    HooksMode, HooksOutcome, HooksPushAction, ensure_hooks_branch, hooks_step_outcome,
-    push_hooks_branch, settings_to_ask,
+    HooksMode, HooksOutcome, HooksPushAction, ensure_hooks_branch, hooks_questions,
+    hooks_step_outcome, push_hooks_branch,
 };
 use crate::init_report::InitReport;
 use crate::inspect::{

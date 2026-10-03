@@ -587,6 +587,7 @@ mod embed_tests {
                 ".github/actions/uplink-toolchain-hook/action.yml",
                 ".github/workflows/uplink-assessment-hook-example.yml",
                 "assessment-hook.md",
+                "preflight.sh",
                 "toolchain-hook.md",
             ]
         );
@@ -597,6 +598,11 @@ mod embed_tests {
                 .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
                 .unwrap()
         };
+        let script = text("preflight.sh");
+        assert!(script.starts_with("#!/bin/sh\n"), "{script}");
+        // `init` appends the seed command, so the stub must end on a new line
+        // and run nothing by itself.
+        assert!(script.ends_with("\nset -eu\n"), "{script}");
         let stub = text(".github/actions/uplink-toolchain-hook/action.yml");
         assert!(stub.contains("using: composite"), "{stub}");
         assert!(stub.contains("toolchain-hook.md"), "{stub}");
@@ -613,7 +619,7 @@ mod embed_tests {
     #[test]
     fn every_preflight_job_runs_the_toolchain_hook_first() {
         let hook = "uses: $/.github/actions/uplink-toolchain-hook";
-        // The steps that run the preflight command from uplink.toml.
+        // The steps that run preflight.sh from uplink/hooks.
         let preflight_steps = [
             ("uplink-pr.yml", "name: Export preflight"),
             ("uplink-gate.yml", "name: Validate gated work"),
@@ -653,7 +659,7 @@ mod embed_tests {
                 ] {
                     assert!(
                         !text.contains(variable),
-                        "{forge:?} {path} still uses {variable}; it lives in uplink.toml now"
+                        "{forge:?} {path} still uses {variable}; it lives on uplink/hooks now"
                     );
                 }
             }

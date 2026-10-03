@@ -71,7 +71,7 @@ jobs:
             exit 1
           fi
           # Internal-only patches never leave the company: skip the upstream
-          # assessment and run only the preflight command, as for
+          # assessment and run only the preflight script, as for
           # transfer-to-internal. If the queue cannot be read, assess.
           is_internal() {
             local queue

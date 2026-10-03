@@ -14,7 +14,7 @@ pub struct InitOpts {
     /// `None` detects a TTY. Tests set `Some(false)` so adopt never opens the TUI.
     pub interactive: Option<bool>,
     pub progress: ProgressMode,
-    /// Answers for `uplink.toml`.
+    /// Answers for `uplink.toml`, and the command to seed `preflight.sh` with.
     pub settings: SettingsFlags,
     /// Ask on the terminal for settings without an answer. Off by default so
     /// library callers and tests never block on stdin; the CLI turns it on
@@ -128,14 +128,21 @@ pub(super) fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
     ensure_company_branch_ref(repo, COMPANY_REMOTE, &queue.config.internal_branch)?;
     if let Some(forge) = queue.config.forge {
-        ensure_hooks_branch(repo, forge, HooksMode::FetchOnly, &Settings::default())?;
+        ensure_hooks_branch(
+            repo,
+            forge,
+            HooksMode::FetchOnly,
+            &Settings::default(),
+            None,
+        )?;
     }
     read_queue_file(repo)
 }
 
 /// Create `uplink/hooks` locally when neither this clone nor origin has it.
 /// With [`HooksMode::Upgrade`], also add pack files and settings the branch
-/// lacks. Settings to write are asked for first; existing values never change.
+/// lacks. What it writes is asked for first; existing values and files never
+/// change.
 pub(super) fn ensure_hooks_step(
     repo: &Path,
     queue: &QueueState,
@@ -148,16 +155,25 @@ pub(super) fn ensure_hooks_step(
             Ok(((), StepOutcome::skip("no forge recorded")))
         });
     };
-    let keys = settings_to_ask(repo, mode)?;
+    let questions = hooks_questions(repo, mode)?;
+    let seed = if questions.preflight_script {
+        preflight_seed(opts, queue.config.preflight_command.as_deref())?
+    } else {
+        None
+    };
     let legacy = Settings {
-        preflight: queue.config.preflight_command.clone(),
         redact_keywords: queue.config.redact_keywords.clone(),
         internal_email_domains: queue.config.internal_email_domains.clone(),
         problem: None,
     };
-    let (answers, unanswered) = answer_settings(&keys, &opts.settings, &legacy, opts.ask_settings)?;
+    let (answers, unanswered) = answer_settings(
+        &questions.settings,
+        &opts.settings,
+        &legacy,
+        opts.ask_settings,
+    )?;
     progress.run_step("hooks-branch", "uplink/hooks branch", || {
-        let outcome = ensure_hooks_branch(repo, forge, mode, &answers)?;
+        let outcome = ensure_hooks_branch(repo, forge, mode, &answers, seed.as_deref())?;
         let wrote_settings = match &outcome {
             HooksOutcome::Created => true,
             HooksOutcome::Completed(paths) => paths.iter().any(|p| p == SETTINGS_PATH),
@@ -172,6 +188,22 @@ pub(super) fn ensure_hooks_step(
         }
         Ok(((), step))
     })
+}
+
+/// The command a new `preflight.sh` starts with: the flag, a question in a
+/// terminal (offering `legacy`, the value an older `queue.json` held), else
+/// `legacy`.
+fn preflight_seed(opts: &InitOpts, legacy: Option<&str>) -> Result<Option<String>> {
+    let seed = match &opts.settings.preflight {
+        Some(command) => command.clone(),
+        None if opts.ask_settings => crate::prompt::ask_line(
+            "Preflight command, run on the export tree (empty for none)",
+            legacy.unwrap_or_default(),
+        )?,
+        None => legacy.unwrap_or_default().to_string(),
+    };
+    let seed = seed.trim();
+    Ok((!seed.is_empty()).then(|| seed.to_string()))
 }
 
 pub(super) fn missing_forge_error() -> Error {

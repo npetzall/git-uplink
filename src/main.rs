@@ -79,7 +79,7 @@ enum Commands {
         json: bool,
         #[arg(
             long,
-            help = "uplink.toml: command preflight runs on the export tree (asked in a terminal when omitted)"
+            help = "Command a new preflight.sh on uplink/hooks starts with (asked in a terminal when omitted)"
         )]
         preflight: Option<String>,
         #[arg(
@@ -154,9 +154,15 @@ enum Commands {
         #[arg(
             long = "command-only",
             conflicts_with_all = ["id", "from", "head"],
-            help = "Only run the preflight command from uplink.toml in the current tree"
+            help = "Only run preflight.sh in the current tree"
         )]
         command_only: bool,
+        #[arg(
+            long,
+            value_name = "REV",
+            help = "Read preflight.sh from this revision instead of uplink/hooks, to try a change to it"
+        )]
+        hooks: Option<String>,
     },
     Assess {
         #[arg(long, help = "Base revision (fetched from origin if missing)")]
@@ -1049,7 +1055,7 @@ fn cmd_preflight(
 ) -> Result<(), Error> {
     let result = if let Some(id) = id {
         let queue = read_queue(repo)?;
-        preflight_existing_patch(repo, &queue, &id)
+        preflight_existing_patch(repo, &queue, &id, incoming.hooks_ref.as_deref())
     } else {
         preflight_incoming_change(repo, incoming)
     };
@@ -1065,11 +1071,11 @@ fn cmd_preflight(
     }
 }
 
-/// Runs the `preflight` command from `uplink.toml` in the current tree, with
-/// nothing applied. The gate uses it for internal-only patches.
-fn cmd_preflight_command(repo: &Path) -> Result<(), Error> {
+/// Runs `preflight.sh` from `uplink/hooks` in the current tree, with nothing
+/// applied. The gate uses it for internal-only patches.
+fn cmd_preflight_command(repo: &Path, hooks_ref: Option<&str>) -> Result<(), Error> {
     let queue = read_queue(repo)?;
-    match run_preflight_command_in(&queue, repo) {
+    match run_preflight_command_in(&queue, repo, hooks_ref) {
         Ok(()) => {
             println!("preflight command passed");
             Ok(())
@@ -1304,9 +1310,18 @@ fn cmd_web_ui(repo: PathBuf, port: u16, no_open: bool) -> Result<(), Error> {
         .map_err(|err| Error::msg(format!("web-ui server: {err}")))
 }
 
+/// The checkout `cwd` is in, so commands work from a subdirectory. Outside a
+/// checkout, `cwd` itself.
+fn repo_root(cwd: PathBuf) -> PathBuf {
+    match git_uplink::git_ok(&cwd, &["rev-parse", "--show-toplevel"]) {
+        Ok(root) if !root.is_empty() => PathBuf::from(root),
+        _ => cwd,
+    }
+}
+
 fn run() -> Result<(), Error> {
     let cli = Cli::parse();
-    let repo = env::current_dir()?;
+    let repo = repo_root(env::current_dir()?);
     match cli.command {
         Commands::Init {
             upstream,
@@ -1423,9 +1438,10 @@ fn run() -> Result<(), Error> {
             depends_on,
             internal_only,
             command_only,
+            hooks,
         } => {
             if command_only {
-                return cmd_preflight_command(&repo);
+                return cmd_preflight_command(&repo, hooks.as_deref());
             }
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
@@ -1438,7 +1454,7 @@ fn run() -> Result<(), Error> {
                     head_ref: head.unwrap_or_else(|| "HEAD".into()),
                     depends_on,
                     message: Some(message),
-                    preflight_command: None,
+                    hooks_ref: hooks,
                     internal_only,
                 },
             )

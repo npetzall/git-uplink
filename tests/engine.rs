@@ -178,11 +178,21 @@ fn keep_dir() -> PathBuf {
 fn set_settings(repo: &Path, edit: impl FnOnce(&mut Settings)) {
     let mut settings = Settings::default();
     edit(&mut settings);
+    commit_hooks_file(repo, "uplink/hooks", "uplink.toml", &settings.render());
+}
+
+/// Makes `body` the commands of `preflight.sh` on `uplink/hooks`.
+fn set_preflight_script(repo: &Path, body: &str) {
+    commit_hooks_file(repo, "uplink/hooks", "preflight.sh", &format!("{body}\n"));
+}
+
+/// Commits `content` as `path` on top of `branch`, creating it when missing.
+fn commit_hooks_file(repo: &Path, branch: &str, path: &str, content: &str) {
     let blob = git(
         repo,
         &["hash-object", "-w", "--stdin"],
         GitOpts {
-            input: Some(settings.render().as_bytes()),
+            input: Some(content.as_bytes()),
             ..GitOpts::default()
         },
     )
@@ -196,7 +206,8 @@ fn set_settings(repo: &Path, edit: impl FnOnce(&mut Settings)) {
         )],
         ..GitOpts::default()
     };
-    let parent = has_git_ref(repo, "refs/heads/uplink/hooks").then(|| rev_of(repo, "uplink/hooks"));
+    let branch_ref = format!("refs/heads/{branch}");
+    let parent = has_git_ref(repo, &branch_ref).then(|| rev_of(repo, branch));
     match &parent {
         Some(parent) => git(repo, &["read-tree", parent], with_index()).unwrap(),
         None => git(repo, &["read-tree", "--empty"], with_index()).unwrap(),
@@ -207,20 +218,20 @@ fn set_settings(repo: &Path, edit: impl FnOnce(&mut Settings)) {
             "update-index",
             "--add",
             "--cacheinfo",
-            &format!("100644,{blob},uplink.toml"),
+            &format!("100644,{blob},{path}"),
         ],
         with_index(),
     )
     .unwrap();
     let tree = git(repo, &["write-tree"], with_index()).unwrap().stdout;
-    let mut args = vec!["commit-tree", tree.as_str(), "-m", "settings"];
+    let mut args = vec!["commit-tree", tree.as_str(), "-m", "hooks"];
     if let Some(parent) = &parent {
         args.extend_from_slice(&["-p", parent]);
     }
     let commit = git_ok(repo, &args).unwrap();
     git(
         repo,
-        &["update-ref", "refs/heads/uplink/hooks", &commit],
+        &["update-ref", &branch_ref, &commit],
         GitOpts::default(),
     )
     .unwrap();
@@ -2659,7 +2670,7 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
             head_ref: head.clone(),
             depends_on: Vec::new(),
             message: None,
-            preflight_command: None,
+            hooks_ref: None,
             internal_only: false,
         },
     )
@@ -2792,7 +2803,7 @@ fn preflight_fetches_missing_from_and_head_from_origin() {
             head_ref: head.clone(),
             depends_on: Vec::new(),
             message: None,
-            preflight_command: None,
+            hooks_ref: None,
             internal_only: false,
         },
     )
@@ -2814,7 +2825,7 @@ fn preflight_missing_revs_without_origin_fails_clearly() {
             head_ref: "cafebabecafebabecafebabecafebabecafebabe".into(),
             depends_on: Vec::new(),
             message: None,
-            preflight_command: None,
+            hooks_ref: None,
             internal_only: false,
         },
     )
@@ -2845,7 +2856,7 @@ fn preflight_missing_revs_not_on_origin_fails_clearly() {
             head_ref: "cafebabecafebabecafebabecafebabecafebabe".into(),
             depends_on: Vec::new(),
             message: None,
-            preflight_command: None,
+            hooks_ref: None,
             internal_only: false,
         },
     )
@@ -5349,13 +5360,12 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
     );
     commit_all(company, "add checker");
 
-    let command = "grep -q sha256 src/tokens.js";
+    set_preflight_script(company, "grep -q sha256 src/tokens.js");
     let err = add_patch(
         company,
         AddPatchOpts {
             title: "Add hash checker".into(),
             from_ref: Some("main".into()),
-            preflight_command: Some(command.into()),
             ..Default::default()
         },
     )
@@ -5374,7 +5384,6 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
             title: "Add hash checker".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash_patch.id.clone()],
-            preflight_command: Some(command.into()),
             ..Default::default()
         },
     )
@@ -5527,7 +5536,7 @@ fn incoming_preflight_reads_depends_on_from_the_message() {
                 "Log token hashes\n\nUplink-Depends-On: {}\n",
                 hash_patch.id
             )),
-            preflight_command: None,
+            hooks_ref: None,
             internal_only: false,
         },
     )
@@ -5561,8 +5570,8 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     .unwrap();
     approve_patch(company, &hash_patch.id).unwrap();
 
-    // The failing command lives in this repo's uplink.toml only.
-    set_settings(company, |s| s.preflight = Some("exit 1".into()));
+    // The failing script lives on this repo's uplink/hooks only.
+    set_preflight_script(company, "exit 1");
     let err = submit_patch(company, &hash_patch.id, true);
     assert!(matches!(err, Err(Error::Preflight(_))));
 
@@ -5630,10 +5639,10 @@ fn user_git_config_and_hooks_do_not_change_the_imported_patch() {
 fn preflight_command_does_not_see_uplink_credentials() {
     let world = setup_world();
     let company = &world.company;
-    set_settings(company, |s| {
-        s.preflight =
-            Some(r#"test -z "$UPLINK_CONTRIB_TOKEN$UPLINK_INTERNAL_KEY$GITHUB_TOKEN""#.into())
-    });
+    set_preflight_script(
+        company,
+        r#"test -z "$UPLINK_CONTRIB_TOKEN$UPLINK_INTERNAL_KEY$GITHUB_TOKEN""#,
+    );
 
     git(
         company,
@@ -6912,7 +6921,7 @@ fn incoming_preflight_skips_internal_only() {
             head_ref: "also-missing".into(),
             depends_on: Vec::new(),
             message: None,
-            preflight_command: None,
+            hooks_ref: None,
             internal_only: true,
         },
     )
@@ -6963,7 +6972,7 @@ fn incoming_preflight_fails_when_candidate_needs_internal() {
             head_ref: head,
             depends_on: Vec::new(),
             message: None,
-            preflight_command: None,
+            hooks_ref: None,
             internal_only: false,
         },
     )
@@ -7223,7 +7232,7 @@ fn transfer_to_upstream_gates_on_preflight_failure_without_writing_queue() {
     let world = setup_world();
     let company = &world.company;
     let patch = add_internal_notes(company);
-    set_settings(company, |s| s.preflight = Some("exit 1".into()));
+    set_preflight_script(company, "exit 1");
 
     let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
     assert!(result.gated, "{result:?}");
@@ -7264,7 +7273,7 @@ fn transfer_abort_deletes_branches_and_leaves_the_source_queue() {
     let world = setup_world();
     let company = &world.company;
     let patch = add_internal_notes(company);
-    set_settings(company, |s| s.preflight = Some("exit 1".into()));
+    set_preflight_script(company, "exit 1");
     let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
     assert!(result.gated);
     let base = result.base_branch.unwrap();
@@ -7287,9 +7296,7 @@ fn transfer_complete_applies_work_and_moves_the_patch() {
     let world = setup_world();
     let company = &world.company;
     let patch = add_internal_notes(company);
-    set_settings(company, |s| {
-        s.preflight = Some("grep -q ready NOTES.md".into())
-    });
+    set_preflight_script(company, "grep -q ready NOTES.md");
     let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
     assert!(result.gated, "{result:?}");
     let work = result.work_branch.unwrap();
@@ -7655,6 +7662,7 @@ fn init_creates_the_hooks_branch_locally_as_an_orphan() {
             ".github/actions/uplink-toolchain-hook/action.yml",
             ".github/workflows/uplink-assessment-hook-example.yml",
             "assessment-hook.md",
+            "preflight.sh",
             "toolchain-hook.md",
             "uplink.toml",
         ]
@@ -7972,6 +7980,10 @@ fn doctor_fails_when_the_hooks_branch_is_missing() {
     assert!(detail.contains("git uplink init --upgrade"), "{detail}");
 }
 
+fn hooks_file(repo: &Path, path: &str) -> String {
+    git_ok(repo, &["show", &format!("uplink/hooks:{path}")]).unwrap()
+}
+
 fn hooks_toml(repo: &Path) -> String {
     git_ok(repo, &["show", "uplink/hooks:uplink.toml"]).unwrap()
 }
@@ -7998,7 +8010,7 @@ fn hooks_step_detail(result: &git_uplink::InitResult) -> String {
 }
 
 #[test]
-fn init_writes_the_answers_to_uplink_toml_on_the_hooks_branch() {
+fn init_writes_the_answers_to_the_hooks_branch() {
     let world = setup_uninitialized();
     let result = init(
         &world.company,
@@ -8012,11 +8024,11 @@ fn init_writes_the_answers_to_uplink_toml_on_the_hooks_branch() {
         ),
     )
     .unwrap();
+    let script = hooks_file(&world.company, "preflight.sh");
+    assert!(script.starts_with("#!/bin/sh\n"), "{script}");
+    assert!(script.ends_with("\nnpm ci && npm test"), "{script}");
     let text = hooks_toml(&world.company);
-    assert!(
-        text.contains("preflight = \"npm ci && npm test\""),
-        "{text}"
-    );
+    assert!(!text.contains("preflight"), "{text}");
     assert!(
         text.contains("redact_keywords = [\"AcmeCorp\", \"companyTelemetry\"]"),
         "{text}"
@@ -8028,7 +8040,6 @@ fn init_writes_the_answers_to_uplink_toml_on_the_hooks_branch() {
     assert!(!hooks_step_detail(&result).contains("Left empty"));
 
     let settings = git_uplink::read_queue(&world.company).unwrap().settings;
-    assert_eq!(settings.preflight.as_deref(), Some("npm ci && npm test"));
     assert_eq!(settings.redact_keywords, ["AcmeCorp", "companyTelemetry"]);
     assert_eq!(settings.internal_email_domains, ["acme.example"]);
     assert!(settings.problem.is_none());
@@ -8049,13 +8060,13 @@ fn init_without_answers_writes_empty_settings_and_says_so() {
     )
     .unwrap();
     let text = hooks_toml(&world.company);
-    assert!(text.contains("preflight = \"\""), "{text}");
     assert!(text.contains("redact_keywords = []"), "{text}");
+    // The stub has the contract and no command.
+    let script = hooks_file(&world.company, "preflight.sh");
+    assert!(script.trim_end().ends_with("\nset -eu"), "{script}");
     let detail = hooks_step_detail(&result);
     assert!(
-        detail.contains(
-            "Left empty in uplink.toml: preflight, redact_keywords, internal_email_domains"
-        ),
+        detail.contains("Left empty in uplink.toml: redact_keywords, internal_email_domains"),
         "{detail}"
     );
     assert!(result.report.ok, "{:?}", result.report.checks);
@@ -8103,8 +8114,9 @@ fn init_upgrade_adds_a_missing_uplink_toml_from_flags_and_the_old_queue() {
     )
     .unwrap();
     let text = hooks_toml(company);
-    assert!(text.contains("preflight = \"make check\""), "{text}");
     assert!(text.contains("redact_keywords = [\"LegacyCo\"]"), "{text}");
+    // preflight.sh was already there, so the flag seeds nothing.
+    assert!(!hooks_file(company, "preflight.sh").contains("make check"));
     let detail = hooks_step_detail(&result);
     assert!(detail.contains("uplink.toml"), "{detail}");
     assert!(
@@ -8135,13 +8147,12 @@ fn init_upgrade_appends_missing_settings_and_keeps_the_rest() {
         .unwrap()
     };
     upgrade(SettingsFlags {
-        preflight: Some("make check".into()),
+        preflight: None,
         redact_keywords: Some(vec!["Ignored".into()]),
         internal_domains: None,
     });
     let text = format!("{}\n", hooks_toml(company));
     assert!(text.starts_with(ours), "{text}");
-    assert!(text.contains("preflight = \"make check\""), "{text}");
     assert!(
         !text.contains("Ignored"),
         "existing values are never changed\n{text}"
@@ -8154,6 +8165,56 @@ fn init_upgrade_appends_missing_settings_and_keeps_the_rest() {
         ..Default::default()
     });
     assert_eq!(rev_of(company, "uplink/hooks"), tip, "nothing left to add");
+}
+
+#[test]
+fn init_upgrade_adds_a_missing_preflight_script_and_never_rewrites_it() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    edit_hooks(company, "drop the script", |dir| {
+        fs::remove_file(dir.join("preflight.sh")).unwrap();
+    });
+    // An older binary kept the command in queue.json.
+    let path = company.join(".uplink/queue.json");
+    let stored = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        stored.replacen(
+            "\"config\": {",
+            "\"config\": {\n    \"preflightCommand\": \"make legacy\",",
+            1,
+        ),
+    )
+    .unwrap();
+    git_uplink::commit_queue(company, "uplink: old command").unwrap();
+
+    let upgrade = |preflight: Option<&str>| {
+        init(
+            company,
+            InitOpts {
+                upgrade: true,
+                settings: SettingsFlags {
+                    preflight: preflight.map(str::to_string),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let result = upgrade(None);
+    assert!(
+        hooks_step_detail(&result).contains("preflight.sh"),
+        "{}",
+        hooks_step_detail(&result)
+    );
+    let script = hooks_file(company, "preflight.sh");
+    assert!(script.ends_with("\nmake legacy"), "{script}");
+
+    let tip = rev_of(company, "uplink/hooks");
+    upgrade(Some("make other"));
+    assert_eq!(rev_of(company, "uplink/hooks"), tip, "the script is kept");
 }
 
 #[test]
@@ -8198,7 +8259,7 @@ fn a_forge_queue_without_uplink_toml_fails_closed() {
 }
 
 #[test]
-fn preflight_command_only_runs_the_command_from_uplink_toml() {
+fn preflight_command_only_runs_preflight_sh_from_uplink_hooks() {
     let world = setup_world();
     let company = &world.company;
     let run = |old_variable: &str| {
@@ -8209,17 +8270,15 @@ fn preflight_command_only_runs_the_command_from_uplink_toml() {
             .output()
             .unwrap()
     };
-    // No uplink.toml: nothing to run, and the old variable is not read.
+    // No preflight.sh: nothing to run, and the old variable is not read.
     let output = run("exit 9");
     assert!(output.status.success(), "{output:?}");
 
-    set_settings(company, |s| {
-        s.preflight = Some("test -f src/tokens.js".into())
-    });
+    set_preflight_script(company, "test -f src/tokens.js");
     let output = run("exit 9");
     assert!(output.status.success(), "{output:?}");
 
-    set_settings(company, |s| s.preflight = Some("exit 3".into()));
+    set_preflight_script(company, "exit 3");
     let output = run("true");
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -8227,6 +8286,124 @@ fn preflight_command_only_runs_the_command_from_uplink_toml() {
     assert!(
         format!("{stdout}{stderr}").contains("exit 3"),
         "{stdout}\n{stderr}"
+    );
+}
+
+fn run_command_only(dir: &Path, extra: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["preflight", "--command-only"])
+        .args(extra)
+        .current_dir(dir)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn preflight_sh_starts_in_the_checkout_root_from_a_subdirectory() {
+    let world = setup_world();
+    let company = &world.company;
+    // Passes only in the directory that holds src/, and prints where it ran.
+    set_preflight_script(company, "pwd\ntest -f src/tokens.js && exit 4");
+    let output = run_command_only(&company.join("src"), &[]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(text.contains("exit 4"), "{text}");
+    let root = git_ok(company, &["rev-parse", "--show-toplevel"]).unwrap();
+    assert!(text.lines().any(|line| line == root), "{text}");
+}
+
+#[test]
+fn preflight_sh_runs_in_the_export_tree_and_reaches_its_siblings() {
+    let world = setup_world();
+    let company = &world.company;
+    commit_hooks_file(company, "uplink/hooks", "lib/check.sh", "pwd\nexit 6\n");
+    set_preflight_script(company, r#"sh "$(dirname "$0")/lib/check.sh""#);
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+
+    let err = preflight_incoming_change(
+        company,
+        IncomingPreflight {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: "main".into(),
+            head_ref: "HEAD".into(),
+            depends_on: Vec::new(),
+            message: None,
+            hooks_ref: None,
+            internal_only: false,
+        },
+    )
+    .unwrap_err();
+    let Error::Preflight(pre) = err else {
+        panic!("expected preflight, got {err}");
+    };
+    assert_eq!(pre.stage, "command");
+    let message = pre.to_string();
+    assert!(message.contains("preflight.sh, exit 6"), "{message}");
+    // The sibling printed the working directory: the export tree, not the
+    // checkout and not the hooks checkout.
+    assert!(message.contains("uplink-export-"), "{message}");
+    let worktrees = git_ok(company, &["worktree", "list", "--porcelain"]).unwrap();
+    assert_eq!(worktrees.matches("worktree ").count(), 1, "{worktrees}");
+}
+
+#[test]
+fn preflight_hooks_flag_reads_the_script_from_another_revision() {
+    let world = setup_world();
+    let company = &world.company;
+    set_preflight_script(company, "exit 0");
+    git(
+        company,
+        &["branch", "hooks-change", "uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    commit_hooks_file(company, "hooks-change", "preflight.sh", "exit 7\n");
+
+    let output = run_command_only(company, &[]);
+    assert!(output.status.success(), "{output:?}");
+    let output = run_command_only(company, &["--hooks", "hooks-change"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("exit 7"),
+        "{output:?}"
+    );
+    let output = run_command_only(company, &["--hooks", "no-such-branch"]);
+    assert!(!output.status.success(), "{output:?}");
+}
+
+#[test]
+fn preflight_without_a_hooks_branch_fails_closed_for_a_forge_queue() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let output = run_command_only(company, &[]);
+    assert!(output.status.success(), "the stub passes\n{output:?}");
+
+    git(
+        company,
+        &["update-ref", "-d", "refs/heads/uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let output = run_command_only(company, &[]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("uplink/hooks is missing"),
+        "{output:?}"
     );
 }
 
@@ -8312,7 +8489,7 @@ fn preflight_keeps_uncommitted_work_and_rebuild_refuses_it() {
             head_ref: "HEAD".into(),
             depends_on: Vec::new(),
             message: None,
-            preflight_command: None,
+            hooks_ref: None,
             internal_only: false,
         },
     )

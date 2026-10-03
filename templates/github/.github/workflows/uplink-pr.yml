@@ -6,7 +6,7 @@
 # author, keyword / internal-email scan) and posts the report. Preflight
 # applies the unique diff onto public upstream plus declared
 # Uplink-Depends-On, then tooling + queued upstream (internal omitted),
-# then the preflight command from uplink.toml on uplink/hooks. Fail these instead of opening a contribution
+# then preflight.sh from uplink/hooks. Fail these instead of opening a contribution
 # later that leaks company text or is missing queued work from main.
 #
 # Assess also runs the optional company assessment hook from branch
