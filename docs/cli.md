@@ -21,6 +21,7 @@ git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
             [--depends-on <id>]...
 git uplink preflight --command-only
+            (both forms: [--hooks <rev>])
 git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>]
             [--internal-only | --patch <id>]
@@ -60,18 +61,15 @@ git uplink version
 - `--forge` is required when creating a queue: `github` for github.com and GitHub Enterprise Cloud, `try-it-on-github` for the worked example. The former names `ghec` and `example-github` are still accepted, and are read from queues that stored them.
 - First-time init also installs that forge's workflows plus the shared GitHub pull request template as the dedicated **tooling** patch.
 - `--upgrade` refreshes the tooling patch in its dedicated slot. Re-run it after upgrading the binary.
-- Init also creates the local orphan branch `uplink/hooks` for company hooks (assessment hook guide and starter, toolchain hook stub) when neither this clone nor `origin` has it. Init never pushes it and never changes an existing file on it. `--upgrade` creates it for queues initialized before it existed, and adds files a newer pack brings as one commit on top.
+- Init also creates the local orphan branch `uplink/hooks` for company hooks (assessment hook guide and starter, toolchain hook stub, `preflight.sh`) when neither this clone nor `origin` has it. Init never pushes it and never changes an existing file on it. `--upgrade` creates it for queues initialized before it existed, and adds files a newer pack brings as one commit on top.
 - `--json` prints the stored config.
-- `--preflight <cmd>`, `--redact-keyword <word>`, and `--internal-domain <domain>` answer the settings questions below. The last two can be repeated or comma-separated.
+- `--preflight <cmd>`, `--redact-keyword <word>`, and `--internal-domain <domain>` answer the questions below. The last two can be repeated or comma-separated.
 
 #### Settings: `uplink.toml`
 
-The preflight command and the leak scan's keywords and internal email domains live in `uplink.toml` on `uplink/hooks`, not in environment or repository variables. Every command reads the file from the local `uplink/hooks`, else `origin/uplink/hooks`, so a developer's machine and CI agree.
+The leak scan's keywords and internal email domains live in `uplink.toml` on `uplink/hooks`, not in environment or repository variables. Every command reads the file from the local `uplink/hooks`, else `origin/uplink/hooks`, so a developer's machine and CI agree.
 
 ```toml
-# Command preflight runs on the export tree. Empty: no command.
-preflight = "npm ci && npm test"
-
 # Words that must not appear in a contribution.
 redact_keywords = ["AcmeCorp", "companyTelemetry"]
 
@@ -81,8 +79,19 @@ internal_email_domains = ["acme.example"]
 
 - When `init` creates `uplink/hooks` it asks for each setting in a terminal. A flag answers its question. Without a terminal, a setting with no flag is written empty and init says which.
 - `init --upgrade` adds the file when it is missing and appends settings the file lacks, asking the same way. It offers values an older `queue.json` held. It never changes a value that is already there; edit the file on `uplink/hooks` for that.
-- With a forge recorded, a missing or unparseable `uplink.toml` fails upstream-bound `assess` and `preflight` instead of scanning for nothing.
+- With a forge recorded, a missing or unparseable `uplink.toml` fails upstream-bound `assess` instead of scanning for nothing.
 - **Moving from repository variables:** run `git uplink init --upgrade`, answer with the values of `UPLINK_PREFLIGHT`, `UPLINK_REDACT_KEYWORDS`, and `UPLINK_INTERNAL_DOMAINS`, run `git uplink push`, then delete the three variables. They are no longer read.
+
+#### Preflight script: `preflight.sh`
+
+What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, read from the local branch, else `origin/uplink/hooks`.
+
+- **How it runs:** `sh preflight.sh`, with the root of the tree under test as the working directory: the export tree, or the current checkout for `--command-only`. A non-zero exit fails preflight.
+- **Other files on the branch** are checked out beside the script for the run; reach them with `"$(dirname "$0")"`.
+- **Credentials** (`GITHUB_TOKEN`, `GH_TOKEN`, `UPLINK_*_TOKEN`, `UPLINK_*_KEY`) are removed from its environment.
+- **Created by `init`,** with the answer to its preflight question (or `--preflight <cmd>`) as the script's command. `init --upgrade` adds the script when the branch lacks it, offering the command an older `queue.json` held. An existing script is never rewritten; edit it on `uplink/hooks`.
+- **No script** means preflight runs no command. With a forge recorded, a missing `uplink/hooks` fails preflight.
+- **Trying a change:** commit it on a branch made from `uplink/hooks`, then run `git uplink preflight --command-only --hooks <branch>`. `--hooks` works with every form of `preflight`.
 
 A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `uplink/upstream`, and the configured company branch, materializes that local ref (and `uplink/hooks` when origin has it) without checking it out, and reconstitutes the remotes from the stored URLs. It does not rewrite workflows.
 
@@ -131,7 +140,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 
 ## Checks
 
-- **`preflight`** applies a change onto public `main` plus its declared dependencies. Incoming preflight reads `Uplink-Depends-On` trailers from `--message` / `--message-file`. `--command-only` applies nothing and just runs the `preflight` command from `uplink.toml` in the current tree; the gate uses it for internal-only patches.
+- **`preflight`** applies a change onto public `main` plus its declared dependencies. Incoming preflight reads `Uplink-Depends-On` trailers from `--message` / `--message-file`. `--command-only` applies nothing and just runs `preflight.sh` in the current tree; the gate uses it for internal-only patches. `--hooks <rev>` reads `preflight.sh` from that revision instead of `uplink/hooks`.
 - **`assess`** checks the message, cutoff, author, and affiliation of a change. `--patch <id>` takes the title, message, and layer from a queued patch; the gate uses it on conflict-resolution PRs.
 - **`report <id>`** writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`. Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). `--extra-dir` prepends those files instead, and `--store-extras` also stores them for later packets. Submit runs the hook from branch `uplink/hooks` only when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
 - **`status`** shows the queue (`--json` for machines).
@@ -144,7 +153,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - **`submit`** exports the patch onto the contrib fork (git only) and prints JSON for `POST /repos/{parent}/pulls`. `head` is the branch from `.branch`; `head_repo` is `<contrib_owner>/<contrib_repo>`.
 - **`submitted`** records the PR URL, commits the queue, and pushes company `uplink/state`.
 
-Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight command (`git uplink preflight --command-only`). After a submitted patch is conflict-resolved it becomes **`amended`** until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you.
+Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`). After a submitted patch is conflict-resolved it becomes **`amended`** until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you.
 
 ### Merge detection
 
@@ -169,7 +178,7 @@ Resolve re-runs the upstream assessment on the resolution and refuses an upstrea
   - A successful `--to-internal` of a submitted patch prints `gh.prClose` (`url`, `contribBranch`) so Actions can dispatch **Uplink abandon contrib**.
 - **`amend`** revises a patch through a gated PR: an internal-only patch, an upstream patch not yet submitted, or a submitted one a maintainer asked to change.
   - Without `--complete` it replays the queue on `uplink/upstream` up to and including the patch, cuts protected `uplink/amend/<id>` there, and cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can open at once. The queue is not touched. It prints `base`, `work`, and `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the stored message after an HTML-comment instruction block).
-  - `--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight command (internal). A failing upstream assessment is refused and the branch is left as it was. A submitted patch becomes **`amended`** (IP approves the delta, then submit force-pushes the contrib branch); otherwise it is `queued`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was.
+  - `--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. A submitted patch becomes **`amended`** (IP approves the delta, then submit force-pushes the contrib branch); otherwise it is `queued`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was.
   - Conflicted, merged, dropped, and tooling patches cannot be amended.
 - **`drop`** removes a patch. `--reason` defaults to `dropped by operator`.
 - **`rebuild`** replays `main` from the queue, optionally onto `--branch` for preview, and `--push` publishes it.
