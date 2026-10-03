@@ -86,7 +86,7 @@ run git uplink init --upgrade to create it, then git uplink push",
     }
 }
 
-fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<ApplyOutcome> {
+pub(crate) fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<ApplyOutcome> {
     if !git_succeeds(
         dir,
         &[

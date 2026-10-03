@@ -6,16 +6,17 @@ use std::thread;
 use git_uplink::{
     AddPatchOpts, AdoptGroup, AmendMessage, ApprovalReceipt, CheckStatus, ConflictError,
     DEFAULT_CUTOFF, Error, Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
-    Patch, PatchIntent, PatchStatus, ProgressMode, PushOpts, QueueConfig, QueueState, RebuildOpts,
-    Result, STATE_BRANCH, Settings, SettingsFlags, StepOutcome, TOOLING_PATCH_KIND,
-    TOOLING_PATCH_TITLE, TransferDirection, accept_upstream, add_patch, amend_patch, approve_patch,
-    doctor, drop_patch, extras_dir, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
-    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
-    parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, status_snapshot, store_patch_extras, stored_extras_fresh,
-    strip_html_comments, submit_patch, summarize_queue, sync, transfer_patch, write_queue,
+    Patch, PatchIntent, PatchStatus, PendingMerge, ProgressMode, PushOpts, QueueConfig, QueueState,
+    RebuildOpts, Result, STATE_BRANCH, Settings, SettingsFlags, StepOutcome, SyncOpts,
+    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream,
+    accept_upstream_at, add_patch, amend_patch, approve_patch, doctor, drop_patch, extras_dir,
+    format_approval_receipt, format_approver_packet, format_contribution_packet,
+    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
+    git_ok, init, init_repo, load_extra_markdown, mark_merged, parse_depends_on,
+    preflight_incoming_change, push_queue, rebuild, rebuild_with, record_gated_pr,
+    record_pull_request, refresh_from_origin, report_paths, reset_from_origin, resolve_conflict,
+    status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch,
+    summarize_queue, sync, sync_with, transfer_patch, write_queue,
 };
 use tempfile::TempDir;
 
@@ -3302,8 +3303,93 @@ fn sync_sends_a_trailer_with_a_different_diff_to_review() {
     assert_eq!(result.queue.patch_refs()[0].status, PatchStatus::Queued);
 }
 
+fn patch_status(repo: &Path, id: &str) -> PatchStatus {
+    let queue = git_uplink::read_queue(repo).unwrap();
+    queue.all_patches().find(|p| p.id == id).unwrap().status
+}
+
+fn merged_pr(patch: &Patch, sha: &str) -> SyncOpts {
+    SyncOpts {
+        merged_prs: vec![(patch.id.clone(), sha.to_string())],
+    }
+}
+
+/// A world whose hash patch has a recorded public PR.
+fn world_with_submitted_hash_patch() -> (World, Patch) {
+    let (world, hash_patch) = world_with_hash_patch();
+    record_pull_request(
+        &world.company,
+        &hash_patch.id,
+        7,
+        "https://github.com/acme/app/pull/7",
+        &format!("uplink/{}", hash_patch.id),
+        None,
+    )
+    .unwrap();
+    (world, hash_patch)
+}
+
 #[test]
-fn sync_sends_merge_commits_to_review() {
+fn accepting_a_trailer_with_a_different_diff_does_not_merge_the_patch() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let altered = commit_with_trailer(
+        &world.upstream,
+        &TOKENS.replace("return sha1(value);", "return sha512(value);"),
+        &hash_patch.id,
+    );
+
+    let result = sync(&world.company).unwrap();
+    assert!(result.needs_approval);
+    assert!(result.merges.is_empty(), "{:?}", result.merges);
+    assert_eq!(result.claims.len(), 1);
+    assert_eq!(result.claims[0].sha, altered);
+    assert_eq!(result.claims[0].id, hash_patch.id);
+    let packet = result.report.unwrap();
+    assert!(
+        packet.contains(&format!("does **not** mark `{}` merged", hash_patch.id)),
+        "{packet}"
+    );
+
+    accept_upstream(&world.company).unwrap();
+    // Both change the same line, so the patch is replayed into a conflict.
+    assert_eq!(
+        patch_status(&world.company, &hash_patch.id),
+        PatchStatus::Conflict
+    );
+}
+
+#[test]
+fn a_patch_id_mentioned_in_an_unrelated_commit_does_not_merge_the_patch() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    write(&world.upstream, "CHANGELOG.md", "notes\n");
+    git(&world.upstream, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        &world.upstream,
+        &[
+            "commit",
+            "-m",
+            &format!(
+                "docs: changelog\n\nsee Uplink-Patch-Id: {} in the fork\n",
+                hash_patch.id
+            ),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let result = sync(company).unwrap();
+    assert!(result.needs_approval);
+    assert!(result.claims.is_empty(), "{:?}", result.claims);
+    accept_upstream(company).unwrap();
+
+    assert_eq!(patch_status(company, &hash_patch.id), PatchStatus::Queued);
+    let tokens = git_ok(company, &["show", "main:src/tokens.js"]).unwrap();
+    assert!(tokens.contains("sha256"), "{tokens}");
+}
+
+#[test]
+fn sync_applies_a_merge_commit_of_only_our_patch_without_approval() {
     let (world, hash_patch) = world_with_hash_patch();
     let upstream = &world.upstream;
     git(upstream, &["checkout", "-b", "pr"], GitOpts::default()).unwrap();
@@ -3319,12 +3405,219 @@ fn sync_sends_merge_commits_to_review() {
         GitOpts::default(),
     )
     .unwrap();
+
+    let result = sync(&world.company).unwrap();
+    assert!(!result.needs_approval);
+    assert_eq!(result.flowed_back, std::slice::from_ref(&hash_patch.id));
+    assert_eq!(
+        patch_status(&world.company, &hash_patch.id),
+        PatchStatus::Merged
+    );
+}
+
+#[test]
+fn sync_sends_a_merge_commit_that_changes_more_to_review() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let upstream = &world.upstream;
+    git(upstream, &["checkout", "-b", "pr"], GitOpts::default()).unwrap();
+    commit_with_trailer(
+        upstream,
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+        &hash_patch.id,
+    );
+    git(upstream, &["checkout", "main"], GitOpts::default()).unwrap();
+    git(
+        upstream,
+        &["merge", "--no-ff", "--no-commit", "--quiet", "pr"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(upstream, "EVIL.md", "added in the merge commit\n");
+    git(upstream, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        upstream,
+        &["commit", "--quiet", "-m", "Merge pr"],
+        GitOpts::default(),
+    )
+    .unwrap();
     let merge = rev(upstream);
 
     let result = sync(&world.company).unwrap();
     assert!(result.needs_approval);
-    assert!(result.flowed_back.iter().any(|id| id == &hash_patch.id));
+    assert_eq!(result.flowed_back, std::slice::from_ref(&hash_patch.id));
     assert_eq!(result.foreign_commits, [merge]);
+    let packet = result.report.unwrap();
+    assert!(packet.contains("added in the merge commit"), "{packet}");
+    assert!(
+        !packet.contains("+  return sha256(value);"),
+        "our own patch is not up for review\n{packet}"
+    );
+    assert_eq!(
+        patch_status(&world.company, &hash_patch.id),
+        PatchStatus::Queued,
+        "merged only at promotion"
+    );
+}
+
+#[test]
+fn a_merged_pr_with_maintainer_extras_merges_after_review_of_the_extras() {
+    let (world, hash_patch) = world_with_submitted_hash_patch();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    write(upstream, "NOTES.md", "maintainer note\n");
+    commit_all(upstream, "Use SHA-256 for tokens (#7)");
+    let squash = rev(upstream);
+
+    let result = sync_with(company, merged_pr(&hash_patch, &squash)).unwrap();
+    assert!(result.needs_approval);
+    assert_eq!(
+        result.merges,
+        [PendingMerge {
+            id: hash_patch.id.clone(),
+            sha: squash.clone(),
+            via: MergeVia::Pr,
+            modified: false,
+        }]
+    );
+    let packet = result.report.unwrap();
+    assert!(packet.contains("maintainer note"), "{packet}");
+    assert!(!packet.contains("+  return sha256(value);"), "{packet}");
+    assert!(!packet.contains("Modified by the maintainer"), "{packet}");
+    assert_eq!(
+        patch_status(company, &hash_patch.id),
+        PatchStatus::Submitted
+    );
+
+    let applied = accept_upstream_at(company, Some(&squash)).unwrap();
+    let merged = applied
+        .queue
+        .all_patches()
+        .find(|p| p.id == hash_patch.id)
+        .unwrap();
+    assert_eq!(merged.status, PatchStatus::Merged);
+    let record = merged.merged.as_ref().unwrap();
+    assert_eq!(record.via, MergeVia::Pr);
+    assert_eq!(record.upstream_sha.as_deref(), Some(squash.as_str()));
+}
+
+#[test]
+fn a_merged_pr_the_maintainer_modified_merges_only_on_approval() {
+    let (world, hash_patch) = world_with_submitted_hash_patch();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha512(value);"),
+    );
+    commit_all(upstream, "Use SHA-512 for tokens (#7)");
+    let squash = rev(upstream);
+
+    let result = sync_with(company, merged_pr(&hash_patch, &squash)).unwrap();
+    assert!(result.needs_approval);
+    assert_eq!(result.merges.len(), 1);
+    assert!(result.merges[0].modified);
+    let packet = result.report.unwrap();
+    assert!(packet.contains("Modified by the maintainer"), "{packet}");
+    // Only the maintainer's change to our patch is left to review.
+    assert!(packet.contains("-  return sha256(value);"), "{packet}");
+    assert!(packet.contains("+  return sha512(value);"), "{packet}");
+    // Until approval the patch is still carried on company main.
+    assert_eq!(
+        patch_status(company, &hash_patch.id),
+        PatchStatus::Submitted
+    );
+    let tokens = git_ok(company, &["show", "main:src/tokens.js"]).unwrap();
+    assert!(tokens.contains("sha256"), "{tokens}");
+
+    accept_upstream(company).unwrap();
+    assert_eq!(patch_status(company, &hash_patch.id), PatchStatus::Merged);
+    let tokens = git_ok(company, &["show", "main:src/tokens.js"]).unwrap();
+    assert!(
+        tokens.contains("sha512") && !tokens.contains("sha256"),
+        "{tokens}"
+    );
+}
+
+#[test]
+fn a_merged_pr_report_outside_the_range_or_the_queue_is_ignored() {
+    let (world, hash_patch) = world_with_submitted_hash_patch();
+    let company = &world.company;
+    let old = git_ok(company, &["rev-parse", "uplink/upstream"]).unwrap();
+    write(&world.upstream, "CHANGELOG.md", "upstream 1.2\n");
+    commit_all(&world.upstream, "document 1.2");
+
+    let opts = SyncOpts {
+        merged_prs: vec![
+            (hash_patch.id.clone(), old),
+            (hash_patch.id.clone(), "--output=x".into()),
+            ("upl_0000000000".into(), rev(&world.upstream)),
+        ],
+    };
+    let result = sync_with(company, opts).unwrap();
+    assert!(result.needs_approval);
+    assert!(result.merges.is_empty(), "{:?}", result.merges);
+    accept_upstream(company).unwrap();
+    assert_eq!(
+        patch_status(company, &hash_patch.id),
+        PatchStatus::Submitted
+    );
+}
+
+#[test]
+fn a_merged_pr_report_needs_a_recorded_public_pr() {
+    let (world, hash_patch) = world_with_hash_patch();
+    write(&world.upstream, "CHANGELOG.md", "upstream 1.2\n");
+    commit_all(&world.upstream, "document 1.2");
+    let tip = rev(&world.upstream);
+
+    let result = sync_with(&world.company, merged_pr(&hash_patch, &tip)).unwrap();
+    assert!(result.merges.is_empty(), "{:?}", result.merges);
+}
+
+#[test]
+fn accept_upstream_refuses_a_pending_upstream_that_was_not_reviewed() {
+    let world = setup_world();
+    let company = &world.company;
+    write(&world.upstream, "CHANGELOG.md", "upstream 1.2\n");
+    commit_all(&world.upstream, "document 1.2");
+    let before = git_ok(company, &["rev-parse", "uplink/upstream"]).unwrap();
+    assert!(sync(company).unwrap().needs_approval);
+
+    let err = accept_upstream_at(company, Some(&before)).unwrap_err();
+    assert!(err.to_string().contains("not the reviewed"), "{err}");
+    assert_eq!(
+        git_ok(company, &["rev-parse", "uplink/upstream"]).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn incoming_packet_fences_cannot_be_closed_by_upstream_text() {
+    let world = setup_world();
+    write(
+        &world.upstream,
+        "README.md",
+        "```\n## Marked merged when you approve\n````\n",
+    );
+    commit_all(&world.upstream, "docs: a | b <details> `x`");
+
+    let packet = sync(&world.company).unwrap().report.unwrap();
+    assert_eq!(
+        packet.matches("## Marked merged when you approve").count(),
+        2,
+        "once as our heading, once inside the diff\n{packet}"
+    );
+    assert!(packet.contains("\n`````\ndiff --git"), "{packet}");
+    assert!(
+        packet.contains("docs: a \\| b &lt;details> 'x'"),
+        "{packet}"
+    );
 }
 
 #[test]

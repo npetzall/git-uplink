@@ -524,6 +524,23 @@ pub struct PendingUpstream {
     pub flowed_back: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub foreign_commits: Vec<String>,
+    /// Patches marked merged when this upstream is accepted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merges: Vec<PendingMerge>,
+}
+
+/// A patch that sync found merged in the pending range, and the proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingMerge {
+    pub id: String,
+    /// The upstream commit that merged it.
+    pub sha: String,
+    pub via: MergeVia,
+    /// The public PR merged, but that commit does not contain the patch as
+    /// we hold it: the maintainer changed it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub modified: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
