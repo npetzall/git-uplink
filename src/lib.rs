@@ -4,6 +4,7 @@
 
 mod adopt;
 mod assess;
+pub mod cli;
 mod doctor;
 mod error;
 mod gate;
