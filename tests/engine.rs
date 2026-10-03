@@ -3621,6 +3621,53 @@ fn incoming_packet_fences_cannot_be_closed_by_upstream_text() {
 }
 
 #[test]
+fn add_refuses_a_change_merged_into_another_branch() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    // The helper lands the change on main, so pin the range before it does.
+    let from = rev_of(company, "main");
+    let opts = |base: &str| AddPatchOpts {
+        title: "Use SHA-256 for tokens".into(),
+        from_ref: Some(from.clone()),
+        base_branch: Some(base.into()),
+        ..Default::default()
+    };
+    let before = rev_of(company, STATE_BRANCH);
+
+    for base in ["release/1.x", "uplink/conflict/upl_0000000000"] {
+        let err = add_landed_patch(company, opts(base)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("was merged into {base}, not company main")),
+            "{err}"
+        );
+    }
+    assert_eq!(rev_of(company, STATE_BRANCH), before);
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert!(queue.upstream.is_empty(), "{:?}", queue.upstream);
+    let patches: Vec<_> = fs::read_dir(company.join(".uplink/patches"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(patches.len(), usize::from(queue.tooling.is_some()));
+
+    let patch = add_landed_patch(company, opts("main")).unwrap();
+    assert_eq!(patch.status, PatchStatus::Queued);
+}
+
+#[test]
 fn sync_detects_merged_patches_by_a_custom_trailer_key() {
     let world = setup_world();
     let company = &world.company;

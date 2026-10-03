@@ -12,6 +12,9 @@ pub struct AddPatchOpts {
     pub note: Option<String>,
     pub internal_pr_number: Option<u64>,
     pub internal_pr_url: Option<String>,
+    /// Branch the company PR merged into. Anything but the company branch
+    /// is refused.
+    pub base_branch: Option<String>,
     /// Company assessment-hook extras to store with the patch.
     pub extra_dir: Option<PathBuf>,
     /// Where the extras came from, such as the hook run URL.
@@ -25,6 +28,17 @@ pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
         ));
     }
     let queued = read_queue_file(repo)?;
+    // Only the forge knows where a PR merged: by the time import runs, a
+    // rebuild may have rewritten the company branch, so git cannot tell.
+    let company_branch = &queued.config.internal_branch;
+    if let Some(base) = opts.base_branch.as_deref()
+        && base != company_branch
+    {
+        return Err(Error::msg(format!(
+            "\"{}\" was merged into {base}, not company {company_branch}; only changes merged into {company_branch} are imported.",
+            opts.title
+        )));
+    }
     let head_ref = opts.head_ref.as_deref().unwrap_or("HEAD");
     let from_ref = opts
         .from_ref

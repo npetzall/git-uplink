@@ -329,6 +329,13 @@ pub enum Commands {
         /// URL of the company PR that merged the change.
         #[arg(long, value_name = "url")]
         pr_url: Option<String>,
+        /// Branch the company PR merged into.
+        ///
+        /// Refused unless it is the company branch: a change merged into
+        /// any other branch has not passed the company branch's review.
+        /// Import passes the PR's base branch.
+        #[arg(long = "base-branch", value_name = "branch")]
+        base_branch: Option<String>,
         /// Patch this one depends on, on top of the message trailers (repeatable).
         #[arg(long = "depends-on", value_name = "id")]
         depends_on: Vec<String>,
