@@ -239,15 +239,6 @@ On a conflict it prints `gh.prCreate` JSON for the gated conflict PR and exits 0
 
 Promote a pending public main after from-upstream environment approval.
 
-### `gated`
-
-Record the company PR that gates a conflict.
-
-- `<id>`: Patch the PR gates.
-- `--pr-url <url>`: URL of the company pull request.
-- `--pr <n>`: Pull request number, read from the URL when omitted.
-- `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
-
 ### `merged`
 
 Record that upstream merged a patch.
@@ -308,6 +299,15 @@ Replay main from the queue.
 - `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
 - `--push`: Push uplink/state and the rebuilt branch after rebuild.
 - `--push-remote <remote>`: Remote for --push, origin by default.
+
+### `gated`
+
+Record the company PR that gates a conflict.
+
+- `<id>`: Patch the PR gates.
+- `--pr-url <url>`: URL of the company pull request.
+- `--pr <n>`: Pull request number, read from the URL when omitted.
+- `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
 
 ### `resolve`
 
