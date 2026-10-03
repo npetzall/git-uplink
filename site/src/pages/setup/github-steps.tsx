@@ -44,9 +44,6 @@ const LABELS = [
 const VARIABLES = [
   ["UPLINK_SRC", "npetzall/git-uplink", "Repository that publishes git-uplink releases"],
   ["UPLINK_VERSION", "{{uplinkVersion}}", "Release to install: latest, or a tag"],
-  ["UPLINK_PREFLIGHT", "npm test", "Build and test command run on the export tree"],
-  ["UPLINK_REDACT_KEYWORDS", "<company>,<product alias>", "Words that must not appear in a contribution"],
-  ["UPLINK_INTERNAL_DOMAINS", "<company.example>", "Email domains flagged in the export"],
   ["UPLINK_INTERNAL_AUTH", "app", "app or pat"],
   ["UPLINK_UPSTREAM_AUTH", "app", "app or pat"],
   ["UPLINK_CONTRIB_AUTH", "app", "app or pat. Only app gives Verified contribution commits"],
@@ -735,11 +732,26 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
         <code>init</code>.
       </p>
       <p>
+        <code>init</code> asks three questions and writes the answers to <code>uplink.toml</code> on{" "}
+        <code>uplink/hooks</code>: the preflight command run on the export tree (for example{" "}
+        <code>npm ci &amp;&amp; npm test</code>), the words that must not appear in a contribution (company and
+        product names), and your internal email domains. In a script, pass{" "}
+        <code>--preflight</code>, <code>--redact-keyword</code>, and <code>--internal-domain</code> instead. These
+        are not repository variables: the CLI reads the file from the branch, on your machine and in CI alike. To
+        change them later, edit <code>uplink.toml</code> on <code>uplink/hooks</code>.
+      </p>
+      <p>
         <code>init</code> also creates the orphan branch <code>uplink/hooks</code> locally: the assessment hook guide and
         starter, and the toolchain hook that sets up the runner before preflight. Edit{" "}
         <code>.github/actions/uplink-toolchain-hook/action.yml</code> there to install what{" "}
-        <code>UPLINK_PREFLIGHT</code> needs (see <code>toolchain-hook.md</code> on that branch).{" "}
+        the <code>preflight</code> command needs (see <code>toolchain-hook.md</code> on that branch).{" "}
         <code>git uplink doctor</code> reports if it is not pushed.
+      </p>
+      <p>
+        Coming from an older setup that used the variables <code>UPLINK_PREFLIGHT</code>,{" "}
+        <code>UPLINK_REDACT_KEYWORDS</code>, and <code>UPLINK_INTERNAL_DOMAINS</code>? Run{" "}
+        <code>git uplink init --upgrade</code>, answer with their values, run <code>git uplink push</code>, then
+        delete the three variables.
       </p>
       <details className="rounded-lg border border-border px-4 py-2">
         <summary className="cursor-pointer text-sm text-foreground">

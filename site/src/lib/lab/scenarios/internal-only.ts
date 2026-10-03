@@ -23,7 +23,7 @@ export const internalOnly: LabScenario = {
       id: "assess-fail",
       title: "Assess fails without the label",
       summary:
-        "Open a PR for vendor telemetry without uplink:internal-only. Uplink upstream assess fails: the export surface contains companyTelemetry (in UPLINK_REDACT_KEYWORDS). Close this PR.",
+        "Open a PR for vendor telemetry without uplink:internal-only. Uplink upstream assess fails: the export surface contains companyTelemetry (in redact_keywords, uplink.toml). Close this PR.",
       why: "Affiliation scan is the guard. Internal-only is an explicit label, not a silent default.",
       operations: [
         branchPush("feat/telemetry-public", "internal-telemetry.diff", "Vendor telemetry"),
@@ -40,7 +40,7 @@ export const internalOnly: LabScenario = {
         stepId: "assess-fail",
         log: [
           ...state.log,
-          "Assess failed: companyTelemetry is in UPLINK_REDACT_KEYWORDS. PR not merged.",
+          "Assess failed: companyTelemetry is in redact_keywords (uplink.toml). PR not merged.",
         ],
       }),
     },

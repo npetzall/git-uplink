@@ -25,9 +25,6 @@ const LABELS = [
 ];
 
 const VARIABLES = [
-  ["UPLINK_PREFLIGHT", "npm test", "Build and test command run on the export tree"],
-  ["UPLINK_REDACT_KEYWORDS", "companyTelemetry,AcmeCorp", "Words that must not appear in a contribution"],
-  ["UPLINK_INTERNAL_DOMAINS", "acme.example", "Email domains flagged in the export"],
   ["UPLINK_SRC", "npetzall/git-uplink", "Repository that publishes git-uplink releases"],
   ["UPLINK_VERSION", "{{uplinkVersion}}", "Release to install"],
   ["UPLINK_INTERNAL_AUTH", "pat", "Token model for the internal role"],
@@ -488,14 +485,17 @@ git remote add upstream ${repoUrl(UPSTREAM)}
 git remote add contrib ${repoUrl(CONTRIB)}
 git fetch upstream
 git checkout -B main upstream/main
-git uplink init --upstream ${repoUrl(UPSTREAM)} --contrib ${repoUrl(CONTRIB)} --forge try-it-on-github
+git uplink init --upstream ${repoUrl(UPSTREAM)} --contrib ${repoUrl(CONTRIB)} --forge try-it-on-github \\
+  --preflight 'npm test' --redact-keyword companyTelemetry,AcmeCorp --internal-domain acme.example
 git uplink status
 git push -u origin main
 git push origin uplink/state uplink/upstream uplink/hooks
 git branch seed main && git branch seed-state uplink/state && git branch seed-upstream uplink/upstream
 git push origin seed seed-state seed-upstream`}</Command>
       <p>
-        <code>git uplink status</code> shows <strong>Uplink tooling</strong> in the tooling slot.
+        <code>git uplink status</code> shows <strong>Uplink tooling</strong> in the tooling slot. The three{" "}
+        <code>init</code> flags are the stories&apos; settings; <code>init</code> writes them to{" "}
+        <code>uplink.toml</code> on <code>uplink/hooks</code>.
       </p>
       <ResetBranch script="internal" />
     </>
