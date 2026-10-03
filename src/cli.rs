@@ -121,11 +121,11 @@ pub const GROUPS: &[(&str, &[&str])] = &[
         &["preflight", "assess", "report", "status", "doctor"],
     ),
     ("Contributing upstream", &["approve", "submit", "submitted"]),
+    ("Ingesting upstream", &["sync", "accept-upstream", "merged"]),
     (
-        "Ingesting upstream",
-        &["sync", "accept-upstream", "gated", "merged"],
+        "Edit",
+        &["transfer", "amend", "drop", "rebuild", "gated", "resolve"],
     ),
-    ("Edit", &["transfer", "amend", "drop", "rebuild", "resolve"]),
     ("Tools", &["web-ui", "man", "version"]),
 ];
 
