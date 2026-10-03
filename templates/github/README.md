@@ -11,9 +11,9 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 - **Runs on:** pull requests to `main` (opened, synchronize, reopened, edited). Skipped for `uplink:internal-only`.
 - **Does:** two parallel jobs, both required checks.
   - **Uplink upstream assess:** turns the PR title and body into the commit message, strips everything below the cutoff, turns `Uplink-Export-Author` into a `Co-Authored-By` trailer, and scans for company keywords and internal email domains. It also runs the optional assessment hook (below) with `pr`. Both results go into one PR comment that is updated in place on every run, and into artifact `uplink-assessment` for import. A failed hook is noted in the comment; it does not fail the check.
-  - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs `UPLINK_PREFLIGHT`. A failure is commented on the PR; later runs update that comment.
+  - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs the `preflight` command from `uplink.toml`. A failure is commented on the PR; later runs update that comment.
 - **Requires:**
-  - variables `UPLINK_REDACT_KEYWORDS`, `UPLINK_INTERNAL_DOMAINS`, `UPLINK_PREFLIGHT`;
+  - `uplink.toml` on `uplink/hooks` (`preflight`, `redact_keywords`, `internal_email_domains`; see [Settings](#settings));
   - the Actions token (contents read, pull requests write, actions write to run the hook);
   - label `uplink:internal-only`.
 
@@ -80,7 +80,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 - **Requires:**
   - the internal App or PAT (contents, workflows, and pull requests write), which opens the transfer PR;
   - the upstream App or PAT for fetch;
-  - variable `UPLINK_PREFLIGHT`;
+  - `preflight` in `uplink.toml` on `uplink/hooks`;
   - the Actions token (actions write);
   - labels `uplink:transfer-to-upstream` and `uplink:transfer-to-internal`;
   - concurrency group `uplink-mutate`.
@@ -96,7 +96,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 - **Requires:**
   - the internal App or PAT (contents, workflows, and pull requests write), which opens the amend PR;
   - the upstream App or PAT for fetch;
-  - variable `UPLINK_PREFLIGHT`;
+  - `preflight` in `uplink.toml` on `uplink/hooks`;
   - the Actions token (actions write to dispatch submit);
   - label `uplink:amend`;
   - concurrency group `uplink-mutate`.
@@ -113,11 +113,19 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 ## `uplink-gate.yml` — Uplink gate
 
 - **Runs on:** pull requests into `uplink/conflict/**`, `uplink/transfer-to-upstream/**`, `uplink/transfer-to-internal/**`, and `uplink/amend/**` (`pull_request_target`), including title and description edits.
-- **Does:** job **Uplink gate** fails if conflict markers remain or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`). For conflict PRs it also runs the upstream assessment on the resolution with the patch's stored message, so a resolution that would leak company text cannot merge. For transfer-to-upstream PRs it runs export preflight. For amend PRs it assesses the whole amended patch with the PR title and description as its message. Conflict and amend PRs for internal-only patches skip the assessment and run only `UPLINK_PREFLIGHT`, as transfer-to-internal PRs do.
+- **Does:** job **Uplink gate** fails if conflict markers remain or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`). For conflict PRs it also runs the upstream assessment on the resolution with the patch's stored message, so a resolution that would leak company text cannot merge. For transfer-to-upstream PRs it runs export preflight. For amend PRs it assesses the whole amended patch with the PR title and description as its message. Conflict and amend PRs for internal-only patches skip the assessment and run only the preflight command (`git uplink preflight --command-only`), as transfer-to-internal PRs do.
 - **Requires:**
-  - variable `UPLINK_PREFLIGHT`;
+  - `preflight` in `uplink.toml` on `uplink/hooks`;
   - the Actions token (contents read);
   - make **Uplink gate** a required check on the gated bases. Before this job had a name its check was called `validate`; update existing rulesets or branch protection to the new name.
+
+## Settings
+
+- **`uplink.toml` on `uplink/hooks`** holds what the CLI needs and the workflows do not: `preflight` (the command run on the export tree), `redact_keywords` (words that must not appear in a contribution), and `internal_email_domains`. They are not repository variables, so `git uplink assess` and `git uplink preflight` give the same result on a developer's machine and in CI.
+- **Written by `git uplink init`,** which asks for each setting in a terminal, or takes `--preflight`, `--redact-keyword`, and `--internal-domain`. `init --upgrade` adds the file, or settings a newer binary introduces, and never changes a value that is there. Change values by editing the file on `uplink/hooks`.
+- **Read from** the local `uplink/hooks`, else `origin/uplink/hooks`. Every job runs `git uplink init`, which fetches the branch. Gated jobs read the branch, never the pull request, so a PR cannot change the command they run.
+- **Missing or broken file:** upstream-bound assess and preflight fail rather than scan for nothing. `git uplink doctor` reports it.
+- **Protect it:** the file decides what CI runs and what counts as a leak. Import [`uplink-hooks-ruleset.json`](.github/uplink-hooks-ruleset.json) so changes need a reviewed pull request.
 
 ## Assessment hook
 
@@ -135,7 +143,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 ## Toolchain hook
 
-- **Company-owned.** A composite action at `.github/actions/uplink-toolchain-hook/action.yml` on `uplink/hooks` that installs what `UPLINK_PREFLIGHT` needs (runtimes, package managers, system packages). `init` creates a stub that only prints `toolchain-hook.md` to the job summary.
+- **Company-owned.** A composite action at `.github/actions/uplink-toolchain-hook/action.yml` on `uplink/hooks` that installs what the `preflight` command in `uplink.toml` needs (runtimes, package managers, system packages). `init` creates a stub that only prints `toolchain-hook.md` to the job summary.
 - **Runs in:** every job that runs preflight, right before its Uplink step: PR checks (**Uplink upstream preflight**), gate, import, submit, amend, and transfer (start and complete). The pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `uplink/hooks` into `.uplink-hooks/` and runs the hook from there.
 - **Missing hook:** the job shows a notice and continues. **A failed hook fails the job**, since preflight without its toolchain would fail anyway.
 - **Requires:** keep it to installing pinned tools; import, submit, amend, and transfer hold write tokens and Environment secrets. Do not build or run product code in it.
