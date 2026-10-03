@@ -137,7 +137,7 @@ export function syncFlowBack(): LabOperation[] {
     ciJob(
       "Uplink sync",
       ["git uplink init", "git uplink sync"],
-      "Inspect applies immediately when every new public commit matches a company patch (trailer / patch-id). No from-upstream wait.",
+      "Inspect applies immediately when merged company patches explain every new public change: a commit with the patch's patch-id, or its merged public PR. The trailer alone is not enough. No from-upstream wait.",
     ),
   ];
 }

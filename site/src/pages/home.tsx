@@ -95,8 +95,9 @@ export function HomePage() {
           After IP export and an ordinary upstream merge, the change is public. Sync flows it back,
           marks the patch merged, so it's skipped during rebuild of
           <code className="rounded bg-muted px-1 py-0.5 text-foreground">internal main</code>.
-          (trailer / <code className="rounded bg-muted px-1 py-0.5 text-foreground">patch-id</code>
-          is the identification of a merged company contribution). Foreign public commits wait on the{" "}
+          (A merged company contribution is identified by a matching{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">patch-id</code> or its merged
+          public PR; the trailer alone is not enough.) Other public changes wait on the{" "}
           <code className="rounded bg-muted px-1 py-0.5 text-foreground">sync workflow</code>{" "}
           approval - we do{" "}
           <code className="rounded bg-muted px-1 py-0.5 text-foreground">NOT</code>{" "}silently take unrelated upstream changes into{" "}
