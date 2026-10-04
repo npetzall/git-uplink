@@ -376,6 +376,16 @@ mod embed_tests {
         assert!(text.contains("name: Uplink upstream preflight"), "{text}");
         assert!(text.contains("git uplink assess"), "{text}");
         assert!(text.contains("git uplink preflight"), "{text}");
+        // Removing uplink:internal-only must run the checks it skipped, and
+        // no job may be skipped for an unrelated label: skipped is a pass.
+        assert!(
+            text.contains("types: [opened, synchronize, reopened, edited, labeled, unlabeled]"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("github.event.action") && !text.contains("github.event.label"),
+            "{text}"
+        );
         assert!(
             paths.contains(&".github/pull_request_template.md"),
             "{paths:?}"

@@ -122,7 +122,7 @@ git switch -c fix/token-hash origin/main`}</Code>
         <p>
           Add the <code>uplink:internal-only</code> label to the pull request. Assess and preflight are skipped, the
           change is applied after all upstream-bound changes, and it is never exported. Keep these rare: the goal is
-          that almost everything goes upstream.
+          that almost everything goes upstream. Removing the label runs both checks again.
         </p>
         <Lab scenario="internal-only">Internal-only</Lab>
       </Section>
