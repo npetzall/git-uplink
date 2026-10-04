@@ -126,6 +126,7 @@ pub(super) fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
     require_stored_urls(&queue.config)?;
     ensure_configured_remotes(repo, &queue.config)?;
     refresh_upstream_ref(repo, COMPANY_REMOTE)?;
+    require_origin_upstream(repo)?;
     ensure_company_branch_ref(repo, COMPANY_REMOTE, &queue.config.internal_branch)?;
     if let Some(forge) = queue.config.forge {
         ensure_hooks_branch(
@@ -269,6 +270,22 @@ pub(super) fn append_init_health_checks(
     }
 }
 
+/// A queue that lives on origin comes with origin's `uplink/upstream`: the
+/// base every export and preflight builds on, moved only by an accepted
+/// sync. Without it, seeding from public upstream would put work on a base
+/// nobody accepted, so init stops instead.
+fn require_origin_upstream(repo: &Path) -> Result<()> {
+    if has_ref(repo, UPSTREAM_REF)? || !has_ref(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?
+    {
+        return Ok(());
+    }
+    Err(Error::msg(format!(
+        "{COMPANY_REMOTE} has {STATE_BRANCH} but no {UPSTREAM_REF}. That branch is the accepted \
+public base; it is not seeded from public upstream again. Push it back from a clone that has \
+it (git push {COMPANY_REMOTE} {UPSTREAM_REF}), or redo the init setup."
+    )))
+}
+
 pub(super) fn init_needs_upstream_seed(repo: &Path) -> Result<bool> {
     Ok(!has_ref(repo, UPSTREAM_REF)?)
 }
@@ -298,6 +315,7 @@ pub(super) fn resume_incomplete_init(
     }
 
     if needs_upstream {
+        require_origin_upstream(repo)?;
         progress.run_step("resume-upstream-seed", "Seed uplink/upstream", || {
             let queue = read_queue_file(repo)?;
             if queue

@@ -18,14 +18,14 @@ git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <na
             [--redact-keyword <word>]... [--internal-domain <domain>]...
 git uplink add --title <text> [--message <text> | --message-file <path>] [--from <ref>]
             [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
-            [--base-branch <branch>] [--depends-on <id>]... [--extra-dir <path>]
-            [--extra-source <url>]
+            [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
+            [--extra-dir <path>] [--extra-source <url>]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
 git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>] [--depends-on <id>]...
-            [--internal-only] [--command-only] [--hooks <rev>]
+            [--internal-only] [--command-only] [--hooks <rev>] [--json]
 git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>] [--internal-only | --patch <id>]
 git uplink report <id> [--out <path>] [--extra-dir <path>] [--store-extras]
@@ -33,7 +33,7 @@ git uplink report <id> [--out <path>] [--extra-dir <path>] [--store-extras]
 git uplink status [--json]
 git uplink doctor [--json]
 git uplink approve <id> [--out <path>] [--reviewed <token>]
-git uplink submit <id> [--push]
+git uplink submit <id> [--push] [--preflight-result <path>]
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink sync [--merged-pr <id=sha>]...
 git uplink accept-upstream [--sha <sha>]
@@ -43,8 +43,10 @@ git uplink drop <id> [--reason <text>]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
 git uplink resolve <id>
 git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
+            [--preflight-result <path>] [--preflight-only]
 git uplink amend <id> [--complete] [--title <text>]
-            [--message <text> | --message-file <path>]
+            [--message <text> | --message-file <path>] [--preflight-result <path>]
+            [--preflight-only]
 git uplink web-ui [--port <port>] [--no-open]
 git uplink man <dir>
 git uplink version
@@ -106,6 +108,9 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 
   Refused unless it is the company branch: a change merged into any other branch has not passed the company branch's review. Import passes the PR's base branch.
 - `--depends-on <id>`: Patch this one depends on, on top of the message trailers (repeatable).
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
 - `--extra-dir <path>`: Directory of company assessment-hook \*.md extras to store with the patch.
 
   Stored for an upstream-bound patch under `.uplink/reports/<id>/extras/`. Import passes the result from the PR checks when it matches what was merged.
@@ -151,6 +156,7 @@ With `<id>` it checks a queued patch; without, the incoming change between `--fr
 - `--internal-only`: The incoming change is internal-only; export preflight is skipped.
 - `--command-only`: Only run preflight.sh in the current tree.
 - `--hooks <rev>`: Read preflight.sh from this revision instead of uplink/hooks, to try a change to it.
+- `--json`: Print the result as JSON, for `--preflight-result` of the command that records it.
 
 ### `assess`
 
@@ -220,6 +226,9 @@ Exports the patch for the contrib fork (git only) and prints JSON for `POST /rep
 
 - `<id>`: Approved patch to submit.
 - `--push`: Force-push the local, unsigned export commit to contrib instead.
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
 
 ### `submitted`
 
@@ -281,6 +290,12 @@ When apply, assess (`--to-upstream`), or preflight fails it prints gated branche
 - `--to-upstream`: Move the patch to the upstream queue.
 - `--to-internal`: Move the patch to the internal queue.
 - `--complete`: Finish a gated transfer after the work PR is merged.
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of `git uplink preflight --json`, or of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the result is not a pass. With `--complete` the checkout is left on the squashed work, so use a clone made for it.
 
 ### `amend`
 
@@ -297,6 +312,12 @@ Without `--complete` it replays the queue on `uplink/upstream` up to and includi
 - `--title <text>`: New patch title.
 - `--message <text>`: New commit message, as the PR title and body.
 - `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of `git uplink preflight --json`, or of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the result is not a pass. The checkout is left on the squashed work, so use a clone made for it.
 
 ### `drop`
 
@@ -391,7 +412,11 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
 
 - Other files on the branch are checked out beside the script for the run; reach them with `"$(dirname "$0")"`.
 
-- Credentials (`GITHUB_TOKEN`, `GH_TOKEN`, `UPLINK_*_TOKEN`, `UPLINK_*_KEY`) are removed from its environment.
+- Environment: the caller's, without `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `UPLINK_*_TOKEN` and `UPLINK_*_KEY`.
+
+- Credentials: the script builds and runs product code, so it must not run where credentials are. An emptied environment does not hide them from a process on the same runner. In CI (`CI` or `GITHUB_ACTIONS` set) with a forge recorded, a command that holds a credential refuses to run the script. Run `git uplink preflight --json` (or `transfer` / `amend --complete` with `--preflight-only`) in a job without credentials, and give the output to `add`, `submit`, `transfer` or `amend --complete` with `--preflight-result <file>`. The result carries a token for the tree and the hooks it was tested with; a command accepts it only for the same tree.
+
+- Known limitations: the job that runs the script still holds a read-only token and a clone of the company repository, so code the script runs can read company source. The verdict is the script's exit code, which code it runs could force to 0. Preflight checks that a change builds and passes its tests; it is not a defence against hostile code in the tree.
 
 - Created by `init`, with the answer to its preflight question (or `--preflight <cmd>`) as the script's command. `init --upgrade` adds the script when the branch lacks it, offering the command an older `queue.json` held. An existing script is never rewritten; edit it on `uplink/hooks`.
 

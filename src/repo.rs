@@ -495,9 +495,29 @@ pub fn ensure_upstream_ref(repo: &Path) -> Result<()> {
 /// Fetch `uplink/upstream` from the company remote and update the local branch.
 /// Does not talk to the public `upstream` remote (`fetch_upstream` is sync).
 pub fn refresh_upstream_ref(repo: &Path, remote: &str) -> Result<()> {
-    let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/remotes/{remote}/{UPSTREAM_REF}");
-    if !git_succeeds(repo, &["fetch", "--quiet", "--prune", remote, &spec])? {
+    if !has_remote(repo, remote) {
         return Ok(());
+    }
+    let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/remotes/{remote}/{UPSTREAM_REF}");
+    let args = ["fetch", "--quiet", "--prune", remote, spec.as_str()];
+    // C locale so the "couldn't find remote ref" message is not translated.
+    let fetched = git(
+        repo,
+        &args,
+        GitOpts {
+            allow_fail: true,
+            extra_env: vec![("LC_ALL".into(), "C".into())],
+            ..GitOpts::default()
+        },
+    )?;
+    if fetched.code != 0 {
+        // A remote without the branch is fine. Any other failure is not:
+        // init would go on to seed uplink/upstream from public upstream,
+        // and preflight would build on a base nobody accepted.
+        if fetched.stderr.contains("couldn't find remote ref") {
+            return Ok(());
+        }
+        return Err(Error::Git(crate::git::GitError::new(&args, fetched)));
     }
     let sha = git_ok(repo, &["rev-parse", &format!("{remote}/{UPSTREAM_REF}")])?;
     git(

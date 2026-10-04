@@ -34,6 +34,8 @@ pub struct PreflightError {
     pub suggested_depends_on: Vec<String>,
     pub stage: &'static str,
     pub output: Option<String>,
+    /// Names the tree and script the failure is for, when a tree was built.
+    pub token: Option<String>,
 }
 
 impl PreflightError {
@@ -48,7 +50,13 @@ impl PreflightError {
             suggested_depends_on,
             stage,
             output,
+            token: None,
         }
+    }
+
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
     }
 }
 

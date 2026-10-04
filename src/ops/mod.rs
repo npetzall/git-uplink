@@ -27,7 +27,8 @@ use crate::inspect::{
 };
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
 use crate::preflight::{
-    apply_abs, assert_export_preflight, assert_upstream_layer_applies, run_preflight_command_in,
+    PreflightReport, STAGE_STALE, ScriptVerdict, apply_abs, assert_upstream_layer_applies,
+    command_preflight, export_preflight,
 };
 use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
@@ -78,6 +79,53 @@ pub use transfer::*;
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
     read_queue_file(repo)
+}
+
+/// What a gated command does once it has built the tree it tests.
+pub(super) enum Checks<'a> {
+    /// Check it, taking the verdict of `preflight.sh` from here, and record.
+    Record(&'a ScriptVerdict),
+    /// Run `preflight.sh` on it and report; record nothing.
+    Probe,
+}
+
+impl Checks<'_> {
+    fn is_probe(&self) -> bool {
+        matches!(self, Self::Probe)
+    }
+
+    fn verdict(&self) -> &ScriptVerdict {
+        static RUN: ScriptVerdict = ScriptVerdict::Run;
+        match self {
+            Self::Record(verdict) => verdict,
+            Self::Probe => &RUN,
+        }
+    }
+}
+
+/// How a command given [`Checks`] ended.
+pub(super) enum Checked<T> {
+    Recorded(T),
+    Probed(PreflightReport),
+}
+
+impl<T> Checked<T> {
+    /// The result of a command that was asked to record.
+    fn recorded(self) -> T {
+        match self {
+            Self::Recorded(result) => result,
+            Self::Probed(_) => unreachable!("only a probe returns a report"),
+        }
+    }
+
+    /// The report of a probe. An error on the way is a report too.
+    fn report(result: Result<Self>) -> PreflightReport {
+        match result {
+            Ok(Self::Probed(report)) => report,
+            Ok(Self::Recorded(_)) => unreachable!("a probe records nothing"),
+            Err(err) => PreflightReport::of(Err(err)),
+        }
+    }
 }
 
 pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
