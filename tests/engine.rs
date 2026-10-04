@@ -3805,6 +3805,37 @@ fn a_public_pr_is_recorded_only_after_approval() {
 }
 
 #[test]
+fn status_lists_patches_whose_approval_no_longer_covers_them() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let stale = |repo: &Path| status_snapshot(repo).unwrap().stale_approvals;
+
+    // Not approved yet: nothing to be stale.
+    assert!(stale(company).is_empty());
+    approve_patch(company, &hash_patch.id).unwrap();
+    assert!(stale(company).is_empty());
+
+    retitle(company, &hash_patch.id, "Use SHA-256 everywhere");
+    assert_eq!(stale(company), std::slice::from_ref(&hash_patch.id));
+    let snapshot = status_snapshot(company).unwrap();
+    let report = serde_json::to_value(git_uplink::status_report(&snapshot)).unwrap();
+    assert_eq!(report["staleApprovals"][0], hash_patch.id.as_str());
+    let table = git_uplink::format_status_table(&snapshot);
+    assert!(
+        table.contains(&format!(
+            "needs approval before submit (content changed since the last approval): {}",
+            hash_patch.id
+        )),
+        "{table}"
+    );
+
+    approve_patch(company, &hash_patch.id).unwrap();
+    assert!(stale(company).is_empty());
+    let table = git_uplink::format_status_table(&status_snapshot(company).unwrap());
+    assert!(!table.contains("needs approval before submit"), "{table}");
+}
+
+#[test]
 fn review_token_ignores_the_rest_of_the_queue() {
     let (world, hash_patch) = world_with_hash_patch();
     let company = &world.company;
