@@ -86,6 +86,16 @@ pub fn parse_depends_on(message: &str) -> Vec<String> {
     ids
 }
 
+/// `public_text` without its `Uplink-Depends-On:` lines. They name internal
+/// patch ids, so they stay on company `main` and are never exported.
+fn strip_depends_on(public_text: &str) -> String {
+    let stripped = DEPENDS_ON_HEADER.replace_all(public_text, "");
+    BLANK_LINES
+        .replace_all(&stripped, "\n\n")
+        .trim()
+        .to_string()
+}
+
 fn union_depends_on(from_message: Vec<String>, extra: &[String]) -> Vec<String> {
     let mut ids = from_message;
     for id in extra {
@@ -939,6 +949,7 @@ pub fn assess_from_message(
         stored = fallback.to_string();
     }
     let (public_text, internal_text) = split_internal_message(&stored, &marker);
+    let public_text = strip_depends_on(&public_text);
     let (subject, body) = subject_and_body(&public_text, fallback);
     let co_author = resolve_co_author(&internal_text);
     let (original_author, original_email) = head_author(repo, head_ref)?;

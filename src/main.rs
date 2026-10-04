@@ -157,7 +157,7 @@ fn preflight_comment(error: &PreflightError) -> String {
         "Uplink export preflight failed ({}). This change is not ready to import or to open an upstream PR.\n\n\
 Company `main` already includes other queued patches. Branching from it is not enough — record the patches this source actually needs, then retry.\n\n\
 ```\n{}\n```\n\n\
-Add to the PR body (one per line) and import again:\n\n\
+Add to the PR body below the cutoff (one per line) and import again:\n\n\
 ```\n{lines}\n```\n",
         error.stage, error
     )

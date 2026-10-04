@@ -97,7 +97,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - `--title <text>`: Queue entry name.
 - `--message <text>`: The single commit message stored on the patch (PR title, blank line, PR body).
 
-  HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `Uplink-Depends-On: upl_...` lines in the message become `dependsOn`.
+  HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `Uplink-Depends-On: upl_...` lines in the message become `dependsOn` and are left out of the public message.
 - `--message-file <path>`: Read the commit message from a file (- reads stdin).
 - `--from <ref>`: Base revision, the company branch by default (fetched from origin if missing).
 - `--head <ref>`: Head revision, HEAD by default (fetched from origin if missing).
