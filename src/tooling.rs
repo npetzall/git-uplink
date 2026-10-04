@@ -981,6 +981,30 @@ mod embed_tests {
                 gate.contains("uplink-.*\\.yml"),
                 "{forge:?} gate must refuse pack-file diffs\n{gate}"
             );
+            // The gate and the ruleset refuse the same paths.
+            for path in ["\\.github/uplink/", "'^\\.uplink/'"] {
+                assert!(
+                    gate.contains(path),
+                    "{forge:?} gate must refuse {path}\n{gate}"
+                );
+            }
+            let ruleset = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-pack-files-ruleset.json"))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap();
+            for path in [
+                ".github/workflows/uplink-*.yml",
+                ".github/actions/install-git-uplink/**",
+                ".github/actions/uplink-*/**",
+                ".github/uplink/**",
+                ".uplink/**",
+            ] {
+                assert!(
+                    ruleset.contains(&format!("\"{path}\"")),
+                    "{forge:?} ruleset must restrict {path}\n{ruleset}"
+                );
+            }
             assert!(
                 gate.contains("contents: read"),
                 "{forge:?} gate must be contents: read\n{gate}"

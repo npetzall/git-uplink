@@ -142,7 +142,7 @@ const PACK_RULESET = `{
     "exclude": [] } },
   "rules": [
     { "type": "file_path_restriction", "parameters": {
-        "restricted_file_paths": [".github/workflows/uplink-*.yml", ".github/actions/install-git-uplink/**", ".github/uplink/**"] } }
+        "restricted_file_paths": [".github/workflows/uplink-*.yml", ".github/actions/install-git-uplink/**", ".github/actions/uplink-*/**", ".github/uplink/**", ".uplink/**"] } }
   ]
 }`;
 
@@ -680,8 +680,8 @@ function RulesetList() {
       <li>
         <strong>Uplink: pack files</strong> (same refs, including <code>*-work</code>): nobody but the bots may change{" "}
         <code>.github/workflows/uplink-*.yml</code>, <code>.github/actions/install-git-uplink/**</code>,{" "}
-        <code>.github/actions/uplink-*/**</code>, or{" "}
-        <code>.github/uplink/**</code> on a gated
+        <code>.github/actions/uplink-*/**</code>,{" "}
+        <code>.github/uplink/**</code>, or <code>.uplink/**</code> on a gated
         branch. Product workflows stay editable. Bypass: the internal App. Sample:{" "}
         <a href={`${GITHUB_BLOB}/templates/github/.github/uplink-pack-files-ruleset.json`}>uplink-pack-files-ruleset.json</a>.
       </li>
