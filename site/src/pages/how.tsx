@@ -183,7 +183,8 @@ export function HowPage() {
         <p>
           Three credentials, each able to do one thing: push company <code>main</code>, read upstream and open the
           public pull request, and push the contribution fork. The fork-write credential exists only inside jobs
-          that passed the IP gate. Uplink never uses a developer&apos;s own keys, signing setup, or tokens.
+          that passed the IP gate. Uplink never uses a developer&apos;s own keys, signing setup, or tokens. The
+          preflight script, which builds and runs product code, runs only in jobs that hold a read-only token.
         </p>
       </Section>
 

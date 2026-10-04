@@ -687,7 +687,8 @@ function RulesetList() {
       </li>
       <li>
         <strong>Uplink: hooks branch</strong> (<code>uplink/hooks</code>): pull request with one approval, no deletion or
-        force-push. The assessment and toolchain hooks on this branch run on every PR check and submit. No bypass:
+        force-push. The assessment hook on this branch runs on every PR check and submit, and the toolchain hook and{" "}
+        <code>preflight.sh</code> before every import, submit, amend and transfer. No bypass:
         nothing in Actions writes this branch. Sample:{" "}
         <a href={`${GITHUB_BLOB}/templates/github/.github/uplink-hooks-ruleset.json`}>uplink-hooks-ruleset.json</a>.
       </li>
