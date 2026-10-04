@@ -1,32 +1,17 @@
-name: GitHub Pages
+name: Site
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - site/**
-      - docs/**
-      - templates/*/README.md
-      - examples/github/stories/**
-      - .github/workflows/site.yml
-      - .github/workflows/zizmor.yml
-      - .github/codeql/site.yml
-  pull_request:
-    paths:
-      - site/**
-      - docs/**
-      - templates/*/README.md
-      - examples/github/stories/**
-      - .github/workflows/site.yml
-      - .github/workflows/zizmor.yml
-      - .github/codeql/site.yml
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      pages:
+        description: Build for GitHub Pages and upload the Pages artifact
+        type: boolean
+        default: false
+    secrets:
+      SOCKET_SECURITY_API_KEY:
+        required: false
 
 permissions: {}
-
-concurrency:
-  group: site-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -103,38 +88,13 @@ jobs:
           job-summary: errors
       - run: sfw npm ci
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-        if: github.ref == 'refs/heads/main'
+        if: inputs.pages
         id: pages
       - name: Build
         run: sfw npm run build
         env:
-          PAGES_BASE: ${{ github.ref == 'refs/heads/main' && steps.pages.outputs.base_path || '' }}
+          PAGES_BASE: ${{ inputs.pages && steps.pages.outputs.base_path || '' }}
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        if: github.ref == 'refs/heads/main'
+        if: inputs.pages
         with:
           path: site/dist
-
-  merge-gate:
-    name: Merge gate
-    if: github.ref != 'refs/heads/main'
-    needs: [build, codeql, zizmor, socket]
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Ok to merge
-        run: |
-          echo "OK to merge"
-
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    needs: [build, codeql, zizmor, socket]
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
-        id: deployment

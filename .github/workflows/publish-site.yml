@@ -1,0 +1,52 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - docs/**
+      - templates/*/README.md
+      - examples/github/stories/**
+      - .github/workflows/site.yml
+      - .github/workflows/publish-site.yml
+      - .github/workflows/codeql.yml
+      - .github/workflows/socket.yml
+      - .github/workflows/zizmor.yml
+      - .github/codeql/site.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: site-publish
+  cancel-in-progress: false
+
+jobs:
+  site:
+    if: github.ref == 'refs/heads/main'
+    uses: $/.github/workflows/site.yml
+    with:
+      pages: true
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+      actions: read
+      issues: write
+      pull-requests: write
+
+  deploy:
+    needs: site
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        id: deployment
