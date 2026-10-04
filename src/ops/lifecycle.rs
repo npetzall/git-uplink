@@ -81,11 +81,7 @@ pub fn approve_patch_reviewed(
                 return Err(changed_since_review(id));
             }
             let patch = get_patch_mut(&mut queue, id)?;
-            if patch.assess.as_ref().is_some_and(|p| !p.ok) {
-                return Err(Error::msg(format!(
-                    "{id} is not ready for contribution. Fix the upstream assessment findings first."
-                )));
-            }
+            super::submit::ensure_assessed_ok(patch)?;
             let kind = match patch.status {
                 PatchStatus::Queued => "initial",
                 PatchStatus::Amended => "delta",

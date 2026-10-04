@@ -76,11 +76,7 @@ fn check_ready_to_submit(
             patch.status
         )));
     }
-    if patch.assess.as_ref().is_some_and(|p| !p.ok) {
-        return Err(Error::msg(format!(
-            "{id} is not ready for contribution. Fix the upstream assessment findings first."
-        )));
-    }
+    ensure_assessed_ok(patch)?;
     // The approval is for specific content, not for the patch id.
     let token = review_token(repo, patch)?;
     if !patch
@@ -179,6 +175,22 @@ fn push_to_contrib(repo: &Path, queue: &QueueState, branch: &str) -> Result<()> 
         GitOpts::default(),
     )?;
     Ok(())
+}
+
+/// Refuses an upstream-bound patch whose stored assessment failed, or that
+/// has none: without a report nothing was scanned.
+pub(super) fn ensure_assessed_ok(patch: &Patch) -> Result<()> {
+    let id = &patch.id;
+    match &patch.assess {
+        Some(report) if report.ok => Ok(()),
+        Some(_) => Err(Error::msg(format!(
+            "{id} is not ready for contribution. Fix the upstream assessment findings first."
+        ))),
+        None => Err(Error::msg(format!(
+            "{id} has no upstream assessment on record, so nothing was scanned. \
+Amend it (git uplink amend {id}) to assess it, then try again."
+        ))),
+    }
 }
 
 /// Refuses `action` (approve or submit) while an upstream-bound dependency is

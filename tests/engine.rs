@@ -9968,3 +9968,68 @@ fn init_refuses_to_seed_uplink_upstream_when_origin_has_the_queue_without_it() {
         accepted
     );
 }
+
+/// Removes the stored assess report of `id`, as an older or hand-edited
+/// queue would have it.
+fn drop_assess_report(company: &Path, id: &str) {
+    let path = company.join(".uplink/queue.json");
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let patch = raw["upstream"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|patch| patch["id"] == id)
+        .unwrap();
+    patch.as_object_mut().unwrap().remove("assess");
+    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    git_uplink::commit_queue(company, "test: drop the assess report").unwrap();
+    assert!(patch_of(company, id).assess.is_none());
+}
+
+#[test]
+fn approve_refuses_an_upstream_patch_without_an_assess_report() {
+    let world = setup_world();
+    let company = &world.company;
+    sha256_change(company);
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    drop_assess_report(company, &patch.id);
+
+    let err = approve_patch(company, &patch.id).unwrap_err().to_string();
+    assert!(err.contains("no upstream assessment on record"), "{err}");
+    assert!(err.contains("git uplink amend"), "{err}");
+    assert_eq!(patch_of(company, &patch.id).status, PatchStatus::Queued);
+}
+
+#[test]
+fn submit_refuses_an_approved_patch_without_an_assess_report() {
+    let world = setup_world();
+    let company = &world.company;
+    sha256_change(company);
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    approve_patch(company, &patch.id).unwrap();
+    drop_assess_report(company, &patch.id);
+
+    let err = submit_patch(company, &patch.id, false)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no upstream assessment on record"), "{err}");
+    assert!(!ref_exists(company, &format!("uplink/{}", patch.id)));
+    assert_eq!(patch_of(company, &patch.id).status, PatchStatus::Approved);
+}
