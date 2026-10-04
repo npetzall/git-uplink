@@ -21,6 +21,7 @@ export type PatchApproval = {
   sha: string;
   patchIdStable?: string;
   runUrl?: string;
+  reviewed?: string;
 };
 
 export type PatchEvent = {
