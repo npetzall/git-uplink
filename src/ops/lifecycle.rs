@@ -31,6 +31,32 @@ pub(super) fn approval_covers(approval: &PatchApproval, patch: &Patch, token: &s
     }
 }
 
+/// True for an approved or submitted upstream patch whose newest approval
+/// does not cover its current content, for example after a replay onto a
+/// moved upstream. `submit` refuses it until it is approved again.
+pub fn approval_stale(repo: &Path, queue: &QueueState, patch: &Patch) -> bool {
+    if !queue.is_upstream(&patch.id)
+        || !matches!(patch.status, PatchStatus::Approved | PatchStatus::Submitted)
+    {
+        return false;
+    }
+    let Ok(token) = review_token(repo, patch) else {
+        return true;
+    };
+    !patch
+        .last_approval()
+        .is_some_and(|approval| approval_covers(approval, patch, &token))
+}
+
+/// Ids of the patches [`approval_stale`] is true for, in queue order.
+pub fn stale_approvals(repo: &Path, queue: &QueueState) -> Vec<String> {
+    queue
+        .all_patches()
+        .filter(|patch| approval_stale(repo, queue, patch))
+        .map(|patch| patch.id.clone())
+        .collect()
+}
+
 /// Records the to-upstream approval for the patch as it is now. `reviewed` is
 /// the review token of the packet the reviewer saw; when the patch no longer
 /// has that token, nothing is approved.

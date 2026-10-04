@@ -50,12 +50,12 @@ pub use ops::{
     AddPatchOpts, AmendMessage, AmendResult, IncomingClaim, InitOpts, InitResult, PushOpts,
     PushResult, QueueCounts, RebuildOpts, RebuildResult, RefreshResult, ResetResult, StateStatus,
     StatusReport, StatusSnapshot, SubmitResult, SyncOpts, SyncResult, TransferResult,
-    accept_upstream, accept_upstream_at, add_patch, amend_patch, approve_patch, approve_patch_at,
-    approve_patch_reviewed, drop_patch, format_status_table, init, init_repo,
+    accept_upstream, accept_upstream_at, add_patch, amend_patch, approval_stale, approve_patch,
+    approve_patch_at, approve_patch_reviewed, drop_patch, format_status_table, init, init_repo,
     init_repo_with_progress, mark_merged, push_queue, read_queue, rebuild, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, reset_from_origin, resolve_conflict,
-    state_status_at, status_report, status_snapshot, store_patch_extras, submit_patch,
-    summarize_queue, sync, sync_with, transfer_patch, write_queue,
+    stale_approvals, state_status_at, status_report, status_snapshot, store_patch_extras,
+    submit_patch, summarize_queue, sync, sync_with, transfer_patch, write_queue,
 };
 pub use preflight::{
     IncomingPreflight, assert_export_preflight, preflight_existing_patch,

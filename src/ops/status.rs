@@ -6,6 +6,8 @@ pub struct StatusSnapshot {
     pub upstream_head: Option<String>,
     pub product_files: std::collections::BTreeMap<String, String>,
     pub state: StateStatus,
+    /// Approved or submitted patches that changed since their last approval.
+    pub stale_approvals: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -36,6 +38,9 @@ pub struct StatusReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<LastSync>,
     pub state: StateStatus,
+    /// Approved or submitted patches that changed since their last
+    /// approval; `submit` refuses them until they are approved again.
+    pub stale_approvals: Vec<String>,
 }
 
 pub fn status_snapshot(repo: &Path) -> Result<StatusSnapshot> {
@@ -58,7 +63,9 @@ pub fn status_snapshot(repo: &Path) -> Result<StatusSnapshot> {
         );
     }
     let state = state_status(repo)?;
+    let stale_approvals = stale_approvals(repo, &queue);
     Ok(StatusSnapshot {
+        stale_approvals,
         queue,
         company_head,
         upstream_head,
@@ -124,6 +131,7 @@ pub fn status_report(snapshot: &StatusSnapshot) -> StatusReport {
         internal: snapshot.queue.internal.clone(),
         last_sync: snapshot.queue.last_sync.clone(),
         state: snapshot.state.clone(),
+        stale_approvals: snapshot.stale_approvals.clone(),
     }
 }
 
@@ -160,6 +168,13 @@ pub fn format_status_table(snapshot: &StatusSnapshot) -> String {
             out,
             "{:<12}  {:<10}  {:<14}  {}  {link}",
             patch.id, patch.status, layer, patch.title
+        );
+    }
+    if !snapshot.stale_approvals.is_empty() {
+        let _ = writeln!(
+            out,
+            "needs approval before submit (content changed since the last approval): {}",
+            snapshot.stale_approvals.join(", ")
         );
     }
     if let Some(sync) = &snapshot.queue.last_sync {
