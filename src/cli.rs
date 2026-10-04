@@ -312,7 +312,8 @@ pub enum Commands {
         /// HTML comments are stripped. Company `main` keeps the cutoff;
         /// contrib export removes it. If neither message flag is set, the
         /// title is the whole message. `Uplink-Depends-On: upl_...` lines in
-        /// the message become `dependsOn`.
+        /// the message become `dependsOn` and are left out of the public
+        /// message.
         #[arg(long, value_name = "text", conflicts_with = "message_file")]
         message: Option<String>,
         /// Read the commit message from a file (- reads stdin).

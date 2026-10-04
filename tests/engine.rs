@@ -4434,6 +4434,47 @@ fn add_refuses_a_title_with_a_company_keyword_when_the_message_is_clean() {
 }
 
 #[test]
+fn depends_on_lines_above_the_cutoff_are_not_exported() {
+    let world = setup_world();
+    let company = &world.company;
+    let dep = add_internal_notes(company);
+    git(
+        company,
+        &["checkout", "--quiet", "-b", "feat/ttl", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let line = format!("Uplink-Depends-On: {}", dep.id);
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            message: Some(format!("Extend TTL\n\nLonger sessions.\n\n{line}\n")),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(patch.depends_on, std::slice::from_ref(&dep.id));
+    // Company main keeps the line; the public message does not have it.
+    assert!(patch.commit_message.contains(&line), "{patch:?}");
+    assert_eq!(
+        git_uplink::export_commit_message(&patch),
+        format!(
+            "Extend TTL\n\nLonger sessions.\n\nUplink-Patch-Id: {}\n",
+            patch.id
+        )
+    );
+}
+
+#[test]
 fn resolve_refuses_a_resolution_that_fails_the_assessment() {
     let world = setup_world();
     let company = &world.company;

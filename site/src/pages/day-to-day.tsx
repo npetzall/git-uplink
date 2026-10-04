@@ -94,10 +94,13 @@ git switch -c fix/token-hash origin/main`}</Code>
         <p>
           If your code needs another change that is merged internally but not yet upstream, it is already on{" "}
           <code>main</code>. Branch from <code>main</code> and use it. Then declare the dependency, one line per
-          patch, in the PR body above the cutoff:
+          patch, in the PR body below the cutoff:
         </p>
         <Code>{`Uplink-Depends-On: upl_ab12cd34ef`}</Code>
         <ul>
+          <li>
+            A line above the cutoff is read too, and is removed from the public message.
+          </li>
           <li>
             Find the id with <code>git uplink status</code> or in the web UI.
           </li>
