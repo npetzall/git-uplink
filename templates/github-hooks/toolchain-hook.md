@@ -6,11 +6,13 @@ Hooks are company-only. They live on the orphan branch `uplink/hooks`, never on 
 
 ## When it runs
 
-Every Uplink job that runs preflight calls the hook right before its Uplink step:
+Every Uplink job that runs `preflight.sh` calls the hook right before the step that runs it:
 
 - **Uplink PR checks:** job *Uplink upstream preflight*;
-- **Uplink gate:** conflict and transfer PRs;
-- **Uplink import**, **Uplink submit**, **Uplink amend**, and **Uplink transfer** (start and complete).
+- **Uplink gate:** conflict, amend and transfer PRs;
+- **Uplink import**, **Uplink submit**, **Uplink amend** (complete), and **Uplink transfer** (start and complete): their preflight job.
+
+Those jobs hold a read-only Actions token and nothing else: no App token, no Environment, no credentials in the checkout. The job that writes (import, submit, amend, transfer) takes the preflight job's result and runs neither the hook nor `preflight.sh`.
 
 The forge pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `uplink/hooks` into `.uplink-hooks/` and runs `.github/actions/uplink-toolchain-hook/action.yml` from there. If that file is missing on `uplink/hooks`, the job shows a notice and carries on without it. **A failed hook fails the job.**
 
@@ -27,7 +29,7 @@ The forge pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `u
 - Do not build, test, or run product code here. Preflight does that, on the change it applies.
 - Do not change the workspace checkout or push anything.
 
-**Some callers hold write tokens and Environment secrets** (import, submit, amend, transfer). The hook runs in those jobs. Keep it to installing tools from sources you trust, pinned to a version or commit.
+The hook never runs in a job that holds write tokens or Environment secrets. Still keep it to installing tools from sources you trust, pinned to a version or commit: it runs before every preflight.
 
 ## Examples
 
@@ -81,7 +83,14 @@ Put the build and test commands in `preflight.sh` on this branch, for example `n
 
 - Preflight runs it as `sh preflight.sh` from the root of the tree under test. A non-zero exit fails preflight.
 - This branch is checked out beside the script for the run, so it can call other files here through `"$(dirname "$0")"`.
-- `GITHUB_TOKEN`, `GH_TOKEN`, and `UPLINK_*_TOKEN` / `UPLINK_*_KEY` are removed from its environment.
+- `GITHUB_TOKEN`, `GH_TOKEN`, and `UPLINK_*_TOKEN` / `UPLINK_*_KEY` are removed from its environment. Do not export other secrets through `$GITHUB_ENV` unless the build needs them: the script sees them.
+- It builds and runs product code, public upstream's included, so it never runs next to a credential. In CI, `git uplink` refuses to run it in a step that holds a token. The pack runs it in a job of its own and hands the result to the job that writes (`--preflight-result`).
+
+Known limitations:
+
+- **The script can read company source.** Its job holds a read-only Actions token for the company repository, and the tree under test sits in a clone of it. Code the script builds and runs, public upstream's included, can read what that token and that clone can. It cannot write, and it cannot reach the App tokens or Environment secrets.
+- **On a developer's machine the script runs as the developer.** The token names are removed from its environment, but it can still read what the user can: other processes, credential stores, any file. The refusal to run next to a credential applies in CI only. Review the script and the tree it builds as you would any build you run locally.
+- **The verdict is the script's own exit code.** You write the script, so that is as intended. Code it runs could make it exit 0. Preflight checks that a change builds and passes its tests; it is not a defence against hostile code in the tree.
 
 To try a change before it lands, commit it on a branch made from `uplink/hooks` and run:
 

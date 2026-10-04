@@ -3,6 +3,8 @@
 # YAML is loaded from the default branch so *-work cannot replace this sidecar.
 # Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
 # The shell git fetch of the protected base uses that token for one command.
+# The step that assesses and runs preflight.sh has no token: the script
+# builds and runs the gated tree.
 name: Uplink gate
 
 on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data; contents: read; persist-credentials: false
@@ -39,19 +41,12 @@ jobs:
           version: ${{ vars.UPLINK_VERSION }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run company toolchain hook
-        uses: $/.github/actions/uplink-toolchain-hook
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Validate gated work
+      - name: Fetch the base and check the changed files
         env:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          TITLE: ${{ github.event.pull_request.title }}
-          BODY: ${{ github.event.pull_request.body }}
         run: |
           git uplink init
           # Depth 2 keeps the base's parent: an amend assesses from it.
@@ -70,6 +65,22 @@ jobs:
             echo "Conflict markers still present; remove them before merge."
             exit 1
           fi
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one.
+      - name: Validate gated work
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
           # Internal-only patches never leave the company: skip the upstream
           # assessment and run only the preflight script, as for
           # transfer-to-internal. If the queue cannot be read, assess.

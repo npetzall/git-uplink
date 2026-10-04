@@ -537,7 +537,7 @@ mod embed_tests {
             assert!(action.contains("run-id:"), "{action}");
             assert!(action.contains("continue-on-error: true"), "{action}");
             assert!(text.contains("needs: extras"), "{forge:?}");
-            assert!(text.contains("needs: packet"), "{forge:?}");
+            assert!(text.contains("needs: [packet, preflight]"), "{forge:?}");
             assert!(!text.contains("finalize:"), "{forge:?}\n{text}");
             // The hook runs in `extras`, which must not hold the queue lock;
             // only `packet` writes uplink/state.
@@ -616,39 +616,182 @@ mod embed_tests {
         assert_eq!(hooks_files(Forge::TryItOnGithub), files);
     }
 
+    /// The jobs of a workflow as (key, text).
+    fn jobs_of(text: &str) -> Vec<(String, String)> {
+        let body = text.split_once("\njobs:\n").expect("jobs:").1;
+        let mut jobs: Vec<(String, String)> = Vec::new();
+        for line in body.lines() {
+            let key = line
+                .strip_prefix("  ")
+                .filter(|rest| !rest.starts_with([' ', '#']))
+                .and_then(|rest| rest.strip_suffix(':'));
+            match (key, jobs.last_mut()) {
+                (Some(key), _) => jobs.push((key.to_string(), String::new())),
+                (None, Some((_, job))) => {
+                    job.push_str(line);
+                    job.push('\n');
+                }
+                (None, None) => {}
+            }
+        }
+        jobs
+    }
+
+    /// The steps of a job as text, each starting at its `name:` or `uses:`.
+    fn steps_of(job: &str) -> Vec<&str> {
+        job.split("\n      - ").skip(1).collect()
+    }
+
     #[test]
-    fn every_preflight_job_runs_the_toolchain_hook_first() {
+    fn preflight_sh_runs_only_in_jobs_without_credentials() {
         let hook = "uses: $/.github/actions/uplink-toolchain-hook";
-        // The steps that run preflight.sh from uplink/hooks.
-        let preflight_steps = [
-            ("uplink-pr.yml", "name: Export preflight"),
-            ("uplink-gate.yml", "name: Validate gated work"),
-            ("uplink-import.yml", "name: Import as a queued patch"),
+        // (workflow, job that runs preflight.sh, job that records, its command)
+        let split = [
+            (
+                "uplink-import.yml",
+                "preflight",
+                "import",
+                "git uplink add ",
+            ),
             (
                 "uplink-submit.yml",
-                "name: Record approval, export, and record the public PR",
+                "preflight",
+                "submit",
+                "git uplink submit ",
             ),
-            ("uplink-amend.yml", "name: Amend patch and rebuild main"),
-            ("uplink-transfer.yml", "name: Transfer patch"),
-            ("uplink-transfer.yml", "name: Complete gated transfer"),
+            (
+                "uplink-amend.yml",
+                "complete-preflight",
+                "complete",
+                "git uplink amend ",
+            ),
+            (
+                "uplink-transfer.yml",
+                "start-preflight",
+                "start",
+                "git uplink transfer ",
+            ),
+            (
+                "uplink-transfer.yml",
+                "complete-preflight",
+                "complete",
+                "git uplink transfer ",
+            ),
+        ];
+        // Jobs that only check: (workflow, job, step that runs preflight.sh).
+        let checks = [
+            ("uplink-pr.yml", "preflight", "name: Export preflight"),
+            ("uplink-gate.yml", "validate", "name: Validate gated work"),
         ];
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
-            for (workflow, name) in preflight_steps {
+            let jobs = |workflow: &str| {
                 let text = files
                     .iter()
                     .find(|(p, _)| p.ends_with(workflow))
                     .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
                     .unwrap_or_else(|| panic!("{forge:?} missing {workflow}"));
-                let steps: Vec<&str> = text.split("\n      - ").collect();
+                jobs_of(&text)
+            };
+            let job = |workflow: &str, key: &str| {
+                jobs(workflow)
+                    .into_iter()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, text)| text)
+                    .unwrap_or_else(|| panic!("{forge:?} {workflow} has no job {key}"))
+            };
+            // The step that runs the script: no secret, the hook right before it.
+            let script_step_is_clean = |workflow: &str, key: &str, name: &str| {
+                let text = job(workflow, key);
+                let steps = steps_of(&text);
                 let i = steps
                     .iter()
-                    .position(|step| step.starts_with(name))
-                    .unwrap_or_else(|| panic!("{forge:?} {workflow} has no step {name:?}"));
+                    .position(|step| step.contains(name))
+                    .unwrap_or_else(|| panic!("{forge:?} {workflow} {key} has no step {name:?}"));
                 assert!(
                     steps[i - 1].contains(hook),
-                    "{forge:?} {workflow}: the step before {name:?} must run the toolchain hook"
+                    "{forge:?} {workflow} {key}: the toolchain hook must run right before {name:?}"
                 );
+                assert!(
+                    !steps[i].contains("secrets.") && !steps[i].contains("_TOKEN"),
+                    "{forge:?} {workflow} {key}: {name:?} runs preflight.sh and must hold no token\n{}",
+                    steps[i]
+                );
+                assert!(
+                    text.contains("persist-credentials: false")
+                        && !text.contains("persist-credentials: true"),
+                    "{forge:?} {workflow} {key} must not keep credentials in its checkout"
+                );
+                assert!(
+                    !text.contains("create-github-app-token") && !text.contains("environment:"),
+                    "{forge:?} {workflow} {key} must not mint a token or use an Environment"
+                );
+            };
+            for (workflow, probe, record, command) in split {
+                script_step_is_clean(workflow, probe, "name: Run preflight.sh");
+                let probing = job(workflow, probe);
+                assert!(
+                    probing.contains("    permissions:\n      contents: read\n    outputs:")
+                        && !probing.contains(": write"),
+                    "{forge:?} {workflow} {probe} must be read-only\n{probing}"
+                );
+                let recording = job(workflow, record);
+                assert!(
+                    recording.contains(&format!("needs: {probe}"))
+                        || recording.contains(&format!(", {probe}]")),
+                    "{forge:?} {workflow} {record} must wait for {probe}"
+                );
+                assert!(
+                    !recording.contains(hook),
+                    "{forge:?} {workflow} {record} holds write tokens and must not run the toolchain hook"
+                );
+                assert!(
+                    recording.contains(&format!(
+                        "PREFLIGHT_REPORT: ${{{{ needs.{probe}.outputs.report }}}}"
+                    )),
+                    "{forge:?} {workflow} {record} must take the result of {probe}"
+                );
+                // Every call of the recording command takes the result.
+                let calls: Vec<&str> = recording
+                    .split(command)
+                    .skip(1)
+                    .map(|rest| rest.split(")\n").next().unwrap_or(rest))
+                    .collect();
+                assert!(
+                    !calls.is_empty(),
+                    "{forge:?} {workflow} {record}: no {command}"
+                );
+                for call in calls {
+                    let call = call.split(" > ").next().unwrap_or(call);
+                    assert!(
+                        call.contains("--preflight-result \"$RUNNER_TEMP/uplink-preflight.json\""),
+                        "{forge:?} {workflow} {record}: `{command}` would run preflight.sh itself\n{call}"
+                    );
+                }
+            }
+            for (workflow, key, name) in checks {
+                script_step_is_clean(workflow, key, name);
+            }
+            // No other job runs a command that would run the script.
+            for (path, bytes) in &files {
+                if !path.starts_with(".github/workflows/") {
+                    continue;
+                }
+                let text = String::from_utf8_lossy(bytes);
+                for (key, body) in jobs_of(&text) {
+                    let runs_script =
+                        body.contains("git uplink preflight") || body.contains("--preflight-only");
+                    let known = split
+                        .iter()
+                        .any(|(w, probe, ..)| path.ends_with(w) && *probe == key)
+                        || checks
+                            .iter()
+                            .any(|(w, job, _)| path.ends_with(w) && *job == key);
+                    assert_eq!(
+                        runs_script, known,
+                        "{forge:?} {path} job {key}: jobs that run preflight.sh are listed in this test"
+                    );
+                }
             }
             for (path, bytes) in &files {
                 let text = String::from_utf8_lossy(bytes);

@@ -8,4 +8,6 @@
 # - This branch is checked out beside the script. Reach its other files with
 #   "$(dirname "$0")".
 # - GITHUB_TOKEN, GH_TOKEN, and UPLINK_*_TOKEN / UPLINK_*_KEY are not set.
+# - In the forge pack it runs in a job with a read-only token and no other
+#   credential, never in the job that writes.
 set -eu

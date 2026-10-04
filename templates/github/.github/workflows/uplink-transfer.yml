@@ -39,8 +39,61 @@ concurrency:
 permissions: {}
 
 jobs:
+  # preflight.sh builds and runs product code (public upstream's included),
+  # so it runs in this job: read-only token, no App token, no Environment,
+  # no credentials in the checkout. The job that holds the write tokens
+  # takes the result and never runs the script.
+  start-preflight:
+    name: Preflight the transfer (no credentials)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.run.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git uplink init
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one.
+      - name: Run preflight.sh
+        id: run
+        env:
+          PATCH_ID: ${{ inputs.patch_id }}
+          DIRECTION: ${{ inputs.direction }}
+        run: |
+          report=$(git uplink transfer "$PATCH_ID" --"$DIRECTION" --preflight-only) || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
   start:
     name: Start transfer
+    needs: start-preflight
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -128,11 +181,6 @@ jobs:
           ref: main
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
-      - name: Run company toolchain hook
-        uses: $/.github/actions/uplink-toolchain-hook
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Transfer patch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -141,11 +189,15 @@ jobs:
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
           DIRECTION: ${{ inputs.direction }}
+          PREFLIGHT_REPORT: ${{ needs.start-preflight.outputs.report }}
         run: |
           git uplink init
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
           main_before=$(git rev-parse HEAD)
 
-          transfer_json=$(git uplink transfer "$PATCH_ID" --"$DIRECTION")
+          # A failed preflight in the result gates the transfer, as before.
+          transfer_json=$(git uplink transfer "$PATCH_ID" --"$DIRECTION" \
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
           gated=$(jq -r '.gated // false' <<<"$transfer_json")
           if [ "$gated" != "true" ]; then
             git push origin uplink/state
@@ -188,8 +240,70 @@ jobs:
             echo "Reusing existing transfer PR $existing"
           fi
 
+  # preflight.sh builds and runs product code (public upstream's included),
+  # so it runs in this job: read-only token, no App token, no Environment,
+  # no credentials in the checkout. The job that holds the write tokens
+  # takes the result and never runs the script.
+  complete-preflight:
+    name: Preflight the gated transfer (no credentials)
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.run.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git uplink init
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one.
+      - name: Run preflight.sh
+        id: run
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          if [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
+            id="${BASE_REF#uplink/transfer-to-upstream/}"
+            direction=to-upstream
+          elif [[ "$BASE_REF" == uplink/transfer-to-internal/* ]]; then
+            id="${BASE_REF#uplink/transfer-to-internal/}"
+            direction=to-internal
+          else
+            echo "Unexpected base $BASE_REF"
+            exit 1
+          fi
+          report=$(git uplink transfer "$id" --"$direction" --complete --preflight-only) || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
   complete:
     name: Complete transfer
+    needs: complete-preflight
     if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
     permissions:
@@ -276,11 +390,6 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
-      - name: Run company toolchain hook
-        uses: $/.github/actions/uplink-toolchain-hook
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Complete gated transfer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -288,8 +397,10 @@ jobs:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PREFLIGHT_REPORT: ${{ needs.complete-preflight.outputs.report }}
         run: |
           git uplink init
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
           if [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
             id="${BASE_REF#uplink/transfer-to-upstream/}"
             direction=to-upstream
@@ -306,7 +417,8 @@ jobs:
           fi
 
           main_before=$(git rev-parse origin/main)
-          transfer_json=$(git uplink transfer "$id" --"$direction" --complete)
+          transfer_json=$(git uplink transfer "$id" --"$direction" --complete \
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 
           head=$(git rev-parse --abbrev-ref HEAD)
           if [ "$head" != "main" ]; then

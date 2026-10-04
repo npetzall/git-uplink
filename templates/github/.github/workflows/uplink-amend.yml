@@ -161,8 +161,68 @@ jobs:
           gh pr edit "$url" --add-label "$label"
           echo "Amend PR: $url" >> "$GITHUB_STEP_SUMMARY"
 
+  # preflight.sh builds and runs product code (public upstream's included),
+  # so it runs in this job: read-only token, no App token, no Environment,
+  # no credentials in the checkout. The job that holds the write tokens
+  # takes the result and never runs the script.
+  complete-preflight:
+    name: Preflight the amend (no credentials)
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.run.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git uplink init
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one.
+      - name: Run preflight.sh
+        id: run
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          id="${BASE_REF#uplink/amend/}"
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > "$RUNNER_TEMP/uplink-amend-msg.txt"
+          report=$(git uplink amend "$id" --complete --title "$TITLE" \
+            --message-file "$RUNNER_TEMP/uplink-amend-msg.txt" --preflight-only) || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
   complete:
     name: Complete amend
+    needs: complete-preflight
     if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
     permissions:
@@ -250,11 +310,6 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
-      - name: Run company toolchain hook
-        uses: $/.github/actions/uplink-toolchain-hook
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Amend patch and rebuild main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -264,8 +319,10 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
+          PREFLIGHT_REPORT: ${{ needs.complete-preflight.outputs.report }}
         run: |
           git uplink init
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
           id="${BASE_REF#uplink/amend/}"
           if [ -z "$id" ] || [ "$id" = "$BASE_REF" ] || [[ "$id" == *-work ]]; then
             echo "Could not parse patch id from $BASE_REF"
@@ -277,7 +334,9 @@ jobs:
           } > "$RUNNER_TEMP/uplink-amend-msg.txt"
 
           main_before=$(git rev-parse origin/main)
-          amend_json=$(git uplink amend "$id" --complete --title "$TITLE" --message-file "$RUNNER_TEMP/uplink-amend-msg.txt")
+          amend_json=$(git uplink amend "$id" --complete --title "$TITLE" \
+            --message-file "$RUNNER_TEMP/uplink-amend-msg.txt" \
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 
           head=$(git rev-parse --abbrev-ref HEAD)
           if [ "$head" != "main" ]; then

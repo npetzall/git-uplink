@@ -18,6 +18,8 @@
 # Put both job names in the required status checks for the PR.
 # This workflow does not write uplink/state (not uplink-mutate).
 # Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
+# preflight.sh runs in a step without that token, and its comment is posted
+# by a separate job.
 name: Uplink PR checks
 
 on:
@@ -147,13 +149,17 @@ jobs:
           CODE: ${{ steps.assess.outputs.code }}
         run: exit "$CODE"
 
+  # preflight.sh builds and runs product code (public upstream's included),
+  # so this job has a read-only token and no credentials in the checkout.
+  # The comment is posted by the job below, which never runs the script.
   preflight:
     name: Uplink upstream preflight
     if: ${{ !contains(join(github.event.pull_request.labels.*.name, ','), 'uplink:internal-only') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
+    outputs:
+      report: ${{ steps.run.outputs.report }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -167,34 +173,86 @@ jobs:
           version: ${{ vars.UPLINK_VERSION }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git uplink init
+          fetch_origin() {
+            local auth
+            auth=$(printf 'x-access-token:%s' "$UPLINK_INTERNAL_TOKEN" | base64 -w0)
+            git \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=" \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
+              fetch --quiet origin "$@"
+          }
+          fetch_origin "$FROM_SHA" "$HEAD_SHA"
+
       - name: Run company toolchain hook
         uses: $/.github/actions/uplink-toolchain-hook
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one.
       - name: Export preflight
+        id: run
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          set -euo pipefail
-          git uplink init
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
-          } > /tmp/uplink-msg.txt
-          code=0
-          git uplink preflight \
+          } > "$RUNNER_TEMP/uplink-msg.txt"
+          report=$(git uplink preflight --json \
             --title "$TITLE" \
-            --message-file /tmp/uplink-msg.txt \
+            --message-file "$RUNNER_TEMP/uplink-msg.txt" \
             --from "$FROM_SHA" \
-            --head "$HEAD_SHA" > /tmp/uplink-preflight.md || code=$?
+            --head "$HEAD_SHA") || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
+      - name: Fail when preflight did not pass
+        env:
+          REPORT: ${{ steps.run.outputs.report }}
+        run: jq -e '.ok == true' <<<"$REPORT" > /dev/null
+
+  preflight-comment:
+    name: Uplink preflight comment
+    needs: preflight
+    if: ${{ always() && needs.preflight.result != 'skipped' && needs.preflight.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment the preflight result
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPORT: ${{ needs.preflight.outputs.report }}
+        run: |
+          set -euo pipefail
+          if [ -z "$REPORT" ]; then
+            echo "The preflight job printed no result; see its log."
+            exit 0
+          fi
+          failed=true
+          if jq -e '.ok == true' <<<"$REPORT" > /dev/null; then
+            failed=false
+            echo "export preflight passed" > /tmp/uplink-preflight.md
+          else
+            jq -r '.comment // .message // "Uplink export preflight failed."' <<<"$REPORT" > /tmp/uplink-preflight.md
+          fi
           # One comment per PR, updated in place. A pass only updates an
           # earlier failure comment; it does not post a new one.
           marker='<!-- uplink:preflight -->'
@@ -205,8 +263,7 @@ jobs:
           if [ -n "$id" ]; then
             gh api --method PATCH "repos/${GH_REPO}/issues/comments/${id}" \
               -F "body=@/tmp/uplink-preflight-comment.md" > /dev/null
-          elif [ "$code" -ne 0 ]; then
+          elif [ "$failed" = "true" ]; then
             gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
               -F "body=@/tmp/uplink-preflight-comment.md" > /dev/null
           fi
-          exit "$code"
