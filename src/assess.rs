@@ -189,8 +189,9 @@ fn public_subject_and_body(patch: &Patch) -> (String, String) {
         };
         return (subject, assess.public_body.trim().to_string());
     }
-    let (public, _) = split_internal_message(&stored_commit_message(patch), DEFAULT_CUTOFF);
-    subject_and_body(&public, &patch.title)
+    // Without a report no text was scanned and the cutoff is not known, so
+    // nothing of the stored message is exported.
+    (patch.title.clone(), String::new())
 }
 
 pub fn stored_commit_message(patch: &Patch) -> String {
