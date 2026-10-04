@@ -4394,6 +4394,20 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
 }
 
 #[test]
+fn export_message_is_the_title_only_without_an_assess_report() {
+    let world = setup_world();
+    let company = &world.company;
+    let mut patch = add_internal_notes(company);
+    patch.assess = None;
+    patch.commit_message =
+        "Internal notes\n\nPublic reason.\n\n--- company only ---\nTicket: PROJ-1".into();
+    assert_eq!(
+        git_uplink::export_commit_message(&patch),
+        format!("Internal notes\n\nUplink-Patch-Id: {}\n", patch.id)
+    );
+}
+
+#[test]
 fn resolve_refuses_a_resolution_that_fails_the_assessment() {
     let world = setup_world();
     let company = &world.company;
