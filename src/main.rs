@@ -10,15 +10,16 @@ use git_uplink::{
     AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT,
     Forge, IncomingPreflight, InitOpts, MergeVia, PreflightError, ProgressMode, PushOpts,
     RebuildOpts, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream_at, add_patch,
-    adopted_next_steps, amend_patch, approve_patch_at, assess_from_message, commit_queue, doctor,
-    drop_patch, format_approval_receipt, format_assess_markdown,
+    adopted_next_steps, amend_patch, approve_patch_reviewed, assess_from_message, commit_queue,
+    doctor, drop_patch, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
     format_status_table, from_upstream_report_paths, git_ok, hooks_publish_hint, init,
     load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
     preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, status_report, status_snapshot, store_patch_extras, stored_commit_message,
-    submit_patch, sync_with, transfer_patch, write_man_pages,
+    resolve_conflict, review_token, review_token_path, status_report, status_snapshot,
+    store_patch_extras, stored_commit_message, submit_patch, sync_with, transfer_patch,
+    write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
@@ -101,7 +102,13 @@ struct Receipt {
 
 /// Approval receipt for `subject`; the environment name comes from `env_var`
 /// or `default_env`.
-fn build_receipt(repo: &Path, subject: &str, env_var: &str, default_env: &str) -> Receipt {
+fn build_receipt(
+    repo: &Path,
+    subject: &str,
+    env_var: &str,
+    default_env: &str,
+    reviewed: Option<&str>,
+) -> Receipt {
     let sha = state_sha(repo);
     let run_url = github_run_url();
     let environment = env::var(env_var).ok();
@@ -112,6 +119,7 @@ fn build_receipt(repo: &Path, subject: &str, env_var: &str, default_env: &str) -
         actor: actor.as_deref().unwrap_or("local operator"),
         run_url: &run_url,
         sha: &sha,
+        reviewed,
         at: None,
     });
     Receipt { sha, run_url, text }
@@ -756,6 +764,10 @@ fn cmd_report(
     let default_out = report_paths(id)?.1;
     let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
     write_markdown_file(repo, &dest, &packet)?;
+    // What the packet is for: `approve --reviewed` takes it back.
+    if let Ok(token) = review_token(repo, patch) {
+        write_markdown_file(repo, Path::new(&review_token_path(id)?), &token)?;
+    }
     commit_queue(repo, &format!("uplink: contribution packet {id}"))?;
     println!("{packet}");
     eprintln!("Wrote {}", dest.display());
@@ -814,21 +826,41 @@ fn cmd_status(repo: &Path, json: bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn cmd_approve(repo: &Path, id: &str, out: Option<PathBuf>) -> Result<(), Error> {
+fn cmd_approve(
+    repo: &Path,
+    id: &str,
+    out: Option<PathBuf>,
+    reviewed: Option<&str>,
+) -> Result<(), Error> {
     let queue = read_queue(repo)?;
-    if !queue.all_patches().any(|p| p.id == id) {
-        return Err(Error::msg(format!("unknown patch {id}")));
+    let patch = queue
+        .all_patches()
+        .find(|p| p.id == id)
+        .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
+    // Checked before the receipt is written, and again under the lock.
+    let token = review_token(repo, patch)?;
+    if reviewed.is_some_and(|reviewed| reviewed != token) {
+        return Err(Error::msg(format!(
+            "{id} changed since the packet was reviewed; write a new packet and approve that (dispatch Uplink submit again)."
+        )));
     }
     let receipt = build_receipt(
         repo,
         id,
         "UPLINK_TO_UPSTREAM_ENVIRONMENT",
         TO_UPSTREAM_ENVIRONMENT,
+        Some(&token),
     );
     let default_out = report_paths(id)?.2;
     let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
     write_markdown_file(repo, &dest, &receipt.text)?;
-    let patch = approve_patch_at(repo, id, Some(&receipt.sha), Some(&receipt.run_url))?;
+    let patch = approve_patch_reviewed(
+        repo,
+        id,
+        Some(&receipt.sha),
+        Some(&receipt.run_url),
+        Some(&token),
+    )?;
     commit_queue(repo, &format!("uplink: to-upstream approval receipt {id}"))?;
     println!("{}", receipt.text);
     eprintln!("{} approved", patch.id);
@@ -907,6 +939,7 @@ fn cmd_accept_upstream(repo: &Path, sha: Option<&str>) -> Result<(), Error> {
         "incoming",
         "UPLINK_FROM_UPSTREAM_ENVIRONMENT",
         FROM_UPSTREAM_ENVIRONMENT,
+        None,
     );
     let dest = PathBuf::from(from_upstream_report_paths().2);
     write_markdown_file(repo, &dest, &receipt.text)?;
@@ -1199,7 +1232,9 @@ fn run() -> Result<(), Error> {
             )
         }
         Commands::Status { json } => cmd_status(&repo, json),
-        Commands::Approve { id, out } => cmd_approve(&repo, &id, out),
+        Commands::Approve { id, out, reviewed } => {
+            cmd_approve(&repo, &id, out, reviewed.as_deref())
+        }
         Commands::Submit { id, push } => cmd_submit(&repo, &id, push),
         Commands::Submitted {
             id,

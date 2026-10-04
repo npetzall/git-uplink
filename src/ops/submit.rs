@@ -66,6 +66,16 @@ fn check_ready_to_submit(repo: &Path, queue: &QueueState, patch: &Patch) -> Resu
             "{id} is not ready for contribution. Fix the upstream assessment findings first."
         )));
     }
+    // The approval is for specific content, not for the patch id.
+    let token = review_token(repo, patch)?;
+    if !patch
+        .last_approval()
+        .is_some_and(|approval| super::lifecycle::approval_covers(approval, patch, &token))
+    {
+        return Err(Error::msg(format!(
+            "{id} changed since it was approved; approve the current content before submit (dispatch Uplink submit again)."
+        )));
+    }
     assert_export_preflight(repo, queue, patch, &repo.join(patch_path(id)?), None)
 }
 

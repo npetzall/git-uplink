@@ -504,6 +504,14 @@ pub enum Commands {
         /// Write the receipt here instead of .uplink/reports/<id>/approval.md.
         #[arg(long, value_name = "path")]
         out: Option<PathBuf>,
+        /// Review token of the packet that was reviewed.
+        ///
+        /// `report` writes it to `.uplink/reports/<id>/review-token`. It
+        /// names the patch content, public title and public message. When
+        /// the patch no longer has this token, nothing is approved. Without
+        /// it, the patch is approved as it is now.
+        #[arg(long, value_name = "token")]
+        reviewed: Option<String>,
     },
     /// Build the export commit on uplink/upstream and print the PR request as JSON.
     ///

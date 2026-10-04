@@ -9,14 +9,15 @@ use git_uplink::{
     Patch, PatchIntent, PatchStatus, PendingMerge, ProgressMode, PushOpts, QueueConfig, QueueState,
     RebuildOpts, Result, STATE_BRANCH, Settings, SettingsFlags, StepOutcome, SyncOpts,
     TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream,
-    accept_upstream_at, add_patch, amend_patch, approve_patch, doctor, drop_patch, extras_dir,
-    format_approval_receipt, format_approver_packet, format_contribution_packet,
-    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
-    git_ok, init, init_repo, load_extra_markdown, mark_merged, parse_depends_on,
-    preflight_incoming_change, push_queue, rebuild, rebuild_with, record_gated_pr,
-    record_pull_request, refresh_from_origin, report_paths, reset_from_origin, resolve_conflict,
-    status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch,
-    summarize_queue, sync, sync_with, transfer_patch, write_queue,
+    accept_upstream_at, add_patch, amend_patch, approve_patch, approve_patch_reviewed, doctor,
+    drop_patch, extras_dir, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
+    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
+    parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
+    resolve_conflict, review_token, status_snapshot, store_patch_extras, stored_extras_fresh,
+    strip_html_comments, submit_patch, summarize_queue, sync, sync_with, transfer_patch,
+    write_queue,
 };
 use tempfile::TempDir;
 
@@ -2940,6 +2941,7 @@ fn approve_receipt_records_the_state_branch_commit() {
         actor: "dispatcher",
         run_url: "https://github.example/run/1",
         sha: &sha,
+        reviewed: None,
         at: Some("2026-09-14T00:00:00.000Z".into()),
     });
     assert!(receipt.contains(&format!("`{sha}`")));
@@ -3665,6 +3667,201 @@ fn add_refuses_a_change_merged_into_another_branch() {
 
     let patch = add_landed_patch(company, opts("main")).unwrap();
     assert_eq!(patch.status, PatchStatus::Queued);
+}
+
+fn retitle(repo: &Path, id: &str, title: &str) {
+    let mut queue = git_uplink::read_queue(repo).unwrap();
+    let patch = queue.all_patches_mut().find(|p| p.id == id).unwrap();
+    patch.title = title.into();
+    write_queue(repo, &queue).unwrap();
+    git_uplink::commit_queue(repo, "uplink: retitle").unwrap();
+}
+
+fn stored_patch(repo: &Path, id: &str) -> Patch {
+    let queue = git_uplink::read_queue(repo).unwrap();
+    queue.all_patches().find(|p| p.id == id).unwrap().clone()
+}
+
+#[test]
+fn approve_refuses_a_patch_that_changed_since_the_packet() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let reviewed = review_token(company, &hash_patch).unwrap();
+    let packet = format_contribution_packet(company, &hash_patch).unwrap();
+    assert!(
+        packet.contains(&format!("| Review token | `{reviewed}` |")),
+        "{packet}"
+    );
+
+    // The public PR title is part of what leaves the company.
+    retitle(company, &hash_patch.id, "Use SHA-256 everywhere");
+    let err =
+        approve_patch_reviewed(company, &hash_patch.id, None, None, Some(&reviewed)).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("changed since the packet was reviewed"),
+        "{err}"
+    );
+    let after = stored_patch(company, &hash_patch.id);
+    assert_eq!(after.status, PatchStatus::Queued);
+    assert!(after.approvals.is_empty());
+
+    let current = review_token(company, &after).unwrap();
+    assert_ne!(current, reviewed);
+    let approved =
+        approve_patch_reviewed(company, &hash_patch.id, None, None, Some(&current)).unwrap();
+    assert_eq!(approved.status, PatchStatus::Approved);
+    assert_eq!(
+        approved.last_approval().unwrap().reviewed.as_deref(),
+        Some(current.as_str())
+    );
+}
+
+#[test]
+fn report_writes_the_token_that_approve_takes_back() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let cli = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(args)
+            .current_dir(company)
+            .output()
+            .unwrap()
+    };
+    let id = hash_patch.id.as_str();
+
+    let report = cli(&["report", id]);
+    assert!(report.status.success(), "{report:?}");
+    let token_file = company.join(format!(".uplink/reports/{id}/review-token"));
+    let token = fs::read_to_string(&token_file).unwrap().trim().to_string();
+    assert_eq!(token, review_token(company, &hash_patch).unwrap());
+    let committed = git_ok(
+        company,
+        &[
+            "show",
+            &format!("uplink/state:.uplink/reports/{id}/review-token"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(committed.trim(), token);
+
+    retitle(company, id, "Use SHA-256 everywhere");
+    let stale = cli(&["approve", id, "--reviewed", &token]);
+    assert!(!stale.status.success(), "{stale:?}");
+    assert!(
+        String::from_utf8_lossy(&stale.stderr).contains("changed since the packet was reviewed"),
+        "{stale:?}"
+    );
+    assert!(
+        !company
+            .join(format!(".uplink/reports/{id}/approval.md"))
+            .exists(),
+        "a refused approval leaves no receipt"
+    );
+    assert_eq!(stored_patch(company, id).status, PatchStatus::Queued);
+
+    let report = cli(&["report", id]);
+    assert!(report.status.success(), "{report:?}");
+    let token = fs::read_to_string(&token_file).unwrap().trim().to_string();
+    let approved = cli(&["approve", id, "--reviewed", &token]);
+    assert!(approved.status.success(), "{approved:?}");
+    let receipt = String::from_utf8_lossy(&approved.stdout).into_owned();
+    assert!(
+        receipt.contains(&format!("| Review token | `{token}` |")),
+        "{receipt}"
+    );
+    let patch = stored_patch(company, id);
+    assert_eq!(patch.status, PatchStatus::Approved);
+    assert_eq!(
+        patch.last_approval().unwrap().reviewed.as_deref(),
+        Some(token.as_str())
+    );
+}
+
+#[test]
+fn review_token_ignores_the_rest_of_the_queue() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let before = review_token(company, &hash_patch).unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "notes\n");
+    commit_all(company, "notes");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add notes".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let after = stored_patch(company, &hash_patch.id);
+    assert_eq!(review_token(company, &after).unwrap(), before);
+    approve_patch_reviewed(company, &hash_patch.id, None, None, Some(&before)).unwrap();
+}
+
+#[test]
+fn submit_refuses_content_that_changed_after_approval() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    approve_patch(company, &hash_patch.id).unwrap();
+
+    retitle(company, &hash_patch.id, "Use SHA-256 everywhere");
+    let err = submit_patch(company, &hash_patch.id, false).unwrap_err();
+    assert!(
+        err.to_string().contains("changed since it was approved"),
+        "{err}"
+    );
+
+    // A new approval of the current content is recorded, not skipped.
+    let again = approve_patch(company, &hash_patch.id).unwrap();
+    assert_eq!(again.status, PatchStatus::Approved);
+    assert_eq!(again.approvals.len(), 2);
+    assert_eq!(again.approvals[1].kind, "refresh");
+    let noop = approve_patch(company, &hash_patch.id).unwrap();
+    assert_eq!(noop.approvals.len(), 2);
+    submit_patch(company, &hash_patch.id, false).unwrap();
+}
+
+#[test]
+fn an_approval_without_a_token_covers_the_same_patch_id_only() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    approve_patch(company, &hash_patch.id).unwrap();
+    let rewrite_approval = |stable: Option<&str>| {
+        let mut queue = git_uplink::read_queue(company).unwrap();
+        let patch = queue
+            .all_patches_mut()
+            .find(|p| p.id == hash_patch.id)
+            .unwrap();
+        let approval = patch.approvals.last_mut().unwrap();
+        approval.reviewed = None;
+        if let Some(stable) = stable {
+            approval.patch_id_stable = Some(stable.into());
+        }
+        write_queue(company, &queue).unwrap();
+        git_uplink::commit_queue(company, "uplink: legacy approval").unwrap();
+    };
+
+    rewrite_approval(Some("0000000000000000000000000000000000000000"));
+    let err = submit_patch(company, &hash_patch.id, false).unwrap_err();
+    assert!(
+        err.to_string().contains("changed since it was approved"),
+        "{err}"
+    );
+
+    let stable = stored_patch(company, &hash_patch.id)
+        .patch_id_stable
+        .unwrap();
+    rewrite_approval(Some(&stable));
+    submit_patch(company, &hash_patch.id, false).unwrap();
 }
 
 #[test]
@@ -6551,6 +6748,7 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
             actor: "dispatcher",
             run_url: "https://github.example/acme/product/actions/runs/9",
             sha: "abc123",
+            reviewed: None,
             at: Some("2026-09-14T00:00:00.000Z".into()),
         }),
     );

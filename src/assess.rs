@@ -218,6 +218,37 @@ pub fn company_commit_message(patch: &Patch) -> String {
     with_trailers(&stored_commit_message(patch), patch)
 }
 
+/// Identifies what leaves the company for `patch`: its content, the public
+/// PR title, and the public commit message. An approval records the token it
+/// was given for, and `submit` exports only content with that approval.
+pub fn review_token(repo: &Path, patch: &Patch) -> Result<String> {
+    let Some(stable) = patch.patch_id_stable.as_deref() else {
+        return Err(Error::msg(format!(
+            "{} has no stable patch id; rebuild before asking for approval",
+            patch.id
+        )));
+    };
+    let content = format!(
+        "{stable}\n{}\n{}",
+        patch.title.trim(),
+        export_commit_message(patch)
+    );
+    Ok(git(
+        repo,
+        &["hash-object", "--stdin"],
+        GitOpts {
+            input: Some(content.as_bytes()),
+            ..GitOpts::default()
+        },
+    )?
+    .stdout)
+}
+
+/// Where `report` writes the review token of the packet it produced.
+pub fn review_token_path(id: &str) -> Result<String> {
+    Ok(format!("{}/review-token", report_paths(id)?.0))
+}
+
 pub fn export_commit_message(patch: &Patch) -> String {
     let (subject, body) = public_subject_and_body(patch);
     let mut lines = vec![subject];
@@ -327,6 +358,17 @@ fn packet_assessment(patch: &Patch) -> String {
 }
 
 pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
+    approver_packet(patch, None)
+}
+
+/// `| Review token | … |`, or nothing when the patch has none yet.
+fn review_token_row(token: Option<&str>) -> String {
+    token
+        .map(|token| format!("| Review token | `{token}` |\n"))
+        .unwrap_or_default()
+}
+
+fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
     let assessment = packet_assessment(patch);
     let pr = patch
         .source
@@ -351,15 +393,17 @@ pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
 | Patch | `{id}` |\n\
 | Title | {title} |\n\
 | Depends on | {depends} |\n\
-| Internal PR | {pr} |\n\n\
+| Internal PR | {pr} |\n\
+{token}\n\
 ## Upstream commit message\n\n\
 {contrib}\n\n\
 {assessment}\n\
 ## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
-3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment (git push to the contrib fork).\n\
+3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment. The approval is for the review token above: if the patch changed since this packet, approve stops and nothing is exported.\n\
 4. The workflow opens the public pull request with `POST /repos/{{parent}}/pulls` (`head` is the branch, `head_repo` is `<contrib_owner>/<contrib_repo>`, `maintainer_can_modify` false) and runs `git uplink submitted`. No public PR is opened unless export preflight still passes.\n",
+        token = review_token_row(token),
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
@@ -379,7 +423,7 @@ pub fn format_contribution_packet_with_extras(
     let packet = if patch.status == PatchStatus::Amended {
         format_delta_approver_packet(repo, patch)?
     } else {
-        format_approver_packet(patch)
+        approver_packet(patch, review_token(repo, patch).ok().as_deref())
     };
     if extra_dir.is_none() && stored_extras_fresh(patch) {
         let stored = repo.join(extras_dir(&patch.id)?);
@@ -524,7 +568,8 @@ This contribution was **already IP-approved** and submitted. Review **only the d
 | Public PR | {pr} |\n\
 | Last approved at | {last_at} |\n\
 | Last approved commit | `{last_sha}` |\n\
-| Last approval run | {last_run} |\n\n\
+| Last approval run | {last_run} |\n\
+{token}\n\
 ## Delta since last approval\n\n\
 {delta}\n\n\
 ## Upstream commit message\n\n\
@@ -533,9 +578,10 @@ This contribution was **already IP-approved** and submitted. Review **only the d
 ## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
 2. This workflow writes `.uplink/reports/{id}/approval.md` on `uplink/state`.\n\
-3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment (git push to the contrib fork).\n\
+3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment. The approval is for the review token above: if the patch changed since this packet, approve stops and nothing is exported.\n\
 4. The workflow opens the public pull request with `POST /repos/{{parent}}/pulls` (`head` is the branch, `head_repo` is `<contrib_owner>/<contrib_repo>`, `maintainer_can_modify` false) or reuses the recorded PR, then runs `git uplink submitted`. No second PR is opened.\n\n\
 {history}",
+        token = review_token_row(review_token(repo, patch).ok().as_deref()),
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = patch.title,
@@ -697,6 +743,8 @@ pub struct ApprovalReceipt<'a> {
     pub actor: &'a str,
     pub run_url: &'a str,
     pub sha: &'a str,
+    /// Review token of the approved content; none for from-upstream.
+    pub reviewed: Option<&'a str>,
     pub at: Option<String>,
 }
 
@@ -711,6 +759,7 @@ pub fn format_approval_receipt(opts: ApprovalReceipt<'_>) -> String {
 | Environment reviewers | See the Deployments tab and the GitHub Enterprise audit log for this run |\n\
 | Run | {run} |\n\
 | Queue commit | `{sha}` |\n\
+{token}\
 | Recorded at | {at} |\n\n\
 This file is the in-repo receipt. The authoritative approval event is the GitHub Environment review on **{env}**.\n",
         id = opts.patch_id,
@@ -718,6 +767,7 @@ This file is the in-repo receipt. The authoritative approval event is the GitHub
         actor = opts.actor,
         run = opts.run_url,
         sha = opts.sha,
+        token = review_token_row(opts.reviewed),
         at = at,
     )
 }

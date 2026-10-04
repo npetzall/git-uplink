@@ -305,6 +305,10 @@ pub struct PatchApproval {
     pub patch_id_stable: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_url: Option<String>,
+    /// Review token of the content this approval is for. Absent on
+    /// approvals recorded before tokens existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed: Option<String>,
 }
 
 /// Company assessment-hook extras stored on `uplink/state` under
