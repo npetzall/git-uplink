@@ -19,15 +19,91 @@ concurrency:
   group: uplink-mutate
   queue: max
 
-permissions:
-  contents: write
-  pull-requests: write
-  actions: read
+permissions: {}
 
 jobs:
-  import:
+  # preflight.sh builds and runs product code (public upstream's included),
+  # so it runs in this job: read-only token, no App token, no Environment,
+  # no credentials in the checkout. The job that holds the write tokens
+  # takes the result and never runs the script.
+  preflight:
+    name: Preflight (no credentials)
     if: github.event.pull_request.merged
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.run.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git uplink init
+          fetch_origin() {
+            local auth
+            auth=$(printf 'x-access-token:%s' "$UPLINK_INTERNAL_TOKEN" | base64 -w0)
+            git \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=" \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
+              fetch --quiet origin "$@"
+          }
+          fetch_origin "$FROM_SHA" "$HEAD_SHA"
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one.
+      - name: Run preflight.sh
+        id: run
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          INTERNAL_ONLY: ${{ contains(github.event.pull_request.labels.*.name, 'uplink:internal-only') }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > "$RUNNER_TEMP/uplink-msg.txt"
+          extra=()
+          if [ "$INTERNAL_ONLY" = "true" ]; then extra+=(--internal-only); fi
+          report=$(git uplink preflight --json --title "$TITLE" \
+            --message-file "$RUNNER_TEMP/uplink-msg.txt" \
+            --from "$FROM_SHA" --head "$HEAD_SHA" "${extra[@]}") || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
+  import:
+    needs: preflight
+    if: github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,11 +129,6 @@ jobs:
           permission-contents: write
           permission-workflows: write
 
-      - name: Run company toolchain hook
-        uses: $/.github/actions/uplink-toolchain-hook
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Import as a queued patch
         env:
           TITLE: ${{ github.event.pull_request.title }}
@@ -71,8 +142,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          PREFLIGHT_REPORT: ${{ needs.preflight.outputs.report }}
         run: |
           git uplink init
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
           extra=()
           if [ "$INTERNAL_ONLY" = "true" ]; then extra+=(--internal-only); fi
           {
@@ -101,7 +174,8 @@ jobs:
           set +e
           git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" --head "$HEAD_SHA" --base-branch "$BASE_REF" \
-            --pr "$PR_NUMBER" --pr-url "$PR_URL" "${extra[@]}" > /tmp/uplink-add.out
+            --pr "$PR_NUMBER" --pr-url "$PR_URL" \
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" "${extra[@]}" > /tmp/uplink-add.out
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then

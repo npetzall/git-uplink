@@ -180,9 +180,60 @@ jobs:
   # Do not put uplink-mutate on this job. A required-reviewer environment
   # holds its concurrency group the whole time the job is Waiting, which
   # would freeze import/resolve/transfer and block resolve's cancel+redispatch.
+  # preflight.sh builds and runs product code (public upstream's included),
+  # so it runs in this job: read-only token, no App token, no Environment,
+  # no credentials in the checkout. The job that holds the write tokens
+  # takes the result and never runs the script.
+  preflight:
+    name: Preflight (no credentials)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.run.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git uplink init
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one.
+      - name: Run preflight.sh
+        id: run
+        env:
+          PATCH_ID: ${{ inputs.patch_id }}
+        run: |
+          report=$(git uplink preflight "$PATCH_ID" --json) || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
   submit:
     name: Approve to-upstream environment and submit
-    needs: packet
+    needs: [packet, preflight]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -247,11 +298,6 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
-      - name: Run company toolchain hook
-        uses: $/.github/actions/uplink-toolchain-hook
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Record approval, export, and record the public PR
         env:
           GH_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
@@ -261,7 +307,9 @@ jobs:
           PATCH_ID: ${{ inputs.patch_id }}
           REVIEW_TOKEN: ${{ needs.packet.outputs.review_token }}
           HEAD_REPO: ${{ steps.queue.outputs.contrib_owner }}/${{ steps.queue.outputs.contrib_repo }}
+          PREFLIGHT_REPORT: ${{ needs.preflight.outputs.report }}
         run: |
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
           if [ -z "$REVIEW_TOKEN" ]; then
             echo "The packet job recorded no review token; not approving."
             exit 1
@@ -269,7 +317,9 @@ jobs:
           # Approves only the content the packet of this run showed.
           receipt=$(git uplink approve "$PATCH_ID" --reviewed "$REVIEW_TOKEN")
           printf '%s\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
-          submit_json=$(git uplink submit "$PATCH_ID")
+          # The result is for one tree. If uplink/upstream or uplink/hooks moved
+          # while this job waited for approval, submit stops; dispatch again.
+          submit_json=$(git uplink submit "$PATCH_ID" --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
           # GitHub creates the contrib commit (Git Database API) and signs it.
           # It shows as Verified only when UPLINK_CONTRIB_* is a GitHub App token.
           contrib_json=$(CONTRIB_COMMIT=$(jq -c .contribCommit <<<"$submit_json") \
