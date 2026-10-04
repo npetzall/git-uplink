@@ -6,18 +6,19 @@ use std::thread;
 use git_uplink::{
     AddPatchOpts, AdoptGroup, AmendMessage, ApprovalReceipt, CheckStatus, ConflictError,
     DEFAULT_CUTOFF, Error, Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
-    Patch, PatchIntent, PatchStatus, PendingMerge, ProgressMode, PushOpts, QueueConfig, QueueState,
-    RebuildOpts, Result, STATE_BRANCH, Settings, SettingsFlags, StepOutcome, SyncOpts,
-    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream,
-    accept_upstream_at, add_patch, amend_patch, approve_patch, approve_patch_reviewed, doctor,
-    drop_patch, extras_dir, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
-    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown, mark_merged,
-    parse_depends_on, preflight_incoming_change, push_queue, rebuild, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, review_token, status_snapshot, store_patch_extras, stored_extras_fresh,
-    strip_html_comments, submit_patch, summarize_queue, sync, sync_with, transfer_patch,
-    write_queue,
+    Patch, PatchIntent, PatchStatus, PendingMerge, PreflightReport, ProgressMode, PushOpts,
+    QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH, ScriptVerdict, Settings,
+    SettingsFlags, StepOutcome, SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    TransferDirection, accept_upstream, accept_upstream_at, add_patch, amend_patch,
+    amend_patch_with, amend_preflight, approve_patch, approve_patch_reviewed, doctor, drop_patch,
+    extras_dir, format_approval_receipt, format_approver_packet, format_contribution_packet,
+    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
+    git_ok, init, init_repo, load_extra_markdown, mark_merged, parse_depends_on,
+    preflight_incoming_change, push_queue, rebuild, rebuild_with, record_gated_pr,
+    record_pull_request, refresh_from_origin, report_paths, reset_from_origin, resolve_conflict,
+    review_token, status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments,
+    submit_patch, submit_patch_with, summarize_queue, sync, sync_with, transfer_patch,
+    transfer_patch_with, transfer_preflight, write_queue,
 };
 use tempfile::TempDir;
 
@@ -9382,5 +9383,588 @@ fn amend_complete_without_changes_leaves_the_queue() {
     assert_eq!(
         git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
         "main"
+    );
+}
+
+/// A `preflight.sh` that appends a line to a file outside the repo each time
+/// it runs, then runs `then`. Returns the file.
+fn set_counting_preflight_script(repo: &Path, then: &str) -> PathBuf {
+    let marker = keep_dir().join("preflight-runs");
+    set_preflight_script(repo, &format!("echo ran >> '{}'\n{then}", marker.display()));
+    marker
+}
+
+fn runs_of(marker: &Path) -> usize {
+    fs::read_to_string(marker)
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
+}
+
+fn sha256_change(company: &Path) {
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+}
+
+/// `git uplink <args>` in `repo`, with the report it printed on stdout.
+fn probe(repo: &Path, args: &[&str]) -> (bool, PreflightReport) {
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let report = serde_json::from_str(stdout.trim()).unwrap_or_else(|err| {
+        panic!(
+            "no report ({err}): {stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    (output.status.success(), report)
+}
+
+#[test]
+fn preflight_script_sees_no_credentials_from_the_environment_or_the_checkout() {
+    let world = setup_world();
+    let company = &world.company;
+    // What actions/checkout leaves behind with persist-credentials: true.
+    git(
+        company,
+        &[
+            "config",
+            "http.https://github.com/.extraheader",
+            "AUTHORIZATION: basic c2VjcmV0",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    set_preflight_script(
+        company,
+        r#"set -e
+test -z "$UPLINK_CONTRIB_TOKEN$UPLINK_INTERNAL_KEY$GITHUB_TOKEN$GH_ENTERPRISE_TOKEN"
+test -z "$ACTIONS_RUNTIME_TOKEN$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+# What the toolchain hook exports reaches the build.
+test "$JAVA_HOME" = /opt/java
+# The last value wins, and an empty one drops the header git would send.
+test -z "$(git config --get http.https://github.com/.extraheader)"
+test -z "$(git config --get credential.helper)""#,
+    );
+    sha256_change(company);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args([
+            "preflight",
+            "--from",
+            "main",
+            "--head",
+            "HEAD",
+            "--title",
+            "Use SHA-256 for tokens",
+        ])
+        .current_dir(company)
+        .env("UPLINK_CONTRIB_TOKEN", "contrib-secret")
+        .env("UPLINK_INTERNAL_KEY", "internal-secret")
+        .env("GITHUB_TOKEN", "github-secret")
+        .env("GH_ENTERPRISE_TOKEN", "enterprise-secret")
+        .env("ACTIONS_RUNTIME_TOKEN", "runtime-secret")
+        .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "oidc-secret")
+        .env("JAVA_HOME", "/opt/java")
+        .env_remove("CI")
+        .env_remove("GITHUB_ACTIONS")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_ci_job_with_credentials_refuses_to_run_the_preflight_script() {
+    let world = setup_world();
+    let company = &world.company;
+    let path = company.join(".uplink/queue.json");
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    raw["config"]["forge"] = "github".into();
+    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    let marker = set_counting_preflight_script(company, "true");
+    sha256_change(company);
+
+    let run = |envs: &[(&str, &str)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_git-uplink"));
+        cmd.args(["preflight", "--from", "main", "--head", "HEAD"])
+            .current_dir(company)
+            .env_remove("CI")
+            .env_remove("GITHUB_ACTIONS")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN");
+        for (name, value) in envs {
+            cmd.env(name, value);
+        }
+        cmd.output().unwrap()
+    };
+
+    let refused = run(&[("GITHUB_ACTIONS", "true"), ("UPLINK_CONTRIB_TOKEN", "s")]);
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{stderr}");
+    assert!(stderr.contains("UPLINK_CONTRIB_TOKEN"), "{stderr}");
+    assert!(stderr.contains("--preflight-result"), "{stderr}");
+    assert_eq!(runs_of(&marker), 0);
+
+    // The same job without the credential runs it, and so does a developer
+    // who has one exported.
+    assert!(run(&[("GITHUB_ACTIONS", "true")]).status.success());
+    assert!(run(&[("GH_TOKEN", "mine")]).status.success());
+    assert_eq!(runs_of(&marker), 2);
+}
+
+#[test]
+fn add_takes_the_preflight_result_and_never_runs_the_script() {
+    let world = setup_world();
+    let company = &world.company;
+    let marker = set_counting_preflight_script(company, "true");
+    sha256_change(company);
+
+    let (ok, report) = probe(
+        company,
+        &["preflight", "--from", "main", "--head", "HEAD", "--json"],
+    );
+    assert!(ok && report.ok, "{report:?}");
+    assert!(report.token.is_some());
+    assert_eq!(runs_of(&marker), 1);
+
+    // A result for other hooks does not cover this tree.
+    let stale = PreflightReport {
+        token: Some("0000000000000000000000000000000000000000".into()),
+        ..report.clone()
+    };
+    let opts = |preflight: PreflightReport| AddPatchOpts {
+        title: "Use SHA-256 for tokens".into(),
+        from_ref: Some("main".into()),
+        preflight: ScriptVerdict::Reported(preflight),
+        ..Default::default()
+    };
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    let from = git_ok(company, &["rev-parse", "main"]).unwrap();
+    land_on_main(company, &head);
+    let ranged = |preflight: PreflightReport| AddPatchOpts {
+        from_ref: Some(from.clone()),
+        head_ref: Some(head.clone()),
+        ..opts(preflight)
+    };
+    let Err(Error::Preflight(err)) = add_patch(company, ranged(stale)) else {
+        panic!("a stale result must be refused");
+    };
+    assert_eq!(err.stage, "stale");
+    assert!(git_uplink::read_queue(company).unwrap().upstream.is_empty());
+
+    let patch = add_patch(company, ranged(report)).unwrap();
+    assert_eq!(patch.status, PatchStatus::Queued);
+    assert_eq!(runs_of(&marker), 1, "add must not run preflight.sh");
+}
+
+#[test]
+fn add_fails_with_the_reported_failure_without_running_the_script() {
+    let world = setup_world();
+    let company = &world.company;
+    let marker = set_counting_preflight_script(company, "echo tests are red; exit 3");
+    sha256_change(company);
+
+    let (ok, report) = probe(
+        company,
+        &["preflight", "--from", "main", "--head", "HEAD", "--json"],
+    );
+    assert!(!ok && !report.ok, "{report:?}");
+    assert_eq!(report.stage.as_deref(), Some("command"));
+    assert!(report.token.is_some());
+    let runs = runs_of(&marker);
+
+    let err = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            preflight: ScriptVerdict::Reported(report),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    let Error::Preflight(err) = err else {
+        panic!("expected the reported failure, got {err}");
+    };
+    assert_eq!(err.stage, "command");
+    assert!(err.to_string().contains("exit 3"), "{err}");
+    assert_eq!(err.output.as_deref(), Some("tests are red"));
+    assert_eq!(runs_of(&marker), runs);
+}
+
+#[test]
+fn transfer_start_decides_from_the_probe_without_running_the_script() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let marker = set_counting_preflight_script(company, "grep -q ready NOTES.md");
+    let state = rev_of(company, STATE_BRANCH);
+
+    let failed =
+        transfer_preflight(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(!failed.ok, "{failed:?}");
+    assert!(failed.token.is_some());
+    // The probe changed nothing.
+    assert_eq!(rev_of(company, STATE_BRANCH), state);
+    assert!(!ref_exists(
+        company,
+        &format!("uplink/transfer-to-upstream/{}", patch.id)
+    ));
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    let runs = runs_of(&marker);
+    assert!(runs >= 1);
+
+    // A result for another tree is an error, not a gate.
+    let stale = PreflightReport {
+        ok: true,
+        token: Some("0000000000000000000000000000000000000000".into()),
+        ..PreflightReport::default()
+    };
+    let err = transfer_patch_with(
+        company,
+        &patch.id,
+        TransferDirection::ToUpstream,
+        false,
+        &ScriptVerdict::Reported(stale),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, Error::Preflight(ref e) if e.stage == "stale"),
+        "{err}"
+    );
+    assert!(!ref_exists(
+        company,
+        &format!("uplink/transfer-to-upstream/{}", patch.id)
+    ));
+
+    let gated = transfer_patch_with(
+        company,
+        &patch.id,
+        TransferDirection::ToUpstream,
+        false,
+        &ScriptVerdict::Reported(failed),
+    )
+    .unwrap();
+    assert!(gated.gated && !gated.transferred, "{gated:?}");
+    assert!(
+        gated
+            .message
+            .as_deref()
+            .unwrap_or("")
+            .contains("preflight.sh"),
+        "{gated:?}"
+    );
+    assert_eq!(runs_of(&marker), runs, "transfer must not run preflight.sh");
+
+    // The gated work makes it pass; complete is probed and recorded the same way.
+    let work = gated.work_branch.unwrap();
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "NOTES.md", "internal-notes\nready\n");
+    commit_all(company, "make preflight pass");
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    let passed =
+        transfer_preflight(company, &patch.id, TransferDirection::ToUpstream, true).unwrap();
+    assert!(passed.ok, "{passed:?}");
+    assert_eq!(git_ok(company, &["rev-parse", "HEAD"]).unwrap(), head);
+    assert!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .is_internal(&patch.id)
+    );
+    let runs = runs_of(&marker);
+
+    let done = transfer_patch_with(
+        company,
+        &patch.id,
+        TransferDirection::ToUpstream,
+        true,
+        &ScriptVerdict::Reported(passed),
+    )
+    .unwrap();
+    assert!(done.transferred, "{done:?}");
+    assert!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .is_upstream(&patch.id)
+    );
+    assert_eq!(runs_of(&marker), runs);
+}
+
+#[test]
+fn transfer_to_internal_takes_the_probe_of_the_previewed_tree() {
+    let world = setup_world();
+    let company = &world.company;
+    sha256_change(company);
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let marker = set_counting_preflight_script(company, "grep -q sha256 src/tokens.js");
+
+    let report =
+        transfer_preflight(company, &patch.id, TransferDirection::ToInternal, false).unwrap();
+    assert!(report.ok && report.token.is_some(), "{report:?}");
+    let runs = runs_of(&marker);
+    let done = transfer_patch_with(
+        company,
+        &patch.id,
+        TransferDirection::ToInternal,
+        false,
+        &ScriptVerdict::Reported(report),
+    )
+    .unwrap();
+    assert!(done.transferred, "{done:?}");
+    assert_eq!(runs_of(&marker), runs);
+}
+
+#[test]
+fn amend_complete_is_probed_then_recorded_without_running_the_script() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let marker = set_counting_preflight_script(company, "grep -q reviewed NOTES.md");
+    amend_patch(company, &patch.id, false, None).unwrap();
+    amend_on_work_and_squash(company, &patch.id, "NOTES.md", "internal-notes\nreviewed\n");
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    let state = rev_of(company, STATE_BRANCH);
+
+    let report = amend_preflight(company, &patch.id, None).unwrap();
+    assert!(report.ok && report.token.is_some(), "{report:?}");
+    assert_eq!(git_ok(company, &["rev-parse", "HEAD"]).unwrap(), head);
+    assert_eq!(rev_of(company, STATE_BRANCH), state);
+    assert_eq!(runs_of(&marker), 1);
+
+    let done = amend_patch_with(
+        company,
+        &patch.id,
+        true,
+        None,
+        &ScriptVerdict::Reported(report),
+    )
+    .unwrap();
+    assert!(done.completed && done.changed, "{done:?}");
+    assert_eq!(runs_of(&marker), 1, "amend must not run preflight.sh");
+    assert_eq!(
+        git_ok(company, &["show", "main:NOTES.md"]).unwrap(),
+        "internal-notes\nreviewed"
+    );
+}
+
+#[test]
+fn submit_takes_the_preflight_result_of_the_queued_patch() {
+    let world = setup_world();
+    let company = &world.company;
+    sha256_change(company);
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    approve_patch(company, &patch.id).unwrap();
+    let marker = set_counting_preflight_script(company, "true");
+
+    let (ok, report) = probe(company, &["preflight", &patch.id, "--json"]);
+    assert!(ok && report.ok, "{report:?}");
+    assert_eq!(runs_of(&marker), 1);
+
+    // The script changed after the probe: the result no longer applies.
+    set_counting_preflight_script(company, "true # v2");
+    let err =
+        submit_patch_with(company, &patch.id, false, &ScriptVerdict::Reported(report)).unwrap_err();
+    assert!(
+        matches!(err, Error::Preflight(ref e) if e.stage == "stale"),
+        "{err}"
+    );
+
+    let (_, fresh) = probe(company, &["preflight", &patch.id, "--json"]);
+    let exported =
+        submit_patch_with(company, &patch.id, false, &ScriptVerdict::Reported(fresh)).unwrap();
+    assert_eq!(exported.branch, format!("uplink/{}", patch.id));
+}
+
+#[test]
+fn a_job_with_credentials_submits_with_the_result_of_a_job_without() {
+    let world = setup_world();
+    let company = &world.company;
+    sha256_change(company);
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    approve_patch(company, &patch.id).unwrap();
+    let path = company.join(".uplink/queue.json");
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    raw["config"]["forge"] = "github".into();
+    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    git_uplink::commit_queue(company, "test: record a forge").unwrap();
+    let marker = set_counting_preflight_script(company, "true");
+
+    let uplink = |args: &[&str], envs: &[(&str, &str)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_git-uplink"));
+        cmd.args(args)
+            .current_dir(company)
+            .env("GITHUB_ACTIONS", "true")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN");
+        for (name, value) in envs {
+            cmd.env(name, value);
+        }
+        cmd.output().unwrap()
+    };
+    let tokens = [
+        ("GH_TOKEN", "upstream"),
+        ("UPLINK_CONTRIB_TOKEN", "contrib"),
+    ];
+
+    // The job without credentials.
+    let probed = uplink(&["preflight", &patch.id, "--json"], &[]);
+    assert!(probed.status.success(), "{probed:?}");
+    let result = keep_dir().join("uplink-preflight.json");
+    fs::write(&result, &probed.stdout).unwrap();
+    assert_eq!(runs_of(&marker), 1);
+
+    // The job with them: refused on its own, fine with the result.
+    let refused = uplink(&["submit", &patch.id], &tokens);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--preflight-result"),
+        "{refused:?}"
+    );
+    let submitted = uplink(
+        &[
+            "submit",
+            &patch.id,
+            "--preflight-result",
+            result.to_str().unwrap(),
+        ],
+        &tokens,
+    );
+    assert!(submitted.status.success(), "{submitted:?}");
+    assert_eq!(runs_of(&marker), 1, "submit must not run preflight.sh");
+
+    // Not a result: refused before anything runs.
+    fs::write(&result, "not json").unwrap();
+    let garbage = uplink(
+        &[
+            "submit",
+            &patch.id,
+            "--preflight-result",
+            result.to_str().unwrap(),
+        ],
+        &tokens,
+    );
+    assert!(!garbage.status.success());
+    assert!(
+        String::from_utf8_lossy(&garbage.stderr).contains("is not a preflight result"),
+        "{garbage:?}"
+    );
+}
+
+#[test]
+fn init_refuses_to_seed_uplink_upstream_when_origin_has_the_queue_without_it() {
+    let world = setup_uninitialized();
+    let company = &world.company;
+    init(
+        company,
+        InitOpts {
+            upstream_url: Some(world.upstream.to_str().unwrap().into()),
+            contrib_url: Some(remote_get_url(company, "contrib")),
+            forge: Some(Forge::Github),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let origin_keep = temp_dir();
+    let origin = origin_keep.path().join("origin.git");
+    git(
+        Path::new("/tmp"),
+        &["init", "--bare", "--quiet", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    // The queue and main reach origin; the accepted public base does not.
+    for branch in ["main", "uplink/state"] {
+        git(
+            company,
+            &["push", "--quiet", "origin", branch],
+            GitOpts::default(),
+        )
+        .unwrap();
+    }
+    let accepted = git_ok(company, &["rev-parse", "uplink/upstream"]).unwrap();
+
+    let clone_keep = temp_dir();
+    let clone = clone_keep.path().to_path_buf();
+    git(
+        Path::new("/tmp"),
+        &[
+            "clone",
+            "--quiet",
+            origin.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let err = init(&clone, InitOpts::default()).unwrap_err().to_string();
+    assert!(err.contains("no uplink/upstream"), "{err}");
+    assert!(
+        !has_git_ref(&clone, "uplink/upstream"),
+        "init must not seed the base from public upstream"
+    );
+
+    // With the branch back on origin, the clone takes the accepted base.
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    init(&clone, InitOpts::default()).unwrap();
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "uplink/upstream"]).unwrap(),
+        accepted
     );
 }

@@ -52,7 +52,11 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
 
 - Other files on the branch are checked out beside the script for the run; reach them with `\"$(dirname \"$0\")\"`.
 
-- Credentials (`GITHUB_TOKEN`, `GH_TOKEN`, `UPLINK_*_TOKEN`, `UPLINK_*_KEY`) are removed from its environment.
+- Environment: the caller's, without `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `UPLINK_*_TOKEN` and `UPLINK_*_KEY`.
+
+- Credentials: the script builds and runs product code, so it must not run where credentials are. An emptied environment does not hide them from a process on the same runner. In CI (`CI` or `GITHUB_ACTIONS` set) with a forge recorded, a command that holds a credential refuses to run the script. Run `git uplink preflight --json` (or `transfer` / `amend --complete` with `--preflight-only`) in a job without credentials, and give the output to `add`, `submit`, `transfer` or `amend --complete` with `--preflight-result <file>`. The result carries a token for the tree and the hooks it was tested with; a command accepts it only for the same tree.
+
+- Known limitations: the job that runs the script still holds a read-only token and a clone of the company repository, so code the script runs can read company source. The verdict is the script's exit code, which code it runs could force to 0. Preflight checks that a change builds and passes its tests; it is not a defence against hostile code in the tree.
 
 - Created by `init`, with the answer to its preflight question (or `--preflight <cmd>`) as the script's command. `init --upgrade` adds the script when the branch lacks it, offering the command an older `queue.json` held. An existing script is never rewritten; edit it on `uplink/hooks`.
 
@@ -339,6 +343,14 @@ pub enum Commands {
         /// Patch this one depends on, on top of the message trailers (repeatable).
         #[arg(long = "depends-on", value_name = "id")]
         depends_on: Vec<String>,
+        /// Take the verdict of preflight.sh from this file instead of running it.
+        ///
+        /// The file is the output of `git uplink preflight --json`
+        /// from a job without credentials. It is used only when it is for
+        /// the tree this command builds; otherwise the command fails and
+        /// preflight has to run again.
+        #[arg(long = "preflight-result", value_name = "path")]
+        preflight_result: Option<PathBuf>,
         /// Directory of company assessment-hook *.md extras to store with the patch.
         ///
         /// Stored for an upstream-bound patch under
@@ -409,6 +421,9 @@ pub enum Commands {
         /// Read preflight.sh from this revision instead of uplink/hooks, to try a change to it.
         #[arg(long, value_name = "rev")]
         hooks: Option<String>,
+        /// Print the result as JSON, for `--preflight-result` of the command that records it.
+        #[arg(long)]
+        json: bool,
     },
     /// Check the message, cutoff, author, and affiliation of a change.
     ///
@@ -526,6 +541,14 @@ pub enum Commands {
         /// Force-push the local, unsigned export commit to contrib instead.
         #[arg(long)]
         push: bool,
+        /// Take the verdict of preflight.sh from this file instead of running it.
+        ///
+        /// The file is the output of `git uplink preflight --json`
+        /// from a job without credentials. It is used only when it is for
+        /// the tree this command builds; otherwise the command fails and
+        /// preflight has to run again.
+        #[arg(long = "preflight-result", value_name = "path")]
+        preflight_result: Option<PathBuf>,
     },
     /// Record the upstream PR of a submitted patch and push uplink/state.
     ///
@@ -678,6 +701,23 @@ pub enum Commands {
         /// Finish a gated transfer after the work PR is merged.
         #[arg(long)]
         complete: bool,
+        /// Take the verdict of preflight.sh from this file instead of running it.
+        ///
+        /// The file is the output of `git uplink preflight --json`,
+        /// or of this command with `--preflight-only`,
+        /// from a job without credentials. It is used only when it is for
+        /// the tree this command builds; otherwise the command fails and
+        /// preflight has to run again.
+        #[arg(long = "preflight-result", value_name = "path")]
+        preflight_result: Option<PathBuf>,
+        /// Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+        ///
+        /// For a job without credentials; pass the output to the same
+        /// command with `--preflight-result`. Exits non-zero when the
+        /// result is not a pass. With `--complete` the checkout is
+        /// left on the squashed work, so use a clone made for it.
+        #[arg(long = "preflight-only", conflicts_with = "preflight_result")]
+        preflight_only: bool,
     },
     /// Revise a patch through a gated PR from uplink/amend/<id>-work.
     ///
@@ -728,6 +768,27 @@ pub enum Commands {
             conflicts_with = "message"
         )]
         message_file: Option<PathBuf>,
+        /// Take the verdict of preflight.sh from this file instead of running it.
+        ///
+        /// The file is the output of `git uplink preflight --json`,
+        /// or of this command with `--preflight-only`,
+        /// from a job without credentials. It is used only when it is for
+        /// the tree this command builds; otherwise the command fails and
+        /// preflight has to run again.
+        #[arg(long = "preflight-result", value_name = "path", requires = "complete")]
+        preflight_result: Option<PathBuf>,
+        /// Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+        ///
+        /// For a job without credentials; pass the output to the same
+        /// command with `--preflight-result`. Exits non-zero when the
+        /// result is not a pass. The checkout is left on the
+        /// squashed work, so use a clone made for it.
+        #[arg(
+            long = "preflight-only",
+            conflicts_with = "preflight_result",
+            requires = "complete"
+        )]
+        preflight_only: bool,
     },
     /// Start the embedded operator dashboard on 127.0.0.1 and open a browser.
     ///

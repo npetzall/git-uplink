@@ -19,6 +19,8 @@ pub struct AddPatchOpts {
     pub extra_dir: Option<PathBuf>,
     /// Where the extras came from, such as the hook run URL.
     pub extra_source: Option<String>,
+    /// Where the verdict of `preflight.sh` on the export tree comes from.
+    pub preflight: ScriptVerdict,
 }
 
 pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
@@ -238,7 +240,7 @@ fn validate_candidate(
     head_sha: &str,
 ) -> Result<()> {
     if !opts.internal_only {
-        assert_export_preflight(repo, queue, patch, candidate_abs, None)?;
+        export_preflight(repo, queue, patch, candidate_abs, None, &opts.preflight)?;
     }
     let explicit_range = opts.from_ref.is_some() && opts.head_ref.is_some();
     if !explicit_range {

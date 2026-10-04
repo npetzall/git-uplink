@@ -20,11 +20,21 @@ pub struct SubmitResult {
 /// contrib as is. Without, nothing leaves the machine and the forge creates
 /// the signed commit from the result.
 pub fn submit_patch(repo: &Path, id: &str, push: bool) -> Result<SubmitResult> {
+    submit_patch_with(repo, id, push, &ScriptVerdict::Run)
+}
+
+/// [`submit_patch`], taking the verdict of `preflight.sh` from `preflight`.
+pub fn submit_patch_with(
+    repo: &Path,
+    id: &str,
+    push: bool,
+    preflight: &ScriptVerdict,
+) -> Result<SubmitResult> {
     with_queue_lock(repo, || {
         ensure_upstream_ref(repo)?;
         let queue = read_queue_file(repo)?;
         let patch = get_patch(&queue, id)?.clone();
-        check_ready_to_submit(repo, &queue, &patch)?;
+        check_ready_to_submit(repo, &queue, &patch, preflight)?;
 
         let branch = format!("uplink/{id}");
         let base = rev_parse(repo, "uplink/upstream")?;
@@ -49,7 +59,12 @@ pub fn submit_patch(repo: &Path, id: &str, push: bool) -> Result<SubmitResult> {
 
 /// Upstream-bound, approved, upstream dependencies merged, assess ok,
 /// and export preflight passes. Every export is built on `uplink/upstream`.
-fn check_ready_to_submit(repo: &Path, queue: &QueueState, patch: &Patch) -> Result<()> {
+fn check_ready_to_submit(
+    repo: &Path,
+    queue: &QueueState,
+    patch: &Patch,
+    preflight: &ScriptVerdict,
+) -> Result<()> {
     let id = &patch.id;
     if !queue.is_upstream(id) {
         return Err(Error::msg(format!("{id} is internal-only")));
@@ -76,7 +91,15 @@ fn check_ready_to_submit(repo: &Path, queue: &QueueState, patch: &Patch) -> Resu
             "{id} changed since it was approved; approve the current content before submit (dispatch Uplink submit again)."
         )));
     }
-    assert_export_preflight(repo, queue, patch, &repo.join(patch_path(id)?), None)
+    export_preflight(
+        repo,
+        queue,
+        patch,
+        &repo.join(patch_path(id)?),
+        None,
+        preflight,
+    )
+    .map(|_| ())
 }
 
 /// Applies the patch on `start`, points `branch` at the result, and returns

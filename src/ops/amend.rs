@@ -31,17 +31,45 @@ pub fn amend_patch(
     complete: bool,
     message: Option<AmendMessage>,
 ) -> Result<AmendResult> {
+    amend_patch_with(repo, id, complete, message, &ScriptVerdict::Run)
+}
+
+/// [`amend_patch`], taking the verdict of `preflight.sh` from `preflight`.
+pub fn amend_patch_with(
+    repo: &Path,
+    id: &str,
+    complete: bool,
+    message: Option<AmendMessage>,
+    preflight: &ScriptVerdict,
+) -> Result<AmendResult> {
     if !complete && message.is_some() {
         return Err(Error::msg(
             "A new title or message applies only with --complete",
         ));
     }
     with_queue_lock(repo, || {
-        if complete {
-            complete_amend(repo, id, message.as_ref())
-        } else {
-            start_amend(repo, id)
+        if !complete {
+            return start_amend(repo, id);
         }
+        complete_amend(repo, id, message.as_ref(), Checks::Record(preflight)).map(Checked::recorded)
+    })
+}
+
+/// What `amend --complete` would test, and what `preflight.sh` says about
+/// it. The queue is left as it was; the checkout is not, so run it in a
+/// clone made for it.
+pub fn amend_preflight(
+    repo: &Path,
+    id: &str,
+    message: Option<AmendMessage>,
+) -> Result<PreflightReport> {
+    with_queue_lock(repo, || {
+        Ok(Checked::report(complete_amend(
+            repo,
+            id,
+            message.as_ref(),
+            Checks::Probe,
+        )))
     })
 }
 
@@ -158,7 +186,8 @@ fn complete_amend(
     repo: &Path,
     id: &str,
     new_message: Option<&AmendMessage>,
-) -> Result<AmendResult> {
+    checks: Checks<'_>,
+) -> Result<Checked<AmendResult>> {
     let base = GateKind::Amend.base_branch(id);
     let work = GateKind::Amend.work_branch(id);
     let head = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -251,7 +280,11 @@ fn complete_amend(
             GitOpts::default(),
         )?;
         crate::repo::ensure_state_worktree(repo)?;
-        return Ok(AmendResult {
+        if checks.is_probe() {
+            // Nothing changed, so complete has nothing to test.
+            return Ok(Checked::Probed(PreflightReport::of(Ok(None))));
+        }
+        return Ok(Checked::Recorded(AmendResult {
             queue,
             id: id.into(),
             completed: true,
@@ -259,7 +292,7 @@ fn complete_amend(
             base_branch: None,
             work_branch: None,
             onto: None,
-        });
+        }));
     }
 
     fs::create_dir_all(repo.join(".uplink/patches"))?;
@@ -270,17 +303,28 @@ fn complete_amend(
         current.title = updated.title.clone();
         current.commit_message = updated.commit_message.clone();
     }
+    let verdict = checks.verdict();
     let layer_checks = if intent.is_internal_only() {
-        run_preflight_command_in(&queue, repo, None)
+        command_preflight(&queue, repo, None, verdict)
     } else {
-        assert_export_preflight(repo, &queue, get_patch(&queue, id)?, &patch_abs, None)
-            .and_then(|_| assert_upstream_layer_applies(repo, &queue))
+        export_preflight(
+            repo,
+            &queue,
+            get_patch(&queue, id)?,
+            &patch_abs,
+            None,
+            verdict,
+        )
+        .and_then(|token| assert_upstream_layer_applies(repo, &queue).map(|_| token))
     };
-    if let Err(err) = layer_checks {
+    if checks.is_probe() || layer_checks.is_err() {
         restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-        return Err(err);
     }
+    if checks.is_probe() {
+        return Ok(Checked::Probed(PreflightReport::of(layer_checks)));
+    }
+    layer_checks?;
 
     {
         let current = get_patch_mut(&mut queue, id)?;
@@ -301,7 +345,7 @@ fn complete_amend(
     write_queue_file(repo, &queue)?;
     commit_queue(repo, &format!("uplink: amend {id}"))?;
     let queue = rebuild(repo)?;
-    Ok(AmendResult {
+    Ok(Checked::Recorded(AmendResult {
         queue,
         id: id.into(),
         completed: true,
@@ -309,5 +353,5 @@ fn complete_amend(
         base_branch: None,
         work_branch: None,
         onto: None,
-    })
+    }))
 }

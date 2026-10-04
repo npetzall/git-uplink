@@ -50,16 +50,19 @@ pub use ops::{
     AddPatchOpts, AmendMessage, AmendResult, IncomingClaim, InitOpts, InitResult, PushOpts,
     PushResult, QueueCounts, RebuildOpts, RebuildResult, RefreshResult, ResetResult, StateStatus,
     StatusReport, StatusSnapshot, SubmitResult, SyncOpts, SyncResult, TransferResult,
-    accept_upstream, accept_upstream_at, add_patch, amend_patch, approval_stale, approve_patch,
-    approve_patch_at, approve_patch_reviewed, drop_patch, format_status_table, init, init_repo,
-    init_repo_with_progress, mark_merged, push_queue, read_queue, rebuild, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, reset_from_origin, resolve_conflict,
-    stale_approvals, state_status_at, status_report, status_snapshot, store_patch_extras,
-    submit_patch, summarize_queue, sync, sync_with, transfer_patch, write_queue,
+    accept_upstream, accept_upstream_at, add_patch, amend_patch, amend_patch_with, amend_preflight,
+    approval_stale, approve_patch, approve_patch_at, approve_patch_reviewed, drop_patch,
+    format_status_table, init, init_repo, init_repo_with_progress, mark_merged, push_queue,
+    read_queue, rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
+    reset_from_origin, resolve_conflict, stale_approvals, state_status_at, status_report,
+    status_snapshot, store_patch_extras, submit_patch, submit_patch_with, summarize_queue, sync,
+    sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
 };
 pub use preflight::{
-    IncomingPreflight, assert_export_preflight, preflight_existing_patch,
-    preflight_incoming_change, run_preflight_command_in,
+    IncomingPreflight, PreflightReport, ScriptVerdict, assert_export_preflight, command_preflight,
+    existing_patch_preflight, export_preflight, incoming_change_preflight,
+    preflight_existing_patch, preflight_incoming_change, refuse_script_with_credentials,
+    run_preflight_command_in,
 };
 pub use progress::{ProgressMode, StepOutcome, StepProgress, format_step_line};
 pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};

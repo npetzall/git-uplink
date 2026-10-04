@@ -8,23 +8,23 @@ use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
     AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT,
-    Forge, IncomingPreflight, InitOpts, MergeVia, PreflightError, ProgressMode, PushOpts,
-    RebuildOpts, STATE_BRANCH, TO_UPSTREAM_ENVIRONMENT, accept_upstream_at, add_patch,
-    adopted_next_steps, amend_patch, approve_patch_reviewed, assess_from_message, commit_queue,
-    doctor, drop_patch, format_approval_receipt, format_assess_markdown,
+    Forge, IncomingPreflight, InitOpts, MergeVia, PreflightError, PreflightReport, ProgressMode,
+    PushOpts, RebuildOpts, STATE_BRANCH, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT,
+    accept_upstream_at, add_patch, adopted_next_steps, amend_patch_with, amend_preflight,
+    approve_patch_reviewed, assess_from_message, command_preflight, commit_queue, doctor,
+    drop_patch, existing_patch_preflight, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
-    format_status_table, from_upstream_report_paths, git_ok, hooks_publish_hint, init,
-    load_groups_file, mark_merged, parse_github_repo, parse_pull_request_url,
-    preflight_existing_patch, preflight_incoming_change, push_queue, read_queue, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, review_token, review_token_path, status_report, status_snapshot,
-    store_patch_extras, stored_commit_message, submit_patch, sync_with, transfer_patch,
-    write_man_pages,
+    format_status_table, from_upstream_report_paths, git_ok, hooks_publish_hint,
+    incoming_change_preflight, init, load_groups_file, mark_merged, parse_github_repo,
+    parse_pull_request_url, push_queue, read_queue, rebuild_with, record_gated_pr,
+    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
+    reset_from_origin, resolve_conflict, review_token, review_token_path, status_report,
+    status_snapshot, store_patch_extras, stored_commit_message, submit_patch_with, sync_with,
+    transfer_patch_with, transfer_preflight, write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
-    SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult,
-    run_preflight_command_in, stdin_is_tty,
+    SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult, stdin_is_tty,
 };
 
 const VERSION: &str = concat!(
@@ -647,6 +647,9 @@ fn cmd_doctor(repo: &Path, json: bool) -> Result<(), Error> {
 
 fn cmd_add(repo: &Path, opts: AddPatchOpts) -> Result<(), Error> {
     let internal_only = opts.internal_only;
+    if !internal_only {
+        refuse_script_here(repo, &opts.preflight, None)?;
+    }
     match add_patch(repo, opts) {
         Ok(patch) => {
             println!(
@@ -774,19 +777,74 @@ fn cmd_report(
     Ok(())
 }
 
+/// The verdict a command works with: read from `--preflight-result`, else
+/// `preflight.sh` is run here.
+fn script_verdict(result: Option<PathBuf>) -> Result<ScriptVerdict, Error> {
+    Ok(match result {
+        Some(path) => ScriptVerdict::Reported(PreflightReport::read(&path)?),
+        None => ScriptVerdict::Run,
+    })
+}
+
+/// Stops a command that would run `preflight.sh` in a CI job that holds
+/// credentials.
+fn refuse_script_here(
+    repo: &Path,
+    verdict: &ScriptVerdict,
+    hooks_ref: Option<&str>,
+) -> Result<(), Error> {
+    match verdict {
+        ScriptVerdict::Run => refuse_script_with_credentials(repo, &read_queue(repo)?, hooks_ref),
+        ScriptVerdict::Reported(_) => Ok(()),
+    }
+}
+
+/// Prints `result` as the JSON `--preflight-result` reads. `comment` is the
+/// markdown a failure is reported with.
+fn print_preflight_report(result: Result<Option<String>, Error>) -> Result<(), Error> {
+    let comment = match &result {
+        Err(Error::Preflight(pre)) => Some(preflight_comment(pre)),
+        _ => None,
+    };
+    finish_preflight_report(PreflightReport::of(result), comment)
+}
+
+fn finish_preflight_report(report: PreflightReport, comment: Option<String>) -> Result<(), Error> {
+    let mut value = serde_json::to_value(&report)?;
+    if let Some(comment) = comment {
+        value["comment"] = serde_json::Value::String(comment);
+    }
+    println!("{value}");
+    if report.ok {
+        return Ok(());
+    }
+    Err(Error::msg(
+        report
+            .message
+            .unwrap_or_else(|| "preflight did not pass".to_string()),
+    ))
+}
+
 fn cmd_preflight(
     repo: &Path,
     id: Option<String>,
     incoming: IncomingPreflight,
+    json: bool,
 ) -> Result<(), Error> {
+    if !incoming.internal_only {
+        refuse_script_here(repo, &ScriptVerdict::Run, incoming.hooks_ref.as_deref())?;
+    }
     let result = if let Some(id) = id {
         let queue = read_queue(repo)?;
-        preflight_existing_patch(repo, &queue, &id, incoming.hooks_ref.as_deref())
+        existing_patch_preflight(repo, &queue, &id, incoming.hooks_ref.as_deref())
     } else {
-        preflight_incoming_change(repo, incoming)
+        incoming_change_preflight(repo, incoming)
     };
+    if json {
+        return print_preflight_report(result);
+    }
     match result {
-        Ok(()) => {
+        Ok(_) => {
             println!("export preflight passed");
             Ok(())
         }
@@ -799,10 +857,15 @@ fn cmd_preflight(
 
 /// Runs `preflight.sh` from `uplink/hooks` in the current tree, with nothing
 /// applied. The gate uses it for internal-only patches.
-fn cmd_preflight_command(repo: &Path, hooks_ref: Option<&str>) -> Result<(), Error> {
+fn cmd_preflight_command(repo: &Path, hooks_ref: Option<&str>, json: bool) -> Result<(), Error> {
     let queue = read_queue(repo)?;
-    match run_preflight_command_in(&queue, repo, hooks_ref) {
-        Ok(()) => {
+    refuse_script_with_credentials(repo, &queue, hooks_ref)?;
+    let result = command_preflight(&queue, repo, hooks_ref, &ScriptVerdict::Run);
+    if json {
+        return print_preflight_report(result);
+    }
+    match result {
+        Ok(_) => {
             println!("preflight command passed");
             Ok(())
         }
@@ -868,14 +931,15 @@ fn cmd_approve(
     Ok(())
 }
 
-fn cmd_submit(repo: &Path, id: &str, push: bool) -> Result<(), Error> {
+fn cmd_submit(repo: &Path, id: &str, push: bool, verdict: &ScriptVerdict) -> Result<(), Error> {
+    refuse_script_here(repo, verdict, None)?;
     let queue = read_queue(repo)?;
     let patch = queue
         .all_patches()
         .find(|p| p.id == id)
         .cloned()
         .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
-    let exported = match submit_patch(repo, id, push) {
+    let exported = match submit_patch_with(repo, id, push, verdict) {
         Ok(v) => v,
         Err(err) => {
             print_failure_comment(&err);
@@ -1022,8 +1086,12 @@ fn cmd_amend(
     id: &str,
     complete: bool,
     change: Option<AmendMessage>,
+    verdict: &ScriptVerdict,
 ) -> Result<(), Error> {
-    match amend_patch(repo, id, complete, change) {
+    if complete {
+        refuse_script_here(repo, verdict, None)?;
+    }
+    match amend_patch_with(repo, id, complete, change, verdict) {
         Ok(result) => {
             print_amend_artifact(repo, &result)?;
             if !result.completed {
@@ -1055,8 +1123,10 @@ fn cmd_transfer(
     id: &str,
     direction: TransferDirection,
     complete: bool,
+    verdict: &ScriptVerdict,
 ) -> Result<(), Error> {
-    let result = transfer_patch(repo, id, direction, complete)?;
+    refuse_script_here(repo, verdict, None)?;
+    let result = transfer_patch_with(repo, id, direction, complete, verdict)?;
     print_transfer_artifact(repo, &result)?;
     if result.gated {
         eprintln!(
@@ -1139,6 +1209,7 @@ fn run() -> Result<(), Error> {
             pr_url,
             base_branch,
             depends_on,
+            preflight_result,
             extra_dir,
             extra_source,
         } => {
@@ -1158,6 +1229,7 @@ fn run() -> Result<(), Error> {
                     base_branch,
                     extra_dir,
                     extra_source,
+                    preflight: script_verdict(preflight_result)?,
                     ..Default::default()
                 },
             )
@@ -1211,9 +1283,10 @@ fn run() -> Result<(), Error> {
             internal_only,
             command_only,
             hooks,
+            json,
         } => {
             if command_only {
-                return cmd_preflight_command(&repo, hooks.as_deref());
+                return cmd_preflight_command(&repo, hooks.as_deref(), json);
             }
             let title = title.unwrap_or_else(|| "candidate change".into());
             let message = read_commit_message(message, message_file, &title)?;
@@ -1229,13 +1302,18 @@ fn run() -> Result<(), Error> {
                     hooks_ref: hooks,
                     internal_only,
                 },
+                json,
             )
         }
         Commands::Status { json } => cmd_status(&repo, json),
         Commands::Approve { id, out, reviewed } => {
             cmd_approve(&repo, &id, out, reviewed.as_deref())
         }
-        Commands::Submit { id, push } => cmd_submit(&repo, &id, push),
+        Commands::Submit {
+            id,
+            push,
+            preflight_result,
+        } => cmd_submit(&repo, &id, push, &script_verdict(preflight_result)?),
         Commands::Submitted {
             id,
             pr_url,
@@ -1263,6 +1341,8 @@ fn run() -> Result<(), Error> {
             to_upstream,
             to_internal: _,
             complete,
+            preflight_result,
+            preflight_only,
         } => {
             // clap requires exactly one of --to-upstream / --to-internal.
             let direction = if to_upstream {
@@ -1270,7 +1350,18 @@ fn run() -> Result<(), Error> {
             } else {
                 TransferDirection::ToInternal
             };
-            cmd_transfer(&repo, &id, direction, complete)
+            if preflight_only {
+                refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
+                let report = transfer_preflight(&repo, &id, direction, complete)?;
+                return finish_preflight_report(report, None);
+            }
+            cmd_transfer(
+                &repo,
+                &id,
+                direction,
+                complete,
+                &script_verdict(preflight_result)?,
+            )
         }
         Commands::Amend {
             id,
@@ -1278,6 +1369,8 @@ fn run() -> Result<(), Error> {
             title,
             message,
             message_file,
+            preflight_result,
+            preflight_only,
         } => {
             let change = match title {
                 Some(title) => {
@@ -1290,7 +1383,18 @@ fn run() -> Result<(), Error> {
                 }
                 None => None,
             };
-            cmd_amend(&repo, &id, complete, change)
+            if preflight_only {
+                refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
+                let report = amend_preflight(&repo, &id, change)?;
+                return finish_preflight_report(report, None);
+            }
+            cmd_amend(
+                &repo,
+                &id,
+                complete,
+                change,
+                &script_verdict(preflight_result)?,
+            )
         }
         Commands::WebUi { port, no_open } => cmd_web_ui(repo, port, no_open),
         Commands::Man { dir } => {
