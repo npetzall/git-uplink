@@ -2,30 +2,6 @@ name: PR
 
 on:
   pull_request:
-    paths:
-      - src/**
-      - tests/**
-      - docs/cli.md
-      - web/**
-      - templates/**
-      - Cargo.toml
-      - Cargo.lock
-      - build.rs
-      - Cross.toml
-      - rust-toolchain.toml
-      - .github/calculate-version.sh
-      - .github/workflows/pr.yml
-      - .github/workflows/product.yml
-      - .github/workflows/version.yml
-      - .github/workflows/codeql.yml
-      - .github/workflows/zizmor.yml
-      - .github/workflows/socket.yml
-      - .github/codeql/web.yml
-      - .github/codeql/templates.yml
-      - .github/codeql/github-scripts.yml
-      - .github/*.py
-      - .pre-commit-config.yaml
-      - ruff.toml
 
 permissions: {}
 
@@ -34,7 +10,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Changed scopes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      product: ${{ steps.scopes.outputs.product }}
+      site: ${{ steps.scopes.outputs.site }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit and its parents: HEAD^1 is the base branch.
+          fetch-depth: 2
+      - name: Check scope rules
+        run: bash .github/changed-scopes.sh --self-check
+      - name: Find changed scopes
+        id: scopes
+        run: |
+          set -euo pipefail
+          git -c core.quotePath=false diff --name-only HEAD^1 HEAD \
+            | bash .github/changed-scopes.sh | tee -a "$GITHUB_OUTPUT"
+
   version:
+    needs: changes
+    if: needs.changes.outputs.product == 'true'
     uses: $/.github/workflows/version.yml
     permissions:
       contents: read
@@ -55,16 +56,44 @@ jobs:
       issues: write
       pull-requests: write
 
+  site:
+    needs: changes
+    if: needs.changes.outputs.site == 'true'
+    uses: $/.github/workflows/site.yml
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+      actions: read
+      issues: write
+      pull-requests: write
+
+  # Always runs, so a failure shows as a failed check and not a skipped one.
+  # A skipped scope is fine; a failed or cancelled job is not.
   merge-gate:
     name: Merge gate
-    needs: [version, product]
-    if: |
-      !cancelled() &&
-      needs.version.result == 'success' &&
-      needs.product.result == 'success'
+    needs: [changes, version, product, site]
+    if: always()
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - name: Ok to merge
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
+          set -euo pipefail
+          echo "changes: $CHANGES, all: $RESULTS"
+          if [[ "$CHANGES" != "success" ]]; then
+            echo "could not determine the changed scopes" >&2
+            exit 1
+          fi
+          case " $RESULTS " in
+            *" failure "* | *" cancelled "*)
+              echo "a required job failed or was cancelled" >&2
+              exit 1
+              ;;
+          esac
           echo "OK to merge"

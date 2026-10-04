@@ -55,9 +55,18 @@ sfw cargo clippy --locked --all-targets -- -D warnings
 
 ## CI
 
-### Product pull requests (`pr.yml`)
+### Pull requests (`pr.yml`)
 
-Runs when a PR changes `src/`, `web/`, `templates/`, the Rust manifests, `build.rs`, `Cross.toml`, `rust-toolchain.toml`, tests, or the product workflows. It calculates the next version and calls `product.yml` with a pre-release suffix `-pr.<number>.<run>.<attempt>`.
+Runs on every PR. The `Changed scopes` job passes the changed paths to `.github/changed-scopes.sh`, which decides which of two scopes apply:
+
+- **Product**, when the PR changes `src/`, `web/`, `templates/`, the Rust manifests, `build.rs`, `Cross.toml`, `rust-toolchain.toml`, tests, or the product workflows.
+- **Site**, when it changes `site/`, the markdown the site renders (`docs/`, `templates/*/README.md`, `examples/github/stories/`), or the site workflows.
+
+`Merge gate` is the only required check. It always runs, and fails when any job failed or was cancelled. A scope that did not apply is skipped, and that passes.
+
+### Product (`product.yml`)
+
+For the product scope, `pr.yml` calculates the next version and calls `product.yml` with a pre-release suffix `-pr.<number>.<run>.<attempt>`.
 
 1. `cargo deny` and the `web/` `npm audit --package-lock-only` run first.
 2. Then `web/` is built once (`sfw npm ci`, typecheck, production build) and CycloneDX and SPDX SBOMs are generated.
@@ -67,10 +76,16 @@ CodeQL for Rust and `web/`, zizmor, and Socket start immediately and do not gate
 
 ### Site (`site.yml`)
 
-Runs on site pull requests and on push to `main` when `site/` or the markdown it renders (`docs/`, `templates/*/README.md`, `examples/github/stories/`) changes.
+Called by `pr.yml` for the site scope, and by `publish-site.yml`.
 
-- `sfw npm audit`, typecheck, and vitest run in parallel with site CodeQL and zizmor, then a separate build job.
-- The Pages artifact is uploaded, and deploy runs, only on `main`, after that build, site CodeQL, and zizmor succeed.
+- `sfw npm audit`, typecheck, and vitest run in parallel with site CodeQL, zizmor, and Socket, then a separate build job.
+- The build uses the Pages base path and uploads the Pages artifact only when the caller sets `pages: true`.
+
+### GitHub Pages (`publish-site.yml`)
+
+Runs on push to `main` when `site/`, the markdown it renders, or the site workflows change.
+
+- It calls `site.yml` with `pages: true`, and deploys only after every job in it succeeds.
 - A push that only changes the site does not run the product release.
 - Pages must be enabled under **Settings → Pages → Source: GitHub Actions**.
 
