@@ -92,6 +92,8 @@ export type StatusResponse = {
     message?: string;
   };
   state?: StateStatus;
+  /** Approved or submitted patches that changed since their last approval. */
+  staleApprovals?: string[];
 };
 
 export type FileRevision = {
@@ -108,6 +110,8 @@ export type PatchResponse = {
   patch?: Patch;
   revisions: FileRevision[];
   patchFile?: string;
+  /** The newest approval does not cover the patch as it is now. */
+  approvalStale?: boolean;
 };
 
 export type FileResponse = {

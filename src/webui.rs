@@ -13,7 +13,10 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
-use crate::ops::{QueueCounts, StateStatus, refresh_from_origin, state_status_at, summarize_queue};
+use crate::ops::{
+    QueueCounts, StateStatus, approval_stale, refresh_from_origin, stale_approvals,
+    state_status_at, summarize_queue,
+};
 use crate::queue::{get_patch, patch_path, require_path_component};
 use crate::repo::{
     COMPANY_REMOTE, FileRevision, file_history, has_ref, queue_at, rev_parse, show_at,
@@ -93,6 +96,9 @@ struct StatusResponse {
     last_sync: Option<LastSync>,
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<StateStatus>,
+    /// Approved or submitted patches that changed since their last approval.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stale_approvals: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -109,6 +115,8 @@ struct PatchResponse {
     revisions: Vec<FileRevision>,
     #[serde(skip_serializing_if = "Option::is_none")]
     patch_file: Option<String>,
+    /// The newest approval does not cover the patch as it is now.
+    approval_stale: bool,
 }
 
 #[derive(Serialize)]
@@ -270,6 +278,7 @@ fn missing_status(cwd: String, source: QueueSource, error: String) -> StatusResp
         internal: None,
         last_sync: None,
         state: None,
+        stale_approvals: None,
     }
 }
 
@@ -447,6 +456,7 @@ fn build_status(repo: &Path, source: QueueSource, fetch: bool) -> StatusResponse
         internal: Some(queue.internal.clone()),
         last_sync: queue.last_sync.clone(),
         state,
+        stale_approvals: Some(stale_approvals(repo, &queue)),
     }
 }
 
@@ -480,6 +490,7 @@ fn build_patch(repo: &Path, id: &str, source: QueueSource) -> PatchResponse {
         source: source.as_str().into(),
         error: None,
         layer: Some(crate::queue::layer_label(&queue, id).to_string()),
+        approval_stale: approval_stale(repo, &queue, &patch),
         patch: Some(patch),
         revisions,
         patch_file,
@@ -519,6 +530,7 @@ fn missing_patch(source: QueueSource, error: String) -> PatchResponse {
         patch: None,
         revisions: Vec::new(),
         patch_file: None,
+        approval_stale: false,
     }
 }
 
