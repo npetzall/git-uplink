@@ -10,6 +10,10 @@ Rust Git subcommand. The binary is `git-uplink`, so Git treats it as `git uplink
 - **Public site:** `site/` is the same frontend stack plus Vitest, Marked, and Mermaid. GitHub Pages via `.github/workflows/site.yml`. Do not commit `site/dist`.
 - **Toolchain:** Node.js 22. Tests are `cargo test` (real git temp repos) and `npm test --prefix site`. Supply-chain checks include `cargo deny`, npm audit, Socket Security, and Syft SBOMs.
 
+## Pack and binary versions
+
+The forge pack (`templates/`) and the binary are released and upgraded together. Assume a workflow always runs the binary of its own release: change CLI flags, output and the workflows that use them in the same commit, and do not add compatibility for an older pack or an older binary. This is stated for operators in `templates/github/README.md`.
+
 ## Socket Firewall
 
 Prefix every `npm` and `cargo` command with `sfw` ([Socket Firewall Free](https://docs.socket.dev/docs/socket-firewall-free)). This includes install, build, test, fmt, and clippy.

@@ -71,9 +71,9 @@ export function preflightCi(title: string, extra = ""): LabOperation {
     "Uplink upstream preflight",
     [
       "git uplink init",
-      `git uplink preflight --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
+      `git uplink preflight --json --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
     ],
-    "Same PR. Skipped for uplink:internal-only.",
+    "Same PR. Skipped for uplink:internal-only. preflight.sh runs in a step with no token; a separate job posts the comment.",
   );
 }
 
@@ -89,12 +89,28 @@ export function importOps(opts: {
     ...(opts.internalOnly
       ? []
       : [assessCi(opts.title), preflightCi(opts.title)]),
+    ...(opts.internalOnly
+      ? []
+      : [
+          ciJob(
+            "Uplink import",
+            [
+              "git uplink init",
+              `git uplink preflight --json --title "${opts.title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>`,
+            ],
+            "Preflight job, after the merge: read-only token, no App token. It runs preflight.sh and hands its result to the import job.",
+          ),
+        ]),
     ciJob(
       "Uplink import",
-      ["git uplink init", add, publish],
+      [
+        "git uplink init",
+        opts.internalOnly ? add : `${add} --preflight-result <result>`,
+        publish,
+      ],
       opts.internalOnly
         ? "Runs after the internal PR is merged."
-        : "Runs after the internal PR is merged. Adds --extra-dir with the PR check's hook extras when they match the merged head, title, and body.",
+        : "Import job, with the write token. It takes the preflight job's result and never runs preflight.sh. Adds --extra-dir with the PR check's hook extras when they match the merged head, title, and body.",
     ),
   ];
 }
@@ -119,14 +135,19 @@ export function submitOps(id: string): LabOperation[] {
     ),
     ciJob(
       "Uplink submit",
+      ["git uplink init", `git uplink preflight ${id} --json`],
+      "Preflight job: read-only token, no Environment. It runs preflight.sh on the export tree and hands its result to the submit job.",
+    ),
+    ciJob(
+      "Uplink submit",
       [
         "git uplink init",
         `git uplink approve ${id}`,
-        `git uplink submit ${id}`,
+        `git uplink submit ${id} --preflight-result <result>`,
         `gh api --method POST /repos/<upstream>/pulls -f head=<contrib_org>:uplink/${id} -f base=main -f title=<title> -F maintainer_can_modify=false`,
         `git uplink submitted ${id} --pr-url <url>`,
       ],
-      "Submit job waits on Environment to-upstream. Approve the deployment, then the same run exports: submit builds the commit on uplink/upstream, and contrib_commit.py recreates it on the fork through the Git Database API, so GitHub signs it (Verified with a GitHub App token).",
+      "Submit job waits on Environment to-upstream. Approve the deployment, then the same run exports with the preflight job's result (preflight.sh never runs next to the fork-write credential): submit builds the commit on uplink/upstream, and contrib_commit.py recreates it on the fork through the Git Database API, so GitHub signs it (Verified with a GitHub App token).",
     ),
   ];
 }

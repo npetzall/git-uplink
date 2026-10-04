@@ -119,7 +119,7 @@ const BRANCHES = [
 const INIT_CHART = `
 flowchart TD
   start(["git uplink init"]) --> args{"arguments?"}
-  args -->|"none"| hydrate["Hydrate: fetch origin uplink/state,<br/>uplink/upstream and main,<br/>re-add remotes from stored URLs"]
+  args -->|"none"| hydrate["Hydrate: fetch origin uplink/state,<br/>uplink/upstream and main,<br/>re-add remotes from stored URLs.<br/>Stops if origin has no uplink/upstream"]
   args -->|"--upgrade"| upgrade["Refresh the tooling patch<br/>in its slot"]
   args -->|"--upstream --contrib --forge"| exists{"uplink/state<br/>on origin?"}
   exists -->|"yes"| check["Use it; check the<br/>requested names match"]
@@ -145,7 +145,7 @@ sequenceDiagram
     Note right of CI: message, cutoff, co-author,<br/>keyword and email scan
   and preflight
     CI->>CI: git uplink preflight
-    Note right of CI: apply on upstream + declared deps<br/>+ tooling + queued upstream,<br/>run preflight.sh
+    Note right of CI: apply on upstream + declared deps<br/>+ tooling + queued upstream,<br/>run preflight.sh (step with no token)
   end
   CI-->>PR: report comment, required checks
 `;
@@ -154,11 +154,14 @@ const IMPORT_CHART = `
 sequenceDiagram
   actor Dev as Developer
   participant Main as company main
-  participant CI as uplink-import.yml
+  participant Pre as preflight job
+  participant CI as import job
   participant State as uplink/state
   Dev->>Main: merge PR
-  Main->>CI: push event
-  CI->>State: git uplink add (patch = PR base..head)
+  Main->>Pre: pull request merged
+  Pre->>Pre: git uplink preflight --json (preflight.sh, read-only token)
+  Pre->>CI: result
+  CI->>State: git uplink add --preflight-result (patch = PR base..head)
   alt upstream-bound and internal[] not empty
     CI->>Main: rebuild so the patch sits under internal[]
   end
@@ -169,6 +172,7 @@ const SUBMIT_CHART = `
 sequenceDiagram
   actor Op as Operator
   participant Packet as extras + packet jobs
+  participant Pre as preflight job
   participant Env as to-upstream
   participant Submit as submit job
   participant Fork as contribution fork
@@ -176,10 +180,13 @@ sequenceDiagram
   Op->>Packet: dispatch Uplink submit (id)
   Packet->>Packet: git uplink report (extras stored at import, else run the hook)
   Packet->>Submit: needs
+  Op->>Pre: same dispatch
+  Pre->>Pre: git uplink preflight id --json (preflight.sh, read-only token)
+  Pre->>Submit: result
   Submit->>Env: wait for IP reviewer
   Env-->>Submit: approved
   Submit->>Submit: git uplink approve
-  Submit->>Submit: git uplink submit (export commit on uplink/upstream)
+  Submit->>Submit: git uplink submit --preflight-result (export commit on uplink/upstream)
   Submit->>Fork: contrib_commit.py (Git Database API, signed by GitHub)
   Submit->>Up: open public PR
   Submit->>Submit: git uplink submitted (record PR on the queue)
@@ -301,6 +308,13 @@ export function InternalsPage() {
             The packet (<code>.uplink/reports/&lt;id&gt;/assessment.md</code>) is committed to{" "}
             <code>uplink/state</code> before the wait, so reviewers and auditors read the same bytes. Fork-write
             credentials exist only in the job after the Environment approval.
+          </p>
+          <p>
+            <code>preflight.sh</code> builds and runs product code, so it never runs in a job that can write. Import,
+            submit, amend and transfer each run it in a job of its own with a read-only token, and the writing job
+            takes the result with <code>--preflight-result</code>. The result names the tree and the hooks it was
+            tested with. If <code>uplink/upstream</code> or <code>uplink/hooks</code> moved while submit waited for
+            approval, submit stops; dispatch it again.
           </p>
         </Step>
         <Step n={4} title="Upstream merges" workflow="maintainers">
