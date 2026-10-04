@@ -9268,6 +9268,39 @@ fn amend_complete_refreshes_an_internal_patch_and_rebuilds_main() {
 }
 
 #[test]
+fn amend_complete_leaves_tracked_uplink_files_out_of_the_patch() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    amend_patch(company, &patch.id, false, None).unwrap();
+    let work = format!("uplink/amend/{}-work", patch.id);
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    // The checkout ignores .uplink/, so the gated work has to force it in.
+    write(company, ".uplink/queue.json", "{}\n");
+    git(
+        company,
+        &["add", "-f", ".uplink/queue.json"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    amend_on_work_and_squash(company, &patch.id, "NOTES.md", "internal-notes\nreviewed\n");
+    let done = amend_patch(company, &patch.id, true, None).unwrap();
+    assert!(done.completed && done.changed, "{done:?}");
+    let stored = git_ok(
+        company,
+        &[
+            "show",
+            &format!("{STATE_BRANCH}:.uplink/patches/{}.patch", patch.id),
+        ],
+    )
+    .unwrap();
+    assert!(stored.contains("+reviewed"), "{stored}");
+    assert!(!stored.contains(".uplink"), "{stored}");
+    let tracked = git_ok(company, &["ls-tree", "-r", "--name-only", "main"]).unwrap();
+    assert!(!tracked.contains(".uplink"), "{tracked}");
+}
+
+#[test]
 fn amend_complete_of_a_submitted_patch_takes_the_pr_message_and_is_amended() {
     let world = setup_world();
     let company = &world.company;

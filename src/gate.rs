@@ -111,14 +111,34 @@ pub fn commit_resolution(repo: &Path, onto: &str, message: &str) -> Result<()> {
         git(repo, &["commit", "-m", message], GitOpts::default())?;
     }
     git(repo, &["reset", "--soft", onto], GitOpts::default())?;
+    // Gated work that tracks a file under `.uplink/` must not put it in the
+    // patch: the assessment does not scan that path, and the checkout holds
+    // the real queue and patches there.
+    git(
+        repo,
+        &["reset", "--quiet", onto, "--", ".uplink"],
+        GitOpts::default(),
+    )?;
     if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
         git(repo, &["commit", "-m", message], GitOpts::default())?;
     }
     Ok(())
 }
 
+/// Leaves out `.uplink/`, as the assessment's diff does.
 pub fn format_patch_at_head(repo: &Path) -> Result<String> {
-    let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;
+    let formatted = git_ok(
+        repo,
+        &[
+            "format-patch",
+            "--full-index",
+            "-1",
+            "--stdout",
+            "--",
+            ".",
+            ":!.uplink",
+        ],
+    )?;
     if formatted.ends_with('\n') {
         Ok(formatted)
     } else {
