@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { StatusBadge } from "../components/status-badge";
+import { NEEDS_APPROVAL } from "../lib/status";
 import {
   loadFile,
   loadPatch,
@@ -119,6 +120,7 @@ export function PatchPage() {
         {patch ? (
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={patch.status} />
+            {data?.approvalStale ? <StatusBadge value={NEEDS_APPROVAL} /> : null}
             {data?.layer ? <StatusBadge value={data.layer} /> : null}
             <span className="text-lg text-foreground">{patch.title}</span>
           </div>
@@ -246,6 +248,12 @@ export function PatchPage() {
               <CardTitle className="text-base">Approvals</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {data?.approvalStale ? (
+                <p className="text-sm text-rose-300">
+                  The patch changed since its last approval. Submit refuses it until a new packet is
+                  approved.
+                </p>
+              ) : null}
               {!approvals.length ? (
                 <p className="text-sm text-muted-foreground">No approvals recorded.</p>
               ) : (

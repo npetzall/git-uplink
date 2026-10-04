@@ -14,6 +14,7 @@ const STYLES: Record<string, string> = {
   upstream: "border-teal-500/30 bg-teal-500/10 text-teal-300",
   internal: "border-amber-500/30 bg-amber-500/10 text-amber-300",
   "internal-only": "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  "needs approval": "border-rose-500/30 bg-rose-500/10 text-rose-300",
 };
 
 export function StatusBadge({ value }: { value: string }) {

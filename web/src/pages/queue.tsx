@@ -13,7 +13,7 @@ import {
   type StatusResponse,
 } from "../lib/api";
 import { cn } from "../lib/utils";
-import { STATUS_INFO, STATUS_ORDER } from "../lib/status";
+import { NEEDS_APPROVAL, STATUS_INFO, STATUS_ORDER } from "../lib/status";
 
 function StatusLegend() {
   return (
@@ -42,10 +42,13 @@ function PatchTable({
   patches,
   empty,
   source,
+  stale = [],
 }: {
   patches: Patch[];
   empty: string;
   source: QueueSource;
+  /** Ids whose approval no longer covers their content. */
+  stale?: string[];
 }) {
   if (!patches.length) {
     return <p className="text-sm text-muted-foreground">{empty}</p>;
@@ -80,8 +83,9 @@ function PatchTable({
                 {patch.title}
               </Link>
             </td>
-            <td className="py-2 pr-3">
+            <td className="space-x-1 py-2 pr-3">
               <StatusBadge value={patch.status} />
+              {stale.includes(patch.id) ? <StatusBadge value={NEEDS_APPROVAL} /> : null}
             </td>
             <td className="py-2 font-mono text-xs text-muted-foreground">
               {(patch.dependsOn ?? []).join(", ") || "—"}
@@ -309,6 +313,7 @@ export function QueuePage() {
                   <PatchTable
                     source={source}
                     patches={data.upstream ?? []}
+                    stale={data.staleApprovals}
                     empty="No upstream-bound patches."
                   />
                 </CardContent>

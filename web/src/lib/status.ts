@@ -30,6 +30,14 @@ export const STATUS_INFO: Record<string, { meaning: string; next: string }> = {
     meaning: "Removed from the queue by an operator. It is no longer applied.",
     next: "Nothing.",
   },
+  // Not a status: a flag next to approved or submitted.
+  "needs approval": {
+    meaning:
+      "The patch changed since its last approval, for example by a replay onto a moved upstream. Submit refuses it as it is.",
+    next: "Dispatch Uplink submit: IP reviews a new packet, and the approval covers the current content.",
+  },
 };
+
+export const NEEDS_APPROVAL = "needs approval";
 
 export const STATUS_ORDER = ["queued", "approved", "submitted", "amended", "conflict", "merged", "dropped"];
