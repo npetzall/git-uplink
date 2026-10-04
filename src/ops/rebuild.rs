@@ -215,7 +215,7 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
                 )?));
             }
 
-            record_clean_apply(repo, &mut queue, &patch.id, &patch_file)?;
+            refresh_patch_id(repo, &mut queue, &patch.id, &patch_file)?;
         }
 
         publish_rebuilt_company(repo, &mut queue, &snapshot, &company_branch, upstream_ref)?;
@@ -247,8 +247,9 @@ fn mark_merged_by_empty_rebase(
     Ok(())
 }
 
-/// Refreshes the stable patch id and clears any earlier conflict.
-fn record_clean_apply(
+/// Refreshes the stable patch id of a patch that applied. A patch in
+/// conflict never gets here: the rebuild stops on it before applying.
+fn refresh_patch_id(
     repo: &Path,
     queue: &mut QueueState,
     id: &str,
@@ -257,19 +258,6 @@ fn record_clean_apply(
     let contents = fs::read_to_string(patch_file)?;
     let current = get_patch_mut(queue, id)?;
     current.patch_id_stable = Some(stable_patch_id_from_contents(repo, &contents)?);
-    if current.status == PatchStatus::Conflict {
-        current.status = if current
-            .upstream
-            .as_ref()
-            .and_then(|u| u.pr_number)
-            .is_some()
-        {
-            PatchStatus::Submitted
-        } else {
-            PatchStatus::Queued
-        };
-    }
-    current.conflict = None;
     Ok(())
 }
 
