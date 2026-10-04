@@ -9914,7 +9914,14 @@ fn init_refuses_to_seed_uplink_upstream_when_origin_has_the_queue_without_it() {
     let origin = origin_keep.path().join("origin.git");
     git(
         Path::new("/tmp"),
-        &["init", "--bare", "--quiet", origin.to_str().unwrap()],
+        &[
+            "init",
+            "--bare",
+            "--quiet",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
         GitOpts::default(),
     )
     .unwrap();
