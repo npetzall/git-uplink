@@ -6,6 +6,10 @@
 # Packet job then writes assessment.md once on uplink/state (holding
 # uplink-mutate only for that), and stores a successful hook result. Submit
 # job then waits on Environment `to-upstream`.
+# The packet job hands the packet's review token and uplink/state commit to
+# the submit job. The Environment links that commit's assessment.md, and
+# `approve --reviewed` stops when the patch is no longer what was reviewed
+# (amended, resolved or replayed while the run waited).
 # Resolve of an already-submitted patch dispatches this workflow so IP can
 # approve the delta.
 #
@@ -116,6 +120,9 @@ jobs:
     concurrency:
       group: uplink-mutate
       queue: max
+    outputs:
+      review_token: ${{ steps.packet.outputs.review_token }}
+      state_sha: ${{ steps.packet.outputs.state_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -137,6 +144,7 @@ jobs:
           path: ${{ runner.temp }}/uplink-packet-extras
 
       - name: Write approver packet
+        id: packet
         env:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
@@ -165,6 +173,9 @@ jobs:
           esac
           git push origin uplink/state
           printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
+          # What this run asks the reviewers to approve.
+          echo "review_token=$(cat ".uplink/reports/${PATCH_ID}/review-token")" >> "$GITHUB_OUTPUT"
+          echo "state_sha=$(git rev-parse uplink/state)" >> "$GITHUB_OUTPUT"
 
   # Do not put uplink-mutate on this job. A required-reviewer environment
   # holds its concurrency group the whole time the job is Waiting, which
@@ -179,7 +190,7 @@ jobs:
       deployments: write
     environment:
       name: to-upstream
-      url: ${{ github.server_url }}/${{ github.repository }}/blob/uplink/state/.uplink/reports/${{ inputs.patch_id }}/assessment.md
+      url: ${{ github.server_url }}/${{ github.repository }}/blob/${{ needs.packet.outputs.state_sha }}/.uplink/reports/${{ inputs.patch_id }}/assessment.md
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -248,9 +259,15 @@ jobs:
           UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
           UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream
           PATCH_ID: ${{ inputs.patch_id }}
+          REVIEW_TOKEN: ${{ needs.packet.outputs.review_token }}
           HEAD_REPO: ${{ steps.queue.outputs.contrib_owner }}/${{ steps.queue.outputs.contrib_repo }}
         run: |
-          receipt=$(git uplink approve "$PATCH_ID")
+          if [ -z "$REVIEW_TOKEN" ]; then
+            echo "The packet job recorded no review token; not approving."
+            exit 1
+          fi
+          # Approves only the content the packet of this run showed.
+          receipt=$(git uplink approve "$PATCH_ID" --reviewed "$REVIEW_TOKEN")
           printf '%s\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
           submit_json=$(git uplink submit "$PATCH_ID")
           # GitHub creates the contrib commit (Git Database API) and signs it.

@@ -738,6 +738,31 @@ mod embed_tests {
     }
 
     #[test]
+    fn submit_approves_only_the_packet_of_its_own_run() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-submit.yml"))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing uplink-submit.yml"));
+            for needle in [
+                "review_token: ${{ steps.packet.outputs.review_token }}",
+                "REVIEW_TOKEN: ${{ needs.packet.outputs.review_token }}",
+                "git uplink approve \"$PATCH_ID\" --reviewed \"$REVIEW_TOKEN\"",
+                "/blob/${{ needs.packet.outputs.state_sha }}/.uplink/reports/",
+            ] {
+                assert!(text.contains(needle), "{forge:?} missing {needle}\n{text}");
+            }
+            assert!(
+                !text.contains("git uplink approve \"$PATCH_ID\")")
+                    && !text.contains("/blob/uplink/state/"),
+                "{forge:?} approval must not follow the moving branch\n{text}"
+            );
+        }
+    }
+
+    #[test]
     fn abandon_contrib_is_detached_from_uplink_mutate() {
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
