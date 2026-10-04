@@ -3319,6 +3319,7 @@ fn merged_pr(patch: &Patch, sha: &str) -> SyncOpts {
 /// A world whose hash patch has a recorded public PR.
 fn world_with_submitted_hash_patch() -> (World, Patch) {
     let (world, hash_patch) = world_with_hash_patch();
+    approve_patch(&world.company, &hash_patch.id).unwrap();
     record_pull_request(
         &world.company,
         &hash_patch.id,
@@ -3776,6 +3777,31 @@ fn report_writes_the_token_that_approve_takes_back() {
         patch.last_approval().unwrap().reviewed.as_deref(),
         Some(token.as_str())
     );
+}
+
+#[test]
+fn a_public_pr_is_recorded_only_after_approval() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let url = "https://github.com/acme/app/pull/7";
+    let branch = format!("uplink/{}", hash_patch.id);
+    let record = || record_pull_request(company, &hash_patch.id, 7, url, &branch, None);
+
+    let err = record().unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("is queued; record a public PR only after approve and submit"),
+        "{err}"
+    );
+    let untouched = stored_patch(company, &hash_patch.id);
+    assert_eq!(untouched.status, PatchStatus::Queued);
+    assert!(untouched.upstream.is_none());
+
+    approve_patch(company, &hash_patch.id).unwrap();
+    assert_eq!(record().unwrap().status, PatchStatus::Submitted);
+    let events = stored_patch(company, &hash_patch.id).events.len();
+    assert_eq!(record().unwrap().status, PatchStatus::Submitted);
+    assert_eq!(stored_patch(company, &hash_patch.id).events.len(), events);
 }
 
 #[test]
@@ -4475,6 +4501,21 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(conflicted.status, PatchStatus::Conflict);
     let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
+    // A patch in conflict blocks every later rebuild. Only resolve, drop or
+    // an upstream merge moves it on; a replay never puts it back to submitted.
+    let err = rebuild(company).unwrap_err();
+    assert!(err.to_string().contains("blocked on conflict"), "{err}");
+    assert_eq!(patch_status(company, &ttl_patch.id), PatchStatus::Conflict);
+    let err = record_pull_request(
+        company,
+        &ttl_patch.id,
+        99,
+        "https://github.com/upstream/tokenkit/pull/99",
+        &submitted.branch,
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("is conflict"), "{err}");
     git(
         company,
         &["checkout", "--quiet", &conflict_branch],
@@ -4500,6 +4541,18 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     let fork_after_resolve =
         git_ok(company, &["rev-parse", &format!("uplink/{}", ttl_patch.id)]).unwrap();
     assert_eq!(fork_after_resolve, submitted.sha);
+    // Recording the PR again must not skip the delta approval.
+    let err = record_pull_request(
+        company,
+        &ttl_patch.id,
+        99,
+        "https://github.com/upstream/tokenkit/pull/99",
+        &submitted.branch,
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("is amended"), "{err}");
+    assert_eq!(patch_status(company, &ttl_patch.id), PatchStatus::Amended);
     let err = submit_patch(company, &ttl_patch.id, true).unwrap_err();
     assert!(err.to_string().contains("must be approved"), "{}", err);
 
@@ -7065,6 +7118,7 @@ fn submitted_push_replays_pr_fields_when_origin_state_moved() {
         },
     )
     .unwrap();
+    approve_patch(&asha, &asha_patch.id).unwrap();
     push_queue(
         &asha,
         PushOpts {

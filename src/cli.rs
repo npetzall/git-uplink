@@ -530,7 +530,8 @@ pub enum Commands {
     /// Record the upstream PR of a submitted patch and push uplink/state.
     ///
     /// Records the PR URL, commits the queue, and pushes company
-    /// `uplink/state`.
+    /// `uplink/state`. Refused unless the patch is approved or already
+    /// submitted: a public PR exists only for content that was approved.
     Submitted {
         /// Patch that was submitted.
         #[arg(value_name = "id")]
