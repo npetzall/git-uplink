@@ -9,7 +9,7 @@ use crate::adopt::{self, AdoptGroup};
 use crate::assess::{
     IncomingCommitRow, IncomingMergeRow, IncomingPacket, assert_assess_ok, assess_from_message,
     company_commit_message, depends_on_from_message, format_incoming_packet,
-    from_upstream_report_paths, report_paths, store_extras, stored_commit_message,
+    from_upstream_report_paths, report_paths, review_token, store_extras, stored_commit_message,
 };
 use crate::error::{ConflictError, Error, Result};
 use crate::gate::{

@@ -32,7 +32,7 @@ git uplink report <id> [--out <path>] [--extra-dir <path>] [--store-extras]
             [--extra-source <url>]
 git uplink status [--json]
 git uplink doctor [--json]
-git uplink approve <id> [--out <path>]
+git uplink approve <id> [--out <path>] [--reviewed <token>]
 git uplink submit <id> [--push]
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink sync [--merged-pr <id=sha>]...
@@ -208,6 +208,9 @@ Record the to-upstream approval of a patch and write its receipt.
 
 - `<id>`: Patch to approve.
 - `--out <path>`: Write the receipt here instead of .uplink/reports/\<id>/approval.md.
+- `--reviewed <token>`: Review token of the packet that was reviewed.
+
+  `report` writes it to `.uplink/reports/<id>/review-token`. It names the patch content, public title and public message. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now.
 
 ### `submit`
 

@@ -10,6 +10,37 @@ pub fn approve_patch_at(
     sha: Option<&str>,
     run_url: Option<&str>,
 ) -> Result<Patch> {
+    approve_patch_reviewed(repo, id, sha, run_url, None)
+}
+
+/// The patch is no longer what the reviewer was shown.
+pub(super) fn changed_since_review(id: &str) -> Error {
+    Error::msg(format!(
+        "{id} changed since the packet was reviewed; write a new packet and approve that (dispatch Uplink submit again)."
+    ))
+}
+
+/// True when `approval` was given for the content `token` identifies.
+/// Approvals from before tokens existed compare the stable patch id.
+pub(super) fn approval_covers(approval: &PatchApproval, patch: &Patch, token: &str) -> bool {
+    match approval.reviewed.as_deref() {
+        Some(reviewed) => reviewed == token,
+        None => {
+            approval.patch_id_stable.is_some() && approval.patch_id_stable == patch.patch_id_stable
+        }
+    }
+}
+
+/// Records the to-upstream approval for the patch as it is now. `reviewed` is
+/// the review token of the packet the reviewer saw; when the patch no longer
+/// has that token, nothing is approved.
+pub fn approve_patch_reviewed(
+    repo: &Path,
+    id: &str,
+    sha: Option<&str>,
+    run_url: Option<&str>,
+    reviewed: Option<&str>,
+) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
         {
@@ -19,27 +50,39 @@ pub fn approve_patch_at(
                 )));
             }
             super::submit::ensure_upstream_deps_merged(&queue, get_patch(&queue, id)?, "Approve")?;
+            let token = review_token(repo, get_patch(&queue, id)?)?;
+            if reviewed.is_some_and(|reviewed| reviewed != token) {
+                return Err(changed_since_review(id));
+            }
             let patch = get_patch_mut(&mut queue, id)?;
             if patch.assess.as_ref().is_some_and(|p| !p.ok) {
                 return Err(Error::msg(format!(
                     "{id} is not ready for contribution. Fix the upstream assessment findings first."
                 )));
             }
-            let kind = if patch.status == PatchStatus::Queued {
-                "initial"
-            } else if patch.status == PatchStatus::Amended {
-                "delta"
-            } else if patch.status == PatchStatus::Approved
-                || patch.status == PatchStatus::Submitted
-            {
-                return Ok(patch.clone());
-            } else {
-                return Err(Error::msg(format!(
-                    "{id} is {} and cannot be approved for contribution.",
-                    patch.status
-                )));
+            let kind = match patch.status {
+                PatchStatus::Queued => "initial",
+                PatchStatus::Amended => "delta",
+                PatchStatus::Approved | PatchStatus::Submitted => {
+                    if patch
+                        .last_approval()
+                        .is_some_and(|approval| approval_covers(approval, patch, &token))
+                    {
+                        return Ok(patch.clone());
+                    }
+                    // Replayed onto a moved upstream since the last approval.
+                    "refresh"
+                }
+                _ => {
+                    return Err(Error::msg(format!(
+                        "{id} is {} and cannot be approved for contribution.",
+                        patch.status
+                    )));
+                }
             };
-            patch.status = PatchStatus::Approved;
+            if kind != "refresh" {
+                patch.status = PatchStatus::Approved;
+            }
             let sha = match sha {
                 Some(value) if !value.is_empty() => value.to_string(),
                 _ => rev_parse(repo, STATE_BRANCH)?,
@@ -58,14 +101,15 @@ pub fn approve_patch_at(
                 sha,
                 patch_id_stable: patch.patch_id_stable.clone(),
                 run_url,
+                reviewed: Some(token),
             });
             add_event(
                 patch,
                 "approved",
-                if kind == "delta" {
-                    "IP approved the delta since the previous contribution approval"
-                } else {
-                    "IP and contribution review passed; patch may leave the enterprise"
+                match kind {
+                    "delta" => "IP approved the delta since the previous contribution approval",
+                    "refresh" => "IP approved the patch as replayed since the previous approval",
+                    _ => "IP and contribution review passed; patch may leave the enterprise",
                 },
             );
         }
