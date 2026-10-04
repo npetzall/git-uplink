@@ -24,7 +24,11 @@ name: Uplink PR checks
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    # labeled / unlabeled: both jobs are skipped for uplink:internal-only,
+    # and a skipped check counts as passed. Removing the label must run them.
+    # Every label change runs them: a job skipped for an unrelated label
+    # would replace an earlier failure with a pass.
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
     branches:
       - main
 

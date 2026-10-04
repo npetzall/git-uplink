@@ -10,7 +10,7 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 
 ## `uplink-pr.yml` — Uplink PR checks
 
-- **Runs on:** pull requests to `main` (opened, synchronize, reopened, edited). Skipped for `uplink:internal-only`.
+- **Runs on:** pull requests to `main` (opened, synchronize, reopened, edited, labeled, unlabeled). Skipped for `uplink:internal-only`. Adding or removing any label runs the checks again, so removing `uplink:internal-only` cannot leave the skipped checks standing as passed.
 - **Does:** two parallel jobs, both required checks, and a third that posts the preflight comment.
   - **Uplink upstream assess:** turns the PR title and body into the commit message, strips everything below the cutoff, turns `Uplink-Export-Author` into a `Co-Authored-By` trailer, and scans for company keywords and internal email domains. It also runs the optional assessment hook (below) with `pr`. Both results go into one PR comment that is updated in place on every run, and into artifact `uplink-assessment` for import. A failed hook is noted in the comment; it does not fail the check.
   - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs `preflight.sh` from `uplink/hooks`, in a step with no token. Job **Uplink preflight comment** posts a failure on the PR; later runs update that comment.
