@@ -974,7 +974,9 @@ pub fn assess_from_message(
             .as_ref()
             .map(|(name, email)| format!("{name} <{email}>\n"))
             .unwrap_or_default();
-        let export_surface = format!("{trailer}{subject}\n{body}\n{diff}");
+        // The title is the public PR title; it can differ from the subject.
+        let title = title.unwrap_or_default();
+        let export_surface = format!("{trailer}{title}\n{subject}\n{body}\n{diff}");
         checks.push(affiliation_check(queue, &export_surface));
         checks.extend(binary_files_check(repo, from_ref, head_ref)?);
     }

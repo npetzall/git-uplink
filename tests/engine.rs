@@ -4408,6 +4408,32 @@ fn export_message_is_the_title_only_without_an_assess_report() {
 }
 
 #[test]
+fn add_refuses_a_title_with_a_company_keyword_when_the_message_is_clean() {
+    let world = setup_world();
+    let company = &world.company;
+    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    // The title becomes the public PR title; the message alone is clean.
+    let err = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL for AcmeCorp".into(),
+            message: Some("Extend TTL\n\nLonger sessions.".into()),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("affiliation-leak"), "{err}");
+}
+
+#[test]
 fn resolve_refuses_a_resolution_that_fails_the_assessment() {
     let world = setup_world();
     let company = &world.company;
