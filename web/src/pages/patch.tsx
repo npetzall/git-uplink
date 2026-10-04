@@ -276,6 +276,12 @@ export function PatchPage() {
                         <dt className="text-xs text-muted-foreground uppercase">Queue commit</dt>
                         <dd className="font-mono text-xs">{selectedApproval.sha}</dd>
                       </div>
+                      {selectedApproval.reviewed ? (
+                        <div className="sm:col-span-2">
+                          <dt className="text-xs text-muted-foreground uppercase">Review token</dt>
+                          <dd className="font-mono text-xs">{selectedApproval.reviewed}</dd>
+                        </div>
+                      ) : null}
                       {selectedApproval.runUrl ? (
                         <div className="sm:col-span-2">
                           <dt className="text-xs text-muted-foreground uppercase">Run</dt>
