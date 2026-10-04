@@ -225,7 +225,7 @@ Exports the patch for the contrib fork (git only) and prints JSON for `POST /rep
 
 Record the upstream PR of a submitted patch and push uplink/state.
 
-Records the PR URL, commits the queue, and pushes company `uplink/state`.
+Records the PR URL, commits the queue, and pushes company `uplink/state`. Refused unless the patch is approved or already submitted: a public PR exists only for content that was approved.
 
 - `<id>`: Patch that was submitted.
 - `--pr-url <url>`: URL of the upstream pull request.

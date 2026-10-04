@@ -333,6 +333,13 @@ pub fn record_pull_request(
                 )));
             }
         }
+        // A public PR exists only for content that was approved and exported.
+        if !matches!(patch.status, PatchStatus::Approved | PatchStatus::Submitted) {
+            return Err(Error::msg(format!(
+                "{id} is {}; record a public PR only after approve and submit.",
+                patch.status
+            )));
+        }
         {
             let patch = get_patch_mut(&mut queue, id)?;
             patch.status = PatchStatus::Submitted;
