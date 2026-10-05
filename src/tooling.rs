@@ -483,9 +483,26 @@ mod embed_tests {
                 .find(|(p, _)| p == ".github/workflows/uplink-assessment-hook.yml")
                 .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
                 .unwrap_or_else(|| panic!("{forge:?} missing assessment hook placeholder"));
+            // GitHub checks dispatch inputs against the file on the default
+            // branch, so the placeholder declares the real hook's inputs.
+            let trigger = |workflow: &str| {
+                let start = workflow.find("\non:\n").expect("on: block");
+                let end = workflow.find("\npermissions:").expect("permissions: block");
+                workflow[start..end].to_string()
+            };
+            let example = hooks_files(forge)
+                .into_iter()
+                .find(|(p, _)| p == ".github/workflows/uplink-assessment-hook-example.yml")
+                .map(|(_, b)| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing assessment hook example"));
+            assert_eq!(
+                trigger(&placeholder),
+                trigger(&example),
+                "{forge:?} placeholder and hook example must take the same inputs"
+            );
             assert!(
-                !placeholder.contains("inputs:"),
-                "{forge:?} placeholder must not be dispatchable as a hook\n{placeholder}"
+                placeholder.contains("if: github.ref == 'refs/heads/main'"),
+                "{forge:?} placeholder must not run as the hook\n{placeholder}"
             );
             assert!(
                 placeholder.contains("refs/heads/uplink/hooks"),

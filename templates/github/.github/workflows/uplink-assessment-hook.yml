@@ -8,6 +8,19 @@ name: Uplink assessment hook
 
 on:
   workflow_dispatch:
+    inputs:
+      pr:
+        description: Internal pull request number
+        required: false
+        type: string
+      patch:
+        description: Patch id (upl_…)
+        required: false
+        type: string
+      caller_run_id:
+        description: Caller run id (used to match this hook run)
+        required: true
+        type: string
 
 permissions: {}
 
