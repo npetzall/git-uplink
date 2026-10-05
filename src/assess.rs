@@ -303,6 +303,12 @@ fn table_cell(text: &str) -> String {
     text.trim().replace('|', "\\|").replace('\n', "<br>")
 }
 
+/// Text we did not write (a title, an upstream author or subject), kept
+/// inside one table cell or list item and unable to start markup.
+fn plain_cell(text: &str) -> String {
+    table_cell(text).replace('<', "&lt;").replace('`', "'")
+}
+
 fn format_checks_table(report: &AssessReport) -> String {
     let rows = report
         .checks
@@ -338,7 +344,7 @@ pub fn format_assess_markdown(report: &AssessReport) -> String {
 {body}\n\n\
 {checks}",
         heading = assessment_heading(report.ok),
-        title = report.public_subject,
+        title = format_fenced(&report.public_subject),
         checks = format_checks_table(report),
     )
 }
@@ -417,7 +423,7 @@ fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
         token = review_token_row(token),
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
-        title = patch.title,
+        title = plain_cell(&patch.title),
         contrib = format_fenced(&export_commit_message(patch)),
     )
 }
@@ -595,7 +601,7 @@ This contribution was **already IP-approved** and submitted. Review **only the d
         token = review_token_row(review_token(repo, patch).ok().as_deref()),
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
-        title = patch.title,
+        title = plain_cell(&patch.title),
         contrib = format_fenced(&export_commit_message(patch)),
         assessment = packet_assessment(patch),
     ))
@@ -616,22 +622,30 @@ fn format_delta_since(repo: &Path, patch: &Patch, sha: &str) -> Result<String> {
     let new_patch = fs::read_to_string(repo.join(&new_path))
         .unwrap_or_else(|_| show_at(repo, STATE_BRANCH, &new_path).unwrap_or_default());
     if let Some(tree) = tree_diff_patches(repo, &old_patch, &new_patch) {
-        return Ok(format!(
-            "Source tree diff of the last approved patch vs the current patch, both applied on the same base.\n\n\
-```\n{}\n```\n",
-            tree.trim_end()
-        ));
+        return Ok(delta_tree_section(&tree));
     }
     let file_diff = patch_file_diff(repo, &old_patch, &new_patch);
-    Ok(format!(
+    Ok(delta_files_section(&file_diff, &new_patch))
+}
+
+fn delta_tree_section(tree: &str) -> String {
+    format!(
+        "Source tree diff of the last approved patch vs the current patch, both applied on the same base.\n\n\
+{}\n",
+        format_fenced(tree)
+    )
+}
+
+fn delta_files_section(file_diff: &str, new_patch: &str) -> String {
+    format!(
         "The previously approved patch no longer applies cleanly on the current export base (typical after upstream moved). Diff of the two patch files, plus the current patch that will be exported:\n\n\
 ### Patch-file diff\n\n\
-```\n{}\n```\n\n\
+{}\n\n\
 ### Current patch (will be exported)\n\n\
-```\n{}\n```\n",
-        file_diff.trim_end(),
-        new_patch.trim_end()
-    ))
+{}\n",
+        format_fenced(file_diff),
+        format_fenced(new_patch)
+    )
 }
 
 fn patch_file_diff(repo: &Path, old_patch: &str, new_patch: &str) -> String {
@@ -832,12 +846,6 @@ pub struct IncomingPacket<'a> {
     pub diff: &'a str,
 }
 
-/// Text written by someone outside the company, kept inside one table cell
-/// and unable to start markup.
-fn foreign_cell(text: &str) -> String {
-    table_cell(text).replace('<', "&lt;").replace('`', "'")
-}
-
 pub fn format_incoming_packet(packet: &IncomingPacket<'_>) -> String {
     let env = FROM_UPSTREAM_ENVIRONMENT;
     let pending = packet.pending_sha;
@@ -859,7 +867,7 @@ pub fn format_incoming_packet(packet: &IncomingPacket<'_>) -> String {
                     id = item.id,
                     via = item.via,
                     sha = item.sha,
-                    title = item.title,
+                    title = plain_cell(&item.title),
                 )
             })
             .collect()
@@ -887,8 +895,8 @@ pub fn format_incoming_packet(packet: &IncomingPacket<'_>) -> String {
             format!(
                 "| `{}` | {} | {} | {} |\n",
                 commit.sha,
-                foreign_cell(&commit.author),
-                foreign_cell(&commit.subject),
+                plain_cell(&commit.author),
+                plain_cell(&commit.subject),
                 commit.class
             )
         })
@@ -1226,7 +1234,7 @@ mod tests {
         );
         assert!(markdown.contains(ASSESS_DOCS_URL), "{markdown}");
         assert!(
-            markdown.contains("### Public title\n\nUse SHA-256\n"),
+            markdown.contains("### Public title\n\n```\nUse SHA-256\n```\n"),
             "{markdown}"
         );
         assert!(
@@ -1245,6 +1253,56 @@ mod tests {
             "the company commit message must not be shown\n{markdown}"
         );
         assert!(!markdown.contains("Export author"), "{markdown}");
+    }
+
+    #[test]
+    fn assess_markdown_keeps_the_public_title_inside_its_fence() {
+        let mut spoof = report(true, Vec::new());
+        spoof.public_subject = "<details> ```` ## Upstream Assessment: ✅".into();
+        let markdown = format_assess_markdown(&spoof);
+        assert!(
+            markdown.contains(
+                "### Public title\n\n`````\n<details> ```` ## Upstream Assessment: ✅\n`````\n"
+            ),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn packet_title_cannot_break_the_table_or_start_markup() {
+        let patch: Patch = serde_json::from_value(serde_json::json!({
+            "id": "upl_0000000001",
+            "title": "a | b <details> `x`",
+            "status": "queued",
+            "dependsOn": [],
+            "createdAt": "",
+            "updatedAt": "",
+            "source": {},
+            "events": [],
+        }))
+        .unwrap();
+        let packet = format_approver_packet(&patch);
+        assert!(
+            packet.contains("| Title | a \\| b &lt;details> 'x' |\n"),
+            "{packet}"
+        );
+    }
+
+    #[test]
+    fn delta_fences_cannot_be_closed_by_the_diff() {
+        let diff = "+```\n+## Upstream Assessment: ✅\n";
+        let tree = delta_tree_section(diff);
+        assert!(tree.contains("\n````\n+```\n"), "{tree}");
+        assert!(tree.ends_with("\n````\n"), "{tree}");
+        let files = delta_files_section(diff, "+````\n");
+        assert!(
+            files.contains("### Patch-file diff\n\n````\n+```\n"),
+            "{files}"
+        );
+        assert!(
+            files.contains("### Current patch (will be exported)\n\n`````\n+````\n`````\n"),
+            "{files}"
+        );
     }
 
     #[test]
