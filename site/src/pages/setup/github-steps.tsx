@@ -16,7 +16,6 @@ export const GITHUB_FIELDS: Field[] = [
   { key: "internalAppId", label: "Internal App ID", token: "INTERNAL_APP_ID", initial: "", help: "From step 2" },
   { key: "upstreamAppId", label: "Upstream App ID", token: "UPSTREAM_APP_ID", initial: "", help: "From step 2" },
   { key: "contribAppId", label: "Contrib App ID", token: "CONTRIB_APP_ID", initial: "", help: "From step 2" },
-  { key: "uplinkVersion", label: "git-uplink release", token: "UPLINK_VERSION", initial: "latest" },
 ];
 
 function upstreamSlug(url: string): string {
@@ -42,8 +41,6 @@ const LABELS = [
 ];
 
 const VARIABLES = [
-  ["UPLINK_SRC", "npetzall/git-uplink", "Repository that publishes git-uplink releases"],
-  ["UPLINK_VERSION", "{{uplinkVersion}}", "Release to install: latest, or a tag"],
   ["UPLINK_INTERNAL_AUTH", "app", "app or pat"],
   ["UPLINK_UPSTREAM_AUTH", "app", "app or pat"],
   ["UPLINK_CONTRIB_AUTH", "app", "app or pat. Only app gives Verified contribution commits"],
@@ -625,6 +622,10 @@ function VariableTable() {
           ))}
         </tbody>
       </table>
+      <p>
+        Jobs install the <code>git-uplink</code> release that wrote the pack, from <code>npetzall/git-uplink</code>. Set{" "}
+        <code>UPLINK_SRC</code> or <code>UPLINK_VERSION</code> only to install from a mirror or to pin another release.
+      </p>
     </div>
   );
 }

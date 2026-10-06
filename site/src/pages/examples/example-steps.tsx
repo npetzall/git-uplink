@@ -6,7 +6,6 @@ export const EXAMPLE_FIELDS: Field[] = [
   { key: "org", label: "Your new organization", token: "ORG", initial: "" },
   { key: "work", label: "Directory for the three clones", token: "WORK", initial: "~/src" },
   { key: "checkout", label: "Your git-uplink clone", token: "GIT_UPLINK", initial: "~/src/git-uplink", help: "For the example kit in examples/github" },
-  { key: "uplinkVersion", label: "git-uplink release", token: "UPLINK_VERSION", initial: "latest" },
 ];
 
 export const exampleDerive: Derive = (get) => ({ kit: `${get("checkout")}/examples/github` });
@@ -25,8 +24,6 @@ const LABELS = [
 ];
 
 const VARIABLES = [
-  ["UPLINK_SRC", "npetzall/git-uplink", "Repository that publishes git-uplink releases"],
-  ["UPLINK_VERSION", "{{uplinkVersion}}", "Release to install"],
   ["UPLINK_INTERNAL_AUTH", "pat", "Token model for the internal role"],
   ["UPLINK_UPSTREAM_AUTH", "pat", "Token model for the upstream role"],
   ["UPLINK_CONTRIB_AUTH", "pat", "Token model for the contrib role"],
@@ -525,6 +522,10 @@ function VariableTable() {
           ))}
         </tbody>
       </table>
+      <p>
+        Jobs install the <code>git-uplink</code> release that wrote the pack, from <code>npetzall/git-uplink</code>. Set{" "}
+        <code>UPLINK_SRC</code> or <code>UPLINK_VERSION</code> only to install from a mirror or to pin another release.
+      </p>
     </div>
   );
 }

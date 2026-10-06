@@ -53,4 +53,4 @@ examples/github/
   stories/
 ```
 
-Actions jobs download the `git-uplink` release named by the `UPLINK_SRC` / `UPLINK_VERSION` repository variables; nothing is compiled.
+Actions jobs download the `git-uplink` release that wrote the pack (`git uplink init`); nothing is compiled. The repository variables `UPLINK_SRC` / `UPLINK_VERSION` override the source and the release.
