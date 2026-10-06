@@ -4,7 +4,8 @@
 # Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
 # The shell git fetch of the protected base uses that token for one command.
 # The step that assesses and runs preflight.sh has no token: the script
-# builds and runs the gated tree.
+# builds and runs the gated tree. When it ran preflight.sh, a separate job
+# writes the verdict to one PR comment, on every run and updated in place.
 name: Uplink gate
 
 on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data; contents: read; persist-credentials: false
@@ -28,6 +29,9 @@ jobs:
     name: Uplink gate
     if: ${{ !endsWith(github.event.pull_request.base.ref, '-work') }}
     runs-on: ubuntu-latest
+    outputs:
+      preflight: ${{ steps.run.outputs.preflight }}
+      report: ${{ steps.run.outputs.report }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,6 +84,7 @@ jobs:
       # No token in this step: git uplink refuses to run preflight.sh in a
       # CI job step that holds one.
       - name: Validate gated work
+        id: run
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
@@ -95,13 +100,22 @@ jobs:
             queue=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json 2>/dev/null) || return 1
             jq -e --arg id "$1" 'any(.internal[]?; .id == $id)' <<<"$queue" >/dev/null
           }
+          # The result goes to the comment job; the next step fails on it.
+          # preflight.sh prints to this log (stderr).
           run_preflight() {
-            git uplink preflight --command-only
+            local report
+            echo "preflight=true" >> "$GITHUB_OUTPUT"
+            report=$(git uplink preflight --json "$@") || true
+            if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+              echo "git uplink printed no preflight result"
+              exit 1
+            fi
+            echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
           }
           if [[ "$BASE_REF" == uplink/conflict/* ]] && is_internal "${BASE_REF#uplink/conflict/}"; then
-            run_preflight
+            run_preflight --command-only
           elif [[ "$BASE_REF" == uplink/amend/* ]] && is_internal "${BASE_REF#uplink/amend/}"; then
-            run_preflight
+            run_preflight --command-only
           elif [[ "$BASE_REF" == uplink/conflict/* ]]; then
             # The resolution is new code: assess it with the patch's stored
             # message, as resolve will after merge. A failure blocks the merge.
@@ -125,11 +139,40 @@ jobs:
               printf '%s\n\n' "$TITLE"
               printf '%s\n' "${BODY:-}"
             } > /tmp/uplink-msg.txt
-            git uplink preflight \
+            run_preflight \
               --title "$TITLE" \
               --message-file /tmp/uplink-msg.txt \
               --from "$FROM_SHA" \
               --head "$HEAD_SHA"
           elif [[ "$BASE_REF" == uplink/transfer-to-internal/* ]]; then
-            run_preflight
+            run_preflight --command-only
           fi
+
+      - name: Fail when preflight did not pass
+        if: ${{ steps.run.outputs.report != '' }}
+        env:
+          REPORT: ${{ steps.run.outputs.report }}
+        run: jq -e '.ok == true' <<<"$REPORT" > /dev/null
+
+  # Never runs preflight.sh. The action is the default branch's copy, not the
+  # gated tree's.
+  preflight-comment:
+    name: Uplink gate preflight comment
+    needs: validate
+    if: ${{ always() && needs.validate.outputs.preflight == 'true' && needs.validate.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/actions
+
+      - uses: $/.github/actions/uplink-preflight-comment
+        with:
+          report: ${{ needs.validate.outputs.report }}
+          pr-number: ${{ github.event.pull_request.number }}
+          token: ${{ secrets.GITHUB_TOKEN }}

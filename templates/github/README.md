@@ -13,9 +13,9 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 ## `uplink-pr.yml` — Uplink PR checks
 
 - **Runs on:** pull requests to `main` (opened, synchronize, reopened, edited, labeled, unlabeled). Skipped for `uplink:internal-only`. Adding or removing any label runs the checks again, so removing `uplink:internal-only` cannot leave the skipped checks standing as passed.
-- **Does:** two parallel jobs, both required checks, and a third that posts the preflight comment.
+- **Does:** two parallel jobs, both required checks, and a third that writes the preflight verdict to the PR.
   - **Uplink upstream assess:** turns the PR title and body into the commit message, strips everything below the cutoff, turns `Uplink-Export-Author` into a `Co-Authored-By` trailer, and scans for company keywords and internal email domains. It uploads the assessment package (`git uplink assess --package`: the result, the public message, the `uplink.toml` settings and the diff) as artifact `uplink-assessment`, and runs the optional assessment hook (below), which reads it. Both results go into one PR comment that is updated in place on every run. A failed hook is noted in the comment; it does not fail the check. Both are advice: the change is not a patch yet, and nothing from this run is stored. **Uplink submit** assesses the patch.
-  - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs `preflight.sh` from `uplink/hooks`, in a step with no token. Job **Uplink preflight comment** posts a failure on the PR; later runs update that comment.
+  - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs `preflight.sh` from `uplink/hooks`, in a step with no token. The job log shows the script's output. Job **Uplink preflight comment** writes the verdict to one PR comment on every run, pass or fail, and updates it in place. The comment lists what the script ran on: `uplink/upstream`, each dependency applied onto it, then the change.
 - **Requires:**
   - `uplink.toml` (`redact_keywords`, `internal_email_domains`) and `preflight.sh` on `uplink/hooks` (see [Settings](#settings));
   - the Actions token (contents read, pull requests write for the comments, actions write to run the hook);
@@ -125,10 +125,10 @@ Every job installs the `git-uplink` release named by `UPLINK_SRC` / `UPLINK_VERS
 ## `uplink-gate.yml` — Uplink gate
 
 - **Runs on:** pull requests into `uplink/conflict/**`, `uplink/transfer-to-upstream/**`, `uplink/transfer-to-internal/**`, and `uplink/amend/**` (`pull_request_target`), including title and description edits.
-- **Does:** job **Uplink gate** fails if conflict markers remain or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`, `uplink-*` actions, `.github/uplink/`) or anything under `.uplink/`. For conflict PRs it also runs the upstream assessment on the resolution with the patch's stored message, so a resolution that would leak company text cannot merge. For transfer-to-upstream PRs it runs export preflight. For amend PRs it assesses the whole amended patch with the PR title and description as its message. Conflict and amend PRs for internal-only patches skip the assessment and run only the preflight script (`git uplink preflight --command-only`), as transfer-to-internal PRs do. The step that assesses and runs `preflight.sh` has no token.
+- **Does:** job **Uplink gate** fails if conflict markers remain or if the PR changes pack files (`uplink-*.yml`, `install-git-uplink`, `uplink-*` actions, `.github/uplink/`) or anything under `.uplink/`. For conflict PRs it also runs the upstream assessment on the resolution with the patch's stored message, so a resolution that would leak company text cannot merge. For transfer-to-upstream PRs it runs export preflight. For amend PRs it assesses the whole amended patch with the PR title and description as its message. Conflict and amend PRs for internal-only patches skip the assessment and run only the preflight script (`git uplink preflight --command-only`), as transfer-to-internal PRs do. The step that assesses and runs `preflight.sh` has no token. When it ran `preflight.sh`, job **Uplink gate preflight comment** writes the verdict to one PR comment, as the PR checks do; it holds `pull-requests: write`, takes its action from the default branch, and never checks out the gated tree. With `--command-only` the comment lists the commits the gated tree has on top of `uplink/upstream`.
 - **Requires:**
   - `preflight.sh` on `uplink/hooks`;
-  - the Actions token (contents read);
+  - the Actions token (contents read; pull requests write in the comment job only);
   - make **Uplink gate** a required check on the gated bases. Before this job had a name its check was called `validate`; update existing rulesets or branch protection to the new name.
 
 ## Settings

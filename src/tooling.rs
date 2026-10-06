@@ -1182,9 +1182,80 @@ mod embed_tests {
                     && gate.contains("is_internal \"${BASE_REF#uplink/amend/}\""),
                 "{forge:?} gate must skip assess for internal-only patches\n{gate}"
             );
+            // Only the job that writes the preflight comment may write, and
+            // it never sees the gated tree.
+            for (key, job) in jobs_of(&gate) {
+                if key == "preflight-comment" {
+                    assert!(
+                        !job.contains("pull_request.head") && !job.contains("git uplink"),
+                        "{forge:?} gate {key} must not check out or run the gated tree\n{job}"
+                    );
+                    assert!(
+                        job.contains("ref: ${{ github.event.repository.default_branch }}"),
+                        "{forge:?} gate {key} must take its action from the default branch\n{job}"
+                    );
+                } else {
+                    assert!(
+                        !job.contains(": write"),
+                        "{forge:?} gate {key} must not hold a write permission\n{job}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preflight_verdict_is_commented_on_every_run() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = |path: &str| {
+                files
+                    .iter()
+                    .find(|(p, _)| p.ends_with(path))
+                    .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_else(|| panic!("{forge:?} missing {path}"))
+            };
+            let action = text(".github/actions/uplink-preflight-comment/action.yml");
+            assert!(action.contains("<!-- uplink:preflight -->"), "{action}");
+            // One comment: update it, else create it. No outcome decides.
             assert!(
-                !gate.contains("pull-requests: write"),
-                "{forge:?} gate must not request pull-requests: write\n{gate}"
+                action.contains("--method PATCH") && action.contains("--method POST"),
+                "{action}"
+            );
+            assert!(!action.contains("elif"), "{action}");
+            assert!(action.contains(".comment // .message"), "{action}");
+            for (workflow, needs) in [
+                ("uplink-pr.yml", "needs: preflight"),
+                ("uplink-gate.yml", "needs: validate"),
+            ] {
+                let job = jobs_of(&text(workflow))
+                    .into_iter()
+                    .find(|(key, _)| key == "preflight-comment")
+                    .map(|(_, job)| job)
+                    .unwrap_or_else(|| panic!("{forge:?} {workflow} has no preflight-comment"));
+                assert!(job.contains(needs), "{forge:?} {workflow}\n{job}");
+                assert!(
+                    job.contains("uses: $/.github/actions/uplink-preflight-comment")
+                        && job.contains("pull-requests: write")
+                        && job.contains("always()")
+                        && job.contains("persist-credentials: false"),
+                    "{forge:?} {workflow}\n{job}"
+                );
+                assert!(
+                    !job.contains("uplink-toolchain-hook") && !job.contains("git uplink"),
+                    "{forge:?} {workflow}: the job that comments must not run preflight.sh\n{job}"
+                );
+            }
+            // The gate hands over every preflight it runs.
+            let gate = text("uplink-gate.yml");
+            assert_eq!(
+                gate.matches("git uplink preflight").count(),
+                1,
+                "{forge:?} gate runs preflight in one place, with --json\n{gate}"
+            );
+            assert!(
+                gate.contains("report=$(git uplink preflight --json \"$@\") || true"),
+                "{gate}"
             );
         }
     }
