@@ -7275,6 +7275,125 @@ fn a_dependent_is_ready_to_submit_only_once_the_upstream_is_accepted() {
 }
 
 #[test]
+fn a_sync_that_ends_in_a_conflict_still_reports_what_it_unblocked() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/flag"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "FLAG.md", "flag\n");
+    commit_all(company, "add flag");
+    let flag = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add flag".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "notes\n");
+    commit_all(company, "add notes");
+    let notes = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add notes".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![flag.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    // Upstream takes the flag patch, and changes the line the TTL patch changes.
+    write(upstream, "FLAG.md", "flag\n");
+    commit_all(upstream, "Add flag");
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(upstream, "shorten default ttl");
+
+    let mut result = sync(company).unwrap();
+    if result.needs_approval {
+        assert!(result.ready_to_submit.is_empty(), "{result:?}");
+        result = accept_upstream(company).unwrap();
+    }
+    let status = |queue: &QueueState, id: &str| {
+        queue
+            .all_patches()
+            .find(|p| p.id == id)
+            .map(|p| p.status)
+            .unwrap()
+    };
+    assert_eq!(status(&result.queue, &ttl.id), PatchStatus::Conflict);
+    assert_eq!(status(&result.queue, &flag.id), PatchStatus::Merged);
+    assert_eq!(status(&result.queue, &notes.id), PatchStatus::Queued);
+    assert_eq!(result.ready_to_submit, vec![notes.id.clone()]);
+
+    // The conflict is in another patch: the unblocked one can be submitted.
+    approve_patch(company, &notes.id).unwrap();
+    let submitted = submit_patch(company, &notes.id, true).unwrap();
+    let parent = git_ok(company, &["rev-parse", &format!("{}^", submitted.branch)]).unwrap();
+    assert_eq!(parent.trim(), rev_of(company, "uplink/upstream"));
+    let before_resolve = git_uplink::read_queue(company).unwrap();
+
+    let conflicted = result.queue.all_patches().find(|p| p.id == ttl.id).unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", &work_branch_of(conflicted)],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    let resolved = resolve_conflict(company, &ttl.id).unwrap();
+
+    // Only what resolve changed: the patch that is queued again.
+    assert_eq!(
+        newly_ready_to_submit(&before_resolve, &resolved),
+        vec![ttl.id.clone()]
+    );
+}
+
+#[test]
 fn transfer_to_upstream_makes_the_patch_ready_to_submit() {
     let world = setup_world();
     let company = &world.company;

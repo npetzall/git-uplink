@@ -18,8 +18,7 @@
 #
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, a queued patch
 # whose last unmerged upstream dependency this run marked merged gets Uplink
-# submit dispatched. Not while the run ends in a conflict: the ids are in a
-# warning instead.
+# submit dispatched, also when the run ends in a conflict on another patch.
 #
 # Dispatch only. uplink-sync-schedule.yml runs it hourly.
 name: Uplink sync
@@ -189,13 +188,7 @@ jobs:
           fi
 
           git push origin uplink/state
-          # A conflict blocks the queue; submit would stop at preflight.
-          ready=$(jq -c '.readyToSubmit // []' <<<"$sync_json")
-          if [ "$ready" != "[]" ] && jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
-            echo "::warning title=Uplink auto-submit::Ready to submit once the conflict is resolved: $(jq -r 'join(", ")' <<<"$ready")"
-            ready='[]'
-          fi
-          echo "ready_to_submit=${ready}" >> "$GITHUB_OUTPUT"
+          echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$sync_json")" >> "$GITHUB_OUTPUT"
           if [ "$needs_approval" = "true" ]; then
             exit 0
           fi
@@ -376,13 +369,7 @@ jobs:
           fi
 
           git push origin uplink/state
-          # A conflict blocks the queue; submit would stop at preflight.
-          ready=$(jq -c '.readyToSubmit // []' <<<"$sync_json")
-          if [ "$ready" != "[]" ] && jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
-            echo "::warning title=Uplink auto-submit::Ready to submit once the conflict is resolved: $(jq -r 'join(", ")' <<<"$ready")"
-            ready='[]'
-          fi
-          echo "ready_to_submit=${ready}" >> "$GITHUB_OUTPUT"
+          echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$sync_json")" >> "$GITHUB_OUTPUT"
           git push origin uplink/upstream --force || true
 
           main_after=$(git rev-parse HEAD)

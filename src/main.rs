@@ -363,13 +363,13 @@ fn finish_sync(repo: &Path, result: SyncResult, summary: Option<&str>) -> Result
 fn print_resolve_artifact(
     repo: &Path,
     resolved_id: &str,
+    before: &QueueState,
     queue: &QueueState,
     follow_on_conflict: bool,
 ) -> Result<(), Error> {
-    println!(
-        "{}",
-        resolve_artifact(repo, resolved_id, queue, follow_on_conflict)?
-    );
+    let mut value = resolve_artifact(repo, resolved_id, queue, follow_on_conflict)?;
+    value["readyToSubmit"] = serde_json::json!(newly_ready_to_submit(before, queue));
+    println!("{value}");
     Ok(())
 }
 
@@ -1163,11 +1163,12 @@ fn cmd_rebuild(
 }
 
 fn cmd_resolve(repo: &Path, id: &str) -> Result<(), Error> {
+    let before = read_queue(repo)?;
     match resolve_conflict(repo, id) {
-        Ok(queue) => print_resolve_artifact(repo, id, &queue, false),
+        Ok(queue) => print_resolve_artifact(repo, id, &before, &queue, false),
         Err(Error::Conflict(_)) => {
             let queue = read_queue(repo)?;
-            print_resolve_artifact(repo, id, &queue, true)?;
+            print_resolve_artifact(repo, id, &before, &queue, true)?;
             if let Some(conflict) = find_conflict(&queue) {
                 eprint_conflict(conflict);
             }

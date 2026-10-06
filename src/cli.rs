@@ -630,7 +630,8 @@ pub enum Commands {
     /// and exits 0.
     ///
     /// `readyToSubmit` in the output lists the queued patches whose last
-    /// unmerged upstream dependency this sync marked merged.
+    /// unmerged upstream dependency this sync marked merged, also when the
+    /// sync ends in a conflict on another patch.
     Sync {
         /// A recorded public pull request the forge reports as merged, with
         /// its merge commit. Repeat it per patch; the sync workflow passes
@@ -724,6 +725,10 @@ pub enum Commands {
     /// dispatches a new submit for you either way, so the public PR gets
     /// the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for
     /// the next gated PR and exits 0.
+    ///
+    /// `readyToSubmit` in the output lists the resolved patch when it is
+    /// `queued` again, and the queued patches whose last unmerged upstream
+    /// dependency the rebuild marked merged.
     Resolve {
         /// Patch whose conflict was resolved.
         #[arg(value_name = "id")]

@@ -13,6 +13,10 @@
 # run only exports it again.
 # If rebuild stops on a later patch, it publishes that conflict the same
 # way sync does.
+# With repository variable UPLINK_AUTO_SUBMIT set to `true`, it dispatches
+# Uplink submit for the resolved patch when it is queued again, and for a
+# queued patch whose last unmerged upstream dependency the rebuild marked
+# merged.
 name: Uplink resolve
 
 on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data
@@ -117,6 +121,7 @@ jobs:
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Resolve patch and rebuild main
+        id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -142,6 +147,7 @@ jobs:
           fi
 
           git push origin uplink/state
+          echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$resolve_json")" >> "$GITHUB_OUTPUT"
           main_after=$(git rev-parse HEAD)
           if [ "$main_after" != "$main_before" ]; then
             git push origin main --force
@@ -202,3 +208,10 @@ jobs:
 
           git push origin --delete "uplink/conflict/${id}" || true
           git push origin --delete "uplink/conflict/${id}-work" || true
+
+      - name: Dispatch Uplink submit for patches that became ready
+        if: ${{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.resolve.outputs.ready_to_submit != '' && steps.resolve.outputs.ready_to_submit != '[]' }}
+        uses: $/.github/actions/uplink-dispatch-submit
+        with:
+          patch-ids: ${{ steps.resolve.outputs.ready_to_submit }}
+          token: ${{ secrets.GITHUB_TOKEN }}
