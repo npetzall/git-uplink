@@ -23,8 +23,8 @@
 # Put both job names in the required status checks for the PR.
 # This workflow does not write uplink/state (not uplink-mutate).
 # Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
-# preflight.sh runs in a step without that token, and its comment is posted
-# by a separate job.
+# preflight.sh runs in a step without that token. A separate job writes its
+# verdict to one PR comment, on every run and updated in place.
 name: Uplink PR checks
 
 on:
@@ -232,38 +232,18 @@ jobs:
     if: ${{ always() && needs.preflight.result != 'skipped' && needs.preflight.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     steps:
-      - name: Comment the preflight result
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPORT: ${{ needs.preflight.outputs.report }}
-        run: |
-          set -euo pipefail
-          if [ -z "$REPORT" ]; then
-            echo "The preflight job printed no result; see its log."
-            exit 0
-          fi
-          failed=true
-          if jq -e '.ok == true' <<<"$REPORT" > /dev/null; then
-            failed=false
-            echo "export preflight passed" > /tmp/uplink-preflight.md
-          else
-            jq -r '.comment // .message // "Uplink export preflight failed."' <<<"$REPORT" > /tmp/uplink-preflight.md
-          fi
-          # One comment per PR, updated in place. A pass only updates an
-          # earlier failure comment; it does not post a new one.
-          marker='<!-- uplink:preflight -->'
-          id=$(gh api --paginate "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | .id" \
-            | head -n 1)
-          { echo "$marker"; cat /tmp/uplink-preflight.md; } > /tmp/uplink-preflight-comment.md
-          if [ -n "$id" ]; then
-            gh api --method PATCH "repos/${GH_REPO}/issues/comments/${id}" \
-              -F "body=@/tmp/uplink-preflight-comment.md" > /dev/null
-          elif [ "$failed" = "true" ]; then
-            gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
-              -F "body=@/tmp/uplink-preflight-comment.md" > /dev/null
-          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.ref }}
+          sparse-checkout: .github/actions
+
+      # Pass or fail, and when the job printed no result.
+      - uses: $/.github/actions/uplink-preflight-comment
+        with:
+          report: ${{ needs.preflight.outputs.report }}
+          pr-number: ${{ github.event.pull_request.number }}
+          token: ${{ secrets.GITHUB_TOKEN }}

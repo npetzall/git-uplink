@@ -1,0 +1,49 @@
+name: Uplink preflight comment
+description: >-
+  Write the preflight verdict to the pull request: one comment per PR, created
+  on the first run and updated in place on every run after, whatever the
+  outcome. Runs in a job that never runs preflight.sh.
+inputs:
+  report:
+    description: Output of git uplink preflight --json. Empty when the preflight job printed none.
+    required: true
+  pr-number:
+    description: Number of the pull request to comment on.
+    required: true
+  token:
+    description: Token with pull-requests write on this repository. Workflows pass secrets.GITHUB_TOKEN.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Comment the preflight result
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        REPORT: ${{ inputs.report }}
+      run: |
+        set -euo pipefail
+        marker='<!-- uplink:preflight -->'
+        body="$RUNNER_TEMP/uplink-preflight-comment.md"
+        {
+          echo "$marker"
+          if jq -e 'type == "object"' >/dev/null 2>&1 <<<"$REPORT"; then
+            jq -r '.comment // .message // (if .ok == true then "Uplink preflight passed." else "Uplink preflight failed." end)' <<<"$REPORT"
+          else
+            echo "Uplink preflight printed no result; see the job log."
+          fi
+          echo
+          echo "[Run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+        } > "$body"
+        id=$(gh api --paginate "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+          --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | .id" \
+          | head -n 1)
+        if [ -n "$id" ]; then
+          gh api --method PATCH "repos/${GH_REPO}/issues/comments/${id}" \
+            -F "body=@${body}" > /dev/null
+        else
+          gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+            -F "body=@${body}" > /dev/null
+        fi

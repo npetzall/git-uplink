@@ -82,6 +82,7 @@ runs:
 Put the build and test commands in `preflight.sh` on this branch, for example `npm ci && npm test`, `./gradlew check`, or `cargo test --locked`. `git uplink init` asked for the command when it created the file.
 
 - Preflight runs it as `sh preflight.sh` from the root of the tree under test. A non-zero exit fails preflight.
+- What it prints is shown in the job log as it runs, stdout and stderr together. On a failure it is also in the PR comment.
 - This branch is checked out beside the script for the run, so it can call other files here through `"$(dirname "$0")"`.
 - `GITHUB_TOKEN`, `GH_TOKEN`, and `UPLINK_*_TOKEN` / `UPLINK_*_KEY` are removed from its environment. Do not export other secrets through `$GITHUB_ENV` unless the build needs them: the script sees them.
 - It builds and runs product code, public upstream's included, so it never runs next to a credential. In CI, `git uplink` refuses to run it in a step that holds a token. The pack runs it in a job of its own and hands the result to the job that writes (`--preflight-result`).
