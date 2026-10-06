@@ -270,7 +270,9 @@ fn publish_rebuilt_company(
     company_branch: &str,
     upstream_ref: &str,
 ) -> Result<()> {
-    git(repo, &["add", "-A"], GitOpts::default())?;
+    // Tracked changes only: an untracked file in the operator's checkout
+    // survives the detached checkout and must not land on the company branch.
+    git(repo, &["add", "-u"], GitOpts::default())?;
     if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
         git(
             repo,

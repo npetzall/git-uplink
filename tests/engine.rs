@@ -2005,6 +2005,23 @@ fn rebuild_leaves_stored_patch_bytes_unchanged() {
 }
 
 #[test]
+fn rebuild_leaves_untracked_files_out_of_the_company_branch() {
+    let (world, _) = world_with_hash_patch();
+    let company = &world.company;
+    write(company, "sync.json", "{}\n");
+
+    rebuild(company).unwrap();
+
+    let tree = git_ok(company, &["ls-tree", "-r", "--name-only", "main"]).unwrap();
+    assert!(!tree.lines().any(|path| path == "sync.json"), "{tree}");
+    assert_eq!(rev_of(company, "HEAD"), rev_of(company, "main"));
+    assert_eq!(
+        fs::read_to_string(company.join("sync.json")).unwrap(),
+        "{}\n"
+    );
+}
+
+#[test]
 fn rebuild_after_adopt_replays_onto_main() {
     let world = setup_uninitialized();
     let [a, b, c] = three_linear_ahead(&world.company);
