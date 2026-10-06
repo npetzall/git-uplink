@@ -25,6 +25,16 @@ sfw cargo test --locked
 sfw cargo clippy --locked --all-targets -- -D warnings
 ```
 
+## Branches
+
+Never change or commit directly on `main`. Before the first edit, check the current branch; if it is `main`, create a branch from `origin/main` (no `git fetch`), not from local `main`, and work there:
+
+```bash
+git switch --no-track -c fix/short_description origin/main
+```
+
+Name it `type/short_description`, with the same types as commits.
+
 ## Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/):
