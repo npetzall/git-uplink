@@ -4,7 +4,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::types::{PATCH_DIR, Patch, PatchEvent, PatchLayer, PatchStatus, QUEUE_PATH, QueueState};
+use crate::types::{
+    PATCH_DIR, PREVIOUS_MAIN_PATH, Patch, PatchEvent, PatchLayer, PatchStatus, PreviousMain,
+    QUEUE_PATH, QueueState,
+};
 
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -57,6 +60,11 @@ pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
         let _ = fs::remove_file(&tmp);
     }
     Ok(written?)
+}
+
+pub fn write_previous_main(repo: &Path, previous: &PreviousMain) -> Result<()> {
+    let body = format!("{}\n", serde_json::to_string_pretty(previous)?);
+    Ok(fs::write(repo.join(PREVIOUS_MAIN_PATH), body)?)
 }
 
 pub fn active_upstream(queue: &QueueState) -> Vec<&Patch> {

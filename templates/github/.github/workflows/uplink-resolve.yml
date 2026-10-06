@@ -215,3 +215,13 @@ jobs:
         with:
           patch-ids: ${{ steps.resolve.outputs.ready_to_submit }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # A rebuild writes every commit of main again. Tell the open pull
+      # requests it left behind how to rebase; a failure here is not a
+      # failure of the job.
+      - name: Tell open pull requests about a rebuilt main
+        continue-on-error: true
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}

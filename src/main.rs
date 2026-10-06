@@ -19,11 +19,11 @@ use git_uplink::{
     format_init_summary, format_status_table, from_upstream_report_paths, git_ok,
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
     newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
-    read_queue, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
-    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict,
-    review_token, review_token_path, set_script_echo, status_report, status_snapshot,
-    store_assess_result, store_patch_extras, stored_commit_message, submit_patch_with, sync_with,
-    transfer_patch_with, transfer_preflight, write_man_pages,
+    read_queue, rebase_onto_main, rebase_plan, rebuild_with, record_gated_pr, record_pull_request,
+    refresh_from_origin, refuse_script_with_credentials, report_paths, reset_from_origin,
+    resolve_conflict, review_token, review_token_path, set_script_echo, status_report,
+    status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
+    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
@@ -736,6 +736,43 @@ fn cmd_reset(repo: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+fn cmd_rebase(
+    repo: &Path,
+    plan: bool,
+    head: Option<String>,
+    json: bool,
+    fetch: bool,
+) -> Result<(), Error> {
+    if !plan {
+        let result = rebase_onto_main(repo, fetch)?;
+        if result.rebased {
+            let commits = result.plan.commits;
+            let noun = if commits == 1 { "commit" } else { "commits" };
+            println!(
+                "rebased {commits} {noun} onto origin/{}",
+                result.plan.branch
+            );
+        } else {
+            println!("up to date with origin/{}", result.plan.branch);
+        }
+        return Ok(());
+    }
+    let plan = rebase_plan(repo, head.as_deref().unwrap_or("HEAD"), fetch)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+        return Ok(());
+    }
+    let state = serde_json::to_value(plan.state)?;
+    println!("{}", state.as_str().unwrap_or_default());
+    if let Some(command) = &plan.command {
+        println!("{command}");
+    }
+    if let Some(reason) = &plan.reason {
+        println!("{reason}");
+    }
+    Ok(())
+}
+
 /// What `assess` was asked to assess.
 enum AssessTarget {
     /// The change between two revisions.
@@ -1397,6 +1434,12 @@ fn run() -> Result<(), Error> {
         Commands::Push { push_remote } => cmd_push(&repo, push_remote),
         Commands::Refresh => cmd_refresh(&repo),
         Commands::Reset => cmd_reset(&repo),
+        Commands::Rebase {
+            plan,
+            head,
+            json,
+            no_fetch,
+        } => cmd_rebase(&repo, plan, head, json, !no_fetch),
         Commands::Assess {
             from,
             head,

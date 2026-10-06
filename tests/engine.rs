@@ -6,20 +6,20 @@ use std::thread;
 use git_uplink::{
     AddPatchOpts, AdoptGroup, AmendMessage, ApprovalReceipt, CheckStatus, ConflictError,
     DEFAULT_CUTOFF, Error, Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
-    Patch, PatchIntent, PatchStatus, PendingMerge, PreflightReport, ProgressMode, PushOpts,
-    QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH, ScriptVerdict, Settings,
-    SettingsFlags, StepOutcome, SubmitResult, SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
-    TransferDirection, accept_upstream, accept_upstream_at, add_patch, amend_patch,
-    amend_patch_with, amend_preflight, approve_patch, approve_patch_reviewed,
-    assess_patch_for_packet, doctor, drop_patch, extras_dir, format_approval_receipt,
-    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
-    format_step_line, from_upstream_report_paths, git, git_ok, init, init_repo,
-    load_extra_markdown, mark_merged, newly_ready_to_submit, parse_depends_on,
-    preflight_incoming_change, push_queue, rebuild, rebuild_with, record_gated_pr,
-    record_pull_request, refresh_from_origin, report_paths, reset_from_origin, resolve_conflict,
-    review_token, status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments,
-    submit_patch, submit_patch_with, summarize_queue, sync, sync_with, transfer_patch,
-    transfer_patch_with, transfer_preflight, write_queue,
+    PREVIOUS_MAIN_PATH, Patch, PatchIntent, PatchStatus, PendingMerge, PreflightReport,
+    PreviousMain, ProgressMode, PushOpts, QueueConfig, QueueState, RebaseState, RebuildOpts,
+    Result, STATE_BRANCH, ScriptVerdict, Settings, SettingsFlags, StepOutcome, SubmitResult,
+    SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream,
+    accept_upstream_at, add_patch, amend_patch, amend_patch_with, amend_preflight, approve_patch,
+    approve_patch_reviewed, assess_patch_for_packet, doctor, drop_patch, extras_dir,
+    format_approval_receipt, format_approver_packet, format_contribution_packet,
+    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
+    git_ok, init, init_repo, load_extra_markdown, mark_merged, newly_ready_to_submit,
+    parse_depends_on, preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan,
+    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
+    reset_from_origin, resolve_conflict, review_token, status_snapshot, store_patch_extras,
+    stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with, summarize_queue,
+    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
 };
 use tempfile::TempDir;
 
@@ -11206,4 +11206,301 @@ fn submit_refuses_an_approved_patch_without_an_assess_report() {
     assert!(err.contains("no upstream assessment on record"), "{err}");
     assert!(!ref_exists(company, &format!("uplink/{}", patch.id)));
     assert_eq!(patch_of(company, &patch.id).status, PatchStatus::Approved);
+}
+
+fn previous_main(repo: &Path) -> PreviousMain {
+    let raw = git_ok(
+        repo,
+        &["show", &format!("{STATE_BRANCH}:{PREVIOUS_MAIN_PATH}")],
+    )
+    .unwrap();
+    serde_json::from_str(&raw).unwrap()
+}
+
+#[test]
+fn rebuild_records_the_main_it_replaced() {
+    let (world, _) = world_with_hash_patch();
+    let company = &world.company;
+    // The merged change as it landed: no Uplink-Patch-Id trailer.
+    let landed = rev_of(company, "main");
+
+    rebuild(company).unwrap();
+    let first = previous_main(company);
+    assert_eq!(first.tip, landed);
+    assert_eq!(first.commits, [landed]);
+
+    // Every commit of the replay names its patch, so none is listed.
+    let replay = rev_of(company, "main");
+    rebuild(company).unwrap();
+    let second = previous_main(company);
+    assert_eq!(second.tip, replay);
+    assert!(second.commits.is_empty(), "{:?}", second.commits);
+
+    let state = rev_of(company, STATE_BRANCH);
+    rebuild_with(
+        company,
+        RebuildOpts {
+            branch: Some("uplink/preview/verify".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(rev_of(company, STATE_BRANCH), state);
+}
+
+/// A company repository whose main is a replay of one patch, its origin, and
+/// a developer's clone of that origin.
+fn world_with_developer_clone() -> (World, TempDir, PathBuf) {
+    let (world, _) = world_with_hash_patch();
+    rebuild(&world.company).unwrap();
+    let origin = publish_origin(&world.company);
+    let (keep, clone) = clone_company_from(&origin, &world.upstream);
+    (world, keep, clone)
+}
+
+fn publish_main(company: &Path) {
+    git(
+        company,
+        &[
+            "push",
+            "--quiet",
+            "--force",
+            "origin",
+            "main",
+            "uplink/state",
+            "uplink/upstream",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+}
+
+/// Moves public upstream and syncs, so the rebuild writes every commit of
+/// company main again, then publishes it.
+fn replace_main(world: &World, note: &str) {
+    write(&world.upstream, &format!("notes/{note}.md"), "note\n");
+    commit_all(&world.upstream, &format!("add note {note}"));
+    sync_apply(&world.company);
+    publish_main(&world.company);
+}
+
+/// Lands a change on company main as a merged pull request does, without a
+/// rebuild, and publishes it. Returns the new tip.
+fn land_without_rebuild(company: &Path, name: &str) -> String {
+    git(
+        company,
+        &["checkout", "--quiet", "-b", &format!("feat/{name}")],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, &format!("docs/{name}.md"), "docs\n");
+    commit_all(company, &format!("document {name}"));
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: format!("Document {name}"),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    publish_main(company);
+    rev_of(company, "main")
+}
+
+/// Cuts `feat/mine` from origin's main in the clone and commits one file.
+fn developer_branch(clone: &Path) {
+    for (key, value) in [
+        ("user.name", "Dev Eloper"),
+        ("user.email", "dev@example.com"),
+        ("commit.gpgsign", "false"),
+    ] {
+        git(clone, &["config", key, value], GitOpts::default()).unwrap();
+    }
+    git(clone, &["fetch", "--quiet", "origin"], GitOpts::default()).unwrap();
+    git(
+        clone,
+        &["checkout", "--quiet", "-b", "feat/mine", "origin/main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(clone, "mine.txt", "mine\n");
+    commit_all(clone, "my change");
+}
+
+fn own_commits(clone: &Path) -> Vec<String> {
+    git_ok(clone, &["log", "--format=%s", "origin/main..HEAD"])
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn rebase_moves_a_branch_forked_from_a_patch_commit() {
+    let (world, _keep, clone) = world_with_developer_clone();
+    developer_branch(&clone);
+    let fork = rev_of(&clone, "origin/main");
+    // Two rebuilds on: the record of the first is no longer the newest.
+    replace_main(&world, "one");
+    replace_main(&world, "two");
+
+    let plan = rebase_plan(&clone, "HEAD", true).unwrap();
+    assert_eq!(plan.state, RebaseState::Replaced);
+    assert_eq!(plan.fork_point.as_deref(), Some(fork.as_str()));
+    assert_eq!(plan.commits, 1);
+    assert_eq!(
+        plan.command.as_deref(),
+        Some(format!("git rebase --onto origin/main {fork}").as_str())
+    );
+
+    let result = rebase_onto_main(&clone, true).unwrap();
+    assert!(result.rebased);
+    assert_eq!(own_commits(&clone), ["my change"]);
+    // The rebased commit is the developer's, not the bot's.
+    assert_eq!(
+        git_ok(&clone, &["log", "-1", "--format=%cn"]).unwrap(),
+        "Dev Eloper"
+    );
+    assert_eq!(
+        rebase_plan(&clone, "HEAD", true).unwrap().state,
+        RebaseState::Current
+    );
+}
+
+#[test]
+fn rebase_finds_a_fork_point_on_a_merge_since_the_last_rebuild() {
+    let (world, _keep, clone) = world_with_developer_clone();
+    let landed = land_without_rebuild(&world.company, "ttl");
+    developer_branch(&clone);
+    replace_main(&world, "one");
+    assert_eq!(previous_main(&world.company).commits, [landed.as_str()]);
+
+    // --no-fetch plans from what the clone last fetched.
+    let (ok, stdout, _) = run_uplink(&clone, &["rebase", "--plan", "--no-fetch"]);
+    assert!(ok);
+    assert!(stdout.starts_with("current"), "{stdout}");
+
+    let plan = rebase_plan(&clone, "HEAD", true).unwrap();
+    assert_eq!(plan.state, RebaseState::Replaced);
+    assert_eq!(plan.fork_point.as_deref(), Some(landed.as_str()));
+
+    let (ok, stdout, stderr) = run_uplink(&clone, &["rebase", "--no-fetch"]);
+    assert!(ok, "{stdout}{stderr}");
+    assert_eq!(own_commits(&clone), ["my change"]);
+}
+
+#[test]
+fn rebase_reads_an_earlier_revision_of_previous_main() {
+    let (world, _keep, clone) = world_with_developer_clone();
+    let landed = land_without_rebuild(&world.company, "ttl");
+    developer_branch(&clone);
+    replace_main(&world, "one");
+    replace_main(&world, "two");
+    assert!(previous_main(&world.company).commits.is_empty());
+
+    let plan = rebase_plan(&clone, "HEAD", true).unwrap();
+    assert_eq!(plan.state, RebaseState::Replaced);
+    assert_eq!(plan.fork_point.as_deref(), Some(landed.as_str()));
+
+    rebase_onto_main(&clone, true).unwrap();
+    assert_eq!(own_commits(&clone), ["my change"]);
+}
+
+#[test]
+fn rebase_starts_from_a_main_merged_into_the_branch() {
+    let (world, _keep, clone) = world_with_developer_clone();
+    developer_branch(&clone);
+    let landed = land_without_rebuild(&world.company, "ttl");
+    git(&clone, &["fetch", "--quiet", "origin"], GitOpts::default()).unwrap();
+    git(
+        &clone,
+        &["merge", "--quiet", "--no-edit", "origin/main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    replace_main(&world, "one");
+
+    let plan = rebase_plan(&clone, "HEAD", true).unwrap();
+    assert_eq!(plan.state, RebaseState::Replaced);
+    assert_eq!(plan.fork_point.as_deref(), Some(landed.as_str()));
+    assert_eq!(plan.commits, 1);
+
+    rebase_onto_main(&clone, true).unwrap();
+    assert_eq!(own_commits(&clone), ["my change"]);
+}
+
+#[test]
+fn rebase_plan_tells_current_behind_and_unknown_apart() {
+    let (world, _keep, clone) = world_with_developer_clone();
+    developer_branch(&clone);
+    assert_eq!(
+        rebase_plan(&clone, "HEAD", true).unwrap().state,
+        RebaseState::Current
+    );
+
+    land_without_rebuild(&world.company, "ttl");
+    let branches = |repo: &Path| {
+        let format = "--format=%(refname) %(objectname)";
+        git_ok(repo, &["for-each-ref", format, "refs/heads"]).unwrap()
+    };
+    let before = branches(&clone);
+    let (ok, stdout, stderr) = run_uplink(&clone, &["rebase", "--plan", "--json"]);
+    assert!(ok, "{stdout}{stderr}");
+    let plan: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(plan["state"], "behind");
+    assert_eq!(plan["command"], "git rebase origin/main");
+    assert_eq!(branches(&clone), before, "--plan moved a branch");
+    assert_eq!(own_commits(&clone).len(), 1);
+
+    // A commit that names a patch on top of the branch's own work is not
+    // where the branch left main: rebasing from it would drop "my change".
+    write(&clone, "picked.txt", "picked\n");
+    git(&clone, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        &clone,
+        &[
+            "commit",
+            "-m",
+            "picked from main\n\nUplink-Patch-Id: upl_0123456789\n",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    replace_main(&world, "one");
+    let plan = rebase_plan(&clone, "HEAD", true).unwrap();
+    assert_eq!(plan.state, RebaseState::Unknown);
+    assert!(plan.fork_point.is_none());
+    let reason = plan.reason.unwrap();
+    assert!(reason.contains("not a commit of company main"), "{reason}");
+
+    let before = rev_of(&clone, "HEAD");
+    let err = rebase_onto_main(&clone, true).unwrap_err().to_string();
+    assert!(err.contains("git rebase --onto origin/main"), "{err}");
+    assert_eq!(rev_of(&clone, "HEAD"), before);
+}
+
+#[test]
+fn rebase_refuses_main_and_dirty_worktrees() {
+    let (world, _keep, clone) = world_with_developer_clone();
+    developer_branch(&clone);
+    replace_main(&world, "one");
+
+    write(&clone, "mine.txt", "edited\n");
+    let before = rev_of(&clone, "HEAD");
+    let err = rebase_onto_main(&clone, true).unwrap_err().to_string();
+    assert!(err.contains("Uncommitted changes"), "{err}");
+    assert_eq!(rev_of(&clone, "HEAD"), before);
+    git(&clone, &["checkout", "--quiet", "."], GitOpts::default()).unwrap();
+
+    git(&clone, &["checkout", "--quiet", "main"], GitOpts::default()).unwrap();
+    let (ok, _, stderr) = run_uplink(&clone, &["rebase"]);
+    assert!(!ok);
+    assert!(stderr.contains("not a branch to rebase"), "{stderr}");
 }

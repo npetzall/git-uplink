@@ -239,6 +239,16 @@ jobs:
           patch-ids: ${{ steps.sync.outputs.ready_to_submit }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # A rebuild writes every commit of main again. Tell the open pull
+      # requests it left behind how to rebase; a failure here is not a
+      # failure of the job.
+      - name: Tell open pull requests about a rebuilt main
+        continue-on-error: true
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}
+
   # Environment Waiting occupies a concurrency group. Keep the long
   # from-upstream review off uplink-mutate; apply takes the group after approval.
   wait-from-upstream:
@@ -417,3 +427,13 @@ jobs:
         with:
           patch-ids: ${{ steps.accept.outputs.ready_to_submit }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # A rebuild writes every commit of main again. Tell the open pull
+      # requests it left behind how to rebase; a failure here is not a
+      # failure of the job.
+      - name: Tell open pull requests about a rebuilt main
+        continue-on-error: true
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}

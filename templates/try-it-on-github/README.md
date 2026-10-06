@@ -10,7 +10,8 @@ The workflows themselves are identical. The setup sets the repository variables 
 
 | Workflow | In the walkthrough | Needs |
 | --- | --- | --- |
-| `uplink-pr.yml` — Uplink PR checks | Runs on every story PR to `main`: **Uplink upstream assess** and **Uplink upstream preflight** | `uplink.toml` and `preflight.sh` on `uplink/hooks` (written by `init` in the setup); label `uplink:internal-only` |
+| `uplink-pr.yml` — Uplink PR checks | Runs on every story PR to `main`: **Uplink upstream assess** and **Uplink upstream preflight** | `uplink.toml` and `preflight.sh` on `uplink/hooks` (written by `init` in the setup); labels `uplink:internal-only`, `uplink:rebase` |
+| `uplink-rebase.yml` — Uplink rebase | Add the label `uplink:rebase` to a story PR whose `main` a sync has replaced, or set `UPLINK_AUTO_REBASE` to `true`; the branch is rebased and pushed | `UPLINK_INTERNAL_TOKEN`; label `uplink:rebase` |
 | `uplink-import.yml` — Uplink import | Runs when you merge a story PR; records the patch as `queued` | `UPLINK_INTERNAL_TOKEN` |
 | `uplink-submit.yml` — Uplink submit | **Actions → Uplink submit** with a patch id; stops early if an upstream dependency is not merged; waits for your approval on `to-upstream`, then GitHub creates the signed commit on the fork (`.github/uplink/contrib_commit.py`) and the upstream PR is opened. With a PAT the commit is not shown as Verified | `UPLINK_CONTRIB_TOKEN` on Environment `to-upstream`; `UPLINK_UPSTREAM_TOKEN` |
 | `uplink-sync.yml` — Uplink sync | **Actions → Uplink sync** after upstream moves; foreign commits wait for your approval on `from-upstream`; a conflict opens a gated PR | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; Environment `from-upstream`; label `uplink:conflict` |

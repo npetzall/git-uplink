@@ -1,0 +1,176 @@
+# GitHub forge pack (`git uplink init --forge github`).
+# Installs git-uplink from a GitHub release.
+# Empty UPLINK_INTERNAL_AUTH defaults to app.
+#
+# Rebases one pull request's branch onto company main and pushes it. A
+# rebuild writes every commit of main again, so a branch cut from the old
+# main lists the old patches as its own until it is rebased from the commit
+# it started on. git uplink rebase finds that commit.
+#
+# Dispatched three ways:
+# - by hand, with the pull request number;
+# - by the label uplink:rebase on the pull request (Uplink PR checks removes
+#   the label and dispatches);
+# - by the workflows that rebuild main, for every open pull request the
+#   rebuild left behind, when repository variable UPLINK_AUTO_REBASE is
+#   `true`.
+#
+# The only input is the pull request number. The commit to rebase from is
+# worked out here, never taken from the dispatch or from a comment: a wrong
+# one makes a rebase drop or repeat commits.
+#
+# The push is --force-with-lease on the head this run read, so a push the
+# developer made meanwhile wins. It uses the internal App or PAT, not the
+# Actions token, so that Uplink PR checks runs on the new head.
+#
+# What it does to the branch: the authors stay, the committer becomes the
+# bot, and commit signatures are lost. A conflict pushes nothing and is
+# noted on the pull request. Branches named uplink/* and pull requests from
+# forks are left alone.
+#
+# This workflow does not write uplink/state (not uplink-mutate).
+name: Uplink rebase
+run-name: Uplink rebase #${{ inputs.pr_number }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request whose branch to rebase onto main
+        required: true
+        type: string
+
+concurrency:
+  group: uplink-rebase-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  rebase:
+    name: Uplink rebase
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+
+      # The branch is rebased in a worktree of its own, so its files never
+      # replace this checkout. A rebase runs nothing from the tree, and hooks
+      # are off.
+      - name: Rebase the branch and push it
+        id: rebase
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error title=Uplink rebase::not a pull request number"
+            exit 1
+          fi
+          origin() {
+            local auth
+            auth=$(printf 'x-access-token:%s' "$UPLINK_INTERNAL_TOKEN" | base64 -w0)
+            git \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=" \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
+              "$@"
+          }
+          pr=$(gh pr view "$PR_NUMBER" --json headRefOid,headRefName,isCrossRepository,baseRefName,state)
+          rebasable=$(jq -r '
+            .state == "OPEN" and .baseRefName == "main" and (.isCrossRepository | not)
+            and .headRefName != "main" and (.headRefName | startswith("uplink/") | not)' <<<"$pr")
+          if [ "$rebasable" != "true" ]; then
+            echo "::notice title=Uplink rebase::#${PR_NUMBER} is not an open pull request into main from a branch of this repository; nothing done"
+            echo "outcome=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          old=$(jq -r '.headRefOid' <<<"$pr")
+          HEAD_REF=$(jq -r '.headRefName' <<<"$pr")
+          if [[ ! "$old" =~ ^[0-9a-f]{40,64}$ ]] || ! git check-ref-format --branch "$HEAD_REF" > /dev/null; then
+            echo "::error title=Uplink rebase::could not read the head of #${PR_NUMBER}"
+            exit 1
+          fi
+          origin fetch --quiet origin "refs/pull/${PR_NUMBER}/head"
+          git cat-file -e "${old}^{commit}"
+
+          plan=$(git uplink rebase --plan --head "$old" --json)
+          state=$(jq -r '.state' <<<"$plan")
+          echo "old=${old}" >> "$GITHUB_OUTPUT"
+          case "$state" in
+            current)
+              echo "::notice title=Uplink rebase::#${PR_NUMBER} already has main; nothing done"
+              echo "outcome=skipped" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            unknown)
+              echo "::error title=Uplink rebase::$(jq -r '.reason // "no fork point"' <<<"$plan")"
+              echo "outcome=unknown" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          tree="$RUNNER_TEMP/uplink-rebase"
+          git worktree add --quiet --detach "$tree" "$old"
+          cd "$tree"
+          if ! git \
+            -c core.hooksPath=/dev/null \
+            -c commit.gpgsign=false \
+            -c "user.name=github-actions[bot]" \
+            -c "user.email=41898282+github-actions[bot]@users.noreply.github.com" \
+            uplink rebase --no-fetch; then
+            git rebase --abort > /dev/null 2>&1 || true
+            echo "outcome=conflict" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A push the developer made since `old` was read is not overwritten.
+          origin push --quiet origin \
+            "--force-with-lease=refs/heads/${HEAD_REF}:${old}" \
+            "HEAD:refs/heads/${HEAD_REF}"
+          echo "outcome=rebased" >> "$GITHUB_OUTPUT"
+
+      - name: Say how to update a local copy
+        if: ${{ steps.rebase.outputs.outcome == 'rebased' }}
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ inputs.pr_number }}
+          rebased-from: ${{ steps.rebase.outputs.old }}
+
+      - name: Note the stop on the pull request
+        if: ${{ steps.rebase.outputs.outcome == 'conflict' || steps.rebase.outputs.outcome == 'unknown' }}
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ inputs.pr_number }}
+          note: Uplink rebase could not rebase this branch for you (conflicts, or no commit to rebase from). Rebase it by hand.
+
+      - name: Fail when the branch was not rebased
+        if: ${{ steps.rebase.outputs.outcome == 'conflict' || steps.rebase.outputs.outcome == 'unknown' }}
+        run: exit 1

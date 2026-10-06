@@ -420,9 +420,16 @@ export function InternalsPage() {
           </li>
           <li>
             Force company <code>main</code> to that HEAD, restore <code>.uplink/</code> from the snapshot, and
-            commit queue status.
+            commit queue status together with <code>.uplink/previous-main.json</code>: the tip of the{" "}
+            <code>main</code> it replaced and the commits of it that carry no <code>Uplink-Patch-Id</code> trailer.
           </li>
         </ol>
+        <p>
+          Every commit of the replay is new, so a branch cut from the old <code>main</code> no longer shares it.{" "}
+          <code>git uplink rebase</code> finds the newest commit of an old <code>main</code> in the branch (one
+          with the trailer, or one a revision of <code>previous-main.json</code> lists) and runs{" "}
+          <code>git rebase --onto origin/main</code> from it.
+        </p>
         <p>
           <code>git uplink rebuild --branch uplink/preview/verify</code> is preview only: it does not move{" "}
           <code>main</code> and does not change the queue.

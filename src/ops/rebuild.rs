@@ -178,6 +178,7 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
         company_branch.as_str()
     };
     ensure_clean_worktree(repo, "a rebuild")?;
+    let previous = replaced_main(repo, &company_branch, upstream_ref)?;
     let snapshot = snapshot_uplink(repo)?;
     let outcome = (|| -> Result<QueueState> {
         git(
@@ -218,11 +219,58 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
             refresh_patch_id(repo, &mut queue, &patch.id, &patch_file)?;
         }
 
-        publish_rebuilt_company(repo, &mut queue, &snapshot, &company_branch, upstream_ref)?;
+        publish_rebuilt_company(
+            repo,
+            &mut queue,
+            &snapshot,
+            &company_branch,
+            upstream_ref,
+            previous.as_ref(),
+        )?;
         Ok(queue)
     })();
     let _ = fs::remove_dir_all(&snapshot);
     outcome
+}
+
+/// The company main this rebuild is about to replace, for `git uplink rebase`:
+/// its tip and the commits a branch may have started from that do not
+/// identify themselves. Origin's main is included when it is known and
+/// differs, since that is the one open pull requests were cut from.
+fn replaced_main(
+    repo: &Path,
+    company_branch: &str,
+    upstream_ref: &str,
+) -> Result<Option<PreviousMain>> {
+    if !has_ref(repo, company_branch)? {
+        return Ok(None);
+    }
+    let tip = rev_parse(repo, company_branch)?;
+    let mut tips = vec![tip.clone()];
+    let tracking = format!("{COMPANY_REMOTE}/{company_branch}");
+    if has_ref(repo, &tracking)? {
+        let remote_tip = rev_parse(repo, &tracking)?;
+        if remote_tip != tip {
+            tips.push(remote_tip);
+        }
+    }
+    let mut commits = Vec::new();
+    for tip in &tips {
+        let listed = commits_with_patch_id(
+            repo,
+            &["--first-parent", tip.as_str(), "--not", upstream_ref],
+        )?;
+        for (sha, has_patch_id) in listed {
+            if !has_patch_id && !commits.contains(&sha) {
+                commits.push(sha);
+            }
+        }
+    }
+    Ok(Some(PreviousMain {
+        at: stamp(),
+        tip,
+        commits,
+    }))
 }
 
 /// An upstream patch that applies empty is already in upstream.
@@ -262,13 +310,15 @@ fn refresh_patch_id(
 }
 
 /// Commits the rebuilt tree, points the company branch at it, restores
-/// `.uplink` from the snapshot, and records the rebuild on uplink/state.
+/// `.uplink` from the snapshot, and records the rebuild and the main it
+/// replaced on uplink/state.
 fn publish_rebuilt_company(
     repo: &Path,
     queue: &mut QueueState,
     snapshot: &Path,
     company_branch: &str,
     upstream_ref: &str,
+    previous: Option<&PreviousMain>,
 ) -> Result<()> {
     // Tracked changes only: an untracked file in the operator's checkout
     // survives the detached checkout and must not land on the company branch.
@@ -303,6 +353,9 @@ fn publish_rebuilt_company(
         message: Some("Rebuild completed".into()),
     });
     write_queue_file(repo, queue)?;
+    if let Some(previous) = previous {
+        write_previous_main(repo, previous)?;
+    }
     commit_queue(repo, "uplink: record rebuild status")?;
     Ok(())
 }

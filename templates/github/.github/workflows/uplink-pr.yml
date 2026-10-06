@@ -20,7 +20,17 @@
 # stored with the patch: the change has no patch id yet, and this workflow
 # file is the pull request's own copy. Uplink submit assesses the patch.
 #
-# Put both job names in the required status checks for the PR.
+# Two more jobs are not checks. "Uplink rebase hint" comments how to rebase
+# when the main the branch was cut from has been replaced by a rebuild, and
+# removes the comment once the branch is rebased; with repository variable
+# UPLINK_AUTO_REBASE set to `true` it dispatches Uplink rebase instead of
+# waiting for the developer. "Uplink rebase request" runs when the label
+# uplink:rebase is added: it removes the label and dispatches Uplink rebase.
+# The checks run on that event like on any other label: a skipped check
+# counts as passed, so skipping them would let the label turn a failure
+# green.
+#
+# Put both check names in the required status checks for the PR.
 # This workflow does not write uplink/state (not uplink-mutate).
 # Origin fetch uses the Actions token as UPLINK_INTERNAL_TOKEN (contents: read).
 # preflight.sh runs in a step without that token. A separate job writes its
@@ -247,3 +257,50 @@ jobs:
           report: ${{ needs.preflight.outputs.report }}
           pr-number: ${{ github.event.pull_request.number }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Not a check. The branch is fetched and read, never checked out.
+  rebase-hint:
+    name: Uplink rebase hint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ github.event.pull_request.number }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}
+
+  # Not a check. The label is a request, so it is taken off before the
+  # rebase is dispatched: adding it again asks again.
+  rebase-request:
+    name: Uplink rebase request
+    if: ${{ github.event.action == 'labeled' && github.event.label.name == 'uplink:rebase' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Remove the label and dispatch Uplink rebase
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh api --method DELETE "repos/${GH_REPO}/issues/${PR_NUMBER}/labels/uplink%3Arebase" > /dev/null
+          gh workflow run "Uplink rebase" --ref main -f "pr_number=${PR_NUMBER}"

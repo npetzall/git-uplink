@@ -23,6 +23,7 @@ git uplink add --title <text> [--message <text> | --message-file <path>] [--from
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
+git uplink rebase [--plan] [--head <rev>] [--json] [--no-fetch]
 git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>] [--depends-on <id>]...
             [--internal-only] [--command-only] [--hooks <rev>] [--json]
@@ -135,6 +136,23 @@ The refs are `uplink/state`, `uplink/upstream`, and company main.
 Fetch origin and hard-reset company main, uplink/state, and uplink/upstream.
 
 Afterwards the clone matches origin and `.uplink/` is restored.
+
+### `rebase`
+
+Rebase the current branch onto company main after a rebuild replaced it.
+
+A rebuild writes every commit of `main` again, so a branch cut from the old `main` shares only public upstream with the new one and its pull request lists the old patches as its own. `rebase` finds the commit of the old `main` the branch started from and runs `git rebase --onto origin/main <that commit>`. A branch that is only behind gets a plain `git rebase origin/main`. A conflict stops as `git rebase` does; continue with `git rebase --continue`.
+
+It runs in any clone of the company repository and needs no `git uplink init`. It fetches `main`, `uplink/state` and `uplink/upstream` from origin, which needs `UPLINK_INTERNAL_TOKEN` or `UPLINK_INTERNAL_KEY` as every git-uplink fetch does; after a `git fetch origin` of your own, `--no-fetch` needs neither. The rebase itself is plain `git rebase` with your identity, signing and hooks.
+
+The commits a rebuild writes carry an `Uplink-Patch-Id` trailer, and each rebuild lists the other commits of the `main` it replaced in `.uplink/previous-main.json` on `uplink/state`. When the newest such commit in the branch has anything else under it, `rebase` refuses rather than drop it.
+
+The forge pack comments the command on a pull request whose `main` was replaced. With the repository variable `UPLINK_AUTO_REBASE` set to `true`, or the label `uplink:rebase` on the pull request, Uplink rebase does it and pushes the branch.
+
+- `--plan`: Print what the rebase would do and change nothing.
+- `--head <rev>`: Plan for this commit instead of the checked-out branch.
+- `--json`: Print the plan as JSON: `state` (`current`, `behind`, `replaced`, `unknown`), `forkPoint`, `command`.
+- `--no-fetch`: Use origin's branches as last fetched instead of fetching them.
 
 ## Checks
 

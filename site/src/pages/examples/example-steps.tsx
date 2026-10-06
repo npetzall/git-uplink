@@ -21,6 +21,7 @@ const LABELS = [
   ["uplink:transfer-to-upstream", "1D76DB", "Uplink gated transfer to the upstream queue"],
   ["uplink:transfer-to-internal", "1D76DB", "Uplink gated transfer to the internal queue"],
   ["uplink:amend", "0E8A16", "Uplink gated amend of a patch"],
+  ["uplink:rebase", "FBCA04", "Ask Uplink rebase to rebase this branch onto main"],
 ];
 
 const VARIABLES = [
