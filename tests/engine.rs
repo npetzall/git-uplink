@@ -14,11 +14,12 @@ use git_uplink::{
     assess_patch_for_packet, doctor, drop_patch, extras_dir, format_approval_receipt,
     format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
     format_step_line, from_upstream_report_paths, git, git_ok, init, init_repo,
-    load_extra_markdown, mark_merged, parse_depends_on, preflight_incoming_change, push_queue,
-    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
-    reset_from_origin, resolve_conflict, review_token, status_snapshot, store_patch_extras,
-    stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with, summarize_queue,
-    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
+    load_extra_markdown, mark_merged, newly_ready_to_submit, parse_depends_on,
+    preflight_incoming_change, push_queue, rebuild, rebuild_with, record_gated_pr,
+    record_pull_request, refresh_from_origin, report_paths, reset_from_origin, resolve_conflict,
+    review_token, status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments,
+    submit_patch, submit_patch_with, summarize_queue, sync, sync_with, transfer_patch,
+    transfer_patch_with, transfer_preflight, write_queue,
 };
 use tempfile::TempDir;
 
@@ -7146,6 +7147,182 @@ fn refuses_approve_and_submit_until_an_upstream_dependency_is_merged() {
     let submitted = submit_patch(company, &second.id, true).unwrap();
     let parent = git_ok(company, &["rev-parse", &format!("{}^", submitted.branch)]).unwrap();
     assert_eq!(parent.trim(), rev_of(company, "uplink/upstream"));
+}
+
+/// A hash patch and a flag patch that depends on it, with what each import
+/// made ready to submit.
+fn world_with_stacked_patches() -> (World, Patch, Patch, Vec<String>, Vec<String>) {
+    let world = setup_world();
+    let company = &world.company;
+    let empty = git_uplink::read_queue(company).unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let first = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let with_first = git_uplink::read_queue(company).unwrap();
+    git(
+        company,
+        &["checkout", "-b", "feat/flag"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "FLAG.md", "flag\n");
+    commit_all(company, "add flag");
+    let second = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add flag".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![first.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let with_second = git_uplink::read_queue(company).unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let ready_first = newly_ready_to_submit(&empty, &with_first);
+    let ready_second = newly_ready_to_submit(&with_first, &with_second);
+    (world, first, second, ready_first, ready_second)
+}
+
+#[test]
+fn import_makes_a_patch_ready_to_submit_unless_a_dependency_is_unmerged() {
+    let (world, first, _second, ready_first, ready_second) = world_with_stacked_patches();
+    assert_eq!(ready_first, vec![first.id.clone()]);
+    assert!(ready_second.is_empty(), "{ready_second:?}");
+    // Nothing changed: a patch that was ready already is not listed again.
+    let queue = git_uplink::read_queue(&world.company).unwrap();
+    assert!(newly_ready_to_submit(&queue, &queue).is_empty());
+}
+
+#[test]
+fn internal_only_import_is_never_ready_to_submit() {
+    let world = setup_world();
+    let company = &world.company;
+    let before = git_uplink::read_queue(company).unwrap();
+    add_internal_notes(company);
+    let after = git_uplink::read_queue(company).unwrap();
+    assert!(newly_ready_to_submit(&before, &after).is_empty());
+}
+
+#[test]
+fn sync_that_merges_a_dependency_makes_the_dependent_ready_to_submit() {
+    let (world, first, second, _, _) = world_with_stacked_patches();
+    let company = &world.company;
+    commit_with_trailer(
+        &world.upstream,
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+        &first.id,
+    );
+
+    let result = sync(company).unwrap();
+    assert!(!result.needs_approval);
+    assert_eq!(result.flowed_back, vec![first.id.clone()]);
+    assert_eq!(result.ready_to_submit, vec![second.id.clone()]);
+
+    let again = sync(company).unwrap();
+    assert!(
+        again.ready_to_submit.is_empty(),
+        "{:?}",
+        again.ready_to_submit
+    );
+}
+
+#[test]
+fn a_dependent_is_ready_to_submit_only_once_the_upstream_is_accepted() {
+    let (world, first, second, _, _) = world_with_stacked_patches();
+    let company = &world.company;
+    commit_with_trailer(
+        &world.upstream,
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+        &first.id,
+    );
+    write(&world.upstream, "CHANGELOG.md", "upstream 1.2\n");
+    commit_all(&world.upstream, "document 1.2");
+
+    let held = sync(company).unwrap();
+    assert!(held.needs_approval);
+    assert!(
+        held.ready_to_submit.is_empty(),
+        "{:?}",
+        held.ready_to_submit
+    );
+
+    let applied = accept_upstream(company).unwrap();
+    assert_eq!(applied.ready_to_submit, vec![second.id.clone()]);
+}
+
+#[test]
+fn transfer_to_upstream_makes_the_patch_ready_to_submit() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let result = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(result.transferred, "{result:?}");
+    assert_eq!(result.ready_to_submit, vec![patch.id.clone()]);
+}
+
+#[test]
+fn add_cli_prints_what_became_ready_to_submit() {
+    let world = setup_world();
+    let company = &world.company;
+    let from = rev(company);
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let head = rev(company);
+    land_on_main(company, &head);
+    let add = || -> serde_json::Value {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(["add", "--title", "Use SHA-256 for tokens", "--pr", "7"])
+            .args(["--from", &from, "--head", &head, "--json"])
+            .current_dir(company)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+
+    let value = add();
+    assert_eq!(value["queue"], "upstream");
+    assert_eq!(value["status"], "queued");
+    assert_eq!(value["readyToSubmit"], serde_json::json!([value["id"]]));
+
+    // A re-run for the same pull request returns the patch and dispatches nothing.
+    let again = add();
+    assert_eq!(again["id"], value["id"]);
+    assert_eq!(again["readyToSubmit"], serde_json::json!([]));
 }
 
 #[test]

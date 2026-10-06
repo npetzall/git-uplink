@@ -47,6 +47,11 @@ const VARIABLES = [
   ["UPLINK_INTERNAL_AUTH", "app", "app or pat"],
   ["UPLINK_UPSTREAM_AUTH", "app", "app or pat"],
   ["UPLINK_CONTRIB_AUTH", "app", "app or pat. Only app gives Verified contribution commits"],
+  [
+    "UPLINK_AUTO_SUBMIT",
+    "false",
+    "true dispatches Uplink submit for a patch once its upstream dependencies are merged. IP still approves each one",
+  ],
 ];
 
 const APPS = [

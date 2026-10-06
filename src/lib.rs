@@ -54,11 +54,11 @@ pub use ops::{
     accept_upstream, accept_upstream_at, add_patch, amend_patch, amend_patch_with, amend_preflight,
     approval_stale, approve_patch, approve_patch_at, approve_patch_reviewed,
     assess_patch_for_packet, drop_patch, format_status_table, init, init_repo,
-    init_repo_with_progress, mark_merged, push_queue, read_queue, rebuild, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, reset_from_origin, resolve_conflict,
-    stale_approvals, state_status_at, status_report, status_snapshot, store_assess_result,
-    store_patch_extras, submit_patch, submit_patch_with, summarize_queue, sync, sync_with,
-    transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
+    init_repo_with_progress, mark_merged, newly_ready_to_submit, push_queue, read_queue, rebuild,
+    rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, reset_from_origin,
+    resolve_conflict, stale_approvals, state_status_at, status_report, status_snapshot,
+    store_assess_result, store_patch_extras, submit_patch, submit_patch_with, summarize_queue,
+    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
 };
 pub use preflight::{
     IncomingPreflight, PreflightReport, ScriptVerdict, assert_export_preflight, command_preflight,

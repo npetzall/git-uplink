@@ -200,7 +200,7 @@ pub(super) fn ensure_upstream_deps_merged(
     let id = &patch.id;
     for dep_id in &patch.depends_on {
         let dep = get_patch(queue, dep_id)?;
-        if queue.is_upstream(dep_id) && dep.status != PatchStatus::Merged {
+        if blocks_submit(queue, dep) {
             return Err(Error::msg(format!(
                 "{id} depends on {dep_id}, which is not merged upstream yet (currently {}). {action} {id} after {dep_id} is merged.",
                 dep.status
@@ -208,4 +208,34 @@ pub(super) fn ensure_upstream_deps_merged(
         }
     }
     Ok(())
+}
+
+/// An upstream-bound dependency that is not merged upstream yet.
+fn blocks_submit(queue: &QueueState, dep: &Patch) -> bool {
+    queue.is_upstream(&dep.id) && dep.status != PatchStatus::Merged
+}
+
+/// Upstream-bound, queued, and no dependency blocks it.
+fn ready_to_submit(queue: &QueueState, patch: &Patch) -> bool {
+    queue.is_upstream(&patch.id)
+        && patch.status == PatchStatus::Queued
+        && patch
+            .depends_on
+            .iter()
+            .all(|dep_id| get_patch(queue, dep_id).is_ok_and(|dep| !blocks_submit(queue, dep)))
+}
+
+/// Patches a command made ready to submit: ready in `after`, and not in
+/// `before`. A patch that was ready already is not listed again.
+pub fn newly_ready_to_submit(before: &QueueState, after: &QueueState) -> Vec<String> {
+    after
+        .all_patches()
+        .filter(|patch| ready_to_submit(after, patch))
+        .filter(|patch| {
+            !before
+                .all_patches()
+                .any(|was| was.id == patch.id && ready_to_submit(before, was))
+        })
+        .map(|patch| patch.id.clone())
+        .collect()
 }

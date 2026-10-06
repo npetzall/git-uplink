@@ -13,9 +13,17 @@ pub struct SyncResult {
     pub claims: Vec<IncomingClaim>,
     pub report_path: Option<String>,
     pub report: Option<String>,
+    /// Patches this sync made ready to submit.
+    pub ready_to_submit: Vec<String>,
 }
 
 impl SyncResult {
+    /// Records what became ready to submit since `before`.
+    fn since(mut self, before: &QueueState) -> Self {
+        self.ready_to_submit = newly_ready_to_submit(before, &self.queue);
+        self
+    }
+
     fn applied(queue: QueueState) -> Self {
         Self {
             queue,
@@ -27,6 +35,7 @@ impl SyncResult {
             claims: Vec::new(),
             report_path: None,
             report: None,
+            ready_to_submit: Vec::new(),
         }
     }
 
@@ -41,6 +50,7 @@ impl SyncResult {
             claims: Vec::new(),
             report_path: None,
             report: None,
+            ready_to_submit: Vec::new(),
         }
     }
 }
@@ -533,12 +543,12 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
             });
             write_queue_file(repo, &queue)?;
             commit_queue(repo, "uplink: sync with upstream")?;
-            return Ok(SyncResult::applied(queue));
+            return Ok(SyncResult::applied(queue).since(&fetched));
         }
         let accounting = account_incoming(repo, &fetched, from_sha.as_deref(), &sha, &opts)?;
         if accounting.residual.is_none() {
             let queue = apply_fetched_upstream(repo, &sha, &accounting.merges)?;
-            return Ok(SyncResult::applied_with(queue, accounting.merges));
+            return Ok(SyncResult::applied_with(queue, accounting.merges).since(&fetched));
         }
         let report = write_incoming_packet(repo, &fetched, &accounting)?;
         let report_path = from_upstream_report_paths().1;
@@ -581,6 +591,8 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
             merges: accounting.merges,
             report_path: Some(report_path),
             report: Some(report),
+            // Nothing is marked merged before the approval.
+            ready_to_submit: Vec::new(),
         })
     })
 }
@@ -625,7 +637,7 @@ pub fn accept_upstream_at(repo: &Path, expected_sha: Option<&str>) -> Result<Syn
         } else {
             pending.merges.clone()
         };
-        let queue = apply_fetched_upstream(repo, &pending.sha, &merges)?;
-        Ok(SyncResult::applied_with(queue, merges))
+        let applied = apply_fetched_upstream(repo, &pending.sha, &merges)?;
+        Ok(SyncResult::applied_with(applied, merges).since(&queue))
     })
 }

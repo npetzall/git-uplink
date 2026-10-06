@@ -1,0 +1,46 @@
+name: Uplink dispatch submit
+description: >-
+  Dispatch Uplink submit for each patch id. A run for the same patch that is
+  waiting or in progress is cancelled first, so the run that waits on
+  to-upstream is the one for the queue as it is now. A dispatch that fails is
+  a warning: the queue is already written, and submit can be dispatched by
+  hand.
+inputs:
+  patch-ids:
+    description: JSON array of patch ids, the readyToSubmit of add, sync, accept-upstream or transfer.
+    required: true
+  token:
+    description: Token with actions write on this repository. Workflows pass secrets.GITHUB_TOKEN.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Dispatch Uplink submit
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        PATCH_IDS: ${{ inputs.patch-ids }}
+      run: |
+        set -euo pipefail
+        mapfile -t ids < <(jq -r '.[]' <<<"$PATCH_IDS")
+        if [ "${#ids[@]}" -eq 0 ]; then exit 0; fi
+        runs=$(gh run list --workflow="Uplink submit" --limit 50 --json databaseId,displayTitle,status 2>/dev/null || echo '[]')
+        for id in "${ids[@]}"; do
+          if [[ ! "$id" =~ ^upl_[0-9a-f]{10}$ ]]; then
+            echo "::warning title=Uplink auto-submit::not a patch id, skipped"
+            continue
+          fi
+          jq -r --arg title "Uplink submit $id" \
+            '.[] | select((.displayTitle // "") == $title and (.status == "waiting" or .status == "in_progress")) | .databaseId' <<<"$runs" \
+            | while read -r run_id; do
+            if [ -n "$run_id" ]; then
+              gh run cancel "$run_id" || true
+            fi
+          done
+          if gh workflow run "Uplink submit" --ref main -f "patch_id=$id"; then
+            echo "Dispatched Uplink submit for ${id}"
+          else
+            echo "::warning title=Uplink auto-submit::Failed to dispatch Uplink submit for ${id}; dispatch it by hand."
+          fi
+        done

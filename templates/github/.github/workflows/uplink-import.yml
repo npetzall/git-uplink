@@ -7,6 +7,9 @@
 # uplink/transfer-* bases, has not passed main's review and is handled by its
 # own workflow or not at all. `add --base-branch` refuses it again, in case
 # the filter below is edited.
+#
+# With repository variable UPLINK_AUTO_SUBMIT set to `true`, import dispatches
+# Uplink submit for the patch when no upstream dependency of it is unmerged.
 name: Uplink import
 
 on:
@@ -103,6 +106,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -129,6 +133,7 @@ jobs:
           permission-workflows: write
 
       - name: Import as a queued patch
+        id: add
         env:
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
@@ -155,7 +160,7 @@ jobs:
           git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" --head "$HEAD_SHA" --base-branch "$BASE_REF" \
             --pr "$PR_NUMBER" --pr-url "$PR_URL" \
-            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" "${extra[@]}" > /tmp/uplink-add.out
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --json "${extra[@]}" > /tmp/uplink-add.out
           code=$?
           set -e
           if [ "$code" -ne 0 ]; then
@@ -164,6 +169,7 @@ jobs:
             fi
             exit "$code"
           fi
+          echo "ready_to_submit=$(jq -c '.readyToSubmit // []' /tmp/uplink-add.out)" >> "$GITHUB_OUTPUT"
           rebuild=false
           if [ "$INTERNAL_ONLY" != "true" ]; then
             active=$(jq '[.internal[]? | select(.status != "merged" and .status != "dropped")] | length' .uplink/queue.json)
@@ -174,3 +180,10 @@ jobs:
           else
             git uplink push
           fi
+
+      - name: Dispatch Uplink submit for patches that became ready
+        if: ${{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.add.outputs.ready_to_submit != '' && steps.add.outputs.ready_to_submit != '[]' }}
+        uses: $/.github/actions/uplink-dispatch-submit
+        with:
+          patch-ids: ${{ steps.add.outputs.ready_to_submit }}
+          token: ${{ secrets.GITHUB_TOKEN }}

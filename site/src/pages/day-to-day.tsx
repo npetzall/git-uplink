@@ -84,7 +84,8 @@ export function DayToDayPage() {
         <Code>{`git fetch origin
 git switch -c fix/token-hash origin/main`}</Code>
         <p>
-          Contribution happens later: an operator dispatches <strong>Uplink submit</strong>, IP approves, and the
+          Contribution happens later: an operator dispatches <strong>Uplink submit</strong> (or the pack does, with{" "}
+          <code>UPLINK_AUTO_SUBMIT</code>), IP approves, and the
           public pull request opens. If maintainers ask for changes, make them in a new internal PR, as usual.
         </p>
         <Lab scenario="solo-fix">Solo fix</Lab>

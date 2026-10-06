@@ -19,6 +19,7 @@ git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <na
 git uplink add --title <text> [--message <text> | --message-file <path>] [--from <ref>]
             [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
             [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
+            [--json]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
@@ -111,6 +112,9 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
 
   The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
+- `--json`: Print the patch as JSON, with `readyToSubmit`.
+
+  `readyToSubmit` lists the patches this import made ready to submit: upstream-bound, queued, and every upstream dependency merged. Import dispatches Uplink submit for them when the repository variable `UPLINK_AUTO_SUBMIT` is `true`.
 
 ### `push`
 
@@ -256,6 +260,8 @@ A patch is merged when a commit has its `git patch-id --stable`, or when `--merg
 
 On a conflict it prints `gh.prCreate` JSON for the gated conflict PR and exits 0.
 
+`readyToSubmit` in the output lists the queued patches whose last unmerged upstream dependency this sync marked merged.
+
 - `--merged-pr <id=sha>`: A recorded public pull request the forge reports as merged, with its merge commit. Repeat it per patch; the sync workflow passes these. One that names a commit outside the new range is ignored.
 
 ### `accept-upstream`
@@ -289,7 +295,7 @@ Move a patch between the internal and upstream queues.
 
 When apply, assess (`--to-upstream`), or preflight fails it prints gated branches for a transfer PR instead, and exits 0.
 
-`--to-internal` refuses while an active upstream patch still depends on this id. A successful `--to-internal` of a submitted patch prints `gh.prClose` (`url`, `contribBranch`) so Actions can dispatch Uplink abandon contrib.
+`--to-internal` refuses while an active upstream patch still depends on this id. A successful `--to-internal` of a submitted patch prints `gh.prClose` (`url`, `contribBranch`) so Actions can dispatch Uplink abandon contrib. `readyToSubmit` lists the patch after a `--to-upstream` when no upstream dependency of it is unmerged.
 
 - `<id>`: Patch to move.
 - `--to-upstream`: Move the patch to the upstream queue.
