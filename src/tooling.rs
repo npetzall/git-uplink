@@ -951,6 +951,7 @@ mod embed_tests {
             ("uplink-sync.yml", "apply", "accept"),
             ("uplink-transfer.yml", "start", "transfer"),
             ("uplink-transfer.yml", "complete", "transfer"),
+            ("uplink-resolve.yml", "resolve", "resolve"),
         ];
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
@@ -1010,14 +1011,6 @@ mod embed_tests {
                     "{forge:?} {workflow}\n{workflow_text}"
                 );
             }
-            assert_eq!(
-                text("uplink-sync.yml")
-                    .matches("Ready to submit once the conflict is resolved")
-                    .count(),
-                2,
-                "{forge:?} a sync that ends in a conflict dispatches nothing"
-            );
-
             let dispatch = text(".github/actions/uplink-dispatch-submit/action.yml");
             assert!(
                 dispatch

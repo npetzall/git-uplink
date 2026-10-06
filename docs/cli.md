@@ -260,7 +260,7 @@ A patch is merged when a commit has its `git patch-id --stable`, or when `--merg
 
 On a conflict it prints `gh.prCreate` JSON for the gated conflict PR and exits 0.
 
-`readyToSubmit` in the output lists the queued patches whose last unmerged upstream dependency this sync marked merged.
+`readyToSubmit` in the output lists the queued patches whose last unmerged upstream dependency this sync marked merged, also when the sync ends in a conflict on another patch.
 
 - `--merged-pr <id=sha>`: A recorded public pull request the forge reports as merged, with its merge commit. Repeat it per patch; the sync workflow passes these. One that names a commit outside the new range is ignored.
 
@@ -361,6 +361,8 @@ Finish a conflict resolution and put the patch back in the queue.
 Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`).
 
 A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `amended` until IP approves the delta. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0.
+
+`readyToSubmit` in the output lists the resolved patch when it is `queued` again, and the queued patches whose last unmerged upstream dependency the rebuild marked merged.
 
 - `<id>`: Patch whose conflict was resolved.
 

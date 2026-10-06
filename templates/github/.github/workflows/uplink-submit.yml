@@ -19,8 +19,8 @@
 # (amended, resolved or replayed while the run waited).
 # Resolve of an already-submitted patch dispatches this workflow so IP can
 # approve the delta.
-# With repository variable UPLINK_AUTO_SUBMIT set to `true`, import, sync and
-# transfer dispatch it for a queued patch as soon as none of its upstream
+# With repository variable UPLINK_AUTO_SUBMIT set to `true`, import, sync,
+# transfer and resolve dispatch it for a queued patch as soon as none of its upstream
 # dependencies is unmerged. Such a run waits on `to-upstream` like any other.
 #
 # Empty UPLINK_*_AUTH defaults to app.

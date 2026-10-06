@@ -215,7 +215,8 @@ fn blocks_submit(queue: &QueueState, dep: &Patch) -> bool {
     queue.is_upstream(&dep.id) && dep.status != PatchStatus::Merged
 }
 
-/// Upstream-bound, queued, and no dependency blocks it.
+/// Upstream-bound, queued, and no dependency blocks it. A conflict in
+/// another patch does not: submit only needs the patch on `uplink/upstream`.
 fn ready_to_submit(queue: &QueueState, patch: &Patch) -> bool {
     queue.is_upstream(&patch.id)
         && patch.status == PatchStatus::Queued
