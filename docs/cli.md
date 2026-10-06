@@ -170,7 +170,7 @@ The PR title and body are the single commit message. Assess adds a co-author tra
 - `--internal-only`: Assess as an internal-only change: never exported, leak scan skipped.
 - `--patch <id>`: Assess a queued patch in its layer, with its stored title and message.
 
-  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. With them, the change between the two revisions is assessed as that patch. `--title` or `--message[-file]` override the stored ones, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
+  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. That assessment also has the `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream, and its package says in `storedExtras` whether the assessment-hook result stored with the patch is still for its content. With them, the change between the two revisions is assessed as that patch. `--title` or `--message[-file]` override the stored ones, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
 - `--package <dir>`: Write the assessment package (assessment.json, assessment.md, change.patch) to this directory.
 - `--json`: Print assessment.json instead of the report.
 

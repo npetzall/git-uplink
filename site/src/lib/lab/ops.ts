@@ -130,7 +130,7 @@ export function submitOps(id: string): LabOperation[] {
         `git uplink assess --patch ${id} --package <dir>`,
         "gh workflow run uplink-assessment-hook.yml --ref uplink/hooks -f caller_run_id=<run>",
       ],
-      "Dispatch Uplink submit from company main. Assess job, without the queue lock: assesses the patch file and uploads the assessment package (result, public message, uplink.toml settings, queue entry, patch file). The optional hook reads that package, unless an earlier submit run stored its result and the patch is unchanged. A failed hook is noted in the packet, not fatal, and not stored.",
+      "Dispatch Uplink submit from company main. Assess job, without the queue lock: assesses the patch file and uploads the assessment package (result, public message, uplink.toml settings, queue entry, patch file). The assessment fails while an upstream dependency is not merged. The optional hook reads that package, unless the assessment has findings or an earlier submit run stored its result and the patch is unchanged. A failed hook is noted in the packet, not fatal, and not stored.",
     ),
     ciJob(
       "Uplink submit",

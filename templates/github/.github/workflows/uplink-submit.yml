@@ -4,7 +4,8 @@
 # Assess job (no queue lock) runs `git uplink assess` on the patch file and
 # uploads the assessment package as artifact uplink-assessment. It then runs
 # the optional company `.github/workflows/uplink-assessment-hook.yml` from
-# branch uplink/hooks, which reads that package, unless an earlier run of this
+# branch uplink/hooks, which reads that package, unless the assessment has
+# findings (an unmerged upstream dependency is one) or an earlier run of this
 # workflow stored the hook's result and the patch is unchanged since. A failed
 # hook is noted at the top of assessment.md; it does not fail submit.
 # Packet job then stores the assessment of the package, writes assessment.md
@@ -53,7 +54,7 @@ jobs:
       contents: read
       actions: write
     outputs:
-      fresh: ${{ steps.stored.outputs.fresh }}
+      fresh: ${{ steps.assess.outputs.fresh }}
       hook_status: ${{ steps.hook.outputs.status }}
       hook_run_url: ${{ steps.hook.outputs.run_url }}
     steps:
@@ -69,56 +70,20 @@ jobs:
           version: ${{ vars.UPLINK_VERSION }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check dependencies and extras stored by an earlier run
-        id: stored
+      # The assessment package: assessment.json (result, public message,
+      # uplink.toml settings, queue entry), assessment.md and change.patch
+      # (the patch file). The hook reads it, and the packet job stores it.
+      # Assess also checks that upstream-bound Uplink-Depends-On patches are
+      # merged upstream, and whether a hook result stored by an earlier run
+      # is still for this patch content.
+      - name: Assess the patch
+        id: assess
         env:
           UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
         run: |
           set -euo pipefail
           git uplink init
-          queue=$(git show uplink/state:.uplink/queue.json)
-          if ! jq -e --arg id "$PATCH_ID" '[.upstream[]?, .internal[]?] | any(.id == $id)' <<<"$queue" > /dev/null; then
-            echo "Unknown patch ${PATCH_ID}."
-            exit 1
-          fi
-          # Uplink-Depends-On orders the queue and gates contribution: an
-          # upstream-bound dependency must be merged upstream before this
-          # patch is reviewed or exported. Internal-only dependencies never go upstream.
-          unmerged=$(jq -r --arg id "$PATCH_ID" '
-            (.upstream // []) as $up
-            | [.upstream[]?, .internal[]?] | map(select(.id == $id)) | .[0].dependsOn // []
-            | map(. as $dep | $up[] | select(.id == $dep and .status != "merged") | "\(.id) (\(.status))")
-            | join(", ")
-          ' <<<"$queue")
-          if [ -n "$unmerged" ]; then
-            echo "${PATCH_ID} depends on patches not merged upstream yet: ${unmerged}. Submit ${PATCH_ID} after they merge."
-            printf '%s depends on patches not merged upstream yet: %s.\n' "$PATCH_ID" "$unmerged" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          # Extras an earlier run stored stay valid while the patch content is
-          # unchanged. An amended patch is always assessed again.
-          source=$(jq -r --arg id "$PATCH_ID" '
-            [.upstream[]?, .internal[]?] | map(select(.id == $id)) | .[0]
-            | if (.extras.patchIdStable // "") != "" and .extras.patchIdStable == .patchIdStable and .status != "amended"
-              then (.extras.source // "uplink/state") else empty end
-          ' <<<"$queue")
-          if [ -n "$source" ]; then
-            echo "Using company extras stored for the unchanged patch (${source}); not running the hook."
-            printf 'Company extras: stored for the unchanged patch (%s).\n' "$source" >> "$GITHUB_STEP_SUMMARY"
-            echo "fresh=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "fresh=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # The assessment package: assessment.json (result, public message,
-      # uplink.toml settings, queue entry), assessment.md and change.patch
-      # (the patch file). The hook reads it, and the packet job stores it.
-      - name: Assess the patch
-        env:
-          PATCH_ID: ${{ inputs.patch_id }}
-        run: |
-          set -euo pipefail
           out="$RUNNER_TEMP/uplink-assessment"
           # Findings do not stop here: the packet job writes the packet that
           # shows them, then stops before the Environment.
@@ -126,6 +91,20 @@ jobs:
           if [ ! -s "$out/assessment.json" ]; then
             echo "git uplink assess wrote no assessment package"
             exit 1
+          fi
+          ok=$(jq -r '.ok == true' "$out/assessment.json")
+          fresh=$(jq -r '.storedExtras.fresh == true' "$out/assessment.json")
+          echo "ok=${ok}" >> "$GITHUB_OUTPUT"
+          echo "fresh=${fresh}" >> "$GITHUB_OUTPUT"
+          if [ "$ok" != "true" ]; then
+            {
+              echo "The assessment of ${PATCH_ID} has findings; the hook is not run and nobody is asked to approve."
+              jq -r '.checks[] | select(.status == "fail") | "- \(.id): \(.detail)"' "$out/assessment.json"
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$fresh" = "true" ]; then
+            source=$(jq -r '.storedExtras.source // "uplink/state"' "$out/assessment.json")
+            echo "Using company extras stored for the unchanged patch (${source}); not running the hook."
+            printf 'Company extras: stored for the unchanged patch (%s).\n' "$source" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -137,7 +116,7 @@ jobs:
 
       - name: Run company assessment hook
         id: hook
-        if: steps.stored.outputs.fresh != 'true'
+        if: steps.assess.outputs.ok == 'true' && steps.assess.outputs.fresh != 'true'
         uses: $/.github/actions/uplink-assessment-hook
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

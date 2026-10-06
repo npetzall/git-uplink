@@ -1184,7 +1184,8 @@ pub fn assess_from_message(
 /// is in the queue. Nothing is applied or built, so it needs no
 /// `uplink/upstream` and says nothing about whether the patch still applies
 /// (preflight does). Message, title and author are the ones stored with the
-/// patch; the settings are today's.
+/// patch; the settings are today's. A patch in the queue can also be judged
+/// by what it depends on, so this adds the `dependencies` check.
 pub fn assess_patch_file(
     queue: &QueueState,
     patch: &Patch,
@@ -1201,13 +1202,70 @@ pub fn assess_patch_file(
             )
         })
         .unwrap_or_default();
-    assess_export(
+    let mut report = assess_export(
         queue,
         &stored_commit_message(patch),
         Some(&patch.title),
         author,
         (!intent.is_internal_only()).then(|| export_diff(patch_text)),
-    )
+    );
+    if !intent.is_internal_only() {
+        let check = dependencies_check(queue, patch);
+        report.ok &= check.status != CheckStatus::Fail;
+        report.checks.push(check);
+    }
+    report
+}
+
+/// Fails while an upstream-bound patch that `patch` depends on is not merged
+/// upstream: `patch` cannot be reviewed or exported before it. Internal-only
+/// dependencies never go upstream and do not count. `approve` and `submit`
+/// refuse for the same reason.
+fn dependencies_check(queue: &QueueState, patch: &Patch) -> AssessCheck {
+    let unmerged: Vec<String> = patch
+        .depends_on
+        .iter()
+        .filter_map(|id| match queue.all_patches().find(|dep| &dep.id == id) {
+            None => Some(format!("{id} (not in the queue)")),
+            Some(dep) if queue.is_upstream(id) && dep.status != PatchStatus::Merged => {
+                Some(format!("{id} ({})", dep.status))
+            }
+            Some(_) => None,
+        })
+        .collect();
+    let (status, detail) = if patch.depends_on.is_empty() {
+        (CheckStatus::Skip, "No Uplink-Depends-On.".to_string())
+    } else if unmerged.is_empty() {
+        (
+            CheckStatus::Pass,
+            "Every upstream-bound dependency is merged upstream.".to_string(),
+        )
+    } else {
+        (
+            CheckStatus::Fail,
+            format!(
+                "Depends on patches not merged upstream yet: {}. Contribute {} after they merge.",
+                unmerged.join(", "),
+                patch.id
+            ),
+        )
+    };
+    AssessCheck {
+        id: "dependencies".into(),
+        status,
+        detail,
+    }
+}
+
+/// Whether the company assessment-hook result stored with a patch is still
+/// for its content, so the hook need not run again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageStoredExtras {
+    pub fresh: bool,
+    /// Where the stored result came from, such as the hook run URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// File names of an assessment package (`assess --package <dir>`).
@@ -1274,6 +1332,9 @@ pub struct AssessPackage {
     pub settings: PackageSettings,
     /// Git blob id of `change.patch` in the package.
     pub change_blob: String,
+    /// The stored company assessment-hook result, for kind `patch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored_extras: Option<PackageStoredExtras>,
     /// The patch as it is in `queue.json`, for kind `patch`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_entry: Option<Patch>,
@@ -1321,6 +1382,13 @@ impl AssessPackage {
                 problem: queue.settings.problem.clone(),
             },
             change_blob: hash_text(repo, change)?,
+            stored_extras: patch.map(|patch| PackageStoredExtras {
+                fresh: stored_extras_fresh(patch),
+                source: patch
+                    .extras
+                    .as_ref()
+                    .and_then(|extras| extras.source.clone()),
+            }),
             queue_entry: patch.cloned(),
         })
     }
