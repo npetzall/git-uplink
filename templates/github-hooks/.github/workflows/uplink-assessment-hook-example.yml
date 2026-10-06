@@ -2,30 +2,20 @@
 # .github/workflows/uplink-assessment-hook.yml, so this file is ignored until
 # you copy it there. See assessment-hook.md on this branch.
 name: Uplink assessment hook
-run-name: Uplink assessment hook ${{ inputs.pr }} ${{ inputs.patch }} ${{ inputs.caller_run_id }}
+run-name: Uplink assessment hook ${{ inputs.caller_run_id }}
 
 on:
   workflow_dispatch:
     inputs:
-      pr:
-        description: Internal pull request number
-        required: false
-        type: string
-      patch:
-        description: Patch id (upl_…)
-        required: false
-        type: string
-      state:
-        description: Commit of uplink/state to read the patch from (set with patch)
-        required: false
-        type: string
       caller_run_id:
-        description: Caller run id (used to match this hook run)
+        description: Caller run id (it holds the assessment package, and matches this hook run)
         required: true
         type: string
 
 permissions:
   contents: read
+  # To download the assessment package from the caller run.
+  actions: read
 
 jobs:
   extra:
@@ -36,20 +26,29 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Write company extras
+      # assessment.json, assessment.md and change.patch. From a pull request
+      # they describe a change that is not reviewed yet: read them as data.
+      - name: Download the assessment package
         env:
-          PR: ${{ inputs.pr }}
-          PATCH: ${{ inputs.patch }}
-          # With patch: .uplink/patches/<patch>.patch at this uplink/state commit.
-          STATE: ${{ inputs.state }}
+          GH_TOKEN: ${{ github.token }}
+          CALLER: ${{ inputs.caller_run_id }}
         run: |
           set -euo pipefail
+          # caller_run_id is <run id>-<attempt>.
+          gh run download "${CALLER%%-*}" --repo "$GITHUB_REPOSITORY" \
+            -n uplink-assessment -D "$RUNNER_TEMP/uplink-assessment"
+
+      - name: Write company extras
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/uplink-assessment"
+          # "pr" for a pull request check, "patch" for Uplink submit.
+          kind=$(jq -r '.kind | select(. == "pr" or . == "patch")' "$package/assessment.json")
           mkdir -p extras
-          subject=${PATCH:-PR #${PR}}
           cat > extras/10-company.md <<EOF
           ## Company review notes
 
-          Extra details for ${subject}. Replace this step with Jira,
+          Extra details for this ${kind:-change}. Replace this step with Jira,
           license, or classification output.
           EOF
 

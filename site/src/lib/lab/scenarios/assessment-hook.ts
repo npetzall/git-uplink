@@ -94,7 +94,7 @@ export const assessmentHook: LabScenario = {
       id: "submit-asha",
       title: "Submit Asha; extras lead the packet",
       summary:
-        "Dispatch Uplink submit. The extras job runs the hook with patch, and the packet job assesses the patch file and stores both results: ## Company review notes sits above # Contribution packet. Then approve to-upstream. The contribution fork has SHA-256 only; no hook file is exported.",
+        "Dispatch Uplink submit. The assess job assesses the patch file and runs the hook on that assessment package, and the packet job stores both results: ## Company review notes sits above # Contribution packet. Then approve to-upstream. The contribution fork has SHA-256 only; no hook file is exported.",
       why: "Submit is the only writer of uplink/state. The assessment hook returns an artifact; it must not push state.",
       operations: submitOps("upl_asha"),
       apply: (state) => {
@@ -109,7 +109,7 @@ export const assessmentHook: LabScenario = {
           contrib: [{ branch: "uplink/upl_asha", files: asha.files, prNumber: 412 }],
           log: [
             ...state.log,
-            "Hook ran with patch=upl_asha; ## Company review notes sits above # Contribution packet.",
+            "Assessed upl_asha; the hook read the assessment package; ## Company review notes sits above # Contribution packet.",
             "Approved to-upstream for upl_asha. Opened public PR #412 from uplink/upl_asha.",
           ],
         };

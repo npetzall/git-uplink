@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::{Regex, RegexSet};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{AssessError, Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
@@ -340,21 +341,6 @@ pub fn patch_text(repo: &Path, id: &str) -> Result<String> {
         Ok(text) => Ok(text),
         Err(_) => show_at(repo, STATE_BRANCH, &path),
     }
-}
-
-/// True when the patch file of `id` is byte for byte what it was at
-/// `state`, a commit of `uplink/state`. Compares blob ids.
-pub fn patch_same_as_at(repo: &Path, id: &str, state: &str) -> Result<bool> {
-    let path = format!("{PATCH_DIR}/{id}.patch");
-    let then = git_ok(repo, &["rev-parse", &format!("{state}:{path}")])?;
-    let file = repo.join(&path);
-    let now = if file.is_file() {
-        let file = file.to_string_lossy();
-        git_ok(repo, &["hash-object", "--no-filters", "--", &file])?
-    } else {
-        git_ok(repo, &["rev-parse", &format!("{STATE_BRANCH}:{path}")])?
-    };
-    Ok(then == now)
 }
 
 fn hash_text(repo: &Path, content: &str) -> Result<String> {
@@ -1199,7 +1185,12 @@ pub fn assess_from_message(
 /// `uplink/upstream` and says nothing about whether the patch still applies
 /// (preflight does). Message, title and author are the ones stored with the
 /// patch; the settings are today's.
-pub fn assess_patch_file(queue: &QueueState, patch: &Patch, patch_text: &str) -> AssessReport {
+pub fn assess_patch_file(
+    queue: &QueueState,
+    patch: &Patch,
+    patch_text: &str,
+    intent: PatchIntent,
+) -> AssessReport {
     let author = patch
         .assess
         .as_ref()
@@ -1215,8 +1206,189 @@ pub fn assess_patch_file(queue: &QueueState, patch: &Patch, patch_text: &str) ->
         &stored_commit_message(patch),
         Some(&patch.title),
         author,
-        Some(export_diff(patch_text)),
+        (!intent.is_internal_only()).then(|| export_diff(patch_text)),
     )
+}
+
+/// File names of an assessment package (`assess --package <dir>`).
+pub const PACKAGE_JSON: &str = "assessment.json";
+pub const PACKAGE_MARKDOWN: &str = "assessment.md";
+pub const PACKAGE_CHANGE: &str = "change.patch";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageKind {
+    /// A change that is not a patch yet, such as an open pull request.
+    Pr,
+    /// A patch in the queue.
+    Patch,
+}
+
+/// The stored message of a change and what of it is public.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageMessage {
+    pub stored: String,
+    pub subject: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub co_author: Option<String>,
+}
+
+/// What the assessment scanned for, from `uplink.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageSettings {
+    #[serde(default)]
+    pub redact_keywords: Vec<String>,
+    #[serde(default)]
+    pub internal_email_domains: Vec<String>,
+    /// Why `uplink.toml` could not be used; the scan then fails closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+}
+
+/// `assessment.json` of an assessment package: the result of one assessment,
+/// what it was made for, and what it was made with. The company assessment
+/// hook reads it, and `report --assess-result` stores it with the patch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssessPackage {
+    pub kind: PackageKind,
+    /// Id of the assessed patch, for kind `patch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<String>,
+    /// Commit of `uplink/state` the patch was read at, for kind `patch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    pub at: String,
+    pub title: String,
+    pub message: PackageMessage,
+    pub ok: bool,
+    pub checks: Vec<AssessCheck>,
+    pub cutoff_found: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_email: Option<String>,
+    pub settings: PackageSettings,
+    /// Git blob id of `change.patch` in the package.
+    pub change_blob: String,
+    /// The patch as it is in `queue.json`, for kind `patch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_entry: Option<Patch>,
+}
+
+impl AssessPackage {
+    /// Describes `report`, the assessment of `change` (the text written as
+    /// `change.patch`). `patch` is the queue entry when a patch was assessed.
+    pub fn new(
+        repo: &Path,
+        queue: &QueueState,
+        report: &AssessReport,
+        title: &str,
+        change: &str,
+        patch: Option<&Patch>,
+    ) -> Result<Self> {
+        let state = match patch {
+            Some(_) => git_ok(repo, &["rev-parse", "--verify", "--quiet", STATE_BRANCH]).ok(),
+            None => None,
+        };
+        Ok(Self {
+            kind: if patch.is_some() {
+                PackageKind::Patch
+            } else {
+                PackageKind::Pr
+            },
+            patch: patch.map(|patch| patch.id.clone()),
+            state,
+            at: report.at.clone(),
+            title: title.to_string(),
+            message: PackageMessage {
+                stored: report.commit_message.clone(),
+                subject: report.public_subject.clone(),
+                body: report.public_body.clone(),
+                co_author: report.co_author.clone(),
+            },
+            ok: report.ok,
+            checks: report.checks.clone(),
+            cutoff_found: report.cutoff_found,
+            original_author: report.original_author.clone(),
+            original_email: report.original_email.clone(),
+            settings: PackageSettings {
+                redact_keywords: queue.settings.redact_keywords.clone(),
+                internal_email_domains: queue.settings.internal_email_domains.clone(),
+                problem: queue.settings.problem.clone(),
+            },
+            change_blob: hash_text(repo, change)?,
+            queue_entry: patch.cloned(),
+        })
+    }
+
+    /// The assessment this package holds.
+    pub fn report(&self) -> AssessReport {
+        AssessReport {
+            at: self.at.clone(),
+            ok: self.ok,
+            commit_message: self.message.stored.clone(),
+            public_subject: self.message.subject.clone(),
+            public_body: self.message.body.clone(),
+            co_author: self.message.co_author.clone(),
+            original_author: self.original_author.clone(),
+            original_email: self.original_email.clone(),
+            cutoff_found: self.cutoff_found,
+            checks: self.checks.clone(),
+        }
+    }
+
+    /// Why this package does not describe `patch` (with `patch_text` as its
+    /// patch file) assessed now, or None when it does. `fresh` is that
+    /// assessment: the same change, title, message and settings give the
+    /// same checks.
+    pub fn stale_for(
+        &self,
+        repo: &Path,
+        patch: &Patch,
+        patch_text: &str,
+        fresh: &AssessReport,
+    ) -> Result<Option<&'static str>> {
+        let same_checks = self.checks.len() == fresh.checks.len()
+            && self
+                .checks
+                .iter()
+                .zip(&fresh.checks)
+                .all(|(a, b)| a.id == b.id && a.status == b.status && a.detail == b.detail);
+        Ok(if self.patch.as_deref() != Some(patch.id.as_str()) {
+            Some("it is for another patch")
+        } else if self.change_blob != hash_text(repo, patch_text)? {
+            Some("the patch changed since")
+        } else if self.title != patch.title || self.message.stored != fresh.commit_message {
+            Some("the title or message changed since")
+        } else if self.ok != fresh.ok || !same_checks {
+            Some("uplink.toml changed since, or the result was edited")
+        } else {
+            None
+        })
+    }
+}
+
+/// The export diff between two revisions, as `change.patch` of a package.
+pub fn change_between(repo: &Path, from_ref: &str, head_ref: &str) -> Result<String> {
+    let shas = ensure_revs(repo, &[from_ref, head_ref])?;
+    let diff = git_ok(
+        repo,
+        &[
+            "diff",
+            "--full-index",
+            "--binary",
+            &shas[0],
+            &shas[1],
+            "--",
+            ".",
+            ":!.uplink",
+        ],
+    )?;
+    Ok(format!("{diff}\n"))
 }
 
 /// The diff that would leave the company, and the binary files in it.

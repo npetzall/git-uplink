@@ -1,21 +1,11 @@
 name: Uplink assessment hook
 description: >-
   Run the company assessment hook from branch uplink/hooks and collect its
-  uplink-packet-extra markdown. A missing hook is skipped. A failed hook is
-  reported in the outputs and as a note in the extras; it never fails the caller.
+  uplink-packet-extra markdown. The hook reads artifact uplink-assessment of
+  this run, so upload the assessment package before this step. A missing hook
+  is skipped. A failed hook is reported in the outputs and as a note in the
+  extras; it never fails the caller.
 inputs:
-  pr:
-    description: Internal pull request number. Set for PR checks.
-    required: false
-    default: ""
-  patch:
-    description: Patch id (upl_…). Set for submit.
-    required: false
-    default: ""
-  state:
-    description: Commit of uplink/state to read the patch from. Set with patch.
-    required: false
-    default: ""
   token:
     description: Token with actions write (dispatch) and read (runs and artifacts). Workflows pass secrets.GITHUB_TOKEN.
     required: true
@@ -41,9 +31,6 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
         GH_REPO: ${{ github.repository }}
-        PR: ${{ inputs.pr }}
-        PATCH: ${{ inputs.patch }}
-        STATE: ${{ inputs.state }}
       run: |
         set -euo pipefail
         hook=.github/workflows/uplink-assessment-hook.yml
@@ -63,9 +50,6 @@ runs:
           fail "could not read uplink/hooks: ${probe}"
         fi
         if ! gh workflow run uplink-assessment-hook.yml --ref uplink/hooks \
-          -f "pr=${PR}" \
-          -f "patch=${PATCH}" \
-          -f "state=${STATE}" \
           -f "caller_run_id=${caller}"; then
           fail "could not dispatch the hook on uplink/hooks"
         fi

@@ -4973,25 +4973,234 @@ fn report_assesses_the_patch_file_with_the_settings_of_today() {
     assert!(packet.contains("## Upstream Assessment: ❌"), "{packet}");
 }
 
+/// Runs `git uplink` in `repo` and returns the output.
+fn uplink_cli(repo: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap()
+}
+
+/// `assess --patch <id> --package <dir> --json`: the parsed `assessment.json`.
+fn assess_patch_package(repo: &Path, id: &str, dir: &Path) -> serde_json::Value {
+    let output = uplink_cli(
+        repo,
+        &[
+            "assess",
+            "--patch",
+            id,
+            "--package",
+            dir.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let printed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("assessment.json")).unwrap()).unwrap();
+    assert_eq!(printed, written);
+    written
+}
+
 #[test]
-fn report_refuses_extras_made_for_other_content() {
+fn assess_writes_a_package_for_a_patch_and_for_a_change() {
     let (world, hash_patch) = world_with_hash_patch();
     let company = &world.company;
+    set_settings(company, |s| {
+        s.redact_keywords = vec!["AcmeCorp".into()];
+        s.internal_email_domains = vec!["acme.example".into()];
+    });
+
+    let dir = temp_dir();
+    let package = assess_patch_package(company, &hash_patch.id, dir.path());
+    assert_eq!(package["kind"], "patch");
+    assert_eq!(package["patch"], hash_patch.id.as_str());
+    assert_eq!(
+        package["state"],
+        git_ok(company, &["rev-parse", STATE_BRANCH])
+            .unwrap()
+            .as_str()
+    );
+    assert_eq!(package["ok"], true);
+    assert_eq!(package["title"], "Use SHA-256 for tokens");
+    assert_eq!(package["message"]["subject"], "Use SHA-256 for tokens");
+    assert_eq!(package["settings"]["redactKeywords"][0], "AcmeCorp");
+    assert_eq!(
+        package["settings"]["internalEmailDomains"][0],
+        "acme.example"
+    );
+    assert_eq!(package["queueEntry"]["id"], hash_patch.id.as_str());
+    assert_eq!(package["queueEntry"]["status"], "queued");
+    assert!(
+        package["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["id"] == "affiliation-leak" && check["status"] == "pass"),
+        "{package}"
+    );
+    // change.patch is the patch file, and changeBlob names it.
+    let change = dir.path().join("change.patch");
+    let patch_file = company.join(format!(".uplink/patches/{}.patch", hash_patch.id));
+    assert_eq!(
+        fs::read_to_string(&change).unwrap(),
+        fs::read_to_string(patch_file).unwrap()
+    );
+    assert_eq!(
+        package["changeBlob"],
+        git_ok(company, &["hash-object", change.to_str().unwrap()])
+            .unwrap()
+            .as_str()
+    );
+    let markdown = fs::read_to_string(dir.path().join("assessment.md")).unwrap();
+    assert!(markdown.contains("affiliation-leak"), "{markdown}");
+
+    // A change that is not a patch: the diff, and no queue entry.
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "token notes\n");
+    commit_all(company, "notes");
+    let dir = temp_dir();
+    let output = uplink_cli(
+        company,
+        &[
+            "assess",
+            "--title",
+            "Add notes",
+            "--from",
+            "main",
+            "--head",
+            "feat/notes",
+            "--package",
+            dir.path().to_str().unwrap(),
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    // Without --json the report is printed.
+    assert!(String::from_utf8_lossy(&output.stdout).contains("affiliation-leak"));
+    let package: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join("assessment.json")).unwrap())
+            .unwrap();
+    assert_eq!(package["kind"], "pr");
+    for absent in ["patch", "state", "queueEntry"] {
+        assert!(package.get(absent).is_none(), "{absent}: {package}");
+    }
+    let change = fs::read_to_string(dir.path().join("change.patch")).unwrap();
+    assert!(change.starts_with("diff --git "), "{change}");
+    assert!(change.contains("+token notes"), "{change}");
+}
+
+#[test]
+fn a_package_with_findings_is_written_before_assess_fails() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    set_settings(company, |s| s.redact_keywords = vec!["sha256".into()]);
+    let dir = temp_dir();
+    let output = uplink_cli(
+        company,
+        &[
+            "assess",
+            "--patch",
+            &hash_patch.id,
+            "--package",
+            dir.path().to_str().unwrap(),
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    let package: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join("assessment.json")).unwrap())
+            .unwrap();
+    assert_eq!(package["ok"], false);
+
+    // Report stores it, writes the packet that shows the findings, and fails.
+    let result = dir.path().join("assessment.json");
+    let report = uplink_cli(
+        company,
+        &[
+            "report",
+            &hash_patch.id,
+            "--assess-result",
+            result.to_str().unwrap(),
+        ],
+    );
+    assert!(!report.status.success(), "{report:?}");
+    let packet = String::from_utf8_lossy(&report.stdout);
+    assert!(packet.contains("## Upstream Assessment: ❌"), "{packet}");
+    assert!(!stored_patch(company, &hash_patch.id).assess.unwrap().ok);
+}
+
+#[test]
+fn report_stores_an_assessment_only_for_the_patch_as_it_is_now() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let id = hash_patch.id.as_str();
     let extras = temp_dir();
     write(extras.path(), "10-company.md", "## Company\n");
-    let report = |state: &str| {
-        Command::new(env!("CARGO_BIN_EXE_git-uplink"))
-            .args(["report", &hash_patch.id, "--extra-dir"])
-            .arg(extras.path())
-            .args(["--store-extras", "--extra-state", state])
-            .current_dir(company)
-            .output()
-            .unwrap()
+    let report = |result: &Path| {
+        uplink_cli(
+            company,
+            &[
+                "report",
+                id,
+                "--assess-result",
+                result.to_str().unwrap(),
+                "--extra-dir",
+                extras.path().to_str().unwrap(),
+                "--store-extras",
+            ],
+        )
+    };
+    let refused = |result: &Path, why: &str| {
+        let output = report(result);
+        assert!(!output.status.success(), "{output:?}");
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            message.contains("is not for") && message.contains(why),
+            "{message}"
+        );
+        // The extras of the hook that read the same package are not stored.
+        assert!(stored_patch(company, id).extras.is_none());
     };
 
-    // The hook read the patch at this commit; then the patch changed.
-    let read_at = git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap();
-    let patch_file = format!(".uplink/patches/{}.patch", hash_patch.id);
+    let dir = temp_dir();
+    let package = assess_patch_package(company, id, dir.path());
+    let result = dir.path().join("assessment.json");
+
+    // A result that was changed on its way to report.
+    let mut edited = package.clone();
+    edited["checks"][0]["detail"] = "nothing to see".into();
+    let edited_file = dir.path().join("edited.json");
+    fs::write(&edited_file, edited.to_string()).unwrap();
+    refused(&edited_file, "the result was edited");
+
+    // The result as assess wrote it is stored, with the extras.
+    let output = report(&result);
+    assert!(output.status.success(), "{output:?}");
+    let stored = stored_patch(company, id);
+    assert_eq!(
+        stored.assess.as_ref().unwrap().at,
+        package["at"].as_str().unwrap()
+    );
+    assert!(stored_extras_fresh(&stored));
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue.all_patches_mut().find(|p| p.id == id).unwrap().extras = None;
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: forget the extras").unwrap();
+
+    // The title changed after the assessment.
+    retitle(company, id, "Use SHA-256 everywhere");
+    refused(&result, "the title or message changed since");
+
+    // The patch file changed after the assessment.
+    let dir = temp_dir();
+    assess_patch_package(company, id, dir.path());
+    let result = dir.path().join("assessment.json");
+    let patch_file = format!(".uplink/patches/{id}.patch");
     let text = fs::read_to_string(company.join(&patch_file)).unwrap();
     write(
         company,
@@ -4999,19 +5208,16 @@ fn report_refuses_extras_made_for_other_content() {
         &text.replace("return sha256(value);", "return sha256(value); // v2"),
     );
     git_uplink::commit_queue(company, "uplink: change the patch").unwrap();
+    refused(&result, "the patch changed since");
 
-    let stale = report(&read_at);
-    assert!(!stale.status.success(), "{stale:?}");
-    let message = String::from_utf8_lossy(&stale.stderr);
-    assert!(
-        message.contains("changed while the assessment hook ran"),
-        "{message}"
+    // uplink.toml changed after the assessment.
+    let dir = temp_dir();
+    assess_patch_package(company, id, dir.path());
+    set_settings(company, |s| s.redact_keywords = vec!["sha256".into()]);
+    refused(
+        &dir.path().join("assessment.json"),
+        "uplink.toml changed since",
     );
-    assert!(stored_patch(company, &hash_patch.id).extras.is_none());
-
-    let current = report(&git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap());
-    assert!(current.status.success(), "{current:?}");
-    assert!(stored_extras_fresh(&stored_patch(company, &hash_patch.id)));
 }
 
 #[test]

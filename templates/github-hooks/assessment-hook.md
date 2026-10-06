@@ -6,12 +6,35 @@ Hooks are company-only. They live on the orphan branch `uplink/hooks`, never on 
 
 ## When it runs
 
-1. **On the PR, as advice.** Uplink PR checks run the hook with `pr` on every open, push, reopen and edit. The hook's markdown and the built-in assess report share one PR comment, which is updated in place instead of adding a new one each run. Nothing from this run is stored: the change is not a patch yet, and import does not copy the result.
-2. **At submit, for the packet.** Uplink submit runs the hook with `patch`. This is the result IP reads. A successful run is stored with the patch on `uplink/state` under `.uplink/reports/<id>/extras/` and reused by later submit runs while the patch content is unchanged. The hook runs again when nothing is stored, the stored result is out of date (for example after a conflict was resolved), or the patch was amended.
+1. **On the PR, as advice.** Uplink PR checks run the hook on every open, push, reopen and edit. The hook's markdown and the built-in assess report share one PR comment, which is updated in place instead of adding a new one each run. Nothing from this run is stored: the change is not a patch yet, and import does not copy the result.
+2. **At submit, for the packet.** Uplink submit runs the hook on the patch. This is the result IP reads. A successful run is stored with the patch on `uplink/state` under `.uplink/reports/<id>/extras/` and reused by later submit runs while the patch content is unchanged. The hook runs again when nothing is stored, the stored result is out of date (for example after a conflict was resolved), or the patch was amended.
 
 A failed hook never fails the PR check or submit. It shows as a warning, and the comment or `assessment.md` starts with a note that links to the failed run. IP decides. A failed result is never stored, so the next submit runs the hook again.
 
-If the patch changes while the hook runs at submit, the result is for other content. Submit compares the patch with the one at the `state` commit the hook was given, and stops when they differ; dispatch it again.
+If the patch, its message or `uplink.toml` changes while the hook runs at submit, the package the hook read is for other content. Submit stops; dispatch it again.
+
+## The assessment package
+
+Before it runs the hook, the caller runs `git uplink assess` and uploads the result as artifact `uplink-assessment` of its own run. That is everything the hook is given, and it has the same shape for a pull request and for a patch:
+
+| File | Content |
+| --- | --- |
+| `assessment.json` | What was assessed, the result, and the settings it was made with (below) |
+| `assessment.md` | The assess report as markdown |
+| `change.patch` | The change itself. For a pull request the diff of the PR. For a patch the patch file from the queue, which starts with the company commit message |
+
+`assessment.json`:
+
+| Field | Content |
+| --- | --- |
+| `kind` | `pr` for a pull request check, `patch` for Uplink submit |
+| `patch`, `state` | For `patch`: the patch id (`upl_…`) and the `uplink/state` commit it was read at |
+| `title` | The public pull request title |
+| `message` | `stored` (the whole message), `subject` and `body` (what is public), `coAuthor` |
+| `ok`, `checks` | The result. Each check has `id`, `status` (`pass`, `warn`, `fail`, `skip`) and `detail` |
+| `settings` | `redactKeywords` and `internalEmailDomains` from `uplink.toml`, or `problem` when it could not be read |
+| `changeBlob` | Git blob id of `change.patch` |
+| `queueEntry` | For `patch`: the patch as it is in `queue.json` (status, dependencies, approvals, public PR) |
 
 ## How it is wired
 
@@ -21,29 +44,18 @@ If the patch changes while the hook runs at submit, the result is for other cont
 
 ## Contract
 
-- Trigger on `workflow_dispatch` with these inputs:
-
-  | Input | Set by | What it names | Where the result goes |
-  | --- | --- | --- | --- |
-  | `pr` | Uplink PR checks | The internal pull request number. The change is `refs/pull/<pr>/head`. | The PR comment only |
-  | `patch` | Uplink submit | The patch id (`upl_…`). | The contribution packet, and stored with the patch |
-  | `state` | Uplink submit, with `patch` | The commit of `uplink/state` to read the patch from: `.uplink/patches/<patch>.patch` at that commit. | — |
-  | `caller_run_id` | both | The run that dispatched the hook. | — |
-
-  Exactly one of `pr` and `patch` is set. It tells the hook what it is working with, and whether its result is advice or goes to IP.
-- Put `caller_run_id` in `run-name`. Callers use it to find the run they dispatched.
-- With `patch`, read the patch at `state`, not at the tip of `uplink/state`. The branch can move while the hook runs, and submit refuses a result when the patch is no longer what it was at that commit:
+- Trigger on `workflow_dispatch` with one input, `caller_run_id`: the run that dispatched the hook, as `<run id>-<attempt>`. Put it in `run-name`; callers use it to find the run they dispatched. Inputs of an older contract (`pr`, `patch`, `state`) may stay declared; they are no longer sent.
+- Download the package from the caller run. The job needs `actions: read`:
 
   ```bash
-  git fetch origin "$STATE"
-  git show "$STATE:.uplink/patches/$PATCH.patch"
+  gh run download "${CALLER_RUN_ID%%-*}" -n uplink-assessment -D package
   ```
-- What the hook does with it is yours to decide: look up a ticket, scan the patch file, apply it on `uplink/upstream` and scan the tree. Uplink passes nothing else.
-- Declare all four inputs. GitHub rejects a dispatch with an input the workflow does not declare, and a rejected dispatch shows as a failed hook.
+- The hook is not told whether it runs for a pull request or a patch. `kind` in `assessment.json` says so when it matters.
+- What the hook does with the package is yours to decide: look up a ticket, scan `change.patch`, check the settings against another source. Uplink passes nothing else.
 - Upload `*.md` files as artifact `uplink-packet-extra`. Files are prepended in name order. An empty result is fine. uplink adds no headings or separators. Each file's markdown goes in as-is, so include your own heading and use a prefix such as `10-`, `20-` to set the order.
 - Do not push `uplink/state`. Uplink stores the result itself.
 
-**With `pr`, the checked-out code is not merged or reviewed yet.** Do not build or run it in a job that has secrets. Scan it as data.
+**A package of kind `pr` describes a change that is not merged or reviewed yet, and was made by the pull request's own copy of the workflow.** Read every file in it as data: do not apply and build `change.patch` in a job that has secrets, and do not trust `ok` or `settings` from it for anything but advice.
 
 ## Add the hook
 

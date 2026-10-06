@@ -462,6 +462,40 @@ pub fn store_patch_extras(
     })
 }
 
+/// Whether the contribution packet of `patch` shows an assessment made for
+/// it: an upstream-bound patch that is waiting for contribution.
+fn assessed_for_packet(queue: &QueueState, patch: &Patch) -> bool {
+    queue.is_upstream(&patch.id)
+        && matches!(
+            patch.status,
+            PatchStatus::Queued
+                | PatchStatus::Amended
+                | PatchStatus::Approved
+                | PatchStatus::Submitted
+        )
+}
+
+/// Stores `report` as the assessment the contribution packet of `id` shows.
+fn store_packet_assessment(
+    repo: &Path,
+    queue: &mut QueueState,
+    id: &str,
+    report: AssessReport,
+) -> Result<Patch> {
+    let detail = if report.ok {
+        "Assessed the patch for the contribution packet"
+    } else {
+        "Assessed the patch for the contribution packet; it has findings to fix"
+    };
+    let current = get_patch_mut(queue, id)?;
+    current.assess = Some(report);
+    add_event(current, "assessed", detail);
+    let current = current.clone();
+    write_queue_file(repo, queue)?;
+    commit_queue(repo, &format!("uplink: assess {id} for its packet"))?;
+    Ok(current)
+}
+
 /// Runs the upstream assessment on the patch file of `id` as it is in the
 /// queue, with the settings in `uplink.toml` as they are today. The result
 /// replaces the one stored when the patch was imported, amended or resolved,
@@ -474,29 +508,41 @@ pub fn assess_patch_for_packet(repo: &Path, id: &str) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
         let patch = get_patch(&queue, id)?.clone();
-        let waiting = matches!(
-            patch.status,
-            PatchStatus::Queued
-                | PatchStatus::Amended
-                | PatchStatus::Approved
-                | PatchStatus::Submitted
-        );
-        if !queue.is_upstream(id) || !waiting {
+        if !assessed_for_packet(&queue, &patch) {
             return Ok(patch);
         }
-        let report = assess_patch_file(&queue, &patch, &patch_text(repo, id)?);
-        let detail = if report.ok {
-            "Assessed the patch for the contribution packet"
-        } else {
-            "Assessed the patch for the contribution packet; it has findings to fix"
-        };
-        let current = get_patch_mut(&mut queue, id)?;
-        current.assess = Some(report);
-        add_event(current, "assessed", detail);
-        let current = current.clone();
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: assess {id} for its packet"))?;
-        Ok(current)
+        let intent = PatchIntent::from_internal_only(false);
+        let report = assess_patch_file(&queue, &patch, &patch_text(repo, id)?, intent);
+        store_packet_assessment(repo, &mut queue, id, report)
+    })
+}
+
+/// Stores the assessment in `package` (`assess --patch <id> --package`) as
+/// the one the contribution packet of `id` shows, instead of assessing here.
+///
+/// The package is used only when it describes the patch as it is now. The
+/// patch is assessed once more to tell: the same patch file, title, message
+/// and `uplink.toml` give the same result, so a package that is out of date
+/// or was changed on its way here is refused.
+pub fn store_assess_result(repo: &Path, id: &str, package: &AssessPackage) -> Result<Patch> {
+    with_queue_lock(repo, || {
+        let mut queue = read_queue_file(repo)?;
+        let patch = get_patch(&queue, id)?.clone();
+        if !assessed_for_packet(&queue, &patch) {
+            return Err(Error::msg(format!(
+                "{id} is not an upstream-bound patch waiting for contribution (currently {}); it has no assessment to store.",
+                patch.status
+            )));
+        }
+        let text = patch_text(repo, id)?;
+        let intent = PatchIntent::from_internal_only(false);
+        let fresh = assess_patch_file(&queue, &patch, &text, intent);
+        if let Some(why) = package.stale_for(repo, &patch, &text, &fresh)? {
+            return Err(Error::msg(format!(
+                "The assessment result is not for {id} as it is now: {why}. Assess it again (dispatch Uplink submit again)."
+            )));
+        }
+        store_packet_assessment(repo, &mut queue, id, package.report())
     })
 }
 

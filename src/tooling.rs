@@ -518,12 +518,16 @@ mod embed_tests {
                 "{forge:?}\n{text}"
             );
             assert!(text.contains("--store-extras"), "{forge:?}\n{text}");
-            // A result is only used for the patch the hook was started for.
+            // Assess is its own step, and the packet stores its result:
+            // the one the hook read too.
             assert!(
-                text.matches("--extra-state \"$HOOK_STATE\"").count() == 2
-                    && text.contains("state: ${{ steps.stored.outputs.state }}")
-                    && text.contains("queue.json?ref=${state}"),
+                text.contains("git uplink assess --patch \"$PATCH_ID\" --package \"$out\""),
                 "{forge:?}\n{text}"
+            );
+            assert_eq!(
+                text.matches("--assess-result \"$ASSESSMENT\"").count(),
+                3,
+                "{forge:?} every report takes the assessment of this run\n{text}"
             );
             assert!(text.contains(".extras.patchIdStable"), "{forge:?}\n{text}");
             let action = files
@@ -535,9 +539,16 @@ mod embed_tests {
                 action.contains("gh workflow run uplink-assessment-hook.yml --ref uplink/hooks"),
                 "{action}"
             );
-            // Submit names the uplink/state commit the hook reads the patch at.
-            assert!(action.contains("-f \"state=${STATE}\""), "{action}");
-            assert!(example.contains("STATE: ${{ inputs.state }}"), "{example}");
+            // The hook is told only which run holds its assessment package.
+            assert_eq!(action.matches(" -f \"").count(), 1, "{action}");
+            assert!(
+                action.contains("-f \"caller_run_id=${caller}\""),
+                "{action}"
+            );
+            assert!(
+                example.contains("-n uplink-assessment") && example.contains("actions: read"),
+                "{example}"
+            );
             assert!(
                 action.contains("::warning title=Uplink assessment hook failed::"),
                 "{action}"
@@ -558,11 +569,20 @@ mod embed_tests {
             );
             assert!(pr.contains("<!-- uplink:assessment -->"), "{forge:?}");
             assert!(pr.contains("--method PATCH"), "{forge:?}");
-            // The PR run is advice: nothing of it is handed to import.
-            assert!(
-                !pr.contains("upload-artifact") && !pr.contains("fingerprint"),
-                "{forge:?}\n{pr}"
-            );
+            assert!(!pr.contains("fingerprint"), "{forge:?}\n{pr}");
+            // Both callers upload the package before they run the hook.
+            for (name, workflow) in [("pr", pr.as_str()), ("submit", text.as_ref())] {
+                let assess = workflow
+                    .find("git uplink assess")
+                    .unwrap_or_else(|| panic!("{forge:?} {name} runs no assess"));
+                let upload = workflow
+                    .find("name: uplink-assessment\n")
+                    .unwrap_or_else(|| panic!("{forge:?} {name} uploads no package"));
+                let hook = workflow
+                    .find("uses: $/.github/actions/uplink-assessment-hook")
+                    .unwrap();
+                assert!(assess < upload && upload < hook, "{forge:?} {name}");
+            }
             assert!(
                 !pr.contains("gh pr comment"),
                 "{forge:?} PR comments must be updated in place\n{pr}"
@@ -579,12 +599,12 @@ mod embed_tests {
             assert!(action.contains("uplink-packet-extra"), "{action}");
             assert!(action.contains("run-id:"), "{action}");
             assert!(action.contains("continue-on-error: true"), "{action}");
-            assert!(text.contains("needs: extras"), "{forge:?}");
+            assert!(text.contains("needs: assess"), "{forge:?}");
             assert!(text.contains("needs: [packet, preflight]"), "{forge:?}");
             assert!(!text.contains("finalize:"), "{forge:?}\n{text}");
-            // The hook runs in `extras`, which must not hold the queue lock;
+            // The hook runs in `assess`, which must not hold the queue lock;
             // only `packet` writes uplink/state.
-            let extras_job = text.find("\n  extras:").expect("extras job");
+            let assess_job = text.find("\n  assess:").expect("assess job");
             let packet_job = text.find("\n  packet:").expect("packet job");
             let submit_job = text.find("\n  submit:").expect("submit job");
             let lock = text.find("group: uplink-mutate").expect("uplink-mutate");
@@ -597,7 +617,7 @@ mod embed_tests {
             let hook = text
                 .find("uses: $/.github/actions/uplink-assessment-hook")
                 .unwrap();
-            assert!(extras_job < hook && hook < packet_job, "{forge:?}\n{text}");
+            assert!(assess_job < hook && hook < packet_job, "{forge:?}\n{text}");
             assert_eq!(
                 text.matches("printf '%s\\n' \"$packet\" >> \"$GITHUB_STEP_SUMMARY\"")
                     .count(),

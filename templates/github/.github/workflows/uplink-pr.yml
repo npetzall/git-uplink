@@ -9,10 +9,12 @@
 # then preflight.sh from uplink/hooks. Fail these instead of opening a contribution
 # later that leaks company text or is missing queued work from main.
 #
-# Assess also runs the optional company assessment hook from branch
-# uplink/hooks (see assessment-hook.md on that branch). Both results go into
-# one PR comment that is updated in place on every run. A failed hook is
-# noted in the comment; it does not fail the check.
+# Assess uploads its assessment package (result, public message, uplink.toml
+# settings and the diff) as artifact uplink-assessment, then runs the optional
+# company assessment hook from branch uplink/hooks, which reads that package
+# (see assessment-hook.md on that branch). Both results go into one PR comment
+# that is updated in place on every run. A failed hook is noted in the
+# comment; it does not fail the check.
 #
 # Both are advice for the author and the reviewers. Nothing from this run is
 # stored with the patch: the change has no patch id yet, and this workflow
@@ -79,20 +81,33 @@ jobs:
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > "$RUNNER_TEMP/uplink-msg.txt"
+          out="$RUNNER_TEMP/uplink-assessment"
           code=0
           git uplink assess \
             --title "$TITLE" \
             --message-file "$RUNNER_TEMP/uplink-msg.txt" \
             --from "$FROM_SHA" \
-            --head "$HEAD_SHA" > "$RUNNER_TEMP/uplink-assess.md" || code=$?
-          printf '%s\n' "$(cat "$RUNNER_TEMP/uplink-assess.md")" >> "$GITHUB_STEP_SUMMARY"
+            --head "$HEAD_SHA" \
+            --package "$out" > /dev/null || code=$?
+          if [ ! -s "$out/assessment.md" ]; then
+            echo "git uplink assess wrote no assessment package"
+            exit 1
+          fi
+          cat "$out/assessment.md" >> "$GITHUB_STEP_SUMMARY"
           echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+      # For the hook only. Import does not read it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: uplink-assessment
+          path: ${{ runner.temp }}/uplink-assessment/
+          if-no-files-found: error
+          overwrite: true
 
       - name: Run company assessment hook
         id: hook
         uses: $/.github/actions/uplink-assessment-hook
         with:
-          pr: ${{ github.event.pull_request.number }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update the assessment comment
@@ -115,7 +130,7 @@ jobs:
               echo "---"
               echo
             fi
-            cat "$RUNNER_TEMP/uplink-assess.md"
+            cat "$RUNNER_TEMP/uplink-assessment/assessment.md"
           } > "$RUNNER_TEMP/uplink-comment.md"
           # One comment per PR, updated in place on every run.
           id=$(gh api --paginate "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \

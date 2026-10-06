@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use crate::adopt::{self, AdoptGroup};
 use crate::assess::{
-    IncomingCommitRow, IncomingMergeRow, IncomingPacket, approval_covers, assert_assess_ok,
-    assess_from_message, assess_patch_file, company_commit_message, covering_approval,
-    depends_on_from_message, format_incoming_packet, from_upstream_report_paths, patch_text,
-    report_paths, review_token, store_extras, stored_commit_message,
+    AssessPackage, IncomingCommitRow, IncomingMergeRow, IncomingPacket, approval_covers,
+    assert_assess_ok, assess_from_message, assess_patch_file, company_commit_message,
+    covering_approval, depends_on_from_message, format_incoming_packet, from_upstream_report_paths,
+    patch_text, report_paths, review_token, store_extras, stored_commit_message,
 };
 use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
