@@ -42,6 +42,19 @@ repos:
         language: system
         pass_filenames: false
         files: ^(Cargo\.(toml|lock)|deny\.toml)$
+      # Every commit: advisories are published without the lockfile changing.
+      - id: npm-audit-web
+        name: npm audit web
+        entry: sfw npm audit --package-lock-only --prefix web
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: npm-audit-site
+        name: npm audit site
+        entry: sfw npm audit --package-lock-only --prefix site
+        language: system
+        pass_filenames: false
+        always_run: true
   # Check only, never rewrite: lint without fixes, format with --check.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.10
