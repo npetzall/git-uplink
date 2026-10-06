@@ -12,6 +12,10 @@ inputs:
     description: Patch id (upl_…). Set for submit.
     required: false
     default: ""
+  state:
+    description: Commit of uplink/state to read the patch from. Set with patch.
+    required: false
+    default: ""
   token:
     description: Token with actions write (dispatch) and read (runs and artifacts). Workflows pass secrets.GITHUB_TOKEN.
     required: true
@@ -39,6 +43,7 @@ runs:
         GH_REPO: ${{ github.repository }}
         PR: ${{ inputs.pr }}
         PATCH: ${{ inputs.patch }}
+        STATE: ${{ inputs.state }}
       run: |
         set -euo pipefail
         hook=.github/workflows/uplink-assessment-hook.yml
@@ -60,6 +65,7 @@ runs:
         if ! gh workflow run uplink-assessment-hook.yml --ref uplink/hooks \
           -f "pr=${PR}" \
           -f "patch=${PATCH}" \
+          -f "state=${STATE}" \
           -f "caller_run_id=${caller}"; then
           fail "could not dispatch the hook on uplink/hooks"
         fi

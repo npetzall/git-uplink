@@ -15,7 +15,7 @@ export const STATUS_INFO: Record<string, { meaning: string; next: string }> = {
   },
   amended: {
     meaning:
-      "Submitted, then changed by a conflict resolve. Company main has the new bytes; the fork still has the last approved ones.",
+      "Submitted, then a conflict resolve or an amend changed the lines it adds or removes, or the public title or message, so the last approval no longer covers it. Company main has the new bytes; the fork still has the last approved ones.",
     next: "IP reviews the delta on the re-dispatched Uplink submit. Approval force-pushes the same public pull request.",
   },
   conflict: {
@@ -33,7 +33,7 @@ export const STATUS_INFO: Record<string, { meaning: string; next: string }> = {
   // Not a status: a flag next to approved or submitted.
   "needs approval": {
     meaning:
-      "The patch changed since its last approval, for example by a replay onto a moved upstream. Submit refuses it as it is.",
+      "The lines the patch adds or removes, its public title or its public message changed since its last approval. Submit refuses it as it is.",
     next: "Dispatch Uplink submit: IP reviews a new packet, and the approval covers the current content.",
   },
 };

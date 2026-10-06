@@ -78,11 +78,8 @@ fn check_ready_to_submit(
     }
     ensure_assessed_ok(patch)?;
     // The approval is for specific content, not for the patch id.
-    let token = review_token(repo, patch)?;
-    if !patch
-        .last_approval()
-        .is_some_and(|approval| super::lifecycle::approval_covers(approval, patch, &token))
-    {
+    review_token(repo, patch)?;
+    if covering_approval(repo, patch).is_none() {
         return Err(Error::msg(format!(
             "{id} changed since it was approved; approve the current content before submit (dispatch Uplink submit again)."
         )));

@@ -19,7 +19,6 @@ git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <na
 git uplink add --title <text> [--message <text> | --message-file <path>] [--from <ref>]
             [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
             [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
-            [--extra-dir <path>] [--extra-source <url>]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
@@ -29,7 +28,7 @@ git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
 git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>] [--internal-only | --patch <id>]
 git uplink report <id> [--out <path>] [--extra-dir <path>] [--store-extras]
-            [--extra-source <url>]
+            [--extra-source <url>] [--extra-state <rev>]
 git uplink status [--json]
 git uplink doctor [--json]
 git uplink approve <id> [--out <path>] [--reviewed <token>]
@@ -111,10 +110,6 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
 
   The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
-- `--extra-dir <path>`: Directory of company assessment-hook \*.md extras to store with the patch.
-
-  Stored for an upstream-bound patch under `.uplink/reports/<id>/extras/`. Import passes the result from the PR checks when it matches what was merged.
-- `--extra-source <url>`: Where the extras came from, such as the hook run URL.
 
 ### `push`
 
@@ -180,13 +175,18 @@ Write the contribution packet for a patch and print it.
 
 Writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`.
 
-Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). Submit runs the hook from branch `uplink/hooks` only when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
+For an upstream-bound patch, report first runs the upstream assessment again on the patch file as it is in the queue, with today's `uplink.toml`, and stores that result. The pull request check and import assess the change before it is a patch; this is the result the packet shows. Nothing is applied: whether the patch still applies on upstream is what `preflight` checks. When the assessment has findings, the packet is still written and printed, and report exits non-zero.
+
+Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). Submit runs the hook from branch `uplink/hooks` with the patch id and the `uplink/state` commit to read it from when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
 
 - `<id>`: Patch to report on.
 - `--out <path>`: Write the packet here instead of .uplink/reports/\<id>/assessment.md.
 - `--extra-dir <path>`: Directory of \*.md files prepended to the packet. Without it, extras stored for the unchanged patch are used.
 - `--store-extras`: Also store --extra-dir as the patch's extras for later packets.
 - `--extra-source <url>`: Where the stored extras came from, such as the hook run URL.
+- `--extra-state <rev>`: Commit of uplink/state the hook read the patch from.
+
+  Refused when the patch file is no longer what it was at that commit: the patch changed while the hook ran, so --extra-dir describes other content.
 
 ### `status`
 
@@ -216,7 +216,7 @@ Record the to-upstream approval of a patch and write its receipt.
 - `--out <path>`: Write the receipt here instead of .uplink/reports/\<id>/approval.md.
 - `--reviewed <token>`: Review token of the packet that was reviewed.
 
-  `report` writes it to `.uplink/reports/<id>/review-token`. It names the patch content, public title and public message. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now.
+  `report` writes it to `.uplink/reports/<id>/review-token`. It names what the patch changes, the public title and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one.
 
 ### `submit`
 
@@ -305,7 +305,7 @@ Amends an internal-only patch, an upstream patch not yet submitted, or a submitt
 
 Without `--complete` it replays the queue on `uplink/upstream` up to and including the patch, cuts protected `uplink/amend/<id>` there, and cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can open at once. The queue is not touched. It prints `base`, `work`, and `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the stored message after an HTML-comment instruction block).
 
-`--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. A submitted patch becomes `amended` (IP approves the delta, then submit force-pushes the contrib branch); otherwise it is `queued`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was.
+`--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. A submitted patch becomes `amended` (IP approves the delta, then submit force-pushes the contrib branch) and a patch that was not submitted becomes `queued`, unless the amend adds and removes the same lines as before and leaves the public title and message as they were: then the last approval still covers the patch and it stays `submitted` or `approved`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was.
 
 - `<id>`: Patch to amend.
 - `--complete`: Fold the merged amend PR into the patch.
@@ -349,7 +349,7 @@ Finish a conflict resolution and put the patch back in the queue.
 
 Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`).
 
-After a submitted patch is conflict-resolved it becomes `amended` until IP approves the delta. Resolve of a submitted patch dispatches a new submit for you. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0.
+A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `amended` until IP approves the delta. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0.
 
 - `<id>`: Patch whose conflict was resolved.
 

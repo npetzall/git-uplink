@@ -110,7 +110,7 @@ export function importOps(opts: {
       ],
       opts.internalOnly
         ? "Runs after the internal PR is merged."
-        : "Import job, with the write token. It takes the preflight job's result and never runs preflight.sh. Adds --extra-dir with the PR check's hook extras when they match the merged head, title, and body.",
+        : "Import job, with the write token. It takes the preflight job's result and never runs preflight.sh.",
     ),
   ];
 }
@@ -125,13 +125,13 @@ export function submitOps(id: string): LabOperation[] {
     ], "Locally, --push force-pushes the export commit unsigned. The workflow lets GitHub create a signed one."),
     ciJob(
       "Uplink submit",
-      [`gh workflow run uplink-assessment-hook.yml --ref uplink/hooks -f patch=${id}`],
-      "Dispatch Uplink submit from company main. Extras job, without the queue lock: extras stored at import are reused while the patch is unchanged; otherwise the optional hook runs. A failed hook is noted in the packet, not fatal, and not stored.",
+      [`gh workflow run uplink-assessment-hook.yml --ref uplink/hooks -f patch=${id} -f state=<uplink/state commit>`],
+      "Dispatch Uplink submit from company main. Extras job, without the queue lock: runs the optional hook with the patch id and the uplink/state commit to read it from, unless an earlier submit run stored its result and the patch is unchanged. A failed hook is noted in the packet, not fatal, and not stored.",
     ),
     ciJob(
       "Uplink submit",
-      ["git uplink init", `git uplink report ${id} --extra-dir <artifact> --store-extras`],
-      "Packet job, under uplink-mutate: writes assessment.md once, extras first. No environment secrets yet.",
+      ["git uplink init", `git uplink report ${id} --extra-dir <artifact> --extra-state <uplink/state commit> --store-extras`],
+      "Packet job, under uplink-mutate: assesses the patch file, then writes assessment.md once, extras first. Stops on findings, or when the patch is no longer what the hook read. No environment secrets yet.",
     ),
     ciJob(
       "Uplink submit",

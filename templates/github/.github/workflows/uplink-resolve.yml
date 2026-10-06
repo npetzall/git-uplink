@@ -6,7 +6,11 @@
 # YAML is loaded from the default branch so *-work cannot replace this sidecar.
 # git uplink resolve amends the patch, rebuilds company main, and
 # deletes the protected base plus -work branch. If the patch was already
-# submitted, status becomes amended and this job dispatches Uplink submit.
+# submitted, this job dispatches Uplink submit to export it onto the new
+# upstream. A resolution that adds or removes other lines than the last
+# approval covered makes the patch amended, and that run asks for a delta
+# approval. One that leaves those lines as approved leaves it submitted: the
+# run only exports it again.
 # If rebuild stops on a later patch, it publishes that conflict the same
 # way sync does.
 name: Uplink resolve
@@ -148,7 +152,9 @@ jobs:
             queue_json=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json)
             status=$(printf '%s\n' "$queue_json" | jq -r --arg id "$id" '(.tooling, .upstream[], .internal[]) | select(. != null and .id==$id) | .status')
           fi
-          if [ "$status" = "amended" ]; then
+          # amended: IP approves the delta. submitted: the last approval still
+          # covers the patch, and the public PR needs the new export.
+          if [ "$status" = "amended" ] || [ "$status" = "submitted" ]; then
             runs=$(gh run list --workflow="Uplink submit" --limit 20 --json databaseId,displayTitle,status 2>/dev/null || echo '[]')
             echo "$runs" | jq -r --arg title "Uplink submit $id" \
               '.[] | select((.displayTitle // "") == $title and (.status == "waiting" or .status == "in_progress")) | .databaseId' \

@@ -518,6 +518,13 @@ mod embed_tests {
                 "{forge:?}\n{text}"
             );
             assert!(text.contains("--store-extras"), "{forge:?}\n{text}");
+            // A result is only used for the patch the hook was started for.
+            assert!(
+                text.matches("--extra-state \"$HOOK_STATE\"").count() == 2
+                    && text.contains("state: ${{ steps.stored.outputs.state }}")
+                    && text.contains("queue.json?ref=${state}"),
+                "{forge:?}\n{text}"
+            );
             assert!(text.contains(".extras.patchIdStable"), "{forge:?}\n{text}");
             let action = files
                 .iter()
@@ -528,6 +535,9 @@ mod embed_tests {
                 action.contains("gh workflow run uplink-assessment-hook.yml --ref uplink/hooks"),
                 "{action}"
             );
+            // Submit names the uplink/state commit the hook reads the patch at.
+            assert!(action.contains("-f \"state=${STATE}\""), "{action}");
+            assert!(example.contains("STATE: ${{ inputs.state }}"), "{example}");
             assert!(
                 action.contains("::warning title=Uplink assessment hook failed::"),
                 "{action}"
@@ -548,7 +558,11 @@ mod embed_tests {
             );
             assert!(pr.contains("<!-- uplink:assessment -->"), "{forge:?}");
             assert!(pr.contains("--method PATCH"), "{forge:?}");
-            assert!(pr.contains("name: uplink-assessment"), "{forge:?}");
+            // The PR run is advice: nothing of it is handed to import.
+            assert!(
+                !pr.contains("upload-artifact") && !pr.contains("fingerprint"),
+                "{forge:?}\n{pr}"
+            );
             assert!(
                 !pr.contains("gh pr comment"),
                 "{forge:?} PR comments must be updated in place\n{pr}"
@@ -558,8 +572,10 @@ mod embed_tests {
                 .find(|(p, _)| p == ".github/workflows/uplink-import.yml")
                 .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
                 .unwrap();
-            assert!(import.contains("--extra-dir"), "{forge:?}\n{import}");
-            assert!(import.contains("-n uplink-assessment"), "{forge:?}");
+            assert!(
+                !import.contains("--extra-dir") && !import.contains("gh run download"),
+                "{forge:?} import must not store a result of the PR checks\n{import}"
+            );
             assert!(action.contains("uplink-packet-extra"), "{action}");
             assert!(action.contains("run-id:"), "{action}");
             assert!(action.contains("continue-on-error: true"), "{action}");
@@ -636,6 +652,11 @@ mod embed_tests {
         let example = text(".github/workflows/uplink-assessment-hook-example.yml");
         assert!(example.contains("caller_run_id"), "{example}");
         assert!(example.contains("uplink-packet-extra"), "{example}");
+        // The starter checks out the ref it runs on and may run from any branch.
+        assert!(
+            !example.contains("ref:") && !example.contains("github.ref"),
+            "{example}"
+        );
         assert!(
             !example.contains("\n  push:") && !example.contains("pull_request"),
             "the example must only run when dispatched\n{example}"

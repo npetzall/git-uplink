@@ -20,17 +20,6 @@ pub(super) fn changed_since_review(id: &str) -> Error {
     ))
 }
 
-/// True when `approval` was given for the content `token` identifies.
-/// Approvals from before tokens existed compare the stable patch id.
-pub(super) fn approval_covers(approval: &PatchApproval, patch: &Patch, token: &str) -> bool {
-    match approval.reviewed.as_deref() {
-        Some(reviewed) => reviewed == token,
-        None => {
-            approval.patch_id_stable.is_some() && approval.patch_id_stable == patch.patch_id_stable
-        }
-    }
-}
-
 /// True for an approved or submitted upstream patch whose newest approval
 /// does not cover its current content, for example after a replay onto a
 /// moved upstream. `submit` refuses it until it is approved again.
@@ -40,12 +29,33 @@ pub fn approval_stale(repo: &Path, queue: &QueueState, patch: &Patch) -> bool {
     {
         return false;
     }
-    let Ok(token) = review_token(repo, patch) else {
-        return true;
-    };
-    !patch
-        .last_approval()
-        .is_some_and(|approval| approval_covers(approval, patch, &token))
+    covering_approval(repo, patch).is_none()
+}
+
+/// The status of an approved patch after a conflict resolution or an amend
+/// rewrote it. A rewrite that adds and removes the same lines (see
+/// `changed_lines`) is still covered by the last approval and needs no
+/// other one.
+pub(super) fn status_after_rewrite(repo: &Path, patch: &Patch) -> PatchStatus {
+    match (
+        covering_approval(repo, patch).is_some(),
+        patch.upstream.is_some(),
+    ) {
+        (true, true) => PatchStatus::Submitted,
+        (true, false) => PatchStatus::Approved,
+        (false, true) => PatchStatus::Amended,
+        (false, false) => PatchStatus::Queued,
+    }
+}
+
+/// The event detail for a rewrite that ended in `status`.
+pub(super) fn rewrite_event_detail(status: PatchStatus, how: &str) -> String {
+    match status {
+        PatchStatus::Submitted | PatchStatus::Approved => format!(
+            "{how}; patch refreshed and re-assessed. It adds and removes the same lines, so the last approval still covers it"
+        ),
+        _ => format!("{how}; patch refreshed and re-assessed"),
+    }
 }
 
 /// Ids of the patches [`approval_stale`] is true for, in queue order.
@@ -88,7 +98,7 @@ pub fn approve_patch_reviewed(
                 PatchStatus::Approved | PatchStatus::Submitted => {
                     if patch
                         .last_approval()
-                        .is_some_and(|approval| approval_covers(approval, patch, &token))
+                        .is_some_and(|approval| approval_covers(repo, approval, patch, &token))
                     {
                         return Ok(patch.clone());
                     }
@@ -449,6 +459,44 @@ pub fn store_patch_extras(
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: store assessment extras {id}"))?;
         Ok(patch)
+    })
+}
+
+/// Runs the upstream assessment on the patch file of `id` as it is in the
+/// queue, with the settings in `uplink.toml` as they are today. The result
+/// replaces the one stored when the patch was imported, amended or resolved,
+/// and is what the contribution packet shows. Nothing is applied: whether
+/// the patch still applies on upstream is preflight's question.
+///
+/// Nothing is assessed for an internal-only patch or a patch that is not
+/// waiting for contribution.
+pub fn assess_patch_for_packet(repo: &Path, id: &str) -> Result<Patch> {
+    with_queue_lock(repo, || {
+        let mut queue = read_queue_file(repo)?;
+        let patch = get_patch(&queue, id)?.clone();
+        let waiting = matches!(
+            patch.status,
+            PatchStatus::Queued
+                | PatchStatus::Amended
+                | PatchStatus::Approved
+                | PatchStatus::Submitted
+        );
+        if !queue.is_upstream(id) || !waiting {
+            return Ok(patch);
+        }
+        let report = assess_patch_file(&queue, &patch, &patch_text(repo, id)?);
+        let detail = if report.ok {
+            "Assessed the patch for the contribution packet"
+        } else {
+            "Assessed the patch for the contribution packet; it has findings to fix"
+        };
+        let current = get_patch_mut(&mut queue, id)?;
+        current.assess = Some(report);
+        add_event(current, "assessed", detail);
+        let current = current.clone();
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, &format!("uplink: assess {id} for its packet"))?;
+        Ok(current)
     })
 }
 

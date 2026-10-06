@@ -8,17 +8,17 @@ use git_uplink::{
     DEFAULT_CUTOFF, Error, Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
     Patch, PatchIntent, PatchStatus, PendingMerge, PreflightReport, ProgressMode, PushOpts,
     QueueConfig, QueueState, RebuildOpts, Result, STATE_BRANCH, ScriptVerdict, Settings,
-    SettingsFlags, StepOutcome, SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    SettingsFlags, StepOutcome, SubmitResult, SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
     TransferDirection, accept_upstream, accept_upstream_at, add_patch, amend_patch,
-    amend_patch_with, amend_preflight, approve_patch, approve_patch_reviewed, doctor, drop_patch,
-    extras_dir, format_approval_receipt, format_approver_packet, format_contribution_packet,
-    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
-    git_ok, init, init_repo, load_extra_markdown, mark_merged, parse_depends_on,
-    preflight_incoming_change, push_queue, rebuild, rebuild_with, record_gated_pr,
-    record_pull_request, refresh_from_origin, report_paths, reset_from_origin, resolve_conflict,
-    review_token, status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments,
-    submit_patch, submit_patch_with, summarize_queue, sync, sync_with, transfer_patch,
-    transfer_patch_with, transfer_preflight, write_queue,
+    amend_patch_with, amend_preflight, approve_patch, approve_patch_reviewed,
+    assess_patch_for_packet, doctor, drop_patch, extras_dir, format_approval_receipt,
+    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
+    format_step_line, from_upstream_report_paths, git, git_ok, init, init_repo,
+    load_extra_markdown, mark_merged, parse_depends_on, preflight_incoming_change, push_queue,
+    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
+    reset_from_origin, resolve_conflict, review_token, status_snapshot, store_patch_extras,
+    stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with, summarize_queue,
+    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
 };
 use tempfile::TempDir;
 
@@ -4558,7 +4558,7 @@ fn resolve_refuses_a_resolution_that_fails_the_assessment() {
 }
 
 #[test]
-fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
+fn submitted_conflict_resolve_that_changes_the_patch_requires_delta_approval_and_keeps_the_pr() {
     let world = setup_world();
     let company = &world.company;
     let upstream = &world.upstream;
@@ -4635,10 +4635,11 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         GitOpts::default(),
     )
     .unwrap();
+    // The resolution adds and removes lines the approval did not cover.
     write(
         company,
         "src/tokens.js",
-        &TOKENS.replace("return 3600;", "return 7200;"),
+        &TOKENS.replace("return 3600;", "return 5400;"),
     );
     git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
     resolve_conflict(company, &ttl_patch.id).unwrap();
@@ -4672,6 +4673,15 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     let packet = format_contribution_packet(company, amended).unwrap();
     assert!(packet.contains(&format!("Delta packet — {}", ttl_patch.id)));
     assert!(packet.contains("already IP-approved"));
+    let changed = packet
+        .split("### Changed lines: approved vs current")
+        .nth(1)
+        .expect("changed-lines section");
+    assert!(changed.contains("-+  return 7200;"), "{packet}");
+    assert!(changed.contains("++  return 5400;"), "{packet}");
+    // The patch now removes upstream's new line instead of the old one.
+    assert!(changed.contains("--  return 3600;"), "{packet}");
+    assert!(changed.contains("+-  return 1800;"), "{packet}");
     assert!(packet.contains("Already approved (initial)"));
     assert!(packet.contains("## Upstream commit message"));
     assert!(!packet.contains("### Company main"));
@@ -4715,7 +4725,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
         &["show", &format!("{}:src/tokens.js", resubmitted.branch)],
     )
     .unwrap();
-    assert!(exported.contains("return 7200;"));
+    assert!(exported.contains("return 5400;"));
     assert!(!exported.contains("return 1800;"));
 
     write(
@@ -4743,7 +4753,7 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     write(
         company,
         "src/tokens.js",
-        &TOKENS.replace("return 3600;", "return 7200;"),
+        &TOKENS.replace("return 3600;", "return 6000;"),
     );
     git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
     resolve_conflict(company, &ttl_patch.id).unwrap();
@@ -4758,6 +4768,250 @@ fn submitted_conflict_resolve_requires_delta_approval_and_keeps_the_pr() {
     assert!(packet.contains("Already approved (initial)"));
     assert!(packet.contains("Already approved (delta)"));
     assert!(packet.contains(&amended.approvals[1].sha));
+}
+
+/// A submitted `Extend TTL` patch (3600 to 7200) that the upstream change
+/// `upstream_tokens` of `src/tokens.js` put in conflict. The conflict branch
+/// is checked out.
+fn submitted_ttl_patch_in_conflict(world: &World, upstream_tokens: &str) -> (Patch, SubmitResult) {
+    let company = &world.company;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    commit_contribution_packet(company, &ttl_patch);
+    approve_patch(company, &ttl_patch.id).unwrap();
+    let submitted = submit_patch(company, &ttl_patch.id, true).unwrap();
+    record_pull_request(
+        company,
+        &ttl_patch.id,
+        99,
+        "https://github.com/upstream/tokenkit/pull/99",
+        &submitted.branch,
+        None,
+    )
+    .unwrap();
+
+    write(&world.upstream, "src/tokens.js", upstream_tokens);
+    commit_all(&world.upstream, "change ttl upstream");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let queued = sync_apply(company);
+    let conflicted = queued.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
+    assert_eq!(conflicted.status, PatchStatus::Conflict);
+    let conflict_branch = conflicted.conflict.as_ref().unwrap().branch.clone();
+    git(
+        company,
+        &["checkout", "--quiet", &conflict_branch],
+        GitOpts::default(),
+    )
+    .unwrap();
+    (ttl_patch, submitted)
+}
+
+#[test]
+fn keeping_the_patch_line_over_an_upstream_change_of_it_needs_delta_approval() {
+    let world = setup_world();
+    let company = &world.company;
+    let (ttl_patch, _) =
+        submitted_ttl_patch_in_conflict(&world, &TOKENS.replace("return 3600;", "return 1800;"));
+
+    // The patch adds what was approved, but now removes upstream's new line.
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    resolve_conflict(company, &ttl_patch.id).unwrap();
+
+    let resolved = stored_patch(company, &ttl_patch.id);
+    assert_eq!(resolved.status, PatchStatus::Amended);
+    let packet = format_contribution_packet(company, &resolved).unwrap();
+    assert!(packet.contains("Delta packet"), "{packet}");
+    assert!(packet.contains("--  return 3600;"), "{packet}");
+    assert!(packet.contains("+-  return 1800;"), "{packet}");
+    assert!(
+        !packet.contains("Nothing new leaves the company."),
+        "{packet}"
+    );
+}
+
+#[test]
+fn submitted_conflict_resolve_that_keeps_the_patch_lines_needs_no_new_approval() {
+    let world = setup_world();
+    let company = &world.company;
+    // Upstream changed the line next to the one the patch replaces.
+    let upstream_tokens = TOKENS.replace("function ttl() {", "function ttl(scope) {");
+    let (ttl_patch, _) = submitted_ttl_patch_in_conflict(&world, &upstream_tokens);
+    let approved = review_token(company, &stored_patch(company, &ttl_patch.id)).unwrap();
+
+    // Take upstream's line and keep the patch's: it adds and removes the
+    // lines that were approved, in new surroundings.
+    write(
+        company,
+        "src/tokens.js",
+        &upstream_tokens.replace("return 3600;", "return 7200;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    resolve_conflict(company, &ttl_patch.id).unwrap();
+
+    let resolved = stored_patch(company, &ttl_patch.id);
+    assert_eq!(resolved.status, PatchStatus::Submitted);
+    assert_eq!(resolved.approvals.len(), 1);
+    assert_ne!(resolved.patch_id_stable, ttl_patch.patch_id_stable);
+    assert_eq!(review_token(company, &resolved).unwrap(), approved);
+    assert!(status_snapshot(company).unwrap().stale_approvals.is_empty());
+    let event = resolved.events.last().unwrap();
+    assert!(
+        event.detail.contains("the last approval still covers it"),
+        "{}",
+        event.detail
+    );
+
+    let packet = format_contribution_packet(company, &resolved).unwrap();
+    assert!(packet.contains("# Contribution packet"), "{packet}");
+    assert!(
+        packet.contains("Nothing new leaves the company."),
+        "{packet}"
+    );
+    assert!(!packet.contains("Delta packet"), "{packet}");
+
+    // The Environment approval of the re-export records nothing new.
+    let again =
+        approve_patch_reviewed(company, &ttl_patch.id, None, None, Some(&approved)).unwrap();
+    assert_eq!(again.approvals.len(), 1);
+    let resubmitted = submit_patch(company, &ttl_patch.id, true).unwrap();
+    let exported = git_ok(
+        company,
+        &["show", &format!("{}:src/tokens.js", resubmitted.branch)],
+    )
+    .unwrap();
+    assert!(exported.contains("return 7200;"));
+    assert!(exported.contains("function ttl(scope) {"));
+}
+
+#[test]
+fn report_assesses_the_patch_file_with_the_settings_of_today() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    assert!(hash_patch.assess.as_ref().unwrap().ok);
+    let author = hash_patch.assess.as_ref().unwrap().original_author.clone();
+
+    let same = assess_patch_for_packet(company, &hash_patch.id).unwrap();
+    assert!(same.assess.as_ref().unwrap().ok);
+    assert_eq!(same.assess.as_ref().unwrap().original_author, author);
+    assert_eq!(same.events.last().unwrap().kind, "assessed");
+    assert_eq!(
+        review_token(company, &same).unwrap(),
+        review_token(company, &hash_patch).unwrap()
+    );
+
+    // A patch whose dependency is not merged upstream does not apply on
+    // upstream alone. Assess reads the patch file, so it is assessed too.
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "tokens use sha256\n");
+    commit_all(company, "notes");
+    let notes = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add notes".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![hash_patch.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    // A keyword added after import is applied to the queued patches.
+    set_settings(company, |s| s.redact_keywords = vec!["sha256".into()]);
+    let found = assess_patch_for_packet(company, &hash_patch.id).unwrap();
+    assert!(!found.assess.as_ref().unwrap().ok);
+    let dependent = assess_patch_for_packet(company, &notes.id).unwrap();
+    assert!(!dependent.assess.as_ref().unwrap().ok);
+    let err = approve_patch(company, &hash_patch.id).unwrap_err();
+    assert!(
+        err.to_string().contains("not ready for contribution"),
+        "{err}"
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["report", &hash_patch.id])
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    let packet = String::from_utf8_lossy(&output.stdout);
+    assert!(packet.contains("# Contribution packet"), "{packet}");
+    assert!(packet.contains("## Upstream Assessment: ❌"), "{packet}");
+}
+
+#[test]
+fn report_refuses_extras_made_for_other_content() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let extras = temp_dir();
+    write(extras.path(), "10-company.md", "## Company\n");
+    let report = |state: &str| {
+        Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(["report", &hash_patch.id, "--extra-dir"])
+            .arg(extras.path())
+            .args(["--store-extras", "--extra-state", state])
+            .current_dir(company)
+            .output()
+            .unwrap()
+    };
+
+    // The hook read the patch at this commit; then the patch changed.
+    let read_at = git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let patch_file = format!(".uplink/patches/{}.patch", hash_patch.id);
+    let text = fs::read_to_string(company.join(&patch_file)).unwrap();
+    write(
+        company,
+        &patch_file,
+        &text.replace("return sha256(value);", "return sha256(value); // v2"),
+    );
+    git_uplink::commit_queue(company, "uplink: change the patch").unwrap();
+
+    let stale = report(&read_at);
+    assert!(!stale.status.success(), "{stale:?}");
+    let message = String::from_utf8_lossy(&stale.stderr);
+    assert!(
+        message.contains("changed while the assessment hook ran"),
+        "{message}"
+    );
+    assert!(stored_patch(company, &hash_patch.id).extras.is_none());
+
+    let current = report(&git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap());
+    assert!(current.status.success(), "{current:?}");
+    assert!(stored_extras_fresh(&stored_patch(company, &hash_patch.id)));
 }
 
 #[test]
@@ -7024,24 +7278,26 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
         &TOKENS.replace("return sha1(value);", "return sha256(value);"),
     );
     commit_all(company, "use sha256");
-    let extras = temp_dir();
-    write(
-        extras.path(),
-        "10-company.md",
-        "## Company\n\nFrom the PR.\n",
-    );
-    let run = "https://github.example/acme/product/actions/runs/7";
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
-            extra_dir: Some(extras.path().to_path_buf()),
-            extra_source: Some(run.into()),
             ..Default::default()
         },
     )
     .unwrap();
+    // Import stores nothing: the hook has not seen the patch yet.
+    assert!(patch.extras.is_none());
+    assert!(!stored_extras_fresh(&patch));
+    let extras = temp_dir();
+    write(
+        extras.path(),
+        "10-company.md",
+        "## Company\n\nFrom submit.\n",
+    );
+    let run = "https://github.example/acme/product/actions/runs/7";
+    let patch = store_patch_extras(company, &patch.id, extras.path(), Some(run.into())).unwrap();
 
     let stored = patch.extras.as_ref().expect("extras recorded");
     assert_eq!(stored.source.as_deref(), Some(run));
@@ -7056,7 +7312,7 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
         &["show", &format!("{STATE_BRANCH}:{dir}/10-company.md")],
     )
     .unwrap();
-    assert!(tracked.contains("From the PR."));
+    assert!(tracked.contains("From submit."));
 
     let packet = format_contribution_packet(company, &patch).unwrap();
     assert!(packet.starts_with("## Company"), "{packet}");
@@ -7078,25 +7334,7 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
     assert!(!company.join(&dir).join("10-company.md").exists());
     let packet = format_contribution_packet(company, &refreshed).unwrap();
     assert!(packet.starts_with("## Rerun"), "{packet}");
-    assert!(!packet.contains("From the PR."));
-}
-
-#[test]
-fn add_rejects_extras_for_internal_only_patches() {
-    let world = setup_world();
-    let company = &world.company;
-    let extras = temp_dir();
-    let err = add_patch(
-        company,
-        AddPatchOpts {
-            title: "Internal".into(),
-            internal_only: true,
-            extra_dir: Some(extras.path().to_path_buf()),
-            ..Default::default()
-        },
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("--extra-dir"), "{err}");
+    assert!(!packet.contains("From submit."));
 }
 
 #[test]

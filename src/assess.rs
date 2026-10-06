@@ -12,7 +12,7 @@ use crate::queue::now_iso;
 use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
 use crate::types::{
     AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, MergeVia, PATCH_DIR, Patch,
-    PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
+    PatchApproval, PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
 };
 
 static HTML_COMMENT: LazyLock<Regex> =
@@ -229,21 +229,135 @@ pub fn company_commit_message(patch: &Patch) -> String {
     with_trailers(&stored_commit_message(patch), patch)
 }
 
-/// Identifies what leaves the company for `patch`: its content, the public
-/// PR title, and the public commit message. An approval records the token it
-/// was given for, and `submit` exports only content with that approval.
-pub fn review_token(repo: &Path, patch: &Patch) -> Result<String> {
-    let Some(stable) = patch.patch_id_stable.as_deref() else {
-        return Err(Error::msg(format!(
-            "{} has no stable patch id; rebuild before asking for approval",
-            patch.id
-        )));
+/// What `patch` (format-patch text) changes, file by file: each file's
+/// `diff --git` line, what happens to the file as a whole (created, deleted,
+/// renamed, mode, the new blob of a binary file), and the lines it adds and
+/// removes. The unchanged lines around them and their position are left
+/// out, so the text stays the same when the patch is replayed onto a moved
+/// upstream, or a conflict is resolved without changing what the patch adds
+/// and removes.
+pub fn changed_lines(patch: &str) -> String {
+    const FILE_CHANGES: [&str; 5] = [
+        "new file mode ",
+        "deleted file mode ",
+        "new mode ",
+        "rename to ",
+        "copy to ",
+    ];
+    enum At {
+        Message,
+        Header,
+        Hunk { old: usize, new: usize },
+        Binary,
+    }
+    let mut out = String::new();
+    let mut at = At::Message;
+    let mut new_blob = String::new();
+    // Whether the last hunk line was a changed one, for `\ No newline`.
+    let mut changed = false;
+    for line in patch.lines() {
+        // Hunk lines start with ' ', '-', '+' or '\', so this is never content.
+        if line.starts_with("diff --git ") {
+            out.push_str(line);
+            out.push('\n');
+            at = At::Header;
+            new_blob.clear();
+            continue;
+        }
+        if let At::Hunk { old, new } = &mut at {
+            match line.as_bytes().first() {
+                Some(b'+') if *new > 0 => {
+                    *new -= 1;
+                    changed = true;
+                    out.push_str(line);
+                    out.push('\n');
+                    continue;
+                }
+                Some(b'-') if *old > 0 => {
+                    *old -= 1;
+                    changed = true;
+                    out.push_str(line);
+                    out.push('\n');
+                    continue;
+                }
+                Some(b' ') | None if *old > 0 && *new > 0 => {
+                    *old -= 1;
+                    *new -= 1;
+                    changed = false;
+                    continue;
+                }
+                Some(b'\\') => {
+                    if changed {
+                        out.push_str(line);
+                        out.push('\n');
+                    }
+                    continue;
+                }
+                _ => at = At::Header,
+            }
+        }
+        match at {
+            At::Message | At::Binary | At::Hunk { .. } => {}
+            At::Header => {
+                if let Some(counts) = hunk_counts(line) {
+                    at = At::Hunk {
+                        old: counts.0,
+                        new: counts.1,
+                    };
+                    changed = false;
+                } else if let Some(index) = line.strip_prefix("index ") {
+                    let ids = index.split(' ').next().unwrap_or_default();
+                    new_blob = ids.split("..").nth(1).unwrap_or_default().to_string();
+                } else if line == "GIT binary patch" || line.starts_with("Binary files ") {
+                    out.push_str(&format!("binary {new_blob}\n"));
+                    at = At::Binary;
+                } else if FILE_CHANGES.iter().any(|change| line.starts_with(change)) {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Line counts of a `@@ -start,old +start,new @@` hunk header.
+fn hunk_counts(line: &str) -> Option<(usize, usize)> {
+    let mut parts = line.strip_prefix("@@ -")?.split(' ');
+    let count = |range: &str| match range.split_once(',') {
+        Some((_, count)) => count.parse().ok(),
+        None => Some(1),
     };
-    let content = format!(
-        "{stable}\n{}\n{}",
-        patch.title.trim(),
-        export_commit_message(patch)
-    );
+    let old = count(parts.next()?)?;
+    let new = count(parts.next()?.strip_prefix('+')?)?;
+    Some((old, new))
+}
+
+/// The patch file of `id`: the checked-out copy, or the one on `uplink/state`.
+pub fn patch_text(repo: &Path, id: &str) -> Result<String> {
+    let path = format!("{PATCH_DIR}/{id}.patch");
+    match fs::read_to_string(repo.join(&path)) {
+        Ok(text) => Ok(text),
+        Err(_) => show_at(repo, STATE_BRANCH, &path),
+    }
+}
+
+/// True when the patch file of `id` is byte for byte what it was at
+/// `state`, a commit of `uplink/state`. Compares blob ids.
+pub fn patch_same_as_at(repo: &Path, id: &str, state: &str) -> Result<bool> {
+    let path = format!("{PATCH_DIR}/{id}.patch");
+    let then = git_ok(repo, &["rev-parse", &format!("{state}:{path}")])?;
+    let file = repo.join(&path);
+    let now = if file.is_file() {
+        let file = file.to_string_lossy();
+        git_ok(repo, &["hash-object", "--no-filters", "--", &file])?
+    } else {
+        git_ok(repo, &["rev-parse", &format!("{STATE_BRANCH}:{path}")])?
+    };
+    Ok(then == now)
+}
+
+fn hash_text(repo: &Path, content: &str) -> Result<String> {
     Ok(git(
         repo,
         &["hash-object", "--stdin"],
@@ -253,6 +367,59 @@ pub fn review_token(repo: &Path, patch: &Patch) -> Result<String> {
         },
     )?
     .stdout)
+}
+
+/// Identifies what leaves the company for `patch`: the lines it adds and
+/// removes ([`changed_lines`]), the public PR title, and the public commit
+/// message.
+/// An approval records the token it was given for, and `submit` exports only
+/// content with that approval.
+pub fn review_token(repo: &Path, patch: &Patch) -> Result<String> {
+    let changes = changed_lines(&patch_text(repo, &patch.id)?);
+    hash_text(
+        repo,
+        &format!(
+            "{changes}\n{}\n{}",
+            patch.title.trim(),
+            export_commit_message(patch)
+        ),
+    )
+}
+
+/// The review token as it was before it was made from [`changed_lines`]:
+/// the stable patch id in its place. Approvals recorded with it still count.
+fn stable_review_token(repo: &Path, patch: &Patch) -> Option<String> {
+    let stable = patch.patch_id_stable.as_deref()?;
+    hash_text(
+        repo,
+        &format!(
+            "{stable}\n{}\n{}",
+            patch.title.trim(),
+            export_commit_message(patch)
+        ),
+    )
+    .ok()
+}
+
+/// True when `approval` was given for the content `token` identifies.
+/// Approvals from before tokens existed compare the stable patch id.
+pub fn approval_covers(repo: &Path, approval: &PatchApproval, patch: &Patch, token: &str) -> bool {
+    match approval.reviewed.as_deref() {
+        Some(reviewed) => {
+            reviewed == token || stable_review_token(repo, patch).as_deref() == Some(reviewed)
+        }
+        None => {
+            approval.patch_id_stable.is_some() && approval.patch_id_stable == patch.patch_id_stable
+        }
+    }
+}
+
+/// The newest approval of `patch`, when it covers the patch as it is now.
+pub fn covering_approval<'a>(repo: &Path, patch: &'a Patch) -> Option<&'a PatchApproval> {
+    let token = review_token(repo, patch).ok()?;
+    patch
+        .last_approval()
+        .filter(|approval| approval_covers(repo, approval, patch, &token))
 }
 
 /// Where `report` writes the review token of the packet it produced.
@@ -375,7 +542,7 @@ fn packet_assessment(patch: &Patch) -> String {
 }
 
 pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
-    approver_packet(patch, None)
+    approver_packet(patch, None, None)
 }
 
 /// `| Review token | … |`, or nothing when the patch has none yet.
@@ -385,7 +552,19 @@ fn review_token_row(token: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
+/// Leads the packet of a patch its last approval still covers.
+fn reexport_note(approval: Option<&PatchApproval>) -> String {
+    approval
+        .map(|approval| {
+            format!(
+                "> **Nothing new leaves the company.** Approval {} ({}) covers this patch as it is now: it adds and removes the same lines under the same title and commit message. Approving the Environment only exports it again onto the current upstream.\n\n",
+                approval.version, approval.at
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn approver_packet(patch: &Patch, token: Option<&str>, covered: Option<&PatchApproval>) -> String {
     let assessment = packet_assessment(patch);
     let pr = patch
         .source
@@ -405,6 +584,7 @@ fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
     };
     format!(
         "# Contribution packet — {id}\n\n\
+{reexport}\
 | Field | Value |\n\
 | --- | --- |\n\
 | Patch | `{id}` |\n\
@@ -421,6 +601,7 @@ fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
 3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment. The approval is for the review token above: if the patch changed since this packet, approve stops and nothing is exported.\n\
 4. The workflow opens the public pull request with `POST /repos/{{parent}}/pulls` (`head` is the branch, `head_repo` is `<contrib_owner>/<contrib_repo>`, `maintainer_can_modify` false) and runs `git uplink submitted`. No public PR is opened unless export preflight still passes.\n",
         token = review_token_row(token),
+        reexport = reexport_note(covered),
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = plain_cell(&patch.title),
@@ -440,7 +621,11 @@ pub fn format_contribution_packet_with_extras(
     let packet = if patch.status == PatchStatus::Amended {
         format_delta_approver_packet(repo, patch)?
     } else {
-        approver_packet(patch, review_token(repo, patch).ok().as_deref())
+        approver_packet(
+            patch,
+            review_token(repo, patch).ok().as_deref(),
+            covering_approval(repo, patch),
+        )
     };
     if extra_dir.is_none() && stored_extras_fresh(patch) {
         let stored = repo.join(extras_dir(&patch.id)?);
@@ -621,11 +806,35 @@ fn format_delta_since(repo: &Path, patch: &Patch, sha: &str) -> Result<String> {
     };
     let new_patch = fs::read_to_string(repo.join(&new_path))
         .unwrap_or_else(|_| show_at(repo, STATE_BRANCH, &new_path).unwrap_or_default());
+    let added = delta_added_section(repo, &old_patch, &new_patch);
     if let Some(tree) = tree_diff_patches(repo, &old_patch, &new_patch) {
-        return Ok(delta_tree_section(&tree));
+        return Ok(format!("{added}\n{}", delta_tree_section(&tree)));
     }
     let file_diff = patch_file_diff(repo, &old_patch, &new_patch);
-    Ok(delta_files_section(&file_diff, &new_patch))
+    Ok(format!(
+        "{added}\n{}",
+        delta_files_section(&file_diff, &new_patch)
+    ))
+}
+
+/// What the current patch changes compared with the approved one. Unlike the
+/// tree diff this needs no common base, so it also reads well after a
+/// conflict, when the approved patch no longer applies.
+fn delta_added_section(repo: &Path, old_patch: &str, new_patch: &str) -> String {
+    let diff = text_diff(
+        repo,
+        ("approved.txt", &changed_lines(old_patch)),
+        ("current.txt", &changed_lines(new_patch)),
+    );
+    format!(
+        "### Changed lines: approved vs current\n\n\
+The lines the patch adds and removes, file by file, compared with what was last approved. The unchanged lines around them are not listed.\n\n\
+{}\n",
+        format_fenced(
+            diff.as_deref()
+                .unwrap_or("(the patch adds and removes the same lines as approved)")
+        )
+    )
 }
 
 fn delta_tree_section(tree: &str) -> String {
@@ -649,28 +858,35 @@ fn delta_files_section(file_diff: &str, new_patch: &str) -> String {
 }
 
 fn patch_file_diff(repo: &Path, old_patch: &str, new_patch: &str) -> String {
-    let dir = env::temp_dir().join(format!("uplink-delta-files-{}", uuid::Uuid::new_v4()));
-    let _ = fs::create_dir_all(&dir);
-    let old_file = dir.join("approved.patch");
-    let new_file = dir.join("current.patch");
-    let _ = fs::write(&old_file, old_patch);
-    let _ = fs::write(&new_file, new_patch);
+    text_diff(
+        repo,
+        ("approved.patch", old_patch),
+        ("current.patch", new_patch),
+    )
+    .unwrap_or_else(|| "(no textual difference in patch files)".into())
+}
+
+/// `git diff --no-index` of two named texts, or None when they do not differ.
+fn text_diff(repo: &Path, old: (&str, &str), new: (&str, &str)) -> Option<String> {
+    let dir = RemoveOnDrop(env::temp_dir().join(format!("uplink-delta-{}", uuid::Uuid::new_v4())));
+    fs::create_dir_all(&dir.0).ok()?;
+    let old_file = dir.0.join(old.0);
+    let new_file = dir.0.join(new.0);
+    fs::write(&old_file, old.1).ok()?;
+    fs::write(&new_file, new.1).ok()?;
     let result = git(
         repo,
         &[
             "diff",
             "--no-index",
             "--",
-            old_file.to_str().unwrap_or(""),
-            new_file.to_str().unwrap_or(""),
+            old_file.to_str()?,
+            new_file.to_str()?,
         ],
         GitOpts::allow_fail(),
-    );
-    let _ = fs::remove_dir_all(&dir);
-    match result {
-        Ok(out) if !out.stdout.trim().is_empty() => out.stdout,
-        _ => "(no textual difference in patch files)".into(),
-    }
+    )
+    .ok()?;
+    Some(result.stdout).filter(|diff| !diff.trim().is_empty())
 }
 
 fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<String> {
@@ -950,6 +1166,100 @@ pub fn assess_from_message(
     let shas = ensure_revs(repo, &[from_ref, head_ref])?;
     let from_ref = shas[0].as_str();
     let head_ref = shas[1].as_str();
+    let export = if intent.is_internal_only() {
+        None
+    } else {
+        Some(ExportDiff {
+            diff: git_ok(
+                repo,
+                &[
+                    "diff",
+                    "--full-index",
+                    from_ref,
+                    head_ref,
+                    "--",
+                    ".",
+                    ":!.uplink",
+                ],
+            )?,
+            binaries: binary_files(repo, from_ref, head_ref)?,
+        })
+    };
+    Ok(assess_export(
+        queue,
+        message,
+        title,
+        head_author(repo, head_ref)?,
+        export,
+    ))
+}
+
+/// Assesses an upstream-bound `patch` from its patch file `patch_text` as it
+/// is in the queue. Nothing is applied or built, so it needs no
+/// `uplink/upstream` and says nothing about whether the patch still applies
+/// (preflight does). Message, title and author are the ones stored with the
+/// patch; the settings are today's.
+pub fn assess_patch_file(queue: &QueueState, patch: &Patch, patch_text: &str) -> AssessReport {
+    let author = patch
+        .assess
+        .as_ref()
+        .map(|stored| {
+            (
+                stored.original_author.clone(),
+                stored.original_email.clone(),
+            )
+        })
+        .unwrap_or_default();
+    assess_export(
+        queue,
+        &stored_commit_message(patch),
+        Some(&patch.title),
+        author,
+        Some(export_diff(patch_text)),
+    )
+}
+
+/// The diff that would leave the company, and the binary files in it.
+struct ExportDiff {
+    diff: String,
+    binaries: Vec<String>,
+}
+
+/// The diffs of format-patch text. The mail header and the company commit
+/// message above them are not exported and are left out, and so is the
+/// encoded content of binary files, which the keyword scan cannot read.
+fn export_diff(patch_text: &str) -> ExportDiff {
+    let mut diff = String::new();
+    let mut binaries = Vec::new();
+    let mut path = "";
+    let mut in_diffs = false;
+    let mut in_binary = false;
+    for line in patch_text.lines() {
+        if let Some(paths) = line.strip_prefix("diff --git ") {
+            path = paths.rsplit_once(" b/").map_or(paths, |(_, new)| new);
+            in_diffs = true;
+            in_binary = false;
+        } else if !in_diffs || in_binary {
+            continue;
+        } else if line == "GIT binary patch" || line.starts_with("Binary files ") {
+            binaries.push(path.to_string());
+            in_binary = true;
+        }
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    ExportDiff { diff, binaries }
+}
+
+/// The checks of an assessment. `export` is None for an internal-only
+/// change, which is not exported and not scanned.
+fn assess_export(
+    queue: &QueueState,
+    message: &str,
+    title: Option<&str>,
+    (original_author, original_email): (Option<String>, Option<String>),
+    export: Option<ExportDiff>,
+) -> AssessReport {
     let marker = cutoff_marker(queue);
     let fallback = title.unwrap_or("Contribution");
     let mut stored = strip_html_comments(message);
@@ -960,7 +1270,6 @@ pub fn assess_from_message(
     let public_text = strip_depends_on(&public_text);
     let (subject, body) = subject_and_body(&public_text, fallback);
     let co_author = resolve_co_author(&internal_text);
-    let (original_author, original_email) = head_author(repo, head_ref)?;
 
     let mut checks = message_checks(
         &marker,
@@ -969,40 +1278,30 @@ pub fn assess_from_message(
         co_author.as_ref(),
         (original_author.as_deref(), original_email.as_deref()),
     );
-    if intent.is_internal_only() {
-        checks.push(AssessCheck {
+    match export {
+        None => checks.push(AssessCheck {
             id: "affiliation-leak".into(),
             status: CheckStatus::Skip,
             detail: "internal-only patches are not exported; keyword scan skipped.".into(),
-        });
-    } else {
-        let diff = git_ok(
-            repo,
-            &[
-                "diff",
-                "--full-index",
-                from_ref,
-                head_ref,
-                "--",
-                ".",
-                ":!.uplink",
-            ],
-        )?;
-        // The co-author trailer lands in the public commit, so it is scanned too.
-        let trailer = co_author
-            .as_ref()
-            .map(|(name, email)| format!("{name} <{email}>\n"))
-            .unwrap_or_default();
-        // The title is the public PR title; it can differ from the subject.
-        let title = title.unwrap_or_default();
-        let export_surface = format!("{trailer}{title}\n{subject}\n{body}\n{diff}");
-        checks.push(affiliation_check(queue, &export_surface));
-        checks.extend(binary_files_check(repo, from_ref, head_ref)?);
+        }),
+        Some(export) => {
+            // The co-author trailer lands in the public commit, so it is scanned too.
+            let trailer = co_author
+                .as_ref()
+                .map(|(name, email)| format!("{name} <{email}>\n"))
+                .unwrap_or_default();
+            // The title is the public PR title; it can differ from the subject.
+            let title = title.unwrap_or_default();
+            let diff = &export.diff;
+            let export_surface = format!("{trailer}{title}\n{subject}\n{body}\n{diff}");
+            checks.push(affiliation_check(queue, &export_surface));
+            checks.extend(binary_files_check(&export.binaries));
+        }
     }
 
     let ok = checks.iter().all(|c| c.status != CheckStatus::Fail);
     let cutoff_found = !internal_text.is_empty() || stored.contains(&marker);
-    Ok(AssessReport {
+    AssessReport {
         at: now_iso(),
         ok,
         commit_message: stored,
@@ -1013,7 +1312,7 @@ pub fn assess_from_message(
         original_email,
         cutoff_found,
         checks,
-    })
+    }
 }
 
 /// Author name and email of `head_ref`, when git has them.
@@ -1136,19 +1435,18 @@ fn affiliation_check(queue: &QueueState, export_surface: &str) -> AssessCheck {
 }
 
 /// Warns when the export has binary files, which the keyword scan cannot read.
-fn binary_files_check(repo: &Path, from_ref: &str, head_ref: &str) -> Result<Option<AssessCheck>> {
-    let binaries = binary_files(repo, from_ref, head_ref)?;
+fn binary_files_check(binaries: &[String]) -> Option<AssessCheck> {
     if binaries.is_empty() {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(AssessCheck {
+    Some(AssessCheck {
         id: "binary-files".into(),
         status: CheckStatus::Warn,
         detail: format!(
             "Export contains binary files that the keyword scan cannot read: {}. Check them by hand for company names and internal data.",
             binaries.join(", ")
         ),
-    }))
+    })
 }
 
 /// Paths `git diff --numstat` reports as binary (`-\t-\t<path>`) in the export.
@@ -1216,6 +1514,111 @@ mod tests {
             status,
             detail: detail.into(),
         }
+    }
+
+    const TTL_PATCH: &str = "From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001
+From: Asha <asha@example.com>
+Subject: [PATCH] Extend TTL
+
+diff --git a/README.md b/README.md is quoted in the message
+---
+ src/tokens.js | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/tokens.js b/src/tokens.js
+index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222 100644
+--- a/src/tokens.js
++++ b/src/tokens.js
+@@ -1,3 +1,3 @@
+ function ttl() {
+-  return 3600;
++  return 7200;
+ }
+diff --git a/logo.png b/logo.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..3333333333333333333333333333333333333333
+GIT binary patch
+literal 4
+Lc${NkU|;|M00aO5
+
+literal 0
+HcmV?d00001
+
+--
+2.50.0
+";
+
+    #[test]
+    fn changed_lines_is_what_the_patch_adds_and_removes() {
+        assert_eq!(
+            changed_lines(TTL_PATCH),
+            "diff --git a/README.md b/README.md is quoted in the message\n\
+diff --git a/src/tokens.js b/src/tokens.js\n\
+-  return 3600;\n\
++  return 7200;\n\
+diff --git a/logo.png b/logo.png\n\
+new file mode 100644\n\
+binary 3333333333333333333333333333333333333333\n"
+        );
+    }
+
+    #[test]
+    fn changed_lines_ignores_context_and_position() {
+        // Replayed after upstream changed the lines around the patch's own.
+        let replayed = TTL_PATCH
+            .replace(" function ttl() {", " function defaultTtl() {")
+            .replace("@@ -1,3 +1,3 @@", "@@ -40,3 +41,3 @@ header")
+            .replace("index 1111111111111111111111111111111111111111..2222222222222222222222222222222222222222", "index 4444444444444444444444444444444444444444..5555555555555555555555555555555555555555");
+        assert_ne!(replayed, TTL_PATCH);
+        assert_eq!(changed_lines(&replayed), changed_lines(TTL_PATCH));
+    }
+
+    #[test]
+    fn changed_lines_changes_with_what_the_patch_adds_or_removes() {
+        let base = changed_lines(TTL_PATCH);
+        let changes = [
+            ("+  return 7200;", "+  return 7200; // AcmeCorp SLA"),
+            // Kept its own line over an upstream change of the same line.
+            ("-  return 3600;", "-  return 1800;"),
+            (
+                "+  return 7200;",
+                "+  return 7200;\n\\ No newline at end of file",
+            ),
+            ("b/src/tokens.js", "b/src/token.js"),
+            (
+                "..3333333333333333333333333333333333333333",
+                "..6666666666666666666666666666666666666666",
+            ),
+            ("new file mode 100644", "new file mode 100755"),
+        ];
+        for (from, to) in changes {
+            let changed = TTL_PATCH.replace(from, to);
+            assert_ne!(changed, TTL_PATCH, "{from}");
+            assert_ne!(changed_lines(&changed), base, "{from}");
+        }
+        // A second added line in the same hunk.
+        let more = TTL_PATCH
+            .replace("@@ -1,3 +1,3 @@", "@@ -1,3 +1,4 @@")
+            .replace("+  return 7200;", "+  return 7200;\n+  // extra");
+        assert!(changed_lines(&more).contains("+  // extra\n"));
+    }
+
+    #[test]
+    fn export_diff_is_the_diffs_without_the_mail_and_binary_content() {
+        let patch = TTL_PATCH.replace(
+            "Subject: [PATCH] Extend TTL\n",
+            "Subject: [PATCH] Extend TTL\n\nPublic reason.\n\nTicket: PROJ-1 for AcmeCorp\n",
+        );
+        let export = export_diff(&patch);
+        // The company message and the author's address are not exported.
+        assert!(!export.diff.contains("AcmeCorp"), "{}", export.diff);
+        assert!(!export.diff.contains("asha@example.com"), "{}", export.diff);
+        assert!(export.diff.contains("-  return 3600;\n+  return 7200;\n"));
+        assert!(export.diff.contains(" function ttl() {\n"));
+        // A binary file is named, and its encoded content is not scanned.
+        assert_eq!(export.binaries, ["logo.png"]);
+        assert!(export.diff.contains("GIT binary patch\n"));
+        assert!(!export.diff.contains("Lc${NkU|;|M00aO5"), "{}", export.diff);
     }
 
     #[test]

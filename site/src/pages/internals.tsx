@@ -178,7 +178,7 @@ sequenceDiagram
   participant Fork as contribution fork
   participant Up as upstream
   Op->>Packet: dispatch Uplink submit (id)
-  Packet->>Packet: git uplink report (extras stored at import, else run the hook)
+  Packet->>Packet: run the hook with the patch id, then git uplink report (assess the export)
   Packet->>Submit: needs
   Op->>Pre: same dispatch
   Pre->>Pre: git uplink preflight id --json (preflight.sh, read-only token)
@@ -227,7 +227,7 @@ sequenceDiagram
   Base->>Resolve: pull_request closed (merged)
   Resolve->>Resolve: git uplink resolve id (same id, rebuild)
   opt already submitted
-    Resolve->>Resolve: status amended, dispatch submit for a delta
+    Resolve->>Resolve: dispatch submit (amended and a delta only if added or removed lines changed)
   end
 `;
 
