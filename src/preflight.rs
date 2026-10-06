@@ -376,6 +376,10 @@ fn apply_deps(
 ) -> Result<ApplyOutcome> {
     for id in dep_ids {
         let dep = get_patch(queue, id)?;
+        // Already in upstream, possibly in another form than its patch file.
+        if dep.status == PatchStatus::Merged {
+            continue;
+        }
         let result = apply_abs(
             dir,
             &dep_patch_abs(repo, id)?,

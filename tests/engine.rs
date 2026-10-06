@@ -7326,6 +7326,38 @@ fn add_cli_prints_what_became_ready_to_submit() {
 }
 
 #[test]
+fn a_merged_dependency_is_not_applied_again_for_the_export() {
+    let (world, first, second, _, _) = world_with_stacked_patches();
+    let company = &world.company;
+    // Upstream took the hash patch in another form: its patch file no longer
+    // applies onto uplink/upstream.
+    mark_merged(company, &first.id, MergeVia::Manual, None).unwrap();
+    write(
+        &world.upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha512(value);"),
+    );
+    commit_all(&world.upstream, "use sha512");
+    let mut synced = sync(company).unwrap();
+    if synced.needs_approval {
+        synced = accept_upstream(company).unwrap();
+    }
+    assert!(
+        synced
+            .queue
+            .all_patches()
+            .all(|p| p.status != PatchStatus::Conflict),
+        "{:?}",
+        synced.queue
+    );
+
+    approve_patch(company, &second.id).unwrap();
+    let submitted = submit_patch(company, &second.id, true).unwrap();
+    let parent = git_ok(company, &["rev-parse", &format!("{}^", submitted.branch)]).unwrap();
+    assert_eq!(parent.trim(), rev_of(company, "uplink/upstream"));
+}
+
+#[test]
 fn submit_pushes_to_contrib_only_with_push() {
     let world = setup_world();
     let company = &world.company;
