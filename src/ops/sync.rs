@@ -85,7 +85,7 @@ pub(super) struct IncomingCommit {
 }
 
 /// The pending range, split into what our patches explain and what is left.
-pub(super) struct Accounting {
+pub(super) struct Reconciliation {
     pending_sha: String,
     from_sha: Option<String>,
     merges: Vec<PendingMerge>,
@@ -100,7 +100,7 @@ pub(super) struct Residual {
     diff: String,
 }
 
-impl Accounting {
+impl Reconciliation {
     fn claims(&self) -> Vec<IncomingClaim> {
         self.commits
             .iter()
@@ -196,14 +196,14 @@ fn has_trailer(repo: &Path, queue: &QueueState, sha: &str, id: &str) -> bool {
 /// when `opts` reports its public PR merged at a commit in the range. The
 /// merged patches are then applied on `from_sha`; whatever still differs
 /// from `pending_sha` is the residual a reviewer has to approve.
-pub(super) fn account_incoming(
+pub(super) fn reconcile_incoming(
     repo: &Path,
     queue: &QueueState,
     from_sha: Option<&str>,
     pending_sha: &str,
     opts: &SyncOpts,
-) -> Result<Accounting> {
-    let mut accounting = Accounting {
+) -> Result<Reconciliation> {
+    let mut reconciliation = Reconciliation {
         pending_sha: pending_sha.to_string(),
         from_sha: from_sha.map(str::to_string),
         merges: Vec::new(),
@@ -211,7 +211,7 @@ pub(super) fn account_incoming(
         residual: None,
     };
     let Some(from) = from_sha else {
-        return Ok(accounting);
+        return Ok(reconciliation);
     };
     let list = git_ok(
         repo,
@@ -220,9 +220,9 @@ pub(super) fn account_incoming(
     for sha in list.lines().filter(|s| !s.is_empty()) {
         let class = classify_commit(repo, queue, sha)?;
         if let CommitClass::Ours(id) = &class
-            && !accounting.merges.iter().any(|merge| &merge.id == id)
+            && !reconciliation.merges.iter().any(|merge| &merge.id == id)
         {
-            accounting.merges.push(PendingMerge {
+            reconciliation.merges.push(PendingMerge {
                 id: id.clone(),
                 sha: sha.to_string(),
                 via: if has_trailer(repo, queue, sha, id) {
@@ -233,24 +233,24 @@ pub(super) fn account_incoming(
                 modified: false,
             });
         }
-        accounting.commits.push(IncomingCommit {
+        reconciliation.commits.push(IncomingCommit {
             sha: sha.to_string(),
             class,
         });
     }
     for (id, sha) in &opts.merged_prs {
-        add_merged_pr(repo, queue, &mut accounting, id, sha)?;
+        add_merged_pr(repo, queue, &mut reconciliation, id, sha)?;
     }
     // A claim is moot once the patch is proven merged some other way.
-    for commit in &mut accounting.commits {
+    for commit in &mut reconciliation.commits {
         if let CommitClass::Claims(id) = &commit.class
-            && accounting.merges.iter().any(|merge| &merge.id == id)
+            && reconciliation.merges.iter().any(|merge| &merge.id == id)
         {
             commit.class = CommitClass::Foreign;
         }
     }
-    accounting.residual = residual(repo, queue, from, pending_sha, &accounting.merges)?;
-    Ok(accounting)
+    reconciliation.residual = residual(repo, queue, from, pending_sha, &reconciliation.merges)?;
+    Ok(reconciliation)
 }
 
 /// Records a public PR the forge reports as merged at `sha`. Evidence that
@@ -259,7 +259,7 @@ pub(super) fn account_incoming(
 fn add_merged_pr(
     repo: &Path,
     queue: &QueueState,
-    accounting: &mut Accounting,
+    reconciliation: &mut Reconciliation,
     id: &str,
     sha: &str,
 ) -> Result<()> {
@@ -276,7 +276,7 @@ fn add_merged_pr(
         skip("the patch has no recorded public PR");
         return Ok(());
     }
-    if accounting.merges.iter().any(|merge| merge.id == id) {
+    if reconciliation.merges.iter().any(|merge| merge.id == id) {
         return Ok(());
     }
     let resolved = git(
@@ -290,7 +290,7 @@ fn add_merged_pr(
         ],
         GitOpts::allow_fail(),
     )?;
-    let Some(commit) = accounting
+    let Some(commit) = reconciliation
         .commits
         .iter_mut()
         .find(|commit| resolved.code == 0 && commit.sha == resolved.stdout)
@@ -300,7 +300,7 @@ fn add_merged_pr(
     };
     let contained = patch_already_applied_on(repo, &commit.sha, &repo.join(patch_path(id)?))?;
     commit.class = CommitClass::Ours(id.to_string());
-    accounting.merges.push(PendingMerge {
+    reconciliation.merges.push(PendingMerge {
         id: id.to_string(),
         sha: commit.sha.clone(),
         via: MergeVia::Pr,
@@ -345,7 +345,7 @@ fn residual(
 pub(super) fn write_incoming_packet(
     repo: &Path,
     queue: &QueueState,
-    accounting: &Accounting,
+    reconciliation: &Reconciliation,
 ) -> Result<String> {
     let title = |id: &str| {
         queue
@@ -354,7 +354,7 @@ pub(super) fn write_incoming_packet(
             .map(|p| p.title.clone())
             .unwrap_or_default()
     };
-    let merges: Vec<IncomingMergeRow> = accounting
+    let merges: Vec<IncomingMergeRow> = reconciliation
         .merges
         .iter()
         .map(|merge| IncomingMergeRow {
@@ -366,7 +366,7 @@ pub(super) fn write_incoming_packet(
         })
         .collect();
     let mut commits = Vec::new();
-    for commit in &accounting.commits {
+    for commit in &reconciliation.commits {
         let described = git_ok(
             repo,
             &["log", "-1", "--format=%an <%ae>%x09%s", &commit.sha],
@@ -384,13 +384,13 @@ pub(super) fn write_incoming_packet(
             },
         });
     }
-    let residual = accounting.residual.as_ref();
+    let residual = reconciliation.residual.as_ref();
     Ok(format_incoming_packet(&IncomingPacket {
-        from_sha: accounting.from_sha.as_deref(),
-        pending_sha: &accounting.pending_sha,
+        from_sha: reconciliation.from_sha.as_deref(),
+        pending_sha: &reconciliation.pending_sha,
         trailer_key: &queue.config.trailer_key,
         merges: &merges,
-        claims: &accounting.claims(),
+        claims: &reconciliation.claims(),
         commits: &commits,
         stat: residual.map(|r| r.stat.as_str()).unwrap_or(""),
         diff: residual.map(|r| r.diff.as_str()).unwrap_or(""),
@@ -545,12 +545,12 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
             commit_queue(repo, "uplink: sync with upstream")?;
             return Ok(SyncResult::applied(queue).since(&fetched));
         }
-        let accounting = account_incoming(repo, &fetched, from_sha.as_deref(), &sha, &opts)?;
-        if accounting.residual.is_none() {
-            let queue = apply_fetched_upstream(repo, &sha, &accounting.merges)?;
-            return Ok(SyncResult::applied_with(queue, accounting.merges).since(&fetched));
+        let reconciliation = reconcile_incoming(repo, &fetched, from_sha.as_deref(), &sha, &opts)?;
+        if reconciliation.residual.is_none() {
+            let queue = apply_fetched_upstream(repo, &sha, &reconciliation.merges)?;
+            return Ok(SyncResult::applied_with(queue, reconciliation.merges).since(&fetched));
         }
-        let report = write_incoming_packet(repo, &fetched, &accounting)?;
+        let report = write_incoming_packet(repo, &fetched, &reconciliation)?;
         let report_path = from_upstream_report_paths().1;
         let abs = repo.join(&report_path);
         if let Some(parent) = abs.parent() {
@@ -563,12 +563,12 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
         fs::write(&abs, body)?;
         let mut queue = read_queue_file(repo)?;
         queue.pending_upstream = Some(PendingUpstream {
-            sha: accounting.pending_sha.clone(),
-            from_sha: accounting.from_sha.clone(),
+            sha: reconciliation.pending_sha.clone(),
+            from_sha: reconciliation.from_sha.clone(),
             at: stamp(),
-            flowed_back: merged_ids(&accounting.merges),
-            foreign_commits: accounting.foreign(),
-            merges: accounting.merges.clone(),
+            flowed_back: merged_ids(&reconciliation.merges),
+            foreign_commits: reconciliation.foreign(),
+            merges: reconciliation.merges.clone(),
         });
         queue.last_sync = Some(LastSync {
             at: stamp(),
@@ -576,7 +576,7 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
             result: "pending-approval".into(),
             message: Some(format!(
                 "Waiting for from-upstream approval of {}",
-                accounting.pending_sha
+                reconciliation.pending_sha
             )),
         });
         write_queue_file(repo, &queue)?;
@@ -584,11 +584,11 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
         Ok(SyncResult {
             queue,
             needs_approval: true,
-            pending_sha: Some(accounting.pending_sha.clone()),
-            flowed_back: merged_ids(&accounting.merges),
-            foreign_commits: accounting.foreign(),
-            claims: accounting.claims(),
-            merges: accounting.merges,
+            pending_sha: Some(reconciliation.pending_sha.clone()),
+            flowed_back: merged_ids(&reconciliation.merges),
+            foreign_commits: reconciliation.foreign(),
+            claims: reconciliation.claims(),
+            merges: reconciliation.merges,
             report_path: Some(report_path),
             report: Some(report),
             // Nothing is marked merged before the approval.
@@ -626,7 +626,7 @@ pub fn accept_upstream_at(repo: &Path, expected_sha: Option<&str>) -> Result<Syn
         }
         // A packet written before `merges` was recorded only lists ids.
         let merges = if pending.merges.is_empty() && !pending.flowed_back.is_empty() {
-            account_incoming(
+            reconcile_incoming(
                 repo,
                 &queue,
                 pending.from_sha.as_deref(),
