@@ -4924,7 +4924,7 @@ fn report_assesses_the_patch_file_with_the_settings_of_today() {
     );
 
     // A patch whose dependency is not merged upstream does not apply on
-    // upstream alone. Assess reads the patch file, so it is assessed too.
+    // upstream alone. Assess reads the patch file, so it is scanned too.
     git(
         company,
         &["checkout", "-b", "feat/notes"],
@@ -4955,7 +4955,16 @@ fn report_assesses_the_patch_file_with_the_settings_of_today() {
     let found = assess_patch_for_packet(company, &hash_patch.id).unwrap();
     assert!(!found.assess.as_ref().unwrap().ok);
     let dependent = assess_patch_for_packet(company, &notes.id).unwrap();
-    assert!(!dependent.assess.as_ref().unwrap().ok);
+    let failed: Vec<_> = dependent
+        .assess
+        .as_ref()
+        .unwrap()
+        .checks
+        .iter()
+        .filter(|check| check.status == CheckStatus::Fail)
+        .map(|check| check.id.as_str())
+        .collect();
+    assert_eq!(failed, ["affiliation-leak", "dependencies"]);
     let err = approve_patch(company, &hash_patch.id).unwrap_err();
     assert!(
         err.to_string().contains("not ready for contribution"),
@@ -5093,6 +5102,112 @@ fn assess_writes_a_package_for_a_patch_and_for_a_change() {
     let change = fs::read_to_string(dir.path().join("change.patch")).unwrap();
     assert!(change.starts_with("diff --git "), "{change}");
     assert!(change.contains("+token notes"), "{change}");
+}
+
+#[test]
+fn assess_of_a_patch_fails_while_an_upstream_dependency_is_not_merged() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "notes\n");
+    commit_all(company, "notes");
+    let notes = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add notes".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![hash_patch.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let dependencies = |package: &serde_json::Value| {
+        package["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["id"] == "dependencies")
+            .cloned()
+            .expect("dependencies check")
+    };
+
+    // No dependencies: nothing to wait for.
+    let dir = temp_dir();
+    let package = assess_patch_package(company, &hash_patch.id, dir.path());
+    assert_eq!(dependencies(&package)["status"], "skip");
+
+    // The upstream-bound dependency is queued.
+    let dir = temp_dir();
+    let output = uplink_cli(
+        company,
+        &[
+            "assess",
+            "--patch",
+            &notes.id,
+            "--package",
+            dir.path().to_str().unwrap(),
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    let package: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join("assessment.json")).unwrap())
+            .unwrap();
+    assert_eq!(package["ok"], false);
+    let check = dependencies(&package);
+    assert_eq!(check["status"], "fail");
+    let detail = check["detail"].as_str().unwrap();
+    assert!(
+        detail.contains(&format!("{} (queued)", hash_patch.id)),
+        "{detail}"
+    );
+
+    mark_merged(company, &hash_patch.id, MergeVia::Manual, None).unwrap();
+    let dir = temp_dir();
+    let package = assess_patch_package(company, &notes.id, dir.path());
+    assert_eq!(package["ok"], true);
+    assert_eq!(dependencies(&package)["status"], "pass");
+}
+
+#[test]
+fn the_package_says_whether_the_stored_hook_result_is_current() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let id = hash_patch.id.as_str();
+    let stored_extras = || {
+        let dir = temp_dir();
+        assess_patch_package(company, id, dir.path())["storedExtras"].clone()
+    };
+    assert_eq!(stored_extras()["fresh"], false);
+
+    let extras = temp_dir();
+    write(extras.path(), "10-company.md", "## Company\n");
+    let run = "https://github.example/acme/product/actions/runs/7";
+    store_patch_extras(company, id, extras.path(), Some(run.into())).unwrap();
+    let stored = stored_extras();
+    assert_eq!(stored["fresh"], true);
+    assert_eq!(stored["source"], run);
+
+    // The patch content changed since the hook ran.
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    queue
+        .all_patches_mut()
+        .find(|p| p.id == id)
+        .unwrap()
+        .patch_id_stable = Some("0000000000000000000000000000000000000000".into());
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: other content").unwrap();
+    assert_eq!(stored_extras()["fresh"], false);
 }
 
 #[test]

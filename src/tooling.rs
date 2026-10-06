@@ -529,7 +529,23 @@ mod embed_tests {
                 3,
                 "{forge:?} every report takes the assessment of this run\n{text}"
             );
-            assert!(text.contains(".extras.patchIdStable"), "{forge:?}\n{text}");
+            // The binary decides whether dependencies are merged and whether
+            // a stored hook result is current; the workflow only reads that.
+            assert!(
+                !text.contains("dependsOn") && !text.contains("patchIdStable"),
+                "{forge:?}\n{text}"
+            );
+            assert!(
+                text.contains("jq -r '.storedExtras.fresh == true'")
+                    && text.contains("jq -r '.ok == true'"),
+                "{forge:?}\n{text}"
+            );
+            assert!(
+                text.contains(
+                    "if: steps.assess.outputs.ok == 'true' && steps.assess.outputs.fresh != 'true'\n        uses: $/.github/actions/uplink-assessment-hook"
+                ),
+                "{forge:?} no hook run for findings or a current stored result\n{text}"
+            );
             let action = files
                 .iter()
                 .find(|(p, _)| p == ".github/actions/uplink-assessment-hook/action.yml")

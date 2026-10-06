@@ -7,7 +7,7 @@ Hooks are company-only. They live on the orphan branch `uplink/hooks`, never on 
 ## When it runs
 
 1. **On the PR, as advice.** Uplink PR checks run the hook on every open, push, reopen and edit. The hook's markdown and the built-in assess report share one PR comment, which is updated in place instead of adding a new one each run. Nothing from this run is stored: the change is not a patch yet, and import does not copy the result.
-2. **At submit, for the packet.** Uplink submit runs the hook on the patch. This is the result IP reads. A successful run is stored with the patch on `uplink/state` under `.uplink/reports/<id>/extras/` and reused by later submit runs while the patch content is unchanged. The hook runs again when nothing is stored, the stored result is out of date (for example after a conflict was resolved), or the patch was amended.
+2. **At submit, for the packet.** Uplink submit runs the hook on the patch. This is the result IP reads. A successful run is stored with the patch on `uplink/state` under `.uplink/reports/<id>/extras/` and reused by later submit runs while the patch content is unchanged. The hook runs again when nothing is stored, the stored result is out of date (for example after a conflict was resolved), or the patch was amended. It does not run when the assessment has findings: nobody is asked to approve then.
 
 A failed hook never fails the PR check or submit. It shows as a warning, and the comment or `assessment.md` starts with a note that links to the failed run. IP decides. A failed result is never stored, so the next submit runs the hook again.
 
@@ -31,9 +31,10 @@ Before it runs the hook, the caller runs `git uplink assess` and uploads the res
 | `patch`, `state` | For `patch`: the patch id (`upl_…`) and the `uplink/state` commit it was read at |
 | `title` | The public pull request title |
 | `message` | `stored` (the whole message), `subject` and `body` (what is public), `coAuthor` |
-| `ok`, `checks` | The result. Each check has `id`, `status` (`pass`, `warn`, `fail`, `skip`) and `detail` |
+| `ok`, `checks` | The result. Each check has `id`, `status` (`pass`, `warn`, `fail`, `skip`) and `detail`. For `patch` there is a `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream |
 | `settings` | `redactKeywords` and `internalEmailDomains` from `uplink.toml`, or `problem` when it could not be read |
 | `changeBlob` | Git blob id of `change.patch` |
+| `storedExtras` | For `patch`: `fresh` (whether a hook result stored by an earlier submit is still for this patch content) and its `source`. Submit uses it to decide whether to run the hook |
 | `queueEntry` | For `patch`: the patch as it is in `queue.json` (status, dependencies, approvals, public PR) |
 
 ## How it is wired

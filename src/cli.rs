@@ -453,7 +453,11 @@ pub enum Commands {
         /// Assess a queued patch in its layer, with its stored title and message.
         ///
         /// Without `--from` and `--head` the patch file in the queue is
-        /// assessed as it is; nothing is applied. With them, the change
+        /// assessed as it is; nothing is applied. That assessment also has
+        /// the `dependencies` check, which fails while an upstream-bound
+        /// `Uplink-Depends-On` patch is not merged upstream, and its package
+        /// says in `storedExtras` whether the assessment-hook result stored
+        /// with the patch is still for its content. With them, the change
         /// between the two revisions is assessed as that patch. `--title` or
         /// `--message[-file]` override the stored ones, for example for a
         /// conflict resolution or amend. The gate uses it on
