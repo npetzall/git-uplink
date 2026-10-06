@@ -3,7 +3,7 @@ export const STATUS_INFO: Record<string, { meaning: string; next: string }> = {
   queued: {
     meaning:
       "Merged internally and in the company build. Nothing has left the private forge; IP has not reviewed it.",
-    next: "Dispatch Uplink submit when it should go upstream. Internal-only patches stay queued.",
+    next: "Dispatch Uplink submit when it should go upstream; with UPLINK_AUTO_SUBMIT the pack does, once its upstream dependencies are merged. Internal-only patches stay queued.",
   },
   approved: {
     meaning: "IP approved the to-upstream Environment. The same run submits it.",

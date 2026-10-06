@@ -352,6 +352,14 @@ pub enum Commands {
         /// preflight has to run again.
         #[arg(long = "preflight-result", value_name = "path")]
         preflight_result: Option<PathBuf>,
+        /// Print the patch as JSON, with `readyToSubmit`.
+        ///
+        /// `readyToSubmit` lists the patches this import made ready to
+        /// submit: upstream-bound, queued, and every upstream dependency
+        /// merged. Import dispatches Uplink submit for them when the
+        /// repository variable `UPLINK_AUTO_SUBMIT` is `true`.
+        #[arg(long)]
+        json: bool,
     },
     /// Publish local uplink/state, restacking unique patches if origin moved.
     ///
@@ -620,6 +628,9 @@ pub enum Commands {
     ///
     /// On a conflict it prints `gh.prCreate` JSON for the gated conflict PR
     /// and exits 0.
+    ///
+    /// `readyToSubmit` in the output lists the queued patches whose last
+    /// unmerged upstream dependency this sync marked merged.
     Sync {
         /// A recorded public pull request the forge reports as merged, with
         /// its merge commit. Repeat it per patch; the sync workflow passes
@@ -726,7 +737,8 @@ pub enum Commands {
     /// `--to-internal` refuses while an active upstream patch still depends
     /// on this id. A successful `--to-internal` of a submitted patch prints
     /// `gh.prClose` (`url`, `contribBranch`) so Actions can dispatch Uplink
-    /// abandon contrib.
+    /// abandon contrib. `readyToSubmit` lists the patch after a
+    /// `--to-upstream` when no upstream dependency of it is unmerged.
     #[command(group(
         clap::ArgGroup::new("direction")
             .required(true)

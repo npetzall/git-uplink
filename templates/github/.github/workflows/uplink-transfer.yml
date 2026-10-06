@@ -8,6 +8,9 @@
 # --complete. Closing it without merging deletes both branches and leaves
 # the queue unchanged. Successful --to-internal of a submitted patch
 # dispatches Uplink abandon contrib (fire-and-forget; no uplink-mutate).
+# With repository variable UPLINK_AUTO_SUBMIT set to `true`, a patch moved
+# --to-upstream with no unmerged upstream dependency gets Uplink submit
+# dispatched.
 # Closed-PR jobs load YAML from the default branch so *-work cannot replace
 # this sidecar.
 name: Uplink transfer
@@ -182,6 +185,7 @@ jobs:
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Transfer patch
+        id: transfer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -201,6 +205,7 @@ jobs:
           gated=$(jq -r '.gated // false' <<<"$transfer_json")
           if [ "$gated" != "true" ]; then
             git push origin uplink/state
+            echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$transfer_json")" >> "$GITHUB_OUTPUT"
             main_after=$(git rev-parse HEAD)
             if [ "$main_after" != "$main_before" ]; then
               git push origin HEAD:main --force
@@ -239,6 +244,13 @@ jobs:
           else
             echo "Reusing existing transfer PR $existing"
           fi
+
+      - name: Dispatch Uplink submit for patches that became ready
+        if: ${{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.transfer.outputs.ready_to_submit != '' && steps.transfer.outputs.ready_to_submit != '[]' }}
+        uses: $/.github/actions/uplink-dispatch-submit
+        with:
+          patch-ids: ${{ steps.transfer.outputs.ready_to_submit }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   # preflight.sh builds and runs product code (public upstream's included),
   # so it runs in this job: read-only token, no App token, no Environment,
@@ -391,6 +403,7 @@ jobs:
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Complete gated transfer
+        id: transfer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -427,6 +440,7 @@ jobs:
           fi
 
           git push origin uplink/state
+          echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$transfer_json")" >> "$GITHUB_OUTPUT"
           main_after=$(git rev-parse HEAD)
           if [ "$main_after" != "$main_before" ]; then
             git push origin main --force
@@ -443,6 +457,13 @@ jobs:
           fi
           git push origin --delete "$BASE_REF" || true
           git push origin --delete "${BASE_REF}-work" || true
+
+      - name: Dispatch Uplink submit for patches that became ready
+        if: ${{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.transfer.outputs.ready_to_submit != '' && steps.transfer.outputs.ready_to_submit != '[]' }}
+        uses: $/.github/actions/uplink-dispatch-submit
+        with:
+          patch-ids: ${{ steps.transfer.outputs.ready_to_submit }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   cleanup:
     name: Abort transfer

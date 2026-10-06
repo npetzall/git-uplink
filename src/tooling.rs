@@ -942,6 +942,98 @@ mod embed_tests {
     }
 
     #[test]
+    fn auto_submit_dispatches_what_the_binary_says_is_ready_only_when_the_variable_is_set() {
+        let action = "uses: $/.github/actions/uplink-dispatch-submit";
+        // (workflow, job, the step that writes the queue)
+        let sites = [
+            ("uplink-import.yml", "import", "add"),
+            ("uplink-sync.yml", "inspect", "sync"),
+            ("uplink-sync.yml", "apply", "accept"),
+            ("uplink-transfer.yml", "start", "transfer"),
+            ("uplink-transfer.yml", "complete", "transfer"),
+        ];
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = |path: &str| {
+                files
+                    .iter()
+                    .find(|(p, _)| p.ends_with(path))
+                    .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_else(|| panic!("{forge:?} missing {path}"))
+            };
+            for (workflow, job_key, step_id) in sites {
+                let workflow_text = text(workflow);
+                let jobs = jobs_of(&workflow_text);
+                let (_, job) = jobs
+                    .iter()
+                    .find(|(key, _)| key == job_key)
+                    .unwrap_or_else(|| panic!("{forge:?} {workflow} has no job {job_key}"));
+                assert!(
+                    job.contains("      actions: write\n"),
+                    "{forge:?} {workflow} {job_key} dispatches with the Actions token\n{job}"
+                );
+                let steps = steps_of(job);
+                let last = steps.last().unwrap();
+                assert!(
+                    last.contains(action),
+                    "{forge:?} {workflow} {job_key} dispatches last, after the queue is pushed\n{last}"
+                );
+                assert!(
+                    last.contains(&format!(
+                        "if: ${{{{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.{step_id}.outputs.ready_to_submit != '' && steps.{step_id}.outputs.ready_to_submit != '[]' }}}}"
+                    )),
+                    "{forge:?} {workflow} {job_key} is off unless the variable is true\n{last}"
+                );
+                assert!(
+                    last.contains(&format!(
+                        "patch-ids: ${{{{ steps.{step_id}.outputs.ready_to_submit }}}}"
+                    )),
+                    "{forge:?} {workflow} {job_key}\n{last}"
+                );
+                let writer = steps
+                    .iter()
+                    .find(|step| step.contains(&format!("id: {step_id}\n")))
+                    .unwrap_or_else(|| {
+                        panic!("{forge:?} {workflow} {job_key} has no step {step_id}")
+                    });
+                let pushed = writer
+                    .find("git push origin uplink/state")
+                    .or_else(|| writer.find("git uplink add "))
+                    .unwrap();
+                let read = writer.find(".readyToSubmit // []").unwrap_or_else(|| {
+                    panic!("{forge:?} {workflow} {job_key} reads readyToSubmit\n{writer}")
+                });
+                assert!(pushed < read, "{forge:?} {workflow} {job_key}\n{writer}");
+                // The binary decides what is ready; the workflow only reads that.
+                assert!(
+                    !workflow_text.contains("dependsOn"),
+                    "{forge:?} {workflow}\n{workflow_text}"
+                );
+            }
+            assert_eq!(
+                text("uplink-sync.yml")
+                    .matches("Ready to submit once the conflict is resolved")
+                    .count(),
+                2,
+                "{forge:?} a sync that ends in a conflict dispatches nothing"
+            );
+
+            let dispatch = text(".github/actions/uplink-dispatch-submit/action.yml");
+            assert!(
+                dispatch
+                    .contains("gh workflow run \"Uplink submit\" --ref main -f \"patch_id=$id\""),
+                "{dispatch}"
+            );
+            assert!(dispatch.contains("gh run cancel \"$run_id\""), "{dispatch}");
+            assert!(
+                dispatch.contains("PATCH_IDS: ${{ inputs.patch-ids }}")
+                    && !dispatch.split("run: |").nth(1).unwrap().contains("${{"),
+                "ids reach the script through the environment\n{dispatch}"
+            );
+        }
+    }
+
+    #[test]
     fn import_runs_only_for_pull_requests_merged_into_main() {
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();

@@ -16,6 +16,11 @@
 # pushes uplink/conflict/<id> (protected base) and <id>-work, and opens
 # a gated PR. Do not push the protected base directly.
 #
+# With repository variable UPLINK_AUTO_SUBMIT set to `true`, a queued patch
+# whose last unmerged upstream dependency this run marked merged gets Uplink
+# submit dispatched. Not while the run ends in a conflict: the ids are in a
+# warning instead.
+#
 # Dispatch only. uplink-sync-schedule.yml runs it hourly.
 name: Uplink sync
 
@@ -36,6 +41,7 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+      actions: write
     concurrency:
       group: uplink-mutate
       queue: max
@@ -183,6 +189,13 @@ jobs:
           fi
 
           git push origin uplink/state
+          # A conflict blocks the queue; submit would stop at preflight.
+          ready=$(jq -c '.readyToSubmit // []' <<<"$sync_json")
+          if [ "$ready" != "[]" ] && jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
+            echo "::warning title=Uplink auto-submit::Ready to submit once the conflict is resolved: $(jq -r 'join(", ")' <<<"$ready")"
+            ready='[]'
+          fi
+          echo "ready_to_submit=${ready}" >> "$GITHUB_OUTPUT"
           if [ "$needs_approval" = "true" ]; then
             exit 0
           fi
@@ -226,6 +239,13 @@ jobs:
             git uplink gated "$conflict_id" --pr-url "$url"
           fi
 
+      - name: Dispatch Uplink submit for patches that became ready
+        if: ${{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.sync.outputs.ready_to_submit != '' && steps.sync.outputs.ready_to_submit != '[]' }}
+        uses: $/.github/actions/uplink-dispatch-submit
+        with:
+          patch-ids: ${{ steps.sync.outputs.ready_to_submit }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   # Environment Waiting occupies a concurrency group. Keep the long
   # from-upstream review off uplink-mutate; apply takes the group after approval.
   wait-from-upstream:
@@ -250,6 +270,7 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+      actions: write
     concurrency:
       group: uplink-mutate
       queue: max
@@ -335,6 +356,7 @@ jobs:
           token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Accept pending upstream
+        id: accept
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -354,6 +376,13 @@ jobs:
           fi
 
           git push origin uplink/state
+          # A conflict blocks the queue; submit would stop at preflight.
+          ready=$(jq -c '.readyToSubmit // []' <<<"$sync_json")
+          if [ "$ready" != "[]" ] && jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
+            echo "::warning title=Uplink auto-submit::Ready to submit once the conflict is resolved: $(jq -r 'join(", ")' <<<"$ready")"
+            ready='[]'
+          fi
+          echo "ready_to_submit=${ready}" >> "$GITHUB_OUTPUT"
           git push origin uplink/upstream --force || true
 
           main_after=$(git rev-parse HEAD)
@@ -394,3 +423,10 @@ jobs:
             url="$existing"
           fi
           git uplink gated "$conflict_id" --pr-url "$url"
+
+      - name: Dispatch Uplink submit for patches that became ready
+        if: ${{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.accept.outputs.ready_to_submit != '' && steps.accept.outputs.ready_to_submit != '[]' }}
+        uses: $/.github/actions/uplink-dispatch-submit
+        with:
+          patch-ids: ${{ steps.accept.outputs.ready_to_submit }}
+          token: ${{ secrets.GITHUB_TOKEN }}

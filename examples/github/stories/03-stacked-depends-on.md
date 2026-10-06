@@ -126,3 +126,5 @@ Queue: Asha then Ben; Ben lists `dependsOn`. `src/tokens.js` logs then returns `
 **Uplink submit** for Ben **first**. Its first job, **Assess the patch**, reports the finding in its summary: the `dependencies` check fails because `upl_asha` is not merged upstream yet. The run then fails in **Write contribution packet**, whose packet shows the same check. No hook runs and nobody is asked to approve `to-upstream`. `git uplink approve upl_ben` is refused for the same reason.
 
 Then submit Asha (approve `to-upstream`). Merge her public PR upstream and dispatch **Uplink sync**, which marks her `merged`. Now submit Ben (approve `to-upstream`). His public PR is only the log line on public `main`, which already has `sha256`. `Uplink-Depends-On` orders the queue and guards contribution; it never stacks one public PR on another.
+
+With the repository variable `UPLINK_AUTO_SUBMIT` set to `true` you dispatch none of these: import dispatches submit for Asha, and the sync that marks her `merged` dispatches it for Ben. The walkthrough leaves it unset.

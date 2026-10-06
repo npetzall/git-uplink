@@ -6,7 +6,7 @@ This folder is an overlay on [`../github/`](../github/): a file here with the sa
 
 - **No `uplink-sync-schedule.yml`.** Nothing dispatches **Uplink sync** hourly. You dispatch it when a story says so, so nothing races the walkthrough.
 
-The workflows themselves are identical. The setup sets the repository variables `UPLINK_INTERNAL_AUTH`, `UPLINK_UPSTREAM_AUTH`, and `UPLINK_CONTRIB_AUTH` to `pat`, so each role is one fine-grained token (`UPLINK_*_TOKEN`) instead of a GitHub App, which is the pack's default.
+The workflows themselves are identical. The setup sets the repository variables `UPLINK_INTERNAL_AUTH`, `UPLINK_UPSTREAM_AUTH`, and `UPLINK_CONTRIB_AUTH` to `pat`, so each role is one fine-grained token (`UPLINK_*_TOKEN`) instead of a GitHub App, which is the pack's default. It leaves `UPLINK_AUTO_SUBMIT` unset, so you dispatch every **Uplink submit** yourself, as the stories say.
 
 | Workflow | In the walkthrough | Needs |
 | --- | --- | --- |

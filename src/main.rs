@@ -17,11 +17,12 @@ use git_uplink::{
     format_approval_receipt, format_assess_markdown, format_contribution_packet_with_extras,
     format_doctor_summary, format_init_summary, format_status_table, from_upstream_report_paths,
     git_ok, hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    parse_github_repo, parse_pull_request_url, patch_text, push_queue, read_queue, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, refuse_script_with_credentials,
-    report_paths, reset_from_origin, resolve_conflict, review_token, review_token_path,
-    status_report, status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
-    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
+    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
+    read_queue, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
+    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict,
+    review_token, review_token_path, status_report, status_snapshot, store_assess_result,
+    store_patch_extras, stored_commit_message, submit_patch_with, sync_with, transfer_patch_with,
+    transfer_preflight, write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
@@ -278,6 +279,7 @@ fn print_sync_artifact(
         "claims": result.claims,
         "reportPath": result.report_path,
         "summary": summary,
+        "readyToSubmit": result.ready_to_submit,
     });
     if let Some(patch) = conflict {
         value["conflict"] = conflict_json(patch);
@@ -295,6 +297,7 @@ fn print_transfer_artifact(repo: &Path, result: &TransferResult) -> Result<(), E
         "direction": result.direction.as_str(),
         "transferred": result.transferred,
         "gated": result.gated,
+        "readyToSubmit": result.ready_to_submit,
     });
     if result.gated {
         value["base"] = serde_json::Value::String(result.base_branch.clone().unwrap_or_default());
@@ -646,24 +649,34 @@ fn cmd_doctor(repo: &Path, json: bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn cmd_add(repo: &Path, opts: AddPatchOpts) -> Result<(), Error> {
+fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool) -> Result<(), Error> {
     let internal_only = opts.internal_only;
     if !internal_only {
         refuse_script_here(repo, &opts.preflight, None)?;
     }
+    let before = read_queue(repo)?;
     match add_patch(repo, opts) {
         Ok(patch) => {
-            println!(
-                "{}  {}  {}  {}",
-                patch.id,
-                if internal_only {
-                    "internal"
-                } else {
-                    "upstream"
-                },
-                patch.status,
-                patch.title
-            );
+            let layer = if internal_only {
+                "internal"
+            } else {
+                "upstream"
+            };
+            if json {
+                let ready = newly_ready_to_submit(&before, &read_queue(repo)?);
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "id": patch.id,
+                        "queue": layer,
+                        "status": patch.status,
+                        "title": patch.title,
+                        "readyToSubmit": ready,
+                    })
+                );
+            } else {
+                println!("{}  {}  {}  {}", patch.id, layer, patch.status, patch.title);
+            }
             Ok(())
         }
         Err(err) => {
@@ -1293,6 +1306,7 @@ fn run() -> Result<(), Error> {
             base_branch,
             depends_on,
             preflight_result,
+            json,
         } => {
             let message = read_commit_message(message, message_file, &title)?;
             cmd_add(
@@ -1311,6 +1325,7 @@ fn run() -> Result<(), Error> {
                     preflight: script_verdict(preflight_result)?,
                     ..Default::default()
                 },
+                json,
             )
         }
         Commands::Push { push_remote } => cmd_push(&repo, push_remote),

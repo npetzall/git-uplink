@@ -15,6 +15,8 @@ pub struct TransferResult {
     pub pr_close_url: Option<String>,
     pub pr_close_number: Option<u64>,
     pub pr_close_branch: Option<String>,
+    /// Patches this transfer made ready to submit.
+    pub ready_to_submit: Vec<String>,
 }
 
 pub fn transfer_patch(
@@ -35,7 +37,11 @@ pub fn transfer_patch_with(
     preflight: &ScriptVerdict,
 ) -> Result<TransferResult> {
     with_queue_lock(repo, || {
-        transfer(repo, id, direction, complete, Checks::Record(preflight)).map(Checked::recorded)
+        let before = read_queue_file(repo)?;
+        let mut result =
+            transfer(repo, id, direction, complete, Checks::Record(preflight))?.recorded();
+        result.ready_to_submit = newly_ready_to_submit(&before, &result.queue);
+        Ok(result)
     })
 }
 
@@ -445,6 +451,7 @@ pub(super) fn gated_transfer_result(
         pr_close_url: None,
         pr_close_number: None,
         pr_close_branch: None,
+        ready_to_submit: Vec::new(),
     }
 }
 
@@ -496,6 +503,7 @@ pub(super) fn finish_successful_transfer(
         pr_close_url,
         pr_close_number,
         pr_close_branch,
+        ready_to_submit: Vec::new(),
     })
 }
 
@@ -572,6 +580,7 @@ pub(super) fn complete_transfer(
         pr_close_url,
         pr_close_number,
         pr_close_branch,
+        ready_to_submit: Vec::new(),
     }))
 }
 
