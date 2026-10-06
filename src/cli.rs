@@ -352,16 +352,6 @@ pub enum Commands {
         /// preflight has to run again.
         #[arg(long = "preflight-result", value_name = "path")]
         preflight_result: Option<PathBuf>,
-        /// Directory of company assessment-hook *.md extras to store with the patch.
-        ///
-        /// Stored for an upstream-bound patch under
-        /// `.uplink/reports/<id>/extras/`. Import passes the result from the
-        /// PR checks when it matches what was merged.
-        #[arg(long = "extra-dir", value_name = "path")]
-        extra_dir: Option<PathBuf>,
-        /// Where the extras came from, such as the hook run URL.
-        #[arg(long = "extra-source", value_name = "url", requires = "extra_dir")]
-        extra_source: Option<String>,
     },
     /// Publish local uplink/state, restacking unique patches if origin moved.
     ///
@@ -464,9 +454,19 @@ pub enum Commands {
     /// prints the packet. The submit workflow appends that stdout to
     /// `GITHUB_STEP_SUMMARY`.
     ///
+    /// For an upstream-bound patch, report first runs the upstream
+    /// assessment again on the patch file as it is in the queue, with
+    /// today's `uplink.toml`, and stores that result. The pull request check
+    /// and import assess the change before it is a patch; this is the result
+    /// the packet shows. Nothing is applied: whether the patch still applies
+    /// on upstream is what `preflight` checks. When the assessment has
+    /// findings, the packet is still written and printed, and report exits
+    /// non-zero.
+    ///
     /// Stored extras lead the packet while the patch content is unchanged
     /// (same stable patch id, not `amended`). Submit runs the hook from branch
-    /// `uplink/hooks` only when nothing current is stored (see
+    /// `uplink/hooks` with the patch id and the `uplink/state` commit to
+    /// read it from when nothing current is stored (see
     /// `assessment-hook.md` on that branch); a failed hook adds a warning note
     /// instead of failing submit, and is not stored.
     Report {
@@ -485,6 +485,13 @@ pub enum Commands {
         /// Where the stored extras came from, such as the hook run URL.
         #[arg(long = "extra-source", value_name = "url", requires = "store_extras")]
         extra_source: Option<String>,
+        /// Commit of uplink/state the hook read the patch from.
+        ///
+        /// Refused when the patch file is no longer what it was at that
+        /// commit: the patch changed while the hook ran, so --extra-dir
+        /// describes other content.
+        #[arg(long = "extra-state", value_name = "rev", requires = "extra_dir")]
+        extra_state: Option<String>,
     },
     /// Show the queue.
     Status {
@@ -523,9 +530,13 @@ pub enum Commands {
         /// Review token of the packet that was reviewed.
         ///
         /// `report` writes it to `.uplink/reports/<id>/review-token`. It
-        /// names the patch content, public title and public message. When
-        /// the patch no longer has this token, nothing is approved. Without
-        /// it, the patch is approved as it is now.
+        /// names what the patch changes, the public title and the public
+        /// message. What the patch changes is the lines it adds and removes
+        /// per file, plus the files it creates, deletes, renames or
+        /// replaces; the unchanged lines around them are not part of it.
+        /// When the patch no longer has this token, nothing is
+        /// approved. Without it, the patch is approved as it is now. A
+        /// patch its last approval already covers gets no second one.
         #[arg(long, value_name = "token")]
         reviewed: Option<String>,
     },
@@ -666,9 +677,15 @@ pub enum Commands {
     /// amend PRs and runs only the preflight script (`git uplink preflight
     /// --command-only`).
     ///
-    /// After a submitted patch is conflict-resolved it becomes `amended`
-    /// until IP approves the delta. Resolve of a submitted patch dispatches a
-    /// new submit for you. A follow-on conflict prints `gh.prCreate` JSON for
+    /// A submitted patch whose resolution adds or removes other lines than
+    /// the last approval covered becomes `amended` until IP approves the
+    /// delta. That includes keeping the patch's line over an upstream change
+    /// of the same line: the patch then removes upstream's new line. A
+    /// resolution that only follows upstream changes next to the patch's
+    /// lines changes nothing that was approved: the patch stays `submitted`
+    /// (or `approved`) and needs no other approval. Resolve of a submitted patch
+    /// dispatches a new submit for you either way, so the public PR gets
+    /// the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for
     /// the next gated PR and exits 0.
     Resolve {
         /// Patch whose conflict was resolved.
@@ -739,8 +756,12 @@ pub enum Commands {
     /// re-assesses, and runs export preflight (upstream) or the preflight
     /// script (internal). A failing upstream assessment is refused and the
     /// branch is left as it was. A submitted patch becomes `amended` (IP
-    /// approves the delta, then submit force-pushes the contrib branch);
-    /// otherwise it is `queued`. Then `main` is rebuilt, and a follow-on
+    /// approves the delta, then submit force-pushes the contrib branch) and
+    /// a patch that was not submitted becomes `queued`, unless the amend
+    /// adds and removes the same lines as before and leaves the public
+    /// title and message as they were:
+    /// then the last approval still covers the patch and it stays
+    /// `submitted` or `approved`. Then `main` is rebuilt, and a follow-on
     /// conflict prints like `resolve`. A merge with no code or message change
     /// prints `changed: false` and leaves the queue as it was.
     Amend {

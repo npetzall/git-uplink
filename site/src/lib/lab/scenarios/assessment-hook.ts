@@ -56,7 +56,7 @@ export const assessmentHook: LabScenario = {
       title: "Import Asha’s SHA-256 change",
       summary:
         "Asha branches from company main, switches SHA-1 to SHA-256, and opens one internal PR. Merge plus import records upl_asha as queued.",
-      why: "The assessment hook runs on this PR with pr and shares one PR comment with assess, updated on every push or edit. Import stores the hook's extras with the patch because they match what was merged.",
+      why: "The assessment hook runs on this PR with pr and shares one PR comment with assess, updated on every push or edit. That is advice for the author and reviewers: the change is not a patch yet, so import stores nothing from it.",
       operations: [
         you(
           [
@@ -85,7 +85,7 @@ export const assessmentHook: LabScenario = {
           patches: [...state.patches, patch],
           log: [
             ...state.log,
-            "Imported upl_asha as queued with the PR check's hook extras stored. src/tokens.js on main calls sha256. Only the hook placeholder is on main.",
+            "Imported upl_asha as queued. src/tokens.js on main calls sha256. Only the hook placeholder is on main.",
           ],
         });
       },
@@ -94,7 +94,7 @@ export const assessmentHook: LabScenario = {
       id: "submit-asha",
       title: "Submit Asha; extras lead the packet",
       summary:
-        "Dispatch Uplink submit. The patch is unchanged since import, so the packet reuses the stored extras and the hook does not run again: ## Company review notes sits above # Contribution packet. Then approve to-upstream. The contribution fork has SHA-256 only; no hook file is exported.",
+        "Dispatch Uplink submit. The extras job runs the hook with patch, and the packet job assesses the patch file and stores both results: ## Company review notes sits above # Contribution packet. Then approve to-upstream. The contribution fork has SHA-256 only; no hook file is exported.",
       why: "Submit is the only writer of uplink/state. The assessment hook returns an artifact; it must not push state.",
       operations: submitOps("upl_asha"),
       apply: (state) => {
@@ -109,7 +109,7 @@ export const assessmentHook: LabScenario = {
           contrib: [{ branch: "uplink/upl_asha", files: asha.files, prNumber: 412 }],
           log: [
             ...state.log,
-            "Packet reused the extras stored at import; ## Company review notes sits above # Contribution packet.",
+            "Hook ran with patch=upl_asha; ## Company review notes sits above # Contribution packet.",
             "Approved to-upstream for upl_asha. Opened public PR #412 from uplink/upl_asha.",
           ],
         };

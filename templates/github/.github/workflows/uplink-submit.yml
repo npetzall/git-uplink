@@ -1,11 +1,18 @@
 # CONTRIBUTION / IP gate. Dispatch from company main with a patch id.
-# Extras job (no queue lock) reuses the company extras stored at import if
-# the patch is unchanged since. Otherwise it runs the optional company
-# `.github/workflows/uplink-assessment-hook.yml` from branch uplink/hooks. A
-# failed hook is noted at the top of assessment.md; it does not fail submit.
-# Packet job then writes assessment.md once on uplink/state (holding
-# uplink-mutate only for that), and stores a successful hook result. Submit
-# job then waits on Environment `to-upstream`.
+# This is where the patch is assessed. The pull request checks are advice,
+# and nothing from them is stored.
+# Extras job (no queue lock) runs the optional company
+# `.github/workflows/uplink-assessment-hook.yml` from branch uplink/hooks
+# with the patch id and the uplink/state commit to read it from, unless an
+# earlier run of this workflow stored its result and the patch is unchanged
+# since. A failed hook is noted at the top of
+# assessment.md; it does not fail submit.
+# Packet job then runs the upstream assessment on the patch file, writes
+# assessment.md once on uplink/state (holding uplink-mutate only for that),
+# and stores a successful hook result. It refuses a hook result when the
+# patch is no longer what it was at the commit the hook read, and fails after writing the
+# packet when the assessment has findings. Submit job then waits on
+# Environment `to-upstream`.
 # The packet job hands the packet's review token and uplink/state commit to
 # the submit job. The Environment links that commit's assessment.md, and
 # `approve --reviewed` stops when the patch is no longer what was reviewed
@@ -48,17 +55,22 @@ jobs:
       actions: write
     outputs:
       fresh: ${{ steps.stored.outputs.fresh }}
+      state: ${{ steps.stored.outputs.state }}
       hook_status: ${{ steps.hook.outputs.status }}
       hook_run_url: ${{ steps.hook.outputs.run_url }}
     steps:
-      - name: Check extras stored at import
+      - name: Check extras stored by an earlier run
         id: stored
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
         run: |
           set -euo pipefail
-          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          # One commit of uplink/state for this job and for the hook: the
+          # branch can move while the hook runs.
+          state=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/uplink/state" --jq .object.sha)
+          echo "state=${state}" >> "$GITHUB_OUTPUT"
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=${state}" --jq .content)
           queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
           if ! jq -e --arg id "$PATCH_ID" '[.upstream[]?, .internal[]?] | any(.id == $id)' <<<"$queue" > /dev/null; then
             echo "Unknown patch ${PATCH_ID}."
@@ -78,8 +90,8 @@ jobs:
             printf '%s depends on patches not merged upstream yet: %s.\n' "$PATCH_ID" "$unmerged" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          # Extras from the merged PR's assessment stay valid while the patch
-          # content is unchanged. An amended patch is always assessed again.
+          # Extras an earlier run stored stay valid while the patch content is
+          # unchanged. An amended patch is always assessed again.
           source=$(jq -r --arg id "$PATCH_ID" '
             [.upstream[]?, .internal[]?] | map(select(.id == $id)) | .[0]
             | if (.extras.patchIdStable // "") != "" and .extras.patchIdStable == .patchIdStable and .status != "amended"
@@ -99,6 +111,7 @@ jobs:
         uses: $/.github/actions/uplink-assessment-hook
         with:
           patch: ${{ inputs.patch_id }}
+          state: ${{ steps.stored.outputs.state }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -150,6 +163,7 @@ jobs:
           PATCH_ID: ${{ inputs.patch_id }}
           HOOK_STATUS: ${{ needs.extras.outputs.hook_status }}
           HOOK_RUN_URL: ${{ needs.extras.outputs.hook_run_url }}
+          HOOK_STATE: ${{ needs.extras.outputs.state }}
           EXTRA_DIR: ${{ runner.temp }}/uplink-packet-extras
         run: |
           set -euo pipefail
@@ -157,22 +171,32 @@ jobs:
           # A successful hook run is stored for later packets; a failed one is
           # not, so the next submit runs the hook again. Without a hook run,
           # report uses the stored extras if they still match the patch.
+          # --extra-state stops when the patch is no longer what it was at the
+          # commit the hook read it from.
+          code=0
           case "$HOOK_STATUS" in
             success)
               mkdir -p "$EXTRA_DIR"
               packet=$(git uplink report "$PATCH_ID" --extra-dir "$EXTRA_DIR" \
-                --store-extras --extra-source "$HOOK_RUN_URL")
+                --extra-state "$HOOK_STATE" --store-extras --extra-source "$HOOK_RUN_URL") || code=$?
               ;;
             failure)
               mkdir -p "$EXTRA_DIR"
-              packet=$(git uplink report "$PATCH_ID" --extra-dir "$EXTRA_DIR")
+              packet=$(git uplink report "$PATCH_ID" --extra-dir "$EXTRA_DIR" \
+                --extra-state "$HOOK_STATE") || code=$?
               ;;
             *)
-              packet=$(git uplink report "$PATCH_ID")
+              packet=$(git uplink report "$PATCH_ID") || code=$?
               ;;
           esac
+          # report assesses the patch file and stores the result. With findings it
+          # still writes the packet, then fails: publish it, then stop here so
+          # the Environment is not offered.
           git push origin uplink/state
           printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
           # What this run asks the reviewers to approve.
           echo "review_token=$(cat ".uplink/reports/${PATCH_ID}/review-token")" >> "$GITHUB_OUTPUT"
           echo "state_sha=$(git rev-parse uplink/state)" >> "$GITHUB_OUTPUT"

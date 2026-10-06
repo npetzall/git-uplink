@@ -11,9 +11,12 @@
 #
 # Assess also runs the optional company assessment hook from branch
 # uplink/hooks (see assessment-hook.md on that branch). Both results go into
-# one PR comment that is updated in place on every run, and into artifact
-# uplink-assessment, which import stores with the patch. A failed hook is
+# one PR comment that is updated in place on every run. A failed hook is
 # noted in the comment; it does not fail the check.
+#
+# Both are advice for the author and the reviewers. Nothing from this run is
+# stored with the patch: the change has no patch id yet, and this workflow
+# file is the pull request's own copy. Uplink submit assesses the patch.
 #
 # Put both job names in the required status checks for the PR.
 # This workflow does not write uplink/state (not uplink-mutate).
@@ -72,15 +75,10 @@ jobs:
         run: |
           set -euo pipefail
           git uplink init
-          out="$RUNNER_TEMP/uplink-assessment"
-          mkdir -p "$out"
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > "$RUNNER_TEMP/uplink-msg.txt"
-          # Import recomputes this from the merged PR to decide whether the
-          # stored result still matches what was merged.
-          { printf '%s\n' "$HEAD_SHA"; cat "$RUNNER_TEMP/uplink-msg.txt"; } | sha256sum | cut -c1-16 > "$out/fingerprint"
           code=0
           git uplink assess \
             --title "$TITLE" \
@@ -102,21 +100,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HOOK_STATUS: ${{ steps.hook.outputs.status }}
           HOOK_DIR: ${{ steps.hook.outputs.dir }}
-          HOOK_RUN_URL: ${{ steps.hook.outputs.run_url }}
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/uplink-assessment"
-          mkdir -p "$out/extras"
-          find "$HOOK_DIR" -maxdepth 1 -type f -name '*.md' -exec cp {} "$out/extras/" \;
-          printf '%s\n' "$HOOK_STATUS" > "$out/hook-status"
-          printf '%s\n' "$HOOK_RUN_URL" > "$out/hook-run-url"
           marker='<!-- uplink:assessment -->'
           {
             echo "$marker"
-            echo "<!-- uplink:fingerprint $(cat "$out/fingerprint") hook=${HOOK_STATUS} -->"
-            extras=$(find "$out/extras" -maxdepth 1 -type f -name '*.md' | sort)
+            extras=$(find "$HOOK_DIR" -maxdepth 1 -type f -name '*.md' | sort)
             if [ -n "$extras" ]; then
               while IFS= read -r file; do
                 cat "$file"
@@ -138,15 +128,6 @@ jobs:
             gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
               -F "body=@${RUNNER_TEMP}/uplink-comment.md" > /dev/null
           fi
-
-      # Import stores these extras with the patch when the fingerprint still
-      # matches the merged PR, so submit need not run the hook again.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: uplink-assessment
-          path: ${{ runner.temp }}/uplink-assessment/
-          if-no-files-found: error
-          overwrite: true
 
       - name: Report assess result
         env:

@@ -15,20 +15,11 @@ pub struct AddPatchOpts {
     /// Branch the company PR merged into. Anything but the company branch
     /// is refused.
     pub base_branch: Option<String>,
-    /// Company assessment-hook extras to store with the patch.
-    pub extra_dir: Option<PathBuf>,
-    /// Where the extras came from, such as the hook run URL.
-    pub extra_source: Option<String>,
     /// Where the verdict of `preflight.sh` on the export tree comes from.
     pub preflight: ScriptVerdict,
 }
 
 pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
-    if opts.extra_dir.is_some() && opts.internal_only {
-        return Err(Error::msg(
-            "--extra-dir applies to upstream-bound patches; internal-only patches have no contribution packet",
-        ));
-    }
     let queued = read_queue_file(repo)?;
     // Only the forge knows where a PR merged: by the time import runs, a
     // rebuild may have rewritten the company branch, so git cannot tell.
@@ -115,12 +106,6 @@ pub(super) fn add_patch_once(
 
     let candidate_abs = repo.join(patch_path(&id)?);
     if let Err(err) = validate_candidate(repo, queue, opts, &patch, &candidate_abs, head_sha) {
-        let _ = fs::remove_file(&candidate_abs);
-        return Err(err);
-    }
-    if let Some(dir) = &opts.extra_dir
-        && let Err(err) = store_extras(repo, &mut patch, dir, opts.extra_source.clone())
-    {
         let _ = fs::remove_file(&candidate_abs);
         return Err(err);
     }

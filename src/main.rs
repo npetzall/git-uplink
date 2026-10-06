@@ -11,16 +11,17 @@ use git_uplink::{
     Forge, IncomingPreflight, InitOpts, MergeVia, PreflightError, PreflightReport, ProgressMode,
     PushOpts, RebuildOpts, STATE_BRANCH, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT,
     accept_upstream_at, add_patch, adopted_next_steps, amend_patch_with, amend_preflight,
-    approve_patch_reviewed, assess_from_message, command_preflight, commit_queue, doctor,
-    drop_patch, existing_patch_preflight, format_approval_receipt, format_assess_markdown,
-    format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
-    format_status_table, from_upstream_report_paths, git_ok, hooks_publish_hint,
-    incoming_change_preflight, init, load_groups_file, mark_merged, parse_github_repo,
-    parse_pull_request_url, push_queue, read_queue, rebuild_with, record_gated_pr,
-    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
-    reset_from_origin, resolve_conflict, review_token, review_token_path, status_report,
-    status_snapshot, store_patch_extras, stored_commit_message, submit_patch_with, sync_with,
-    transfer_patch_with, transfer_preflight, write_man_pages,
+    approve_patch_reviewed, assess_from_message, assess_patch_for_packet, command_preflight,
+    commit_queue, doctor, drop_patch, existing_patch_preflight, format_approval_receipt,
+    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
+    format_init_summary, format_status_table, from_upstream_report_paths, git_ok,
+    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
+    parse_github_repo, parse_pull_request_url, patch_same_as_at, push_queue, read_queue,
+    rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
+    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict,
+    review_token, review_token_path, status_report, status_snapshot, store_patch_extras,
+    stored_commit_message, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
+    write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
@@ -754,10 +755,19 @@ fn cmd_report(
     extra_dir: Option<PathBuf>,
     store_extras: bool,
     extra_source: Option<String>,
+    extra_state: Option<String>,
 ) -> Result<(), Error> {
+    if let Some(state) = extra_state.as_deref()
+        && !patch_same_as_at(repo, id, state)?
+    {
+        return Err(Error::msg(format!(
+            "{id} changed while the assessment hook ran, so its result is for other content; dispatch Uplink submit again."
+        )));
+    }
     if store_extras && let Some(dir) = extra_dir.as_deref() {
         store_patch_extras(repo, id, dir, extra_source)?;
     }
+    assess_patch_for_packet(repo, id)?;
     let queue = read_queue(repo)?;
     let patch = queue
         .all_patches()
@@ -774,6 +784,11 @@ fn cmd_report(
     commit_queue(repo, &format!("uplink: contribution packet {id}"))?;
     println!("{packet}");
     eprintln!("Wrote {}", dest.display());
+    if queue.is_upstream(id) && patch.assess.as_ref().is_some_and(|report| !report.ok) {
+        return Err(Error::msg(format!(
+            "{id} is not ready for contribution. Fix the upstream assessment findings in the packet first."
+        )));
+    }
     Ok(())
 }
 
@@ -1210,8 +1225,6 @@ fn run() -> Result<(), Error> {
             base_branch,
             depends_on,
             preflight_result,
-            extra_dir,
-            extra_source,
         } => {
             let message = read_commit_message(message, message_file, &title)?;
             cmd_add(
@@ -1227,8 +1240,6 @@ fn run() -> Result<(), Error> {
                     internal_pr_number: pr,
                     internal_pr_url: pr_url,
                     base_branch,
-                    extra_dir,
-                    extra_source,
                     preflight: script_verdict(preflight_result)?,
                     ..Default::default()
                 },
@@ -1271,7 +1282,16 @@ fn run() -> Result<(), Error> {
             extra_dir,
             store_extras,
             extra_source,
-        } => cmd_report(&repo, &id, out, extra_dir, store_extras, extra_source),
+            extra_state,
+        } => cmd_report(
+            &repo,
+            &id,
+            out,
+            extra_dir,
+            store_extras,
+            extra_source,
+            extra_state,
+        ),
         Commands::Preflight {
             id,
             from,

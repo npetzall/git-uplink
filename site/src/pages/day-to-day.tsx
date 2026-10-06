@@ -234,7 +234,10 @@ git push`}</Code>
           A company-only patch is not assessed; the check runs only the preflight script.
           Get the PR reviewed and merge it. The resolve job updates your patch (same id) and rebuilds{" "}
           <code>main</code>. If a later patch conflicts too, its owner gets the next PR. If your change was already
-          submitted, the fix goes to IP as a small delta. After approval, the same public PR is updated.
+          submitted, <strong>Uplink submit</strong> runs again and the same public PR is updated. IP reviews a small
+          delta when your fix changes the lines the patch adds or removes, which includes keeping your line over
+          an upstream change of the same line. A fix that only follows upstream changes next to your lines needs
+          no new approval.
         </p>
         <Lab scenario="upstream-conflict">Upstream conflict</Lab>
       </Section>
@@ -256,8 +259,8 @@ git push`}</Code>
           change. The <strong>Uplink gate</strong> check assesses the whole amended patch with that message. A
           company-only patch is not assessed and needs no IP approval; the check runs only the preflight script. Mark
           the PR ready, get it reviewed, and merge it. The patch keeps its id and <code>main</code> is rebuilt. If it
-          was already submitted, the change goes to IP as a small delta. After approval, the same public PR is
-          updated. Close the PR without merging to cancel.
+          was already submitted, the change goes to IP as a small delta when it changes the lines the patch adds or
+          removes, or the public title or message. After approval, the same public PR is updated. Close the PR without merging to cancel.
         </p>
       </Section>
 

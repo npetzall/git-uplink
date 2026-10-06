@@ -329,18 +329,11 @@ fn complete_amend(
     {
         let current = get_patch_mut(&mut queue, id)?;
         current.assess = Some(report);
-        current.status = if current.upstream.is_some() {
-            PatchStatus::Amended
-        } else {
-            PatchStatus::Queued
-        };
         let rel = patch_path(id)?.to_string_lossy().into_owned();
         current.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-        add_event(
-            current,
-            "amended",
-            "Amended through the gated amend PR; patch refreshed and re-assessed",
-        );
+        current.status = status_after_rewrite(repo, current);
+        let detail = rewrite_event_detail(current.status, "Amended through the gated amend PR");
+        add_event(current, "amended", detail);
     }
     write_queue_file(repo, &queue)?;
     commit_queue(repo, &format!("uplink: amend {id}"))?;

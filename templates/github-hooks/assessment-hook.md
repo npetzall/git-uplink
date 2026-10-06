@@ -6,11 +6,12 @@ Hooks are company-only. They live on the orphan branch `uplink/hooks`, never on 
 
 ## When it runs
 
-1. **On the PR.** Uplink PR checks run the hook with `pr` on every open, push, reopen and edit. The hook's markdown and the built-in assess report share one PR comment, which is updated in place instead of adding a new one each run.
-2. **At import.** When the PR merges, import keeps the hook result from the last PR check run if it was made for exactly what was merged: the same head commit, title and body. It is stored with the patch on `uplink/state` under `.uplink/reports/<id>/extras/`.
-3. **At submit.** Submit uses the stored result while the patch content is unchanged. It runs the hook again with `patch` only when nothing is stored, the stored result is out of date (for example after a conflict was resolved), or the patch was amended. A successful run at submit is stored for later packets.
+1. **On the PR, as advice.** Uplink PR checks run the hook with `pr` on every open, push, reopen and edit. The hook's markdown and the built-in assess report share one PR comment, which is updated in place instead of adding a new one each run. Nothing from this run is stored: the change is not a patch yet, and import does not copy the result.
+2. **At submit, for the packet.** Uplink submit runs the hook with `patch`. This is the result IP reads. A successful run is stored with the patch on `uplink/state` under `.uplink/reports/<id>/extras/` and reused by later submit runs while the patch content is unchanged. The hook runs again when nothing is stored, the stored result is out of date (for example after a conflict was resolved), or the patch was amended.
 
 A failed hook never fails the PR check or submit. It shows as a warning, and the comment or `assessment.md` starts with a note that links to the failed run. IP decides. A failed result is never stored, so the next submit runs the hook again.
+
+If the patch changes while the hook runs at submit, the result is for other content. Submit compares the patch with the one at the `state` commit the hook was given, and stops when they differ; dispatch it again.
 
 ## How it is wired
 
@@ -21,13 +22,24 @@ A failed hook never fails the PR check or submit. It shows as a warning, and the
 ## Contract
 
 - Trigger on `workflow_dispatch` with these inputs:
-  - `pr`: the internal pull request number, or empty;
-  - `patch`: the patch id (`upl_…`), or empty;
-  - `caller_run_id`: always set.
 
-  At least one of `pr` and `patch` is set. A PR check sets `pr`. Submit sets `patch`. An amendment or conflict-resolution PR for a patch that already exists may set both.
+  | Input | Set by | What it names | Where the result goes |
+  | --- | --- | --- | --- |
+  | `pr` | Uplink PR checks | The internal pull request number. The change is `refs/pull/<pr>/head`. | The PR comment only |
+  | `patch` | Uplink submit | The patch id (`upl_…`). | The contribution packet, and stored with the patch |
+  | `state` | Uplink submit, with `patch` | The commit of `uplink/state` to read the patch from: `.uplink/patches/<patch>.patch` at that commit. | — |
+  | `caller_run_id` | both | The run that dispatched the hook. | — |
+
+  Exactly one of `pr` and `patch` is set. It tells the hook what it is working with, and whether its result is advice or goes to IP.
 - Put `caller_run_id` in `run-name`. Callers use it to find the run they dispatched.
-- With `pr`, assess `refs/pull/<pr>/head`. Otherwise assess `main`.
+- With `patch`, read the patch at `state`, not at the tip of `uplink/state`. The branch can move while the hook runs, and submit refuses a result when the patch is no longer what it was at that commit:
+
+  ```bash
+  git fetch origin "$STATE"
+  git show "$STATE:.uplink/patches/$PATCH.patch"
+  ```
+- What the hook does with it is yours to decide: look up a ticket, scan the patch file, apply it on `uplink/upstream` and scan the tree. Uplink passes nothing else.
+- Declare all four inputs. GitHub rejects a dispatch with an input the workflow does not declare, and a rejected dispatch shows as a failed hook.
 - Upload `*.md` files as artifact `uplink-packet-extra`. Files are prepended in name order. An empty result is fine. uplink adds no headings or separators. Each file's markdown goes in as-is, so include your own heading and use a prefix such as `10-`, `20-` to set the order.
 - Do not push `uplink/state`. Uplink stores the result itself.
 

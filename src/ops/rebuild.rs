@@ -354,19 +354,12 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         {
             let patch = get_patch_mut(&mut queue, id)?;
             patch.assess = Some(report);
-            patch.status = if patch.upstream.is_some() {
-                PatchStatus::Amended
-            } else {
-                PatchStatus::Queued
-            };
             patch.conflict = None;
             let rel = patch_path(id)?.to_string_lossy().into_owned();
             patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-            add_event(
-                patch,
-                "amended",
-                "Conflict resolved; patch refreshed and re-assessed for rebuild and upstream PR",
-            );
+            patch.status = status_after_rewrite(repo, patch);
+            let detail = rewrite_event_detail(patch.status, "Conflict resolved");
+            add_event(patch, "amended", detail);
         }
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: amend {id} after conflict"))?;
