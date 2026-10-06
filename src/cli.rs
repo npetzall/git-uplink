@@ -421,6 +421,16 @@ pub enum Commands {
     /// The PR title and body are the single commit message. Assess adds a
     /// co-author trailer, strips the internal section before contrib export,
     /// and scans for company affiliation using `uplink.toml`.
+    ///
+    /// `--package <dir>` writes the assessment package: `assessment.json`
+    /// (the result, the public message, the `uplink.toml` settings it
+    /// scanned with, and for a patch its queue entry and the `uplink/state`
+    /// commit it was read at), `assessment.md` (the report assess prints),
+    /// and `change.patch` (what was assessed: the diff of the change, or the
+    /// patch file). The pull request checks and Uplink submit upload it for
+    /// the company assessment hook, and `report --assess-result` stores it
+    /// with the patch. The package is written before assess exits non-zero
+    /// on findings.
     Assess {
         /// Base revision, main by default (fetched from origin if missing).
         #[arg(long, value_name = "ref")]
@@ -442,11 +452,20 @@ pub enum Commands {
         internal_only: bool,
         /// Assess a queued patch in its layer, with its stored title and message.
         ///
-        /// `--title` or `--message[-file]` override the stored ones, for
-        /// example for a conflict resolution or amend. The gate uses it on
+        /// Without `--from` and `--head` the patch file in the queue is
+        /// assessed as it is; nothing is applied. With them, the change
+        /// between the two revisions is assessed as that patch. `--title` or
+        /// `--message[-file]` override the stored ones, for example for a
+        /// conflict resolution or amend. The gate uses it on
         /// conflict-resolution PRs.
         #[arg(long, value_name = "id", conflicts_with = "internal_only")]
         patch: Option<String>,
+        /// Write the assessment package (assessment.json, assessment.md, change.patch) to this directory.
+        #[arg(long, value_name = "dir")]
+        package: Option<PathBuf>,
+        /// Print assessment.json instead of the report.
+        #[arg(long)]
+        json: bool,
     },
     /// Write the contribution packet for a patch and print it.
     ///
@@ -454,19 +473,20 @@ pub enum Commands {
     /// prints the packet. The submit workflow appends that stdout to
     /// `GITHUB_STEP_SUMMARY`.
     ///
-    /// For an upstream-bound patch, report first runs the upstream
-    /// assessment again on the patch file as it is in the queue, with
-    /// today's `uplink.toml`, and stores that result. The pull request check
-    /// and import assess the change before it is a patch; this is the result
-    /// the packet shows. Nothing is applied: whether the patch still applies
-    /// on upstream is what `preflight` checks. When the assessment has
-    /// findings, the packet is still written and printed, and report exits
-    /// non-zero.
+    /// The packet of an upstream-bound patch shows an assessment of the
+    /// patch file as it is in the queue, made with today's `uplink.toml`.
+    /// The pull request check and import assess the change before it is a
+    /// patch. Uplink submit runs `assess --patch <id> --package` and passes
+    /// the result with `--assess-result`; without it, report assesses the
+    /// patch file itself. Either way the result is stored with the patch.
+    /// Nothing is applied: whether the patch still applies on upstream is
+    /// what `preflight` checks. When the assessment has findings, the packet
+    /// is still written and printed, and report exits non-zero.
     ///
     /// Stored extras lead the packet while the patch content is unchanged
     /// (same stable patch id, not `amended`). Submit runs the hook from branch
-    /// `uplink/hooks` with the patch id and the `uplink/state` commit to
-    /// read it from when nothing current is stored (see
+    /// `uplink/hooks` on the assessment package when nothing current is
+    /// stored (see
     /// `assessment-hook.md` on that branch); a failed hook adds a warning note
     /// instead of failing submit, and is not stored.
     Report {
@@ -485,13 +505,15 @@ pub enum Commands {
         /// Where the stored extras came from, such as the hook run URL.
         #[arg(long = "extra-source", value_name = "url", requires = "store_extras")]
         extra_source: Option<String>,
-        /// Commit of uplink/state the hook read the patch from.
+        /// Store this assessment instead of assessing here: `assessment.json` of `assess --patch <id> --package`.
         ///
-        /// Refused when the patch file is no longer what it was at that
-        /// commit: the patch changed while the hook ran, so --extra-dir
-        /// describes other content.
-        #[arg(long = "extra-state", value_name = "rev", requires = "extra_dir")]
-        extra_state: Option<String>,
+        /// Refused when it is not for the patch as it is now: the patch
+        /// file, title, message or `uplink.toml` changed since, or the
+        /// result does not match what assessing the patch gives. The company
+        /// assessment hook read the same package, so this also covers
+        /// --extra-dir.
+        #[arg(long = "assess-result", value_name = "path")]
+        assess_result: Option<PathBuf>,
     },
     /// Show the queue.
     Status {

@@ -125,13 +125,17 @@ export function submitOps(id: string): LabOperation[] {
     ], "Locally, --push force-pushes the export commit unsigned. The workflow lets GitHub create a signed one."),
     ciJob(
       "Uplink submit",
-      [`gh workflow run uplink-assessment-hook.yml --ref uplink/hooks -f patch=${id} -f state=<uplink/state commit>`],
-      "Dispatch Uplink submit from company main. Extras job, without the queue lock: runs the optional hook with the patch id and the uplink/state commit to read it from, unless an earlier submit run stored its result and the patch is unchanged. A failed hook is noted in the packet, not fatal, and not stored.",
+      [
+        "git uplink init",
+        `git uplink assess --patch ${id} --package <dir>`,
+        "gh workflow run uplink-assessment-hook.yml --ref uplink/hooks -f caller_run_id=<run>",
+      ],
+      "Dispatch Uplink submit from company main. Assess job, without the queue lock: assesses the patch file and uploads the assessment package (result, public message, uplink.toml settings, queue entry, patch file). The optional hook reads that package, unless an earlier submit run stored its result and the patch is unchanged. A failed hook is noted in the packet, not fatal, and not stored.",
     ),
     ciJob(
       "Uplink submit",
-      ["git uplink init", `git uplink report ${id} --extra-dir <artifact> --extra-state <uplink/state commit> --store-extras`],
-      "Packet job, under uplink-mutate: assesses the patch file, then writes assessment.md once, extras first. Stops on findings, or when the patch is no longer what the hook read. No environment secrets yet.",
+      ["git uplink init", `git uplink report ${id} --assess-result <package>/assessment.json --extra-dir <artifact> --store-extras`],
+      "Packet job, under uplink-mutate: stores the assessment of the package, then writes assessment.md once, extras first. Stops on findings, or when the package is not for the patch as it is now. No environment secrets yet.",
     ),
     ciJob(
       "Uplink submit",

@@ -27,8 +27,9 @@ git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
             [--internal-only] [--command-only] [--hooks <rev>] [--json]
 git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
             [--message <text> | --message-file <path>] [--internal-only | --patch <id>]
+            [--package <dir>] [--json]
 git uplink report <id> [--out <path>] [--extra-dir <path>] [--store-extras]
-            [--extra-source <url>] [--extra-state <rev>]
+            [--extra-source <url>] [--assess-result <path>]
 git uplink status [--json]
 git uplink doctor [--json]
 git uplink approve <id> [--out <path>] [--reviewed <token>]
@@ -159,6 +160,8 @@ Check the message, cutoff, author, and affiliation of a change.
 
 The PR title and body are the single commit message. Assess adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation using `uplink.toml`.
 
+`--package <dir>` writes the assessment package: `assessment.json` (the result, the public message, the `uplink.toml` settings it scanned with, and for a patch its queue entry and the `uplink/state` commit it was read at), `assessment.md` (the report assess prints), and `change.patch` (what was assessed: the diff of the change, or the patch file). The pull request checks and Uplink submit upload it for the company assessment hook, and `report --assess-result` stores it with the patch. The package is written before assess exits non-zero on findings.
+
 - `--from <ref>`: Base revision, main by default (fetched from origin if missing).
 - `--head <ref>`: Head revision, HEAD by default (fetched from origin if missing).
 - `--title <text>`: Title of the change.
@@ -167,7 +170,9 @@ The PR title and body are the single commit message. Assess adds a co-author tra
 - `--internal-only`: Assess as an internal-only change: never exported, leak scan skipped.
 - `--patch <id>`: Assess a queued patch in its layer, with its stored title and message.
 
-  `--title` or `--message[-file]` override the stored ones, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
+  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. With them, the change between the two revisions is assessed as that patch. `--title` or `--message[-file]` override the stored ones, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
+- `--package <dir>`: Write the assessment package (assessment.json, assessment.md, change.patch) to this directory.
+- `--json`: Print assessment.json instead of the report.
 
 ### `report`
 
@@ -175,18 +180,18 @@ Write the contribution packet for a patch and print it.
 
 Writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the packet. The submit workflow appends that stdout to `GITHUB_STEP_SUMMARY`.
 
-For an upstream-bound patch, report first runs the upstream assessment again on the patch file as it is in the queue, with today's `uplink.toml`, and stores that result. The pull request check and import assess the change before it is a patch; this is the result the packet shows. Nothing is applied: whether the patch still applies on upstream is what `preflight` checks. When the assessment has findings, the packet is still written and printed, and report exits non-zero.
+The packet of an upstream-bound patch shows an assessment of the patch file as it is in the queue, made with today's `uplink.toml`. The pull request check and import assess the change before it is a patch. Uplink submit runs `assess --patch <id> --package` and passes the result with `--assess-result`; without it, report assesses the patch file itself. Either way the result is stored with the patch. Nothing is applied: whether the patch still applies on upstream is what `preflight` checks. When the assessment has findings, the packet is still written and printed, and report exits non-zero.
 
-Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). Submit runs the hook from branch `uplink/hooks` with the patch id and the `uplink/state` commit to read it from when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
+Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). Submit runs the hook from branch `uplink/hooks` on the assessment package when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
 
 - `<id>`: Patch to report on.
 - `--out <path>`: Write the packet here instead of .uplink/reports/\<id>/assessment.md.
 - `--extra-dir <path>`: Directory of \*.md files prepended to the packet. Without it, extras stored for the unchanged patch are used.
 - `--store-extras`: Also store --extra-dir as the patch's extras for later packets.
 - `--extra-source <url>`: Where the stored extras came from, such as the hook run URL.
-- `--extra-state <rev>`: Commit of uplink/state the hook read the patch from.
+- `--assess-result <path>`: Store this assessment instead of assessing here: `assessment.json` of `assess --patch <id> --package`.
 
-  Refused when the patch file is no longer what it was at that commit: the patch changed while the hook ran, so --extra-dir describes other content.
+  Refused when it is not for the patch as it is now: the patch file, title, message or `uplink.toml` changed since, or the result does not match what assessing the patch gives. The company assessment hook read the same package, so this also covers --extra-dir.
 
 ### `status`
 

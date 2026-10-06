@@ -7,21 +7,21 @@ use std::process::ExitCode;
 use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
-    AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, Error, FROM_UPSTREAM_ENVIRONMENT,
-    Forge, IncomingPreflight, InitOpts, MergeVia, PreflightError, PreflightReport, ProgressMode,
-    PushOpts, RebuildOpts, STATE_BRANCH, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT,
-    accept_upstream_at, add_patch, adopted_next_steps, amend_patch_with, amend_preflight,
-    approve_patch_reviewed, assess_from_message, assess_patch_for_packet, command_preflight,
-    commit_queue, doctor, drop_patch, existing_patch_preflight, format_approval_receipt,
-    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
-    format_init_summary, format_status_table, from_upstream_report_paths, git_ok,
-    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    parse_github_repo, parse_pull_request_url, patch_same_as_at, push_queue, read_queue,
-    rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
-    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict,
-    review_token, review_token_path, status_report, status_snapshot, store_patch_extras,
-    stored_commit_message, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
-    write_man_pages,
+    AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, AssessPackage, Error,
+    FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia, PACKAGE_CHANGE,
+    PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode, PushOpts,
+    RebuildOpts, STATE_BRANCH, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT, accept_upstream_at,
+    add_patch, adopted_next_steps, amend_patch_with, amend_preflight, approve_patch_reviewed,
+    assess_from_message, assess_patch_file, assess_patch_for_packet, change_between,
+    command_preflight, commit_queue, doctor, drop_patch, existing_patch_preflight,
+    format_approval_receipt, format_assess_markdown, format_contribution_packet_with_extras,
+    format_doctor_summary, format_init_summary, format_status_table, from_upstream_report_paths,
+    git_ok, hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
+    parse_github_repo, parse_pull_request_url, patch_text, push_queue, read_queue, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, refuse_script_with_credentials,
+    report_paths, reset_from_origin, resolve_conflict, review_token, review_token_path,
+    status_report, status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
+    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
@@ -722,26 +722,84 @@ fn cmd_reset(repo: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// What `assess` was asked to assess.
+enum AssessTarget {
+    /// The change between two revisions.
+    Change {
+        from: Option<String>,
+        head: Option<String>,
+        title: String,
+        message: String,
+        internal_only: bool,
+        /// The queued patch the change is assessed as, if any.
+        patch: Option<Patch>,
+    },
+    /// The patch file of a queued patch.
+    PatchFile { patch: Patch, internal_only: bool },
+}
+
 fn cmd_assess(
     repo: &Path,
-    from: Option<String>,
-    head: Option<String>,
-    title: String,
-    message: String,
-    internal_only: bool,
+    target: AssessTarget,
+    package_dir: Option<PathBuf>,
+    json: bool,
 ) -> Result<(), Error> {
     let queue = read_queue(repo)?;
-    let report = assess_from_message(
-        repo,
-        &queue,
-        from.as_deref().unwrap_or("main"),
-        head.as_deref().unwrap_or("HEAD"),
-        &message,
-        Some(&title),
-        PatchIntent::from_internal_only(internal_only),
-    )?;
+    let (report, title, patch, change) = match target {
+        AssessTarget::Change {
+            from,
+            head,
+            title,
+            message,
+            internal_only,
+            patch,
+        } => {
+            let from = from.as_deref().unwrap_or("main");
+            let head = head.as_deref().unwrap_or("HEAD");
+            let report = assess_from_message(
+                repo,
+                &queue,
+                from,
+                head,
+                &message,
+                Some(&title),
+                PatchIntent::from_internal_only(internal_only),
+            )?;
+            let change = change_between(repo, from, head)?;
+            (report, title, patch, change)
+        }
+        AssessTarget::PatchFile {
+            patch,
+            internal_only,
+        } => {
+            let text = patch_text(repo, &patch.id)?;
+            let intent = PatchIntent::from_internal_only(internal_only);
+            let report = assess_patch_file(&queue, &patch, &text, intent);
+            (report, patch.title.clone(), Some(patch), text)
+        }
+    };
     let markdown = format_assess_markdown(&report);
-    println!("{markdown}");
+    let package = AssessPackage::new(repo, &queue, &report, &title, &change, patch.as_ref())?;
+    let package_json = serde_json::to_string_pretty(&package)
+        .map_err(|err| Error::msg(format!("could not write the assessment as JSON: {err}")))?;
+    if let Some(dir) = package_dir {
+        write_markdown_file(repo, &dir.join(PACKAGE_JSON), &package_json)?;
+        write_markdown_file(repo, &dir.join(PACKAGE_MARKDOWN), &markdown)?;
+        let change_file = if dir.is_absolute() {
+            dir.join(PACKAGE_CHANGE)
+        } else {
+            repo.join(&dir).join(PACKAGE_CHANGE)
+        };
+        // Written as is: `changeBlob` in the JSON is the blob of this file.
+        fs::write(&change_file, &change).map_err(|err| {
+            Error::msg(format!("could not write {}: {err}", change_file.display()))
+        })?;
+    }
+    if json {
+        println!("{package_json}");
+    } else {
+        println!("{markdown}");
+    }
     if !report.ok {
         return Err(Error::msg("assess failed"));
     }
@@ -755,19 +813,29 @@ fn cmd_report(
     extra_dir: Option<PathBuf>,
     store_extras: bool,
     extra_source: Option<String>,
-    extra_state: Option<String>,
+    assess_result: Option<PathBuf>,
 ) -> Result<(), Error> {
-    if let Some(state) = extra_state.as_deref()
-        && !patch_same_as_at(repo, id, state)?
-    {
-        return Err(Error::msg(format!(
-            "{id} changed while the assessment hook ran, so its result is for other content; dispatch Uplink submit again."
-        )));
+    // First: a result that is not for the patch as it is now stops here,
+    // before the extras of the hook that read the same package are stored.
+    match assess_result {
+        Some(path) => {
+            let text = fs::read_to_string(&path)
+                .map_err(|err| Error::msg(format!("could not read {}: {err}", path.display())))?;
+            let package: AssessPackage = serde_json::from_str(&text).map_err(|err| {
+                Error::msg(format!(
+                    "{} is not an assessment result: {err}",
+                    path.display()
+                ))
+            })?;
+            store_assess_result(repo, id, &package)?;
+        }
+        None => {
+            assess_patch_for_packet(repo, id)?;
+        }
     }
     if store_extras && let Some(dir) = extra_dir.as_deref() {
         store_patch_extras(repo, id, dir, extra_source)?;
     }
-    assess_patch_for_packet(repo, id)?;
     let queue = read_queue(repo)?;
     let patch = queue
         .all_patches()
@@ -1256,25 +1324,53 @@ fn run() -> Result<(), Error> {
             message_file,
             internal_only,
             patch,
+            package,
+            json,
         } => {
-            if let Some(id) = patch {
+            let target = if let Some(id) = patch {
                 let queue = read_queue(&repo)?;
-                let stored = queue
+                let mut stored = queue
                     .all_patches()
                     .find(|p| p.id == id)
-                    .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
+                    .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?
+                    .clone();
                 let title = title.unwrap_or_else(|| stored.title.clone());
                 let message = if message.is_some() || message_file.is_some() {
                     read_commit_message(message, message_file, &title)?
                 } else {
-                    stored_commit_message(stored)
+                    stored_commit_message(&stored)
                 };
                 let internal_only = !queue.is_upstream(&id);
-                return cmd_assess(&repo, from, head, title, message, internal_only);
-            }
-            let title = title.unwrap_or_else(|| "candidate change".into());
-            let message = read_commit_message(message, message_file, &title)?;
-            cmd_assess(&repo, from, head, title, message, internal_only)
+                if from.is_none() && head.is_none() {
+                    stored.title = title;
+                    stored.commit_message = message;
+                    AssessTarget::PatchFile {
+                        patch: stored,
+                        internal_only,
+                    }
+                } else {
+                    AssessTarget::Change {
+                        from,
+                        head,
+                        title,
+                        message,
+                        internal_only,
+                        patch: Some(stored),
+                    }
+                }
+            } else {
+                let title = title.unwrap_or_else(|| "candidate change".into());
+                let message = read_commit_message(message, message_file, &title)?;
+                AssessTarget::Change {
+                    from,
+                    head,
+                    title,
+                    message,
+                    internal_only,
+                    patch: None,
+                }
+            };
+            cmd_assess(&repo, target, package, json)
         }
         Commands::Report {
             id,
@@ -1282,7 +1378,7 @@ fn run() -> Result<(), Error> {
             extra_dir,
             store_extras,
             extra_source,
-            extra_state,
+            assess_result,
         } => cmd_report(
             &repo,
             &id,
@@ -1290,7 +1386,7 @@ fn run() -> Result<(), Error> {
             extra_dir,
             store_extras,
             extra_source,
-            extra_state,
+            assess_result,
         ),
         Commands::Preflight {
             id,

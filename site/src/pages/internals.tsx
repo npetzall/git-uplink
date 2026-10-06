@@ -171,14 +171,14 @@ sequenceDiagram
 const SUBMIT_CHART = `
 sequenceDiagram
   actor Op as Operator
-  participant Packet as extras + packet jobs
+  participant Packet as assess + packet jobs
   participant Pre as preflight job
   participant Env as to-upstream
   participant Submit as submit job
   participant Fork as contribution fork
   participant Up as upstream
   Op->>Packet: dispatch Uplink submit (id)
-  Packet->>Packet: run the hook with the patch id, then git uplink report (assess the export)
+  Packet->>Packet: git uplink assess --package, run the hook on it, then git uplink report
   Packet->>Submit: needs
   Op->>Pre: same dispatch
   Pre->>Pre: git uplink preflight id --json (preflight.sh, read-only token)

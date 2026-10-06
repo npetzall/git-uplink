@@ -1,6 +1,6 @@
 # Story 7 — Assessment hook extras on the IP packet
 
-Company scans that belong in the contribution packet run in **Uplink submit**, on the patch, **before** the packet is written and Environment **to-upstream** is asked. The same hook also runs on the internal PR, where its result is advice in a comment and is not kept. Hooks are company-only, so they live on the orphan branch `uplink/hooks`, not on `main`. The forge pack ships a placeholder `.github/workflows/uplink-assessment-hook.yml` on `main`, because GitHub only dispatches workflows whose file is on the default branch. Submit's extras job runs the real hook with `--ref uplink/hooks` and prepends artifact `uplink-packet-extra` onto `assessment.md`.
+Company scans that belong in the contribution packet run in **Uplink submit**, on the patch, **before** the packet is written and Environment **to-upstream** is asked. The same hook also runs on the internal PR, where its result is advice in a comment and is not kept. Hooks are company-only, so they live on the orphan branch `uplink/hooks`, not on `main`. The forge pack ships a placeholder `.github/workflows/uplink-assessment-hook.yml` on `main`, because GitHub only dispatches workflows whose file is on the default branch. Submit's assess job runs the real hook with `--ref uplink/hooks` and prepends artifact `uplink-packet-extra` onto `assessment.md`.
 
 This is the walkthrough for [templates/github/README.md](../../../templates/github/README.md) **Assessment hook**. The guide is [`assessment-hook.md`](../../../templates/github-hooks/assessment-hook.md) and the starter is [`uplink-assessment-hook-example.yml`](../../../templates/github-hooks/.github/workflows/uplink-assessment-hook-example.yml). `git uplink init` put both on the orphan branch `uplink/hooks` during setup.
 
@@ -75,7 +75,7 @@ Ticket: PROJ-1234
 Uplink-Export-Author: Asha <asha@example.com>
 ```
 
-Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green. **Uplink upstream assess** also ran **Uplink assessment hook** with `pr`. The PR has one Uplink comment: `## Company review notes` sits above the assess report.
+Wait until **Uplink upstream assess** and **Uplink upstream preflight** are green. **Uplink upstream assess** uploaded its assessment package as artifact `uplink-assessment` and ran **Uplink assessment hook**, which read it (`kind` is `pr`). The PR has one Uplink comment: `## Company review notes` sits above the assess report.
 
 Edit the PR body (for example add a line above the cutoff). The checks run again and the same comment is updated; no second comment appears.
 
@@ -92,7 +92,7 @@ Copy Asha’s patch id (`upl_` + 10 hex digits).
 
 **Actions → Uplink submit → Run workflow** on internal `main`, input `patch_id` = Asha’s id.
 
-The extras job runs **Uplink assessment hook** with `patch` set to Asha’s id and `state` set to the `uplink/state` commit to read it from. The packet job then assesses the patch file and writes the packet. Open its `GITHUB_STEP_SUMMARY` (or `.uplink/reports/<id>/assessment.md` on `uplink/state`): `## Company review notes` sits **above** `# Contribution packet`.
+The assess job runs `git uplink assess --patch <id> --package` and uploads the package as artifact `uplink-assessment`: `assessment.json` (`kind` is `patch`, with the result, the `uplink.toml` settings and Asha’s queue entry), `assessment.md` and `change.patch`. **Uplink assessment hook** reads it. The packet job then stores that assessment and writes the packet. Open its `GITHUB_STEP_SUMMARY` (or `.uplink/reports/<id>/assessment.md` on `uplink/state`): `## Company review notes` sits **above** `# Contribution packet`.
 
 The result is now stored with the patch:
 
@@ -101,7 +101,7 @@ git fetch origin uplink/state
 git show "origin/uplink/state:.uplink/reports/<id>/extras/10-company.md"
 ```
 
-Dispatch **Uplink submit** again for the same patch and the hook does not run: the extras job’s summary says the company extras are stored for the unchanged patch. If the patch changes (for example a conflict is resolved), the stored extras no longer match and the hook runs again.
+Dispatch **Uplink submit** again for the same patch and the hook does not run: the assess job’s summary says the company extras are stored for the unchanged patch. If the patch changes (for example a conflict is resolved), the stored extras no longer match and the hook runs again.
 
 Then **Review deployments** → approve `to-upstream`. Full upstream merge and flow-back are [story 01](01-solo-fix.md).
 
