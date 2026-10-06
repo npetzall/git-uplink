@@ -252,6 +252,16 @@ jobs:
           patch-ids: ${{ steps.transfer.outputs.ready_to_submit }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # A rebuild writes every commit of main again. Tell the open pull
+      # requests it left behind how to rebase; a failure here is not a
+      # failure of the job.
+      - name: Tell open pull requests about a rebuilt main
+        continue-on-error: true
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}
+
   # preflight.sh builds and runs product code (public upstream's included),
   # so it runs in this job: read-only token, no App token, no Environment,
   # no credentials in the checkout. The job that holds the write tokens
@@ -464,6 +474,16 @@ jobs:
         with:
           patch-ids: ${{ steps.transfer.outputs.ready_to_submit }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # A rebuild writes every commit of main again. Tell the open pull
+      # requests it left behind how to rebase; a failure here is not a
+      # failure of the job.
+      - name: Tell open pull requests about a rebuilt main
+        continue-on-error: true
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}
 
   cleanup:
     name: Abort transfer

@@ -38,6 +38,7 @@ const LABELS = [
   ["uplink:transfer-to-upstream", "1D76DB", "Uplink gated transfer to the upstream queue"],
   ["uplink:transfer-to-internal", "1D76DB", "Uplink gated transfer to the internal queue"],
   ["uplink:amend", "0E8A16", "Uplink gated amend of a patch"],
+  ["uplink:rebase", "FBCA04", "Ask Uplink rebase to rebase this branch onto main"],
 ];
 
 const VARIABLES = [
@@ -48,6 +49,11 @@ const VARIABLES = [
     "UPLINK_AUTO_SUBMIT",
     "false",
     "true dispatches Uplink submit for a patch once its upstream dependencies are merged. IP still approves each one",
+  ],
+  [
+    "UPLINK_AUTO_REBASE",
+    "false",
+    "true rebases and pushes every open pull request branch a rebuild of main leaves behind. The committer becomes the bot and commit signatures are lost",
   ],
 ];
 

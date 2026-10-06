@@ -35,25 +35,25 @@ use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
     add_event, apply_order_active, apply_order_upstream_layer, cannot_depend_on, get_patch,
     get_patch_mut, is_active, move_patch, patch_path, read_queue as read_queue_file,
-    write_queue as write_queue_file,
+    write_previous_main, write_queue as write_queue_file,
 };
 use crate::repo::{
     COMPANY_REMOTE, TempWorktree, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha,
-    commit_queue, conflicted_files, copy_dir, ensure_company_branch_ref, ensure_configured_remotes,
-    ensure_revs, ensure_state_worktree, ensure_upstream_ref, fetch_state_tracking,
-    fetch_tracking_sha, fetch_upstream, fetch_upstream_remote, has_ref, is_ancestor, merge_base,
-    new_patch_id, patch_already_applied_on, path_exists_at, point_branch_at, promote_upstream,
-    push_branch_force, push_state_branch, queue_at, refresh_company_branch, refresh_upstream_ref,
-    replace_state_from_origin, restore_paths_from, rev_parse, set_state_branch, stable_patch_id,
-    stable_patch_id_from_contents, stamp, state_exists, try_replace_state_from_origin,
-    uplink_uncommitted_paths, write_product_patch,
+    commit_queue, commits_with_patch_id, conflicted_files, copy_dir, ensure_company_branch_ref,
+    ensure_configured_remotes, ensure_revs, ensure_state_worktree, ensure_upstream_ref,
+    fetch_state_tracking, fetch_tracking_sha, fetch_upstream, fetch_upstream_remote, has_ref,
+    is_ancestor, merge_base, new_patch_id, patch_already_applied_on, path_exists_at,
+    point_branch_at, promote_upstream, push_branch_force, push_state_branch, queue_at,
+    refresh_company_branch, refresh_upstream_ref, replace_state_from_origin, restore_paths_from,
+    rev_parse, set_state_branch, stable_patch_id, stable_patch_id_from_contents, stamp,
+    state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
 use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings};
 use crate::types::{
-    ApplyOutcome, AssessReport, Forge, GateKind, LastSync, MergeVia, Patch, PatchApproval,
-    PatchConflict, PatchEvent, PatchIntent, PatchLayer, PatchMerged, PatchSource, PatchStatus,
-    PatchUpstream, PendingMerge, PendingUpstream, QueueConfig, QueueState, STATE_BRANCH,
-    TransferDirection,
+    ApplyOutcome, AssessReport, Forge, GateKind, LastSync, MergeVia, PREVIOUS_MAIN_PATH, Patch,
+    PatchApproval, PatchConflict, PatchEvent, PatchIntent, PatchLayer, PatchMerged, PatchSource,
+    PatchStatus, PatchUpstream, PendingMerge, PendingUpstream, PreviousMain, QueueConfig,
+    QueueState, STATE_BRANCH, TransferDirection,
 };
 
 mod add;
@@ -61,6 +61,7 @@ mod amend;
 mod init;
 mod lifecycle;
 mod push;
+mod rebase;
 mod rebuild;
 mod status;
 mod submit;
@@ -72,6 +73,7 @@ pub use amend::*;
 pub use init::*;
 pub use lifecycle::*;
 pub use push::*;
+pub use rebase::*;
 pub use rebuild::*;
 pub use status::*;
 pub use submit::*;

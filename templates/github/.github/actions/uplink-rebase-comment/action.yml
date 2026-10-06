@@ -1,0 +1,227 @@
+name: Uplink rebase comment
+description: >-
+  Tell a pull request that the main it was cut from has been replaced by a
+  rebuild, and how to rebase it: one comment per PR, written when the branch
+  needs a rebase or needs another one, removed once the developer has rebased
+  and pushed. Without pr-number it looks at every open pull request into
+  main. With auto-rebase it also dispatches Uplink rebase for a pull request
+  it writes the comment on. The pull request's branch is fetched, never
+  checked out, and nothing the pull request controls is put into the comment.
+inputs:
+  token:
+    description: >-
+      Token with contents read and pull-requests write on this repository,
+      and actions write for auto-rebase. Workflows pass secrets.GITHUB_TOKEN.
+    required: true
+  pr-number:
+    description: Number of the one pull request to look at. Empty for every open pull request into main.
+    required: false
+    default: ""
+  auto-rebase:
+    description: "'true' dispatches Uplink rebase for a pull request this run writes the comment on. Workflows pass vars.UPLINK_AUTO_REBASE."
+    required: false
+    default: ""
+  note:
+    description: A line added to the comment, and a reason to write it again. Uplink rebase passes why it stopped.
+    required: false
+    default: ""
+  rebased-from:
+    description: >-
+      Head of the branch before Uplink rebase pushed it. With pr-number,
+      replaces the comment with how to bring a local copy of the branch up to
+      date.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Comment how to rebase
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        UPLINK_INTERNAL_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        AUTO_REBASE: ${{ inputs.auto-rebase }}
+        NOTE: ${{ inputs.note }}
+        REBASED_FROM: ${{ inputs.rebased-from }}
+      run: |
+        set -euo pipefail
+        body="$RUNNER_TEMP/uplink-rebase-comment.md"
+        fetch_origin() {
+          local auth
+          auth=$(printf 'x-access-token:%s' "$UPLINK_INTERNAL_TOKEN" | base64 -w0)
+          git \
+            -c "http.${GITHUB_SERVER_URL}/.extraheader=" \
+            -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
+            fetch --quiet origin "$@"
+        }
+        # "<id> <kind> <fork point>" of this PR's rebase comment, empty when it has none.
+        find_comment() {
+          gh api --paginate "repos/${GH_REPO}/issues/$1/comments" --jq '
+            .[]
+            | select(.user.login == "github-actions[bot]")
+            | select(.body | test("<!-- uplink:rebase [a-z]+( [0-9a-f]+)? -->"))
+            | (.body | capture("<!-- uplink:rebase (?<kind>[a-z]+)( (?<fork>[0-9a-f]+))? -->")) as $m
+            | "\(.id) \($m.kind) \($m.fork // "")"' | head -n 1
+        }
+        # Writes $body as this PR's rebase comment: in place when there is
+        # one, and as a new one when another run has just removed it.
+        write_comment() {
+          if [ -n "$2" ] \
+            && gh api --method PATCH "repos/${GH_REPO}/issues/comments/$2" -F "body=@${body}" > /dev/null 2>&1; then
+            return
+          fi
+          gh api --method POST "repos/${GH_REPO}/issues/$1/comments" -F "body=@${body}" > /dev/null
+        }
+        run_link() {
+          echo
+          echo "[Run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+        }
+
+        if [ -n "$PR_NUMBER" ] && [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+          echo "::warning title=Uplink rebase::not a pull request number, skipped"
+          exit 0
+        fi
+
+        if [ -n "$REBASED_FROM" ]; then
+          if [ -z "$PR_NUMBER" ] || [[ ! "$REBASED_FROM" =~ ^[0-9a-f]{40,64}$ ]]; then
+            echo "::warning title=Uplink rebase::rebased-from needs pr-number and a commit sha"
+            exit 0
+          fi
+          {
+            echo '<!-- uplink:rebase done -->'
+            echo '**Uplink rebase rebased this branch onto `main` and pushed it.** A local copy of the branch still has the commits from before. With that branch checked out:'
+            echo
+            echo 'Nothing local to keep:'
+            echo
+            echo '```bash'
+            echo 'git fetch origin'
+            echo 'git reset --hard @{u}'
+            echo '```'
+            echo
+            echo 'Local commits that were not pushed:'
+            echo
+            echo '```bash'
+            echo 'git fetch origin'
+            echo "git rebase --onto @{u} ${REBASED_FROM}"
+            echo '```'
+            echo
+            echo 'Uncommitted changes: `git stash` first, `git stash pop` after.'
+            run_link
+          } > "$body"
+          read -r id _ _ <<<"$(find_comment "$PR_NUMBER")" || true
+          write_comment "$PR_NUMBER" "${id:-}"
+          exit 0
+        fi
+
+        fields=number,headRefOid,headRefName,isCrossRepository,baseRefName,state
+        if [ -n "$PR_NUMBER" ]; then
+          prs=$(gh pr view "$PR_NUMBER" --json "$fields" | jq -c '[.]')
+        else
+          prs=$(gh pr list --base main --state open --limit 200 --json "$fields")
+        fi
+        # The branch name is tested here and goes no further.
+        mapfile -t heads < <(jq -r '
+          .[]
+          | select(.state == "OPEN" and .baseRefName == "main" and (.isCrossRepository | not))
+          | select(.headRefName | startswith("uplink/") | not)
+          | "\(.number) \(.headRefOid)"' <<<"$prs")
+
+        for entry in "${heads[@]}"; do
+          read -r number oid <<<"$entry"
+          if [[ ! "$number" =~ ^[0-9]+$ ]] || [[ ! "$oid" =~ ^[0-9a-f]{40,64}$ ]]; then
+            continue
+          fi
+          if ! fetch_origin "refs/pull/${number}/head" || ! git cat-file -e "${oid}^{commit}" 2>/dev/null; then
+            echo "::warning title=Uplink rebase::could not fetch pull request #${number}, skipped"
+            continue
+          fi
+          if ! plan=$(git uplink rebase --plan --head "$oid" --json); then
+            echo "::warning title=Uplink rebase::no rebase plan for pull request #${number}, skipped"
+            continue
+          fi
+          state=$(jq -r '.state' <<<"$plan")
+          fork=$(jq -r '.forkPoint // empty' <<<"$plan")
+          command=$(jq -r '.command // empty' <<<"$plan")
+          reason=$(jq -r '.reason // empty' <<<"$plan")
+          id="" kind="" old_fork=""
+          read -r id kind old_fork <<<"$(find_comment "$number")" || true
+
+          case "$state" in
+            replaced)
+              if [[ ! "$fork" =~ ^[0-9a-f]{40,64}$ ]]; then
+                continue
+              fi
+              changed=true
+              if [ "$kind" = "needs" ] && [ "$old_fork" = "$fork" ]; then
+                changed=false
+              fi
+              if [ "$changed" = "false" ] && [ -z "$NOTE" ]; then
+                continue
+              fi
+              {
+                echo "<!-- uplink:rebase needs ${fork} -->"
+                echo '**This branch was cut from a `main` that a rebuild has since replaced.** Until it is rebased, the pull request lists commits of the old `main` as its own.'
+                echo
+                echo 'With git-uplink:'
+                echo
+                echo '```bash'
+                echo 'git fetch origin'
+                echo 'git uplink rebase --no-fetch'
+                echo '```'
+                echo
+                echo 'With git alone:'
+                echo
+                echo '```bash'
+                echo 'git fetch origin'
+                echo "$command"
+                echo '```'
+                echo
+                echo 'Then `git push --force-with-lease`. Or add the label `uplink:rebase` and Uplink rebase does it.'
+                if [ -n "$NOTE" ]; then
+                  echo
+                  echo "$NOTE"
+                fi
+                run_link
+              } > "$body"
+              write_comment "$number" "$id"
+              echo "Pull request #${number}: rebase needed from ${fork}"
+              if [ "$changed" = "true" ] && [ "$AUTO_REBASE" = "true" ]; then
+                if gh workflow run "Uplink rebase" --ref main -f "pr_number=${number}"; then
+                  echo "Dispatched Uplink rebase for #${number}"
+                else
+                  echo "::warning title=Uplink auto-rebase::Failed to dispatch Uplink rebase for #${number}; add the label uplink:rebase."
+                fi
+              fi
+              ;;
+            current | behind | unknown)
+              if [ -n "$NOTE" ] && [ "$state" != "current" ]; then
+                {
+                  echo '<!-- uplink:rebase stopped -->'
+                  echo "$NOTE"
+                  if [ -n "$reason" ]; then
+                    echo
+                    echo "git-uplink cannot tell where this branch left \`main\`: ${reason}."
+                  fi
+                  if [ -n "$command" ]; then
+                    echo
+                    echo '```bash'
+                    echo 'git fetch origin'
+                    echo "$command"
+                    echo '```'
+                  fi
+                  run_link
+                } > "$body"
+                write_comment "$number" "$id"
+                continue
+              fi
+              # The developer rebased and pushed, so the instruction goes. A
+              # "done" comment stays: it says how to update a local copy.
+              if [ "$kind" = "needs" ] || { [ "$kind" = "stopped" ] && [ "$state" = "current" ]; }; then
+                gh api --method DELETE "repos/${GH_REPO}/issues/comments/${id}" > /dev/null
+                echo "Pull request #${number}: rebased, comment removed"
+              fi
+              ;;
+          esac
+        done

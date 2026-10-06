@@ -207,11 +207,22 @@ git switch -c fix/token-hash origin/main`}</Code>
 
       <Section id="main-moved" title="Main moved under my PR">
         <p>
-          Other merges, and syncs from upstream, move <code>main</code>. Sync may rewrite it. Rebase your branch
-          onto the new <code>main</code>, as you would for any shared branch:
+          Other merges move <code>main</code>, and a rebuild (after a sync from upstream, a resolved conflict, an
+          amend) writes every commit of it again. After a rebuild your pull request lists the old patches as if
+          they were yours, and a plain <code>git rebase origin/main</code> replays them. Rebase from the commit
+          your branch started on instead; <code>git uplink rebase</code> finds it:
         </p>
         <Code>{`git fetch origin
-git rebase origin/main`}</Code>
+git uplink rebase --no-fetch
+git push --force-with-lease`}</Code>
+        <p>
+          The pull request gets a comment with this, and with the same rebase as a plain <code>git</code> command
+          if you do not have git-uplink installed. Or add the label <code>uplink:rebase</code> and the bot rebases
+          and pushes the branch for you (it does so unasked where <code>UPLINK_AUTO_REBASE</code> is set). The
+          comment then says how to update your local copy:
+        </p>
+        <Code>{`git fetch origin
+git reset --hard @{u}`}</Code>
         <p>
           Only branch from company <code>main</code>. Never start work from <code>uplink/state</code>,{" "}
           <code>uplink/upstream</code>, the contribution fork, or a protected <code>uplink/…</code> base.

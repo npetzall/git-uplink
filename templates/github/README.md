@@ -12,16 +12,40 @@ The repository variables `UPLINK_SRC` (owner/name of a repository that publishes
 
 **Auto-submit is opt-in.** Set the repository variable `UPLINK_AUTO_SUBMIT` to `true` and the pack dispatches **Uplink submit** for a `queued` upstream patch as soon as none of its upstream-bound dependencies is unmerged: on import, on a transfer `--to-upstream`, when sync marks its last such dependency `merged`, and when resolve puts a conflicted patch back to `queued` or its rebuild marks a dependency `merged`. The binary names those patches (`readyToSubmit` in the output of `add --json`, `sync`, `accept-upstream`, `transfer` and `resolve`), each one once, so a run that IP rejected is not dispatched again by the next sync. A conflict in one patch does not hold back another: submit only needs the patch itself on `uplink/upstream`. A waiting or running **Uplink submit** for the same patch is cancelled and replaced. Nothing else changes: the run assesses the patch, runs the hook, and waits on Environment `to-upstream`. Unset, or any other value, means every submit is dispatched by hand. Only workflows dispatch: after `git uplink merged` or a rebuild run by hand, dispatch submit by hand. Amend dispatches for the amended patch only.
 
+**A rebuild leaves open pull requests behind.** Every commit of `main` is written again by a rebuild (sync, resolve, amend, transfer, an import under `internal[]`, `init --upgrade`), so a branch cut from the old `main` shares only public upstream with the new one and its pull request lists the old patches as its own. Each rebuild records the `main` it replaced in `.uplink/previous-main.json` on `uplink/state`, and `git uplink rebase` finds the commit a branch started from and rebases from there. The pack writes that command as a comment on each such pull request. The developer rebases; the pack does not touch their branch unless asked:
+
+- **Label `uplink:rebase`** on a pull request asks **Uplink rebase** to rebase that branch and push it.
+- **Repository variable `UPLINK_AUTO_REBASE`** set to `true` asks for it on every pull request a rebuild leaves behind, at the moment the comment is written. A rebase that stopped on a conflict is not asked for again.
+
+What **Uplink rebase** does to a branch: the authors stay, the committer becomes the bot, and commit signatures are lost, so leave both off where those branches must carry signed commits. Approvals are dismissed where the repository dismisses stale ones. The developer's local copy falls behind the pushed branch; the comment then says how to update it.
+
 ## `uplink-pr.yml` — Uplink PR checks
 
 - **Runs on:** pull requests to `main` (opened, synchronize, reopened, edited, labeled, unlabeled). Skipped for `uplink:internal-only`. Adding or removing any label runs the checks again, so removing `uplink:internal-only` cannot leave the skipped checks standing as passed.
-- **Does:** two parallel jobs, both required checks, and a third that writes the preflight verdict to the PR.
+- **Does:** two parallel jobs, both required checks, a third that writes the preflight verdict to the PR, and two for a rebuilt `main` that are not checks.
   - **Uplink upstream assess:** turns the PR title and body into the commit message, strips everything below the cutoff, turns `Uplink-Export-Author` into a `Co-Authored-By` trailer, and scans for company keywords and internal email domains. It uploads the assessment package (`git uplink assess --package`: the result, the public message, the `uplink.toml` settings and the diff) as artifact `uplink-assessment`, and runs the optional assessment hook (below), which reads it. Both results go into one PR comment that is updated in place on every run. A failed hook is noted in the comment; it does not fail the check. Both are advice: the change is not a patch yet, and nothing from this run is stored. **Uplink submit** assesses the patch.
   - **Uplink upstream preflight:** applies the change onto public upstream plus declared `Uplink-Depends-On`, then runs `preflight.sh` from `uplink/hooks`, in a step with no token. The job log shows the script's output. Job **Uplink preflight comment** writes the verdict to one PR comment on every run, pass or fail, and updates it in place. The comment lists what the script ran on: `uplink/upstream`, each dependency applied onto it, then the change.
+  - **Uplink rebase hint:** runs `git uplink rebase --plan` on the head, which is fetched and never checked out. When the `main` the branch was cut from has been replaced, it writes one comment with the rebase command, and with `UPLINK_AUTO_REBASE` dispatches **Uplink rebase**. It removes the comment once the developer has rebased and pushed.
+  - **Uplink rebase request:** runs when the label `uplink:rebase` is added. It removes the label, then dispatches **Uplink rebase**. The two checks run on that event as on any label change: a skipped required check counts as passed, so skipping them would let the label turn a failure green. The run they belong to is cancelled when the rebased branch is pushed.
 - **Requires:**
   - `uplink.toml` (`redact_keywords`, `internal_email_domains`) and `preflight.sh` on `uplink/hooks` (see [Settings](#settings));
-  - the Actions token (contents read, pull requests write for the comments, actions write to run the hook);
-  - label `uplink:internal-only`.
+  - the Actions token (contents read, pull requests write for the comments and the label, actions write to run the hook and to dispatch **Uplink rebase**);
+  - labels `uplink:internal-only` and `uplink:rebase`.
+
+## `uplink-rebase.yml` — Uplink rebase
+
+- **Runs on:** dispatch from `main` with a `pr_number`: by hand, by the label `uplink:rebase`, and, with `UPLINK_AUTO_REBASE`, by the PR checks and by every workflow that pushes a rebuilt `main` (import, sync, resolve, transfer, amend).
+- **Does:** rebases one pull request's branch onto `main` and pushes it.
+  - The pull request number is the only input. `git uplink rebase --plan` works out the commit to rebase from in the job; it is never read from the dispatch or from a comment, because a wrong one makes a rebase drop or repeat commits.
+  - Left alone: closed pull requests, pull requests from forks or into another branch, and branches named `main` or `uplink/*`.
+  - The branch is rebased in a worktree of its own with hooks off, so its files never replace the checkout the job's actions run from.
+  - The push is `--force-with-lease` on the head the job read: a push the developer made meanwhile wins and the job fails.
+  - Afterwards the comment says how to bring a local copy of the branch up to date. On a conflict nothing is pushed, the comment says so, and the job fails.
+  - A branch that is only behind `main` is rebased too when asked by hand or by label; it is never dispatched automatically.
+- **Requires:**
+  - the internal App or PAT (contents and workflows write) for the push, so that **Uplink PR checks** runs on the new head, which a push with the Actions token would not start;
+  - the Actions token (contents read, pull requests write for the comment);
+  - Does not take `uplink-mutate`: it does not write `uplink/state`.
 
 ## `uplink-import.yml` — Uplink import
 

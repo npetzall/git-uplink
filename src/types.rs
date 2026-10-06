@@ -6,6 +6,7 @@ use crate::settings::Settings;
 pub const QUEUE_PATH: &str = ".uplink/queue.json";
 pub const PATCH_DIR: &str = ".uplink/patches";
 pub const STATE_BRANCH: &str = "uplink/state";
+pub const PREVIOUS_MAIN_PATH: &str = ".uplink/previous-main.json";
 pub const DEFAULT_CUTOFF: &str = "----- Uplink: internal below this line -----";
 pub const TOOLING_PATCH_KIND: &str = "uplink-tooling";
 pub const TOOLING_PATCH_TITLE: &str = "Uplink tooling";
@@ -505,6 +506,17 @@ impl Default for QueueConfig {
             forge: None,
         }
     }
+}
+
+/// The company main the latest rebuild replaced. Earlier ones are earlier
+/// revisions of the file on `uplink/state`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviousMain {
+    pub at: String,
+    pub tip: String,
+    /// First-parent commits of the replaced main above upstream that carry no
+    /// `Uplink-Patch-Id` trailer: the merges since the rebuild before.
+    pub commits: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

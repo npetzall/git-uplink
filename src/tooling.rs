@@ -405,10 +405,16 @@ mod embed_tests {
             text.contains("types: [opened, synchronize, reopened, edited, labeled, unlabeled]"),
             "{text}"
         );
-        assert!(
-            !text.contains("github.event.action") && !text.contains("github.event.label"),
-            "{text}"
-        );
+        // The one job that looks at the label is the rebase request, which
+        // is not a check.
+        for (key, job) in jobs_of(&text) {
+            assert!(
+                key == "rebase-request"
+                    || (!job.contains("github.event.action")
+                        && !job.contains("github.event.label")),
+                "{key} must run for every label\n{job}"
+            );
+        }
         assert!(
             paths.contains(&".github/pull_request_template.md"),
             "{paths:?}"
@@ -1016,11 +1022,21 @@ mod embed_tests {
                     "{forge:?} {workflow} {job_key} dispatches with the Actions token\n{job}"
                 );
                 let steps = steps_of(job);
-                let last = steps.last().unwrap();
+                let dispatch = steps
+                    .iter()
+                    .position(|step| step.contains(action))
+                    .unwrap_or_else(|| panic!("{forge:?} {workflow} {job_key} does not dispatch"));
+                let written = steps
+                    .iter()
+                    .position(|step| step.contains(&format!("id: {step_id}\n")))
+                    .unwrap_or_else(|| {
+                        panic!("{forge:?} {workflow} {job_key} has no step {step_id}")
+                    });
                 assert!(
-                    last.contains(action),
-                    "{forge:?} {workflow} {job_key} dispatches last, after the queue is pushed\n{last}"
+                    written < dispatch,
+                    "{forge:?} {workflow} {job_key} dispatches after the queue is pushed\n{job}"
                 );
+                let last = steps[dispatch];
                 assert!(
                     last.contains(&format!(
                         "if: ${{{{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.{step_id}.outputs.ready_to_submit != '' && steps.{step_id}.outputs.ready_to_submit != '[]' }}}}"
@@ -1298,6 +1314,139 @@ mod embed_tests {
             assert!(
                 gate.contains("report=$(git uplink preflight --json \"$@\") || true"),
                 "{gate}"
+            );
+        }
+    }
+    #[test]
+    fn a_rebuilt_main_is_told_to_open_pull_requests_and_rebased_on_request() {
+        let action = "uses: $/.github/actions/uplink-rebase-comment";
+        // Every job that pushes a rebuilt main.
+        let sites = [
+            ("uplink-import.yml", "import"),
+            ("uplink-sync.yml", "inspect"),
+            ("uplink-sync.yml", "apply"),
+            ("uplink-transfer.yml", "start"),
+            ("uplink-transfer.yml", "complete"),
+            ("uplink-resolve.yml", "resolve"),
+            ("uplink-amend.yml", "complete"),
+        ];
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = |path: &str| {
+                files
+                    .iter()
+                    .find(|(p, _)| p.ends_with(path))
+                    .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_else(|| panic!("{forge:?} missing {path}"))
+            };
+            let job = |workflow: &str, key: &str| {
+                jobs_of(&text(workflow))
+                    .into_iter()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, job)| job)
+                    .unwrap_or_else(|| panic!("{forge:?} {workflow} has no job {key}"))
+            };
+            for (workflow, key) in sites {
+                let job = job(workflow, key);
+                assert!(
+                    job.contains("git push origin main --force")
+                        || job.contains("git push origin HEAD:main --force")
+                        || job.contains("git uplink rebuild --push"),
+                    "{forge:?} {workflow} {key} pushes main\n{job}"
+                );
+                let last = *steps_of(&job).last().unwrap();
+                // Last, and never the reason the job fails: main is pushed.
+                assert!(
+                    last.contains(action)
+                        && last.contains("continue-on-error: true")
+                        && last.contains("token: ${{ secrets.GITHUB_TOKEN }}")
+                        && last.contains("auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}"),
+                    "{forge:?} {workflow} {key}\n{last}"
+                );
+                assert!(
+                    job.contains("      pull-requests: write\n")
+                        && job.contains("      actions: write\n"),
+                    "{forge:?} {workflow} {key}\n{job}"
+                );
+            }
+
+            let comment = text(".github/actions/uplink-rebase-comment/action.yml");
+            assert!(
+                comment.contains("<!-- uplink:rebase needs ${fork} -->"),
+                "{comment}"
+            );
+            assert!(comment.contains("<!-- uplink:rebase done -->"), "{comment}");
+            // The plan comes from the binary, for a head that is only fetched.
+            assert!(
+                comment.contains("git uplink rebase --plan --head \"$oid\" --json"),
+                "{comment}"
+            );
+            assert!(
+                !comment.contains("git checkout") && !comment.contains("git switch"),
+                "{comment}"
+            );
+            // Dispatch only with the variable, and only for a comment this
+            // run wrote: a rebase that stopped is not asked for again.
+            assert!(
+                comment.contains(
+                    "if [ \"$changed\" = \"true\" ] && [ \"$AUTO_REBASE\" = \"true\" ]; then"
+                ),
+                "{comment}"
+            );
+            assert_eq!(comment.matches("gh workflow run").count(), 1, "{comment}");
+
+            let hint = job("uplink-pr.yml", "rebase-hint");
+            assert!(
+                hint.contains(action)
+                    && hint.contains("pr-number: ${{ github.event.pull_request.number }}")
+                    && hint.contains("persist-credentials: false")
+                    && !hint.contains("\n    if:"),
+                "{forge:?}\n{hint}"
+            );
+            let request = job("uplink-pr.yml", "rebase-request");
+            assert!(
+                request.contains(
+                    "if: ${{ github.event.action == 'labeled' && github.event.label.name == 'uplink:rebase' }}"
+                ),
+                "{forge:?}\n{request}"
+            );
+            let unlabel = request.find("labels/uplink%3Arebase").unwrap();
+            let dispatch = request.find("gh workflow run \"Uplink rebase\"").unwrap();
+            assert!(unlabel < dispatch, "{forge:?}\n{request}");
+            assert!(!request.contains("secrets.UPLINK"), "{forge:?}\n{request}");
+
+            let rebase = text("uplink-rebase.yml");
+            assert!(rebase.contains("name: Uplink rebase\n"), "{rebase}");
+            assert!(!rebase.contains("group: uplink-mutate"), "{rebase}");
+            // The pull request number is the only input: the commit to
+            // rebase from is worked out in the job.
+            assert_eq!(
+                rebase.matches("inputs.").count(),
+                rebase.matches("inputs.pr_number").count(),
+                "{rebase}"
+            );
+            assert!(
+                rebase.contains("git uplink rebase --plan --head \"$old\" --json"),
+                "{rebase}"
+            );
+            // The branch's files stay out of the checkout, and a push made
+            // since the head was read wins.
+            assert!(
+                rebase.contains("git worktree add --quiet --detach \"$tree\" \"$old\"")
+                    && rebase.contains("-c core.hooksPath=/dev/null"),
+                "{rebase}"
+            );
+            assert!(
+                rebase.contains("\"--force-with-lease=refs/heads/${HEAD_REF}:${old}\""),
+                "{rebase}"
+            );
+            assert!(
+                !rebase.contains(" --force\n") && !rebase.contains(" --force "),
+                "{rebase}"
+            );
+            assert!(
+                rebase.contains("git check-ref-format --branch \"$HEAD_REF\""),
+                "{rebase}"
             );
         }
     }

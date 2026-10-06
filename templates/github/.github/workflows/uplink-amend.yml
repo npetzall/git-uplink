@@ -404,6 +404,16 @@ jobs:
           git push origin --delete "$BASE_REF" || true
           git push origin --delete "${BASE_REF}-work" || true
 
+      # A rebuild writes every commit of main again. Tell the open pull
+      # requests it left behind how to rebase; a failure here is not a
+      # failure of the job.
+      - name: Tell open pull requests about a rebuilt main
+        continue-on-error: true
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}
+
   cleanup:
     name: Abort amend
     if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == false && !endsWith(github.event.pull_request.base.ref, '-work')
