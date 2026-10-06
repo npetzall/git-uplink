@@ -2,11 +2,13 @@ name: Install git-uplink
 description: Download a git-uplink release binary and put it on PATH for this runner.
 inputs:
   repo:
-    description: GitHub repository (owner/name) that publishes git-uplink releases
-    required: true
+    description: GitHub repository (owner/name) that publishes git-uplink releases. Empty means npetzall/git-uplink.
+    required: false
+    default: ""
   version:
-    description: Release tag (vX.Y.Z), version (X.Y.Z), or latest
-    required: true
+    description: Release tag (vX.Y.Z), version (X.Y.Z), or latest. Empty means the release that wrote this pack.
+    required: false
+    default: ""
   token:
     description: Token for gh release download. Workflows pass secrets.GITHUB_TOKEN.
     required: false
@@ -22,6 +24,9 @@ runs:
         TOKEN: ${{ inputs.token }}
       run: | # zizmor: ignore[github-env] constant PATH entry for release binary
         set -euo pipefail
+        REPO="${REPO:-npetzall/git-uplink}"
+        # git uplink init writes its own version here.
+        VERSION="${VERSION:-@GIT_UPLINK_VERSION@}"
         if [[ "$VERSION" != "latest" ]]; then
           tag="$VERSION"
           if [[ "$tag" != v* ]]; then

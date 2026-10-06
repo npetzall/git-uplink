@@ -30,6 +30,12 @@ struct GithubFamilyPack;
 #[folder = "templates/github-hooks"]
 struct GithubHooksPack;
 
+/// The action every job installs the binary with, and the placeholder in it
+/// that `composed_files` replaces with this binary's version: pack and binary
+/// are one release.
+const INSTALL_ACTION: &str = ".github/actions/install-git-uplink/action.yml";
+const VERSION_PLACEHOLDER: &str = "@GIT_UPLINK_VERSION@";
+
 pub struct ToolingRefresh {
     pub changed: bool,
 }
@@ -184,7 +190,24 @@ pub fn composed_files(forge: Forge) -> Result<Vec<(String, Vec<u8>)>> {
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files.dedup_by(|a, b| a.0 == b.0);
     files.retain(|(path, _)| !forge.omitted_paths().contains(&path.as_str()));
+    stamp_version(&mut files)?;
     Ok(files)
+}
+
+fn stamp_version(files: &mut [(String, Vec<u8>)]) -> Result<()> {
+    let Some((_, data)) = files.iter_mut().find(|(path, _)| path == INSTALL_ACTION) else {
+        return Ok(());
+    };
+    let text = String::from_utf8_lossy(data);
+    if !text.contains(VERSION_PLACEHOLDER) {
+        return Err(Error::msg(format!(
+            "embedded {INSTALL_ACTION} lacks {VERSION_PLACEHOLDER}"
+        )));
+    }
+    *data = text
+        .replace(VERSION_PLACEHOLDER, env!("CARGO_PKG_VERSION"))
+        .into_bytes();
+    Ok(())
 }
 
 /// Files for the orphan branch `uplink/hooks`, which `init` creates locally.
@@ -394,6 +417,25 @@ mod embed_tests {
             paths.contains(&".github/actions/install-git-uplink/action.yml"),
             "{paths:?}"
         );
+    }
+
+    #[test]
+    fn install_action_defaults_to_the_version_of_this_binary() {
+        let default = format!("VERSION=\"${{VERSION:-{}}}\"", env!("CARGO_PKG_VERSION"));
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            for (path, data) in &files {
+                let text = String::from_utf8_lossy(data);
+                assert!(!text.contains(VERSION_PLACEHOLDER), "{forge:?}: {path}");
+                if path == INSTALL_ACTION {
+                    assert!(text.contains(&default), "{forge:?}: {text}");
+                    assert!(
+                        text.contains("REPO=\"${REPO:-npetzall/git-uplink}\""),
+                        "{forge:?}: {text}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
