@@ -1,7 +1,9 @@
 use std::env;
 use std::fs;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -23,6 +25,52 @@ use crate::types::{ApplyOutcome, Patch, PatchStatus, QueueState};
 const STAGE_COMMAND: &str = "command";
 /// Stage of a [`PreflightError`]: the supplied result is for another tree.
 pub const STAGE_STALE: &str = "stale";
+
+/// Where the output of `preflight.sh` is shown while the script runs. It is
+/// captured for the result either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptEcho {
+    Off,
+    Stdout,
+    /// For a command whose stdout is its result.
+    Stderr,
+}
+
+static SCRIPT_ECHO: AtomicU8 = AtomicU8::new(ScriptEcho::Off as u8);
+
+/// Sets where every later run of `preflight.sh` in this process shows its
+/// output. Off until set, so a caller of the library prints nothing.
+pub fn set_script_echo(echo: ScriptEcho) {
+    SCRIPT_ECHO.store(echo as u8, Ordering::Relaxed);
+}
+
+fn script_echo() -> Box<dyn Write> {
+    match SCRIPT_ECHO.load(Ordering::Relaxed) {
+        x if x == ScriptEcho::Stdout as u8 => Box::new(io::stdout()),
+        x if x == ScriptEcho::Stderr as u8 => Box::new(io::stderr()),
+        _ => Box::new(io::sink()),
+    }
+}
+
+/// Copies `from` to `to` as it arrives and returns all of it.
+fn tee(mut from: impl Read, to: &mut dyn Write) -> Vec<u8> {
+    let mut captured = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match from.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                captured.extend_from_slice(&chunk[..n]);
+                // A closed terminal or pipe must not change the verdict.
+                let _ = to.write_all(&chunk[..n]);
+                let _ = to.flush();
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    captured
+}
 
 /// Credentials a forge job can hold. They are dropped from the environment
 /// of `preflight.sh`, and a CI job that holds one does not run the script at
@@ -54,6 +102,9 @@ pub struct PreflightReport {
     pub message: Option<String>,
     pub suggested_depends_on: Vec<String>,
     pub output: Option<String>,
+    /// What the script ran on, one line each: the base, then what was
+    /// applied onto it. See [`export_tested`] and [`command_tested`].
+    pub tested: Vec<String>,
 }
 
 /// A job output holds 1 MiB; keep a report well under it.
@@ -94,6 +145,7 @@ impl PreflightReport {
                 message: Some(clip(&err.to_string())),
                 suggested_depends_on: err.suggested_depends_on.clone(),
                 output: err.output.as_deref().map(clip),
+                tested: Vec::new(),
             },
             Err(err) => Self {
                 ok: false,
@@ -280,10 +332,24 @@ impl<'a> PreflightScript<'a> {
     }
 
     /// Runs the script with `cwd`, the root of the tree under test, as its
-    /// working directory.
+    /// working directory, and shows its output where [`set_script_echo`] said.
     fn run(&self, cwd: &Path) -> (i32, String) {
+        self.run_to(cwd, &mut *script_echo())
+    }
+
+    /// [`Self::run`] without showing the output, for a run that only probes.
+    fn run_quiet(&self, cwd: &Path) -> (i32, String) {
+        self.run_to(cwd, &mut io::sink())
+    }
+
+    fn run_to(&self, cwd: &Path, echo: &mut dyn Write) -> (i32, String) {
+        // One pipe for stdout and stderr keeps their lines in order.
         let mut cmd = Command::new("sh");
-        cmd.arg(&self.path).current_dir(cwd);
+        cmd.args(["-c", r#"exec sh "$1" 2>&1"#, "sh"])
+            .arg(&self.path)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped());
         for (name, _) in env::vars_os() {
             if name.to_str().is_some_and(is_credential_env) {
                 cmd.env_remove(name);
@@ -311,12 +377,18 @@ impl<'a> PreflightScript<'a> {
             cmd.env(format!("GIT_CONFIG_KEY_{i}"), key)
                 .env(format!("GIT_CONFIG_VALUE_{i}"), "");
         }
-        match cmd.output() {
-            Ok(output) => {
-                let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-                text.push_str(&String::from_utf8_lossy(&output.stderr));
-                (output.status.code().unwrap_or(1), text.trim().to_string())
-            }
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(err) => return (1, err.to_string()),
+        };
+        let captured = child
+            .stdout
+            .take()
+            .map(|out| tee(out, echo))
+            .unwrap_or_default();
+        let text = String::from_utf8_lossy(&captured).trim().to_string();
+        match child.wait() {
+            Ok(status) => (status.code().unwrap_or(1), text),
             Err(err) => (1, err.to_string()),
         }
     }
@@ -440,6 +512,65 @@ pub fn suggest_depends_on(
         }
         Ok(Vec::new())
     })
+}
+
+/// Commits listed by [`command_tested`] before the rest is counted.
+const TESTED_COMMITS_LIMIT: usize = 50;
+
+fn short_sha(repo: &Path, rev: &str) -> Option<String> {
+    git_ok(repo, &["rev-parse", "--short", "--verify", "--quiet", rev])
+        .ok()
+        .filter(|sha| !sha.is_empty())
+}
+
+/// What an export preflight runs `preflight.sh` on, one line each: public
+/// upstream, each of `depends_on` that is applied onto it, then `subject`,
+/// the change itself. For a report; a line that cannot be read is left out.
+pub fn export_tested(
+    repo: &Path,
+    queue: &QueueState,
+    depends_on: &[String],
+    subject: &str,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(sha) = short_sha(repo, "uplink/upstream") {
+        lines.push(format!("uplink/upstream@{sha}"));
+    }
+    for id in depends_on {
+        match get_patch(queue, id) {
+            // Not applied: it is in upstream already. See `apply_deps`.
+            Ok(dep) if dep.status == PatchStatus::Merged => {}
+            Ok(dep) => lines.push(format!("`{}` {}", dep.id, dep.title)),
+            Err(_) => lines.push(format!("`{id}`")),
+        }
+    }
+    lines.push(subject.to_string());
+    lines
+}
+
+/// What `--command-only` runs `preflight.sh` on, one line each: public
+/// upstream, then the commits `HEAD` has on top of it, oldest first. Only
+/// `HEAD` when there is no `uplink/upstream`.
+pub fn command_tested(cwd: &Path) -> Vec<String> {
+    let base = ["uplink/upstream", "origin/uplink/upstream"]
+        .into_iter()
+        .find_map(|name| short_sha(cwd, name).map(|sha| (name, sha)));
+    let Some((name, sha)) = base else {
+        return short_sha(cwd, "HEAD")
+            .map(|sha| vec![format!("HEAD@{sha}")])
+            .unwrap_or_default();
+    };
+    let mut lines = vec![format!("uplink/upstream@{sha}")];
+    let range = format!("{name}..HEAD");
+    let log = git_ok(cwd, &["log", "--oneline", "--reverse", &range]).unwrap_or_default();
+    let commits: Vec<&str> = log.lines().collect();
+    // The newest are the change under test.
+    let skipped = commits.len().saturating_sub(TESTED_COMMITS_LIMIT);
+    if skipped > 0 {
+        lines.push(format!("… {skipped} earlier commits"));
+    }
+    lines.extend(commits[skipped..].iter().map(|line| line.to_string()));
+    lines
 }
 
 pub fn assert_export_preflight(
@@ -586,7 +717,7 @@ fn suggest_command_deps(
         if apply_abs(dir, candidate_abs, &patch.title)? == ApplyOutcome::Conflict {
             continue;
         }
-        let (code, _) = script.run(dir);
+        let (code, _) = script.run_quiet(dir);
         if code == 0 {
             return Ok(prefix);
         }
@@ -962,6 +1093,89 @@ mod tests {
         let err = other.replay("abc").unwrap_err().to_string();
         assert!(err.contains("queue is blocked"), "{err}");
         assert!(PreflightReport::default().replay("abc").is_err());
+    }
+
+    #[test]
+    fn script_output_is_shown_and_captured_in_order() {
+        let dir = repo_with_hooks();
+        let repo = dir.path();
+        commit_file(
+            repo,
+            PREFLIGHT_SCRIPT_PATH,
+            "echo one\necho two >&2\necho three\nexit 3\n",
+        );
+        let head = git_ok(repo, &["rev-parse", "HEAD"]).unwrap();
+        let script = PreflightScript::materialise(repo, &head).unwrap();
+
+        let mut shown = Vec::new();
+        let (code, text) = script.run_to(repo, &mut shown);
+        assert_eq!(code, 3);
+        assert_eq!(text, "one\ntwo\nthree");
+        assert_eq!(String::from_utf8(shown).unwrap(), "one\ntwo\nthree\n");
+
+        // Off until a command sets it.
+        assert_eq!(script.run(repo), (3, "one\ntwo\nthree".to_string()));
+        assert_eq!(script.run_quiet(repo).0, 3);
+    }
+
+    #[test]
+    fn tested_lists_upstream_then_what_is_applied() {
+        let dir = repo_with_hooks();
+        let repo = dir.path();
+        // No uplink/upstream: only HEAD can be named.
+        let head = git_ok(repo, &["rev-parse", "--short", "HEAD"]).unwrap();
+        assert_eq!(command_tested(repo), [format!("HEAD@{head}")]);
+
+        git_ok(repo, &["branch", "uplink/upstream"]).unwrap();
+        assert_eq!(command_tested(repo), [format!("uplink/upstream@{head}")]);
+        commit_file(repo, "b.txt", "two\n");
+        commit_file(repo, "c.txt", "three\n");
+        let listed = command_tested(repo);
+        assert_eq!(listed.len(), 3, "{listed:?}");
+        assert_eq!(listed[0], format!("uplink/upstream@{head}"));
+        assert!(listed[1].ends_with(" b.txt"), "{listed:?}");
+        assert!(listed[2].ends_with(" c.txt"), "{listed:?}");
+
+        for i in 0..TESTED_COMMITS_LIMIT {
+            let message = format!("empty {i}");
+            git_ok(repo, &["commit", "-q", "--allow-empty", "-m", &message]).unwrap();
+        }
+        let listed = command_tested(repo);
+        assert_eq!(listed.len(), TESTED_COMMITS_LIMIT + 2, "{listed:?}");
+        assert_eq!(listed[1], "… 2 earlier commits");
+        assert!(listed.last().unwrap().ends_with(" empty 49"), "{listed:?}");
+
+        let patch = |id: &str, status: PatchStatus| Patch {
+            id: id.into(),
+            title: format!("title of {id}"),
+            status,
+            depends_on: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            patch_id_stable: None,
+            commit_message: String::new(),
+            source: Default::default(),
+            assess: None,
+            upstream: None,
+            merged: None,
+            conflict: None,
+            approvals: Vec::new(),
+            extras: None,
+            events: Vec::new(),
+            kind: None,
+        };
+        let mut queue = QueueState::empty(Default::default());
+        queue.push_patch(patch("upl_aaaaaaaaaa", PatchStatus::Queued), false);
+        queue.push_patch(patch("upl_bbbbbbbbbb", PatchStatus::Merged), false);
+        let deps = ["upl_aaaaaaaaaa".to_string(), "upl_bbbbbbbbbb".to_string()];
+        assert_eq!(
+            export_tested(repo, &queue, &deps, "the change"),
+            [
+                format!("uplink/upstream@{head}"),
+                "`upl_aaaaaaaaaa` title of upl_aaaaaaaaaa".to_string(),
+                "the change".to_string(),
+            ]
+        );
     }
 
     #[test]

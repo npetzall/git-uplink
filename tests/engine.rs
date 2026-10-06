@@ -6960,6 +6960,104 @@ fn preflight_command_does_not_see_uplink_credentials() {
     );
 }
 
+fn run_uplink(repo: &Path, args: &[&str]) -> (bool, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn preflight_shows_the_script_output_and_what_it_ran_on() {
+    let world = setup_world();
+    let company = &world.company;
+    set_preflight_script(company, "echo hello-from-preflight");
+    let upstream = git_ok(company, &["rev-parse", "--short", "uplink/upstream"]).unwrap();
+    let base = format!("uplink/upstream@{upstream}");
+
+    let (ok, stdout, stderr) = run_uplink(company, &["preflight", "--command-only"]);
+    assert!(ok, "{stdout}{stderr}");
+    assert!(stdout.contains("hello-from-preflight"), "{stdout}");
+    assert!(stdout.contains(&format!("Ran on:\n\n- {base}")), "{stdout}");
+    assert!(stdout.ends_with("preflight command passed\n"), "{stdout}");
+
+    // With --json stdout is the result alone; the script prints to stderr.
+    let (ok, stdout, stderr) = run_uplink(company, &["preflight", "--command-only", "--json"]);
+    assert!(ok, "{stdout}{stderr}");
+    assert!(stderr.contains("hello-from-preflight"), "{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["tested"][0], base.as_str());
+    let comment = report["comment"].as_str().unwrap();
+    assert!(
+        comment.starts_with("Uplink preflight passed.\n\nRan on:\n\n- uplink/upstream@"),
+        "{comment}"
+    );
+    assert!(!comment.contains("hello-from-preflight"), "{comment}");
+
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let head = git_ok(company, &["rev-parse", "--short", "HEAD"]).unwrap();
+    let incoming = [
+        "preflight",
+        "--json",
+        "--from",
+        "main",
+        "--head",
+        "HEAD",
+        "--title",
+        "Use SHA-256 for tokens",
+    ];
+    let (ok, stdout, stderr) = run_uplink(company, &incoming);
+    assert!(ok, "{stdout}{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    assert_eq!(
+        report["tested"],
+        serde_json::json!([base, format!("Use SHA-256 for tokens ({head})")])
+    );
+    assert!(
+        report["comment"]
+            .as_str()
+            .unwrap()
+            .starts_with("Uplink export preflight passed.\n\nRan on:"),
+        "{stdout}"
+    );
+
+    // A failure is still one JSON document, with the output in it.
+    set_preflight_script(company, "echo broke-in-preflight; exit 1");
+    let (ok, stdout, stderr) = run_uplink(company, &incoming);
+    assert!(!ok, "{stdout}{stderr}");
+    assert!(stderr.contains("broke-in-preflight"), "{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["output"], "broke-in-preflight");
+    let comment = report["comment"].as_str().unwrap();
+    assert!(
+        comment.contains("Uplink export preflight failed (command)"),
+        "{comment}"
+    );
+    assert!(
+        comment.contains(&format!("Ran on:\n\n- {base}")),
+        "{comment}"
+    );
+}
+
 #[test]
 fn strips_the_internal_commit_section_and_adds_a_co_author_trailer() {
     let world = setup_world();

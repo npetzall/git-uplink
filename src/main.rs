@@ -10,19 +10,20 @@ use git_uplink::{
     AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, AssessPackage, Error,
     FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia, PACKAGE_CHANGE,
     PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode, PushOpts,
-    RebuildOpts, STATE_BRANCH, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT, accept_upstream_at,
-    add_patch, adopted_next_steps, amend_patch_with, amend_preflight, approve_patch_reviewed,
-    assess_from_message, assess_patch_file, assess_patch_for_packet, change_between,
-    command_preflight, commit_queue, doctor, drop_patch, existing_patch_preflight,
-    format_approval_receipt, format_assess_markdown, format_contribution_packet_with_extras,
-    format_doctor_summary, format_init_summary, format_status_table, from_upstream_report_paths,
-    git_ok, hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
+    RebuildOpts, STATE_BRANCH, ScriptEcho, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT,
+    accept_upstream_at, add_patch, adopted_next_steps, amend_patch_with, amend_preflight,
+    approve_patch_reviewed, assess_from_message, assess_patch_file, assess_patch_for_packet,
+    change_between, command_preflight, command_tested, commit_queue, depends_on_from_message,
+    doctor, drop_patch, existing_patch_preflight, export_tested, format_approval_receipt,
+    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
+    format_init_summary, format_status_table, from_upstream_report_paths, git_ok,
+    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
     newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
     read_queue, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
     refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict,
-    review_token, review_token_path, status_report, status_snapshot, store_assess_result,
-    store_patch_extras, stored_commit_message, submit_patch_with, sync_with, transfer_patch_with,
-    transfer_preflight, write_man_pages,
+    review_token, review_token_path, set_script_echo, status_report, status_snapshot,
+    store_assess_result, store_patch_extras, stored_commit_message, submit_patch_with, sync_with,
+    transfer_patch_with, transfer_preflight, write_man_pages,
 };
 use git_uplink::{
     HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
@@ -895,14 +896,41 @@ fn refuse_script_here(
     }
 }
 
+/// `tested` as a markdown list under `heading`. Empty when nothing is listed.
+fn tested_section(heading: &str, tested: &[String]) -> String {
+    if tested.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<String> = tested.iter().map(|line| format!("- {line}")).collect();
+    format!("{heading}\n\n{}\n", lines.join("\n"))
+}
+
+/// The heading `tested` goes under for `result`. A failure without a token
+/// came before the tree was complete, so the script ran on nothing.
+fn tested_heading(result: &Result<Option<String>, Error>) -> &'static str {
+    match result {
+        Err(Error::Preflight(pre)) if pre.token.is_none() => "Tried to apply:",
+        _ => "Ran on:",
+    }
+}
+
 /// Prints `result` as the JSON `--preflight-result` reads. `comment` is the
-/// markdown a failure is reported with.
-fn print_preflight_report(result: Result<Option<String>, Error>) -> Result<(), Error> {
+/// markdown the verdict is reported with: `passed` or the failure, then
+/// `tested`.
+fn print_preflight_report(
+    result: Result<Option<String>, Error>,
+    tested: Vec<String>,
+    passed: &str,
+) -> Result<(), Error> {
+    let section = tested_section(tested_heading(&result), &tested);
     let comment = match &result {
-        Err(Error::Preflight(pre)) => Some(preflight_comment(pre)),
-        _ => None,
+        Ok(_) => Some(format!("{passed}\n\n{section}")),
+        Err(Error::Preflight(pre)) => Some(format!("{}\n{section}", preflight_comment(pre))),
+        Err(_) => None,
     };
-    finish_preflight_report(PreflightReport::of(result), comment)
+    let mut report = PreflightReport::of(result);
+    report.tested = tested;
+    finish_preflight_report(report, comment.map(|text| format!("{}\n", text.trim_end())))
 }
 
 fn finish_preflight_report(report: PreflightReport, comment: Option<String>) -> Result<(), Error> {
@@ -930,15 +958,45 @@ fn cmd_preflight(
     if !incoming.internal_only {
         refuse_script_here(repo, &ScriptVerdict::Run, incoming.hooks_ref.as_deref())?;
     }
-    let result = if let Some(id) = id {
-        let queue = read_queue(repo)?;
-        existing_patch_preflight(repo, &queue, &id, incoming.hooks_ref.as_deref())
+    let queue = read_queue(repo)?;
+    let (result, depends_on, subject) = if let Some(id) = id {
+        let result = existing_patch_preflight(repo, &queue, &id, incoming.hooks_ref.as_deref());
+        // An internal or tooling patch has no export tree.
+        match queue.upstream.iter().find(|patch| patch.id == id) {
+            Some(patch) => (
+                result,
+                patch.depends_on.clone(),
+                Some(format!("`{id}` {}", patch.title)),
+            ),
+            _ => (result, Vec::new(), None),
+        }
+    } else if incoming.internal_only {
+        (incoming_change_preflight(repo, incoming), Vec::new(), None)
     } else {
-        incoming_change_preflight(repo, incoming)
+        let depends_on = depends_on_from_message(
+            incoming.message.as_deref().unwrap_or(""),
+            &incoming.depends_on,
+        );
+        let (title, head) = (incoming.title.clone(), incoming.head_ref.clone());
+        let result = incoming_change_preflight(repo, incoming);
+        // After the run, which fetches a head this clone did not have.
+        let subject = match git_ok(
+            repo,
+            &["rev-parse", "--short", "--verify", "--quiet", &head],
+        ) {
+            Ok(sha) if !sha.is_empty() => format!("{title} ({sha})"),
+            _ => title,
+        };
+        (result, depends_on, Some(subject))
+    };
+    let tested = match subject {
+        Some(subject) => export_tested(repo, &queue, &depends_on, &subject),
+        None => Vec::new(),
     };
     if json {
-        return print_preflight_report(result);
+        return print_preflight_report(result, tested, "Uplink export preflight passed.");
     }
+    print!("{}", tested_section(tested_heading(&result), &tested));
     match result {
         Ok(_) => {
             println!("export preflight passed");
@@ -957,9 +1015,11 @@ fn cmd_preflight_command(repo: &Path, hooks_ref: Option<&str>, json: bool) -> Re
     let queue = read_queue(repo)?;
     refuse_script_with_credentials(repo, &queue, hooks_ref)?;
     let result = command_preflight(&queue, repo, hooks_ref, &ScriptVerdict::Run);
+    let tested = command_tested(repo);
     if json {
-        return print_preflight_report(result);
+        return print_preflight_report(result, tested, "Uplink preflight passed.");
     }
+    print!("{}", tested_section(tested_heading(&result), &tested));
     match result {
         Ok(_) => {
             println!("preflight command passed");
@@ -1259,6 +1319,11 @@ fn run() -> Result<(), Error> {
     let cli = Cli::from_arg_matches(&cli::command(VERSION).get_matches())
         .unwrap_or_else(|err| err.exit());
     let repo = repo_root(env::current_dir()?);
+    // Only plain `preflight` has a stdout that is for reading.
+    set_script_echo(match &cli.command {
+        Commands::Preflight { json: false, .. } => ScriptEcho::Stdout,
+        _ => ScriptEcho::Stderr,
+    });
     match cli.command {
         Commands::Init {
             upstream,

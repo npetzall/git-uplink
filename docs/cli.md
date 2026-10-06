@@ -146,6 +146,8 @@ With `<id>` it checks a queued patch; without, the incoming change between `--fr
 
 `--command-only` applies nothing and just runs `preflight.sh` in the current tree; the gate uses it for internal-only patches.
 
+The output of `preflight.sh` is shown as it runs. The verdict lists what the script ran on: `uplink/upstream`, each dependency applied onto it, then the change; for `--command-only`, the commits the current tree has on top of `uplink/upstream`.
+
 - `<id>`: Queued patch to check instead of an incoming change.
 - `--from <ref>`: Base revision, main by default (fetched from origin if missing).
 - `--head <ref>`: Head revision, HEAD by default (fetched from origin if missing).
@@ -157,6 +159,8 @@ With `<id>` it checks a queued patch; without, the incoming change between `--fr
 - `--command-only`: Only run preflight.sh in the current tree.
 - `--hooks <rev>`: Read preflight.sh from this revision instead of uplink/hooks, to try a change to it.
 - `--json`: Print the result as JSON, for `--preflight-result` of the command that records it.
+
+  `comment` in it is the verdict as markdown, for a pass and for a failure, and `tested` what the script ran on. The output of `preflight.sh` goes to stderr.
 
 ### `assess`
 
@@ -422,6 +426,8 @@ Moving from repository variables: run `git uplink init --upgrade`, answer with t
 What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, read from the local branch, else `origin/uplink/hooks`.
 
 - How it runs: `sh preflight.sh`, with the root of the tree under test as the working directory: the export tree, or the current checkout for `--command-only`. A non-zero exit fails preflight.
+
+- Output: what the script prints is shown as it runs, stdout and stderr together. `git uplink preflight` shows it on stdout. With `--json`, and in every other command that runs the script, it goes to stderr, because stdout is the result.
 
 - Other files on the branch are checked out beside the script for the run; reach them with `"$(dirname "$0")"`.
 

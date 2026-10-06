@@ -50,6 +50,8 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
 
 - How it runs: `sh preflight.sh`, with the root of the tree under test as the working directory: the export tree, or the current checkout for `--command-only`. A non-zero exit fails preflight.
 
+- Output: what the script prints is shown as it runs, stdout and stderr together. `git uplink preflight` shows it on stdout. With `--json`, and in every other command that runs the script, it goes to stderr, because stdout is the result.
+
 - Other files on the branch are checked out beside the script for the run; reach them with `\"$(dirname \"$0\")\"`.
 
 - Environment: the caller's, without `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `UPLINK_*_TOKEN` and `UPLINK_*_KEY`.
@@ -389,6 +391,11 @@ pub enum Commands {
     ///
     /// `--command-only` applies nothing and just runs `preflight.sh` in the
     /// current tree; the gate uses it for internal-only patches.
+    ///
+    /// The output of `preflight.sh` is shown as it runs. The verdict lists
+    /// what the script ran on: `uplink/upstream`, each dependency applied
+    /// onto it, then the change; for `--command-only`, the commits the
+    /// current tree has on top of `uplink/upstream`.
     Preflight {
         /// Queued patch to check instead of an incoming change.
         #[arg(value_name = "id")]
@@ -421,6 +428,10 @@ pub enum Commands {
         #[arg(long, value_name = "rev")]
         hooks: Option<String>,
         /// Print the result as JSON, for `--preflight-result` of the command that records it.
+        ///
+        /// `comment` in it is the verdict as markdown, for a pass and for a
+        /// failure, and `tested` what the script ran on. The output of
+        /// `preflight.sh` goes to stderr.
         #[arg(long)]
         json: bool,
     },
