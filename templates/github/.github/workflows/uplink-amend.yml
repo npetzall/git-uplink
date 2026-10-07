@@ -9,7 +9,8 @@
 # description (they become the patch title and message). Merging runs
 # git uplink amend --complete, which re-assesses the patch and rebuilds
 # company main. If preflight.sh fails on the rebuilt tree, the first patch
-# it fails on (found with git bisect) gets a conflict PR, as in sync. For a submitted patch Uplink submit is dispatched: the patch
+# it fails on (found with git bisect) gets a conflict PR, as in sync. For a
+# submitted patch Uplink submit is dispatched: the patch
 # is amended and needs a delta approval when the amend changes the lines it
 # adds or removes, or the public title or message, and stays submitted when
 # it does not. Closing without merging deletes both branches and leaves the
