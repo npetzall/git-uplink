@@ -362,7 +362,10 @@ pub enum Commands {
         /// `readyToSubmit` lists the patches this import made ready to
         /// submit: upstream-bound, queued, and every upstream dependency
         /// merged. Import dispatches Uplink submit for them when the
-        /// repository variable `UPLINK_AUTO_SUBMIT` is `true`.
+        /// repository variable `UPLINK_AUTO_SUBMIT` is `true`. When the
+        /// rebuild after the import stops on a patch that no longer
+        /// applies, the change is still recorded: the output has `conflict`
+        /// and `gh.prCreate` for the gated PR, and the command exits 0.
         #[arg(long)]
         json: bool,
     },
@@ -825,6 +828,16 @@ pub enum Commands {
         /// the command then gates that patch.
         #[arg(long = "preflight-only", conflicts_with_all = ["preflight_result", "branch", "push"])]
         preflight_only: bool,
+        /// Run preflight.sh on the rebuilt tree also when main already has that tree.
+        ///
+        /// For a `main` that turned out broken without a rebuild noticing,
+        /// for example after an import, whose rebuild is not tested. The
+        /// first patch the script fails on goes to the conflict gate.
+        #[arg(long, conflicts_with = "branch")]
+        verify: bool,
+        /// Print the result as JSON; a patch that goes to the conflict gate prints `gh.prCreate` and exits 0.
+        #[arg(long, conflicts_with_all = ["branch", "preflight_only"])]
+        json: bool,
     },
     /// Finish a conflict resolution and put the patch back in the queue.
     ///

@@ -44,7 +44,7 @@ git uplink gated <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink merged <id> [--via <how>] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
-            [--preflight-result <path>] [--preflight-only]
+            [--preflight-result <path>] [--preflight-only] [--verify] [--json]
 git uplink resolve <id> [--preflight-result <path>] [--preflight-only]
 git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
             [--preflight-result <path>] [--preflight-only]
@@ -117,7 +117,7 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
   The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
 - `--json`: Print the patch as JSON, with `readyToSubmit`.
 
-  `readyToSubmit` lists the patches this import made ready to submit: upstream-bound, queued, and every upstream dependency merged. Import dispatches Uplink submit for them when the repository variable `UPLINK_AUTO_SUBMIT` is `true`.
+  `readyToSubmit` lists the patches this import made ready to submit: upstream-bound, queued, and every upstream dependency merged. Import dispatches Uplink submit for them when the repository variable `UPLINK_AUTO_SUBMIT` is `true`. When the rebuild after the import stops on a patch that no longer applies, the change is still recorded: the output has `conflict` and `gh.prCreate` for the gated PR, and the command exits 0.
 
 ### `push`
 
@@ -391,6 +391,10 @@ Every command that rebuilds does this: `sync`, `accept-upstream`, `resolve`, `am
 - `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
 
   For a job without credentials; pass the output to the same command with `--preflight-result`. Exits 0 also when a patch fails: the command then gates that patch.
+- `--verify`: Run preflight.sh on the rebuilt tree also when main already has that tree.
+
+  For a `main` that turned out broken without a rebuild noticing, for example after an import, whose rebuild is not tested. The first patch the script fails on goes to the conflict gate.
+- `--json`: Print the result as JSON; a patch that goes to the conflict gate prints `gh.prCreate` and exits 0.
 
 ### `gated`
 

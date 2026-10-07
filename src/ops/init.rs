@@ -500,7 +500,7 @@ pub(super) fn write_tooling_patch(
     crate::lock::with_queue_lock(repo, || {
         let refresh = crate::tooling::refresh_tooling_patch(repo)?;
         if rebuild_if_changed && refresh.changed {
-            rebuild_once(repo, None)?;
+            rebuild_once(repo, None, false)?;
         }
         Ok((read_queue_file(repo)?, refresh.changed))
     })
