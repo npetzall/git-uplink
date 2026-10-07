@@ -792,7 +792,10 @@ pub enum Commands {
     /// first; if it fails too, the command fails and no patch is blamed.
     ///
     /// Every command that rebuilds does this: `sync`, `accept-upstream`,
-    /// `resolve`, `amend --complete`, `transfer`, `add`, `drop` and `merged`.
+    /// `resolve`, `amend --complete`, `transfer`, `drop` and `merged`. `add`
+    /// does not: what it imports was merged into `main` by a reviewed pull
+    /// request, and its rebuild only moves that change under the internal
+    /// patches.
     Rebuild {
         /// Rebuild onto uplink/preview/<name> instead of company main (preview; does not mutate the queue or push).
         #[arg(long, value_name = "name")]

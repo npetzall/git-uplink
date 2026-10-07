@@ -11852,3 +11852,72 @@ fn accept_upstream_probe_reports_an_upstream_that_fails() {
     assert_eq!(runs_of(&marker), runs);
     assert_eq!(rev_of(company, "uplink/upstream"), upstream_before);
 }
+
+#[test]
+fn imports_of_two_merges_close_together_are_not_preflighted_as_rebuilds() {
+    let world = setup_world();
+    let company = &world.company;
+    add_internal_file(company, "FIRST.md", "first\n");
+    let base = rev_of(company, "main");
+    // Two pull requests merged into main before either is imported.
+    let change = |branch: &str, from: &str, to: &str| {
+        git(
+            company,
+            &["checkout", "--quiet", "-b", branch, &base],
+            GitOpts::default(),
+        )
+        .unwrap();
+        write(company, "src/tokens.js", &TOKENS.replace(from, to));
+        commit_all(company, branch);
+        rev_of(company, "HEAD")
+    };
+    let hash = change("feat/hash", "return sha1(value);", "return sha256(value);");
+    let ttl = change("feat/ttl", "return 3600;", "return 7200;");
+    land_on_main(company, &hash);
+    land_on_main(company, &ttl);
+    // Fails on any tree with both changes, as a rebuild check would see.
+    let marker = set_counting_preflight_script(
+        company,
+        "! { grep -q sha256 src/tokens.js && grep -q 7200 src/tokens.js; }",
+    );
+    let import = |title: &str, head: &str| {
+        add_patch(
+            company,
+            AddPatchOpts {
+                title: title.into(),
+                from_ref: Some(base.clone()),
+                head_ref: Some(head.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+
+    import("Use SHA-256 for tokens", &hash);
+    // Only the export tree of the change was tested.
+    assert_eq!(runs_of(&marker), 1);
+    // The second merge is off main until its own import.
+    let tokens = git_ok(company, &["show", "main:src/tokens.js"]).unwrap();
+    assert!(
+        tokens.contains("sha256") && tokens.contains("3600"),
+        "{tokens}"
+    );
+
+    import("Extend TTL", &ttl);
+    assert_eq!(runs_of(&marker), 2);
+    let tokens = git_ok(company, &["show", "main:src/tokens.js"]).unwrap();
+    assert!(
+        tokens.contains("sha256") && tokens.contains("7200"),
+        "{tokens}"
+    );
+    assert_eq!(
+        git_ok(company, &["show", "main:FIRST.md"]).unwrap(),
+        "first"
+    );
+    assert!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .all_patches()
+            .all(|p| p.status != PatchStatus::Conflict)
+    );
+}

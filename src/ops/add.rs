@@ -115,7 +115,10 @@ pub(super) fn add_patch_once(
     write_queue_file(repo, queue)?;
     commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
     if rebuild {
-        rebuild_once(repo, Some(&opts.preflight))?;
+        // Not tested: an import only reorders what a reviewed pull request
+        // already merged into main. Main can also hold merges that are not
+        // imported yet, which this rebuild leaves out until their import.
+        rebuild_once(repo, None)?;
     } else {
         mark_empty_if_already_upstream(repo, &id)?;
     }
