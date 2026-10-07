@@ -235,6 +235,11 @@ git reset --hard @{u}`}</Code>
           pull request labelled <code>uplink:conflict</code> from <code>uplink/conflict/&lt;id&gt;-work</code>.
           Company <code>main</code> is frozen until that PR merges, so it comes first.
         </p>
+        <p>
+          You get the same pull request when your patch still applies but the preflight script fails once it is
+          applied (found with <code>git bisect</code> over the rebuild). The <code>-work</code> branch then has
+          your patch applied without conflict markers, and the PR quotes the end of the script&apos;s output.
+        </p>
         <Code>{`git fetch origin
 git switch uplink/conflict/<id>-work
 # fix the files so the change is right on the new upstream
