@@ -383,7 +383,7 @@ Applies the active patches in order onto `uplink/upstream`, one commit each. A p
 
 When every patch applies and the result is not the tree `main` already has, `preflight.sh` runs on it. If it fails, `git bisect` runs the script between `uplink/upstream` (known good) and the rebuilt tree (known bad), and the first patch it fails on goes to the conflict gate: `uplink/conflict/<id>` is the queue before the patch and `uplink/conflict/<id>-work` has the patch applied, for the fix. `main` stays at the last build that passed. When `uplink/upstream` is not known to pass with the current `preflight.sh`, it is tested first; if it fails too, the command fails and no patch is blamed.
 
-Every command that rebuilds does this: `sync`, `accept-upstream`, `resolve`, `amend --complete`, `transfer`, `drop` and `merged`. `add` does not: what it imports was merged into `main` by a reviewed pull request, and its rebuild only moves that change under the internal patches.
+`accept-upstream`, `resolve`, `amend --complete`, `transfer`, `drop` and `merged` do this too. Two rebuilds are not tested, since they only reorder what was tested already: the one of `add`, whose change a reviewed pull request merged into `main`, and the one of a `sync` that needs no approval, where upstream moved only by our own patches. `rebuild --verify` tests `main` after those.
 
 - `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
 - `--push`: Push uplink/state and the rebuilt branch after rebuild.

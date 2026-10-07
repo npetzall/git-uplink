@@ -3332,7 +3332,6 @@ fn patch_status(repo: &Path, id: &str) -> PatchStatus {
 fn merged_pr(patch: &Patch, sha: &str) -> SyncOpts {
     SyncOpts {
         merged_prs: vec![(patch.id.clone(), sha.to_string())],
-        ..SyncOpts::default()
     }
 }
 
@@ -3581,7 +3580,6 @@ fn a_merged_pr_report_outside_the_range_or_the_queue_is_ignored() {
             (hash_patch.id.clone(), "--output=x".into()),
             ("upl_0000000000".into(), rev(&world.upstream)),
         ],
-        ..SyncOpts::default()
     };
     let result = sync_with(company, opts).unwrap();
     assert!(result.needs_approval);
@@ -11661,6 +11659,10 @@ fn sync_of_only_our_own_patches_runs_no_preflight() {
         GitOpts::default(),
     )
     .unwrap();
+    // A pull request merged into main that is not imported yet: the rebuild
+    // leaves it out, so its tree is not the one main has.
+    write(company, "PENDING.md", "merged, not imported\n");
+    commit_all(company, "merge a pull request");
 
     let result = sync(company).unwrap();
     assert!(!result.needs_approval);
@@ -12311,5 +12313,56 @@ fn gated_add_takes_the_failed_preflight_from_the_probe() {
             .unwrap()
             .patch_refs()
             .is_empty()
+    );
+}
+
+#[test]
+fn transfer_whose_rebuild_fails_preflight_is_recorded_with_the_conflict() {
+    let world = setup_world();
+    let company = &world.company;
+    let first = add_internal_file(company, "FIRST.md", "first\n");
+    let second = add_internal_file(company, "SECOND.md", "second\n");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    // A merge that is not imported yet, so the rebuild is not the tree main has.
+    write(company, "PENDING.md", "merged, not imported\n");
+    commit_all(company, "merge a pull request");
+    // Passes on the export tree of the first patch, fails once both are there.
+    set_preflight_script(company, "! { [ -f FIRST.md ] && [ -f SECOND.md ]; }");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["transfer", &first.id, "--to-upstream"])
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["transferred"], true, "{value}");
+    assert_eq!(value["gated"], false, "{value}");
+    assert_eq!(value["conflict"]["id"], second.id.as_str(), "{value}");
+    assert_eq!(
+        value["gh"]["prCreate"]["base"],
+        format!("uplink/conflict/{}", second.id).as_str()
+    );
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert!(queue.is_upstream(&first.id));
+    let blamed = patch_of(company, &second.id);
+    assert_eq!(blamed.status, PatchStatus::Conflict);
+    assert_eq!(
+        blamed.conflict.unwrap().cause,
+        git_uplink::ConflictCause::Preflight
+    );
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
     );
 }
