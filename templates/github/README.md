@@ -53,11 +53,14 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
 - **Does:** job **Preflight (no credentials)** runs `preflight.sh` on the export tree with a read-only token. Job **import** takes its result: `git uplink add` records the merged change on `uplink/state` as `queued`, in `internal[]` when labelled `uplink:internal-only`, otherwise in `upstream[]`. An upstream import rebuilds `main` so the patch sits under `internal[]`. Then `git uplink push`. With `UPLINK_AUTO_SUBMIT`, it then dispatches **Uplink submit** for the patch unless an upstream dependency of it is unmerged.
   - `git uplink add` runs the upstream assessment on the merged change and refuses an upstream-bound change that fails it. Import stores no assessment-hook result; submit runs the hook on the patch.
   - The rebuild of an import is not preflighted: the pull request that merged the change was reviewed and checked, and the rebuild only moves it under `internal[]`. Two merges close together are imported one after the other; the rebuild of the first leaves the second off `main` until its own import. If `main` turns out broken, run **Uplink verify**.
+  - **A change that fails is still recorded.** It is on `main` already, so refusing it would only drop it at the next rebuild. An upstream-bound change that fails its assessment or its export preflight (the required PR checks were bypassed, or something moved after them) is recorded internal-only, where it sits on `main`, and `git uplink add --gate` starts a transfer to upstream for it: the job pushes `uplink/transfer-to-upstream/<id>` plus `-work` and opens the transfer PR, labelled `uplink:transfer-to-upstream`. Fix it there and merge to move the patch to the upstream queue, or close the PR to keep it internal-only. The reason is in the run summary and in that PR; nothing is commented on the merged PR.
+  - What still fails the run is not about the change: a preflight result for another tree, or a dependency that is not in the queue. Run the job again.
   - If the rebuild stops on a patch (the queue is blocked on a conflict), the change is still recorded, `main` keeps the merge, and that conflict PR is opened or kept.
 - **Requires:**
   - `preflight.sh` on `uplink/hooks`;
   - the Actions token (contents read for the preflight job, actions read to download the PR check's `uplink-assessment` artifact, actions write to dispatch submit);
-  - the internal App or PAT (contents, workflows, and pull requests write), because the rebuild force-pushes `main`, which contains workflow files, and a conflict PR is opened by it;
+  - the internal App or PAT (contents, workflows, and pull requests write), because the rebuild force-pushes `main`, which contains workflow files, and a conflict or transfer PR is opened by it;
+  - labels `uplink:conflict` and `uplink:transfer-to-upstream`;
   - concurrency group `uplink-mutate`.
 
 ## `uplink-submit.yml` — Uplink submit

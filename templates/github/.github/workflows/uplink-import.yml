@@ -14,6 +14,13 @@
 # blocked on a conflict), the change is still recorded and that conflict PR
 # is opened or kept. For a main that turned out broken, run Uplink verify.
 #
+# The change is on main already, so it is recorded whatever it fails. An
+# upstream-bound change that fails its assessment or its export preflight
+# (the required PR checks were bypassed, or something moved after them) is
+# recorded internal-only, and a gated transfer to upstream is opened for it,
+# as Uplink transfer would. Merging that PR moves it to the upstream queue;
+# closing it leaves the patch internal-only.
+#
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, import dispatches
 # Uplink submit for the patch when no upstream dependency of it is unmerged.
 name: Uplink import
@@ -170,14 +177,59 @@ jobs:
           git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" --head "$HEAD_SHA" --base-branch "$BASE_REF" \
             --pr "$PR_NUMBER" --pr-url "$PR_URL" \
-            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --json "${extra[@]}" > /tmp/uplink-add.out
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --gate --json "${extra[@]}" > /tmp/uplink-add.out
           code=$?
           set -e
+          # The pull request is closed, so the failure is reported on the
+          # run. What is left to fail here is not about the change itself
+          # (a preflight result for another tree, a dependency that is not
+          # in the queue): run the job again once that is sorted out.
           if [ "$code" -ne 0 ]; then
-            if [ -s /tmp/uplink-add.out ]; then
-              gh pr comment "$PR_NUMBER" --body-file /tmp/uplink-add.out
-            fi
+            {
+              echo "Import of #${PR_NUMBER} failed. The change is on \`main\` and not in the queue, so the next rebuild leaves it out."
+              echo
+              cat /tmp/uplink-add.out
+            } >> "$GITHUB_STEP_SUMMARY"
             exit "$code"
+          fi
+
+          # The change fails what an upstream-bound patch has to pass. It is
+          # recorded internal-only, where it sits on main, and a transfer to
+          # upstream is open for it: publish that as the gated transfer PR.
+          # (A transfer that went through at once left it upstream-bound:
+          # that is an ordinary import, handled below.)
+          if jq -e '.fallback != null and .fallback.transfer.transferred != true' /tmp/uplink-add.out >/dev/null; then
+            add_json=$(cat /tmp/uplink-add.out)
+            patch_id=$(jq -r '.id' <<<"$add_json")
+            git uplink push
+            {
+              echo "#${PR_NUMBER} was recorded internal-only as \`${patch_id}\`: it fails what an upstream-bound patch has to pass."
+              echo
+              jq -r '.fallback.reason' <<<"$add_json"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$(jq -r '.fallback.transfer.gated // false' <<<"$add_json")" != "true" ]; then
+              why=$(jq -r '.fallback.transferError // "the transfer was not gated"' <<<"$add_json")
+              echo "::warning title=Uplink import::${patch_id} stays internal-only; start Uplink transfer for it by hand (${why//$'\n'/ })"
+              exit 0
+            fi
+            base=$(jq -r '.fallback.transfer.base // empty' <<<"$add_json")
+            work=$(jq -r '.fallback.transfer.work // empty' <<<"$add_json")
+            if [ -z "$base" ] || [ -z "$work" ]; then
+              echo "transfer is gated but no base/work branches were recorded"
+              exit 1
+            fi
+            git push origin "refs/heads/${base}:refs/heads/${base}" --force
+            git push origin "refs/heads/${work}:refs/heads/${work}" --force
+            title=$(jq -r '.fallback.transfer.gh.prCreate.title' <<<"$add_json")
+            body_file=$(jq -r '.fallback.transfer.gh.prCreate.bodyFile' <<<"$add_json")
+            label=$(jq -r '.fallback.transfer.gh.prCreate.labels[0]' <<<"$add_json")
+            gh label create "$label" --description "Uplink gated transfer" --color 1D76DB || true
+            # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
+            # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
+            url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$work" --body-file "$body_file")
+            gh pr edit "$url" --add-label "$label"
+            echo "Transfer PR: $url" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           echo "ready_to_submit=$(jq -c '.readyToSubmit // []' /tmp/uplink-add.out)" >> "$GITHUB_OUTPUT"
 
