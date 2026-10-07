@@ -12,9 +12,18 @@
 # marks those patches merged, and rebuilds company main. It refuses a pending
 # upstream other than the reviewed one. Queue history lives on uplink/state
 # (FF-only).
-# On apply failure it records the patch as conflict on uplink/state,
-# pushes uplink/conflict/<id> (protected base) and <id>-work, and opens
-# a gated PR. Do not push the protected base directly.
+#
+# An approved upstream brings changes that are not ours, so preflight.sh
+# runs on it first, in a job without write credentials. If it fails, nothing
+# is promoted and the run fails. If it passes and the rebuilt tree fails,
+# git bisect finds the first patch the script fails on. An upstream that
+# moved only by our own merged patches was tested as patches: it is applied
+# without running the script.
+#
+# On apply failure, or for the patch preflight.sh fails on, it records the
+# patch as conflict on uplink/state, pushes uplink/conflict/<id> (protected
+# base) and <id>-work, and opens a gated PR. Do not push the protected base
+# directly.
 #
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, a queued patch
 # whose last unmerged upstream dependency this run marked merged gets Uplink
@@ -265,9 +274,119 @@ jobs:
       - name: from-upstream approved
         run: echo "from-upstream approved for ${{ github.repository }}"
 
+  # preflight.sh builds and runs product code (the approved upstream's
+  # included), so it runs in this job: read-only token, no internal App
+  # token, no Environment, no credentials in the checkout. The upstream
+  # token only fetches the approved upstream, in its own step. The job that
+  # holds the write tokens takes the result and never runs the script.
+  accept-preflight:
+    name: Preflight the approved upstream (no credentials)
+    needs: [inspect, wait-from-upstream]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.run.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read upstream and contrib from the queue
+        id: queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
+          parse_owner_repo() {
+            local url=$1 owner repo
+            if [[ "$url" =~ github.com[:/]([^/]+)/(.+)$ ]]; then
+              owner=${BASH_REMATCH[1]}
+              repo=${BASH_REMATCH[2]}
+              repo=${repo%.git}
+              repo=${repo%/}
+              printf '%s\n%s\n' "$owner" "$repo"
+              return 0
+            fi
+            echo "Could not parse GitHub owner/repo from queue URL" >&2
+            return 1
+          }
+          upstream_url=$(jq -r '.config.upstreamUrl // empty' <<<"$queue")
+          contrib_url=$(jq -r '.config.contribUrl // empty' <<<"$queue")
+          if [ -z "$upstream_url" ] || [ -z "$contrib_url" ]; then
+            echo "queue.json is missing upstreamUrl or contribUrl" >&2
+            exit 1
+          fi
+          mapfile -t upstream < <(parse_owner_repo "$upstream_url")
+          mapfile -t contrib < <(parse_owner_repo "$contrib_url")
+          same_owner=false
+          upstream_lc=$(printf '%s' "${upstream[0]}" | tr '[:upper:]' '[:lower:]')
+          contrib_lc=$(printf '%s' "${contrib[0]}" | tr '[:upper:]' '[:lower:]')
+          if [ "$upstream_lc" = "$contrib_lc" ]; then
+            same_owner=true
+          fi
+          {
+            echo "upstream_owner=${upstream[0]}"
+            echo "upstream_repo=${upstream[1]}"
+            echo "contrib_owner=${contrib[0]}"
+            echo "contrib_repo=${contrib[1]}"
+            echo "same_owner=${same_owner}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ steps.queue.outputs.upstream_owner }}
+          repositories: ${{ steps.queue.outputs.upstream_repo }}
+          permission-contents: read
+
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          PENDING_SHA: ${{ needs.inspect.outputs.pending_sha }}
+        run: |
+          set -euo pipefail
+          git uplink init
+          git uplink accept-upstream --fetch-only --sha "$PENDING_SHA"
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one. When the script fails on the rebuilt
+      # tree, git bisect runs it here too, to find the patch.
+      - name: Run preflight.sh
+        id: run
+        env:
+          PENDING_SHA: ${{ needs.inspect.outputs.pending_sha }}
+        run: |
+          report=$(git uplink accept-upstream --sha "$PENDING_SHA" --preflight-only) || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
   apply:
     name: Apply accepted upstream
-    needs: [inspect, wait-from-upstream]
+    needs: [inspect, wait-from-upstream, accept-preflight]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -367,12 +486,16 @@ jobs:
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
           UPLINK_FROM_UPSTREAM_ENVIRONMENT: from-upstream
           PENDING_SHA: ${{ needs.inspect.outputs.pending_sha }}
+          PREFLIGHT_REPORT: ${{ needs.accept-preflight.outputs.report }}
         run: |
           git uplink init
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
           main_before=$(git rev-parse HEAD)
 
-          # Only the pending upstream that was reviewed is accepted.
-          sync_json=$(git uplink accept-upstream --sha "$PENDING_SHA")
+          # Only the pending upstream that was reviewed is accepted, and
+          # only when preflight.sh passed on it.
+          sync_json=$(git uplink accept-upstream --sha "$PENDING_SHA" \
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
           summary=$(jq -r '.summary // empty' <<<"$sync_json")
           if [ -n "$summary" ]; then
             printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"

@@ -80,13 +80,15 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
   - **Merged PRs:** before sync, the job asks the upstream repository whether the public PR recorded for each active upstream patch is merged, and passes each merge commit as `git uplink sync --merged-pr <id>=<sha>`.
   - **Inspect:** `git uplink sync` fetches public upstream without moving `uplink/upstream`. A patch is merged when a commit has its stable patch id or its public PR is merged; an `Uplink-Patch-Id` trailer alone is not enough. When the merged patches explain the whole range, sync promotes, marks them merged, and rebuilds at once. Otherwise it writes the remaining diff to `.uplink/reports/from-upstream/incoming.md`.
   - **Wait:** holds on Environment `from-upstream`. The packet lists the patches that approval marks merged, any that the maintainer changed, and commits whose trailer names a patch they do not match.
-  - **Apply:** after approval, `git uplink accept-upstream --sha <reviewed sha>` promotes, marks those patches merged, and rebuilds. It stops if the pending upstream is no longer the reviewed one.
-  - **Conflict:** a conflict pushes `uplink/conflict/<id>` plus `-work` and opens a gated PR labelled `uplink:conflict`. The run stays green.
+  - **Preflight the approved upstream:** after approval, a job with a read-only token fetches the approved upstream (the upstream token is used for that step only) and runs `git uplink accept-upstream --preflight-only`: `preflight.sh` on that upstream, then on the tree the rebuild would give. If the rebuilt tree fails, `git bisect` runs the script between the upstream (known good) and the rebuilt tree (known bad) to find the first patch it fails on. An upstream that moved only by our own merged patches needs no approval and no preflight: those changes were tested as patches.
+  - **Apply:** `git uplink accept-upstream --sha <reviewed sha>` takes that result, promotes, marks those patches merged, and rebuilds. It stops if the pending upstream is no longer the reviewed one, and fails without promoting if `preflight.sh` failed on the upstream itself.
+  - **Conflict:** a patch that does not apply, or the patch `preflight.sh` fails on, pushes `uplink/conflict/<id>` plus `-work` and opens a gated PR labelled `uplink:conflict`. For a preflight failure `-work` has the patch applied and the PR quotes the end of the script's output; `main` stays at the last build that passed. The run stays green.
   - **Auto-submit:** with `UPLINK_AUTO_SUBMIT`, inspect (when it applied at once) and apply dispatch **Uplink submit** for each queued patch whose last unmerged upstream dependency this run marked merged. A run that ends in a conflict on another patch still dispatches them.
 - **Requires:**
   - the internal App or PAT (contents, workflows, and pull requests write), which also opens the gated PR;
   - the upstream App or PAT, optional for an `https://` upstream. It also reads the public PRs (pull requests read); without it a merged patch is still found by its patch id or an empty apply;
   - Environment `from-upstream` with inbound reviewers and no secrets;
+  - `preflight.sh` on `uplink/hooks`;
   - label `uplink:conflict`;
   - concurrency group `uplink-sync` for the workflow and `uplink-mutate` for inspect and apply.
 
@@ -94,13 +96,15 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
 
 - **Runs on:** a merged pull request into `uplink/conflict/**` (`pull_request_target`, so the YAML comes from the default branch).
 - **Does:**
-  - `git uplink resolve <id>` refreshes the patch, re-runs the upstream assessment on the resolution (refusing an upstream-bound resolution that fails it), rebuilds `main`, and deletes the base and `-work` branches.
-  - If the rebuild stops on a later patch, it opens that conflict PR the same way sync does.
+  - **Preflight:** merging first runs `git uplink resolve --preflight-only` in a job with a read-only token, which runs `preflight.sh` on the tree the rebuild would give (and `git bisect` when it fails) and changes nothing.
+  - `git uplink resolve <id>` takes that result, refreshes the patch, re-runs the upstream assessment on the resolution (refusing an upstream-bound resolution that fails it), rebuilds `main`, and deletes the base and `-work` branches.
+  - If the rebuild stops on a later patch, it opens that conflict PR the same way sync does. That includes the patch `preflight.sh` fails on; when that is the resolved patch again, its branches are published again for the next PR.
   - With `UPLINK_AUTO_SUBMIT`, it dispatches **Uplink submit** for the resolved patch when it is `queued` again (one that has a public PR is covered by the line above), and for a `queued` patch whose last unmerged upstream dependency the rebuild marked `merged`.
   - If the patch was already submitted, it cancels any running `Uplink submit <id>` and dispatches a new one. A resolution that adds or removes other lines than the last approval covered marks the patch `amended`, and that run asks IP to approve the delta. Keeping the patch's line over an upstream change of the same line is such a case: the patch now removes upstream's new line. A resolution that leaves those lines as approved (upstream only changed lines next to them) leaves the patch `submitted`: the run exports it onto the new upstream, and no new approval is recorded.
 - **Requires:**
   - the internal App or PAT (contents, workflows, and pull requests write), which opens the next conflict PR;
   - the upstream App or PAT for fetch;
+  - `preflight.sh` on `uplink/hooks`;
   - the Actions token (actions write to dispatch submit);
   - label `uplink:conflict`;
   - concurrency group `uplink-mutate`.
@@ -161,7 +165,8 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
 
 - **`uplink.toml` on `uplink/hooks`** holds what the CLI needs and the workflows do not: `redact_keywords` (words that must not appear in a contribution) and `internal_email_domains`. They are not repository variables, so `git uplink assess` gives the same result on a developer's machine and in CI.
 - **`preflight.sh` on `uplink/hooks`** is the script preflight runs, with `sh`, from the root of the export tree. The rest of the branch is checked out beside it for the run. `init` creates it with the command given to `--preflight` (or to its question); change it by editing the file on `uplink/hooks`. Try a change with `git uplink preflight --command-only --hooks <branch>`.
-- **`preflight.sh` never runs next to a write token.** It builds and runs product code, public upstream's included. Import, submit, amend and transfer each have a preflight job with a read-only token, no App token, no Environment and no credentials in the checkout; it prints a result (`git uplink preflight --json`, or `--preflight-only`) that the writing job takes with `--preflight-result`. The result names the tree and hooks it was tested with, so it is refused if either changed in between: run the workflow again.
+- **`preflight.sh` never runs next to a write token.** It builds and runs product code, public upstream's included. Import, submit, amend, transfer, resolve and the apply of an approved upstream each have a preflight job with a read-only token, no App token, no Environment and no credentials in the checkout (the one for an approved upstream mints the read-only upstream token, to fetch it, in a step of its own); it prints a result (`git uplink preflight --json`, or `--preflight-only`) that the writing job takes with `--preflight-result`. The result names the tree and hooks it was tested with, so it is refused if either changed in between: run the workflow again.
+- **Every rebuild is preflighted.** Besides the export tree of a change, `preflight.sh` runs on the tree a rebuild gives, unless `main` already has that tree. When it fails, `git bisect` blames the first patch, which gets a conflict PR; see **Uplink sync**. Amend and transfer do this in the preflight job they already have.
 - **Known limitations of preflight:** the preflight job holds a read-only Actions token and a clone of the company repository, so code the script runs (public upstream's included) can read company source; it cannot write or reach the App tokens and Environment secrets. The verdict is the script's exit code, which code it runs could force to 0: preflight checks that a change builds and passes its tests, it is not a defence against hostile code in the tree.
 - **Written by `git uplink init`,** which asks for each setting in a terminal, or takes `--redact-keyword` and `--internal-domain`. `init --upgrade` adds the file, or settings a newer binary introduces, and never changes a value that is there. Change values by editing the file on `uplink/hooks`.
 - **Read from** the local `uplink/hooks`, else `origin/uplink/hooks`. Every job runs `git uplink init`, which fetches the branch. Gated jobs read the branch, never the pull request, so a PR cannot change the command they run.
@@ -186,7 +191,7 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
 ## Toolchain hook
 
 - **Company-owned.** A composite action at `.github/actions/uplink-toolchain-hook/action.yml` on `uplink/hooks` that installs what `preflight.sh` needs (runtimes, package managers, system packages). `init` creates a stub that only prints `toolchain-hook.md` to the job summary.
-- **Runs in:** every job that runs `preflight.sh`, right before that step: PR checks (**Uplink upstream preflight**), gate, and the preflight job of import, submit, amend, and transfer (start and complete). The pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `uplink/hooks` into `.uplink-hooks/` and runs the hook from there.
+- **Runs in:** every job that runs `preflight.sh`, right before that step: PR checks (**Uplink upstream preflight**), gate, and the preflight job of import, submit, amend, transfer (start and complete), resolve, and sync (the approved upstream). The pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `uplink/hooks` into `.uplink-hooks/` and runs the hook from there.
 - **Missing hook:** the job shows a notice and continues. **A failed hook fails the job**, since preflight without its toolchain would fail anyway.
 - **Requires:** keep it to installing pinned tools. Do not build or run product code in it. It never runs in a job that holds write tokens or Environment secrets.
 - Guide and examples: [`toolchain-hook.md`](../github-hooks/toolchain-hook.md).
