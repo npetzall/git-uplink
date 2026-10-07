@@ -410,6 +410,12 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
         }
         value["gh"] = serde_json::json!({ "prClose": pr_close });
     }
+    // The rebuild after the transfer stopped on a patch.
+    if let Some(conflict) = find_conflict(&result.queue).filter(|_| result.transferred) {
+        eprint_conflict(conflict);
+        value["conflict"] = conflict_json(conflict);
+        value["gh"]["prCreate"] = conflict_pr_create_artifact(repo, conflict, None)?;
+    }
     Ok(value)
 }
 
@@ -1290,13 +1296,7 @@ fn cmd_sync(repo: &Path, merged_pr: Vec<String>) -> Result<(), Error> {
             }
         }
     }
-    let result = sync_with(
-        repo,
-        SyncOpts {
-            merged_prs,
-            ..SyncOpts::default()
-        },
-    )?;
+    let result = sync_with(repo, SyncOpts { merged_prs })?;
     let summary = result.report.clone();
     finish_sync(repo, result, summary.as_deref())
 }

@@ -61,8 +61,6 @@ pub struct SyncOpts {
     /// `(patch id, merge commit)` for each recorded public PR the forge
     /// reports as merged.
     pub merged_prs: Vec<(String, String)>,
-    /// Where the verdict of `preflight.sh` on the rebuild comes from.
-    pub preflight: ScriptVerdict,
 }
 
 /// An upstream commit whose trailer names a patch it does not match.
@@ -526,18 +524,20 @@ pub(super) fn persist_conflict(
 /// Moves `uplink/upstream` to `sha`, marks `merges` merged, and rebuilds.
 /// The rebuild still marks an upstream patch that applies empty.
 ///
-/// With `verify`, `sha` brings changes that are not ours, and is promoted
-/// only when `preflight.sh` passes on it. Without, it is the old upstream
-/// plus patches that passed as patches, and is taken as verified.
+/// With `preflight`, `sha` brings changes that are not ours: it is promoted
+/// only when `preflight.sh` passes on it, and the rebuild is tested. Without,
+/// it is the old upstream plus patches that passed as patches: it is taken
+/// as verified, and the rebuild, which only moves those patches from the
+/// queue into upstream, is not tested. Company main can differ from that
+/// rebuild by a merge that is not imported yet, so it is no measure here.
 pub(super) fn apply_fetched_upstream(
     repo: &Path,
     sha: &str,
     merges: &[PendingMerge],
-    preflight: &ScriptVerdict,
-    verify: bool,
+    preflight: Option<&ScriptVerdict>,
 ) -> Result<QueueState> {
     let queue = read_queue_file(repo)?;
-    let token = if verify {
+    let token = if let Some(preflight) = preflight {
         let upstream = preflight.rebuild_part(|report| report.upstream.as_ref());
         match rev_preflight(repo, &queue, sha, &upstream) {
             Ok(token) => Some(token),
@@ -576,7 +576,11 @@ pub(super) fn apply_fetched_upstream(
             merged.push(merge.id.clone());
         }
     }
-    match rebuild_checked(repo, preflight) {
+    let rebuilt = match preflight {
+        Some(preflight) => rebuild_checked(repo, preflight),
+        None => with_queue_lock(repo, || rebuild_once(repo, None, false)),
+    };
+    match rebuilt {
         Ok(mut queue) => {
             queue.pending_upstream = None;
             queue.last_sync = Some(LastSync {
@@ -639,8 +643,7 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
         }
         let reconciliation = reconcile_incoming(repo, &fetched, from_sha.as_deref(), &sha, &opts)?;
         if reconciliation.residual.is_none() {
-            let queue =
-                apply_fetched_upstream(repo, &sha, &reconciliation.merges, &opts.preflight, false)?;
+            let queue = apply_fetched_upstream(repo, &sha, &reconciliation.merges, None)?;
             return Ok(SyncResult::applied_with(queue, reconciliation.merges).since(&fetched));
         }
         let report = write_incoming_packet(repo, &fetched, &reconciliation)?;
@@ -820,7 +823,7 @@ pub fn accept_upstream_with(
             return Err(pending_unavailable(&pending.sha));
         }
         let merges = pending_merges(repo, &queue, &pending)?;
-        let applied = apply_fetched_upstream(repo, &pending.sha, &merges, preflight, true)?;
+        let applied = apply_fetched_upstream(repo, &pending.sha, &merges, Some(preflight))?;
         Ok(SyncResult::applied_with(applied, merges).since(&queue))
     })
 }

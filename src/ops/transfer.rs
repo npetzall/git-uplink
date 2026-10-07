@@ -457,6 +457,16 @@ pub(super) fn gated_transfer_result(
     }
 }
 
+/// The queue after the rebuild that ends a transfer. The transfer is
+/// recorded by then, so a rebuild that stops on a patch `preflight.sh` fails
+/// on does not undo it: the queue then holds that patch in conflict.
+fn rebuilt_or_stopped(repo: &Path, rebuilt: Result<QueueState>) -> Result<QueueState> {
+    match rebuilt {
+        Err(Error::Conflict(_)) => read_queue_file(repo),
+        other => other,
+    }
+}
+
 pub(super) fn finish_successful_transfer(
     repo: &Path,
     id: &str,
@@ -491,7 +501,7 @@ pub(super) fn finish_successful_transfer(
         repo,
         &format!("uplink: transfer {id} {}", direction.as_str()),
     )?;
-    let queue = rebuild_checked(repo, preflight)?;
+    let queue = rebuilt_or_stopped(repo, rebuild_checked(repo, preflight))?;
     Ok(TransferResult {
         queue,
         id: id.into(),
@@ -570,7 +580,7 @@ pub(super) fn complete_transfer(
         repo,
         &format!("uplink: transfer {id} {}", direction.as_str()),
     )?;
-    let queue = rebuild_checked(repo, checks.verdict())?;
+    let queue = rebuilt_or_stopped(repo, rebuild_checked(repo, checks.verdict()))?;
     Ok(Checked::Recorded(TransferResult {
         queue,
         id: id.into(),
