@@ -101,7 +101,7 @@ export const parallelIndependent: LabScenario = {
       id: "merge-ben-first",
       title: "Upstream merges Ben first",
       summary:
-        "Squash-merge Ben’s public PR, then run Uplink sync. Ben’s trailer is the only new commit, so inspect applies immediately. Ben is merged. Asha stays submitted and still applies on company main.",
+        "Squash-merge Ben’s public PR, then run Uplink sync. Ben’s merged public PR is the only new commit, so inspect applies immediately. Ben is merged. Asha stays submitted and still applies on company main.",
       why: "Being first on company main does not mean you must merge first publicly. Drop-on-merge is per patch id.",
       operations: [mergeUpstream("413"), ...syncFlowBack()],
       apply: (state) => {

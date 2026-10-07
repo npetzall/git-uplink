@@ -233,7 +233,8 @@ gh auth login --hostname github.com`}</Command>
         manual={
           <>
             <p>
-              Each role gets its own App so that no job holds more access than it needs. For each App:{" "}
+              Each role gets its own App so that no job holds more access than it needs (
+              <Link to="/security#credentials">Security</Link> has the model). For each App:{" "}
               <strong>Settings → Developer settings → GitHub Apps → New GitHub App</strong> on the owning organization.
               Any homepage URL works. Turn <strong>Webhook → Active</strong> off. Choose{" "}
               <strong>Only on this account</strong>. After creating it, note the <strong>App ID</strong>,{" "}
@@ -700,7 +701,7 @@ function RulesetList() {
       <li>
         <strong>Uplink: hooks branch</strong> (<code>uplink/hooks</code>): pull request with one approval, no deletion or
         force-push. The assessment hook on this branch runs on every PR check and submit, and the toolchain hook and{" "}
-        <code>preflight.sh</code> before every import, submit, amend and transfer. No bypass:
+        <code>preflight.sh</code> before every import, submit, amend, transfer, resolve, verify and accepted upstream. No bypass:
         nothing in Actions writes this branch. Sample:{" "}
         <a href={`${GITHUB_BLOB}/templates/github/.github/uplink-hooks-ruleset.json`}>uplink-hooks-ruleset.json</a>.
       </li>
@@ -757,8 +758,8 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
         <code>init</code> also creates the orphan branch <code>uplink/hooks</code> locally: the assessment hook guide and
         starter, and the toolchain hook that sets up the runner before preflight. Edit{" "}
         <code>.github/actions/uplink-toolchain-hook/action.yml</code> there to install what{" "}
-        <code>preflight.sh</code> needs (see <code>toolchain-hook.md</code> on that branch).{" "}
-        <code>git uplink doctor</code> reports if it is not pushed.
+        <code>preflight.sh</code> needs. The <Link to="/setup?forge=github&amp;view=hooks">Hooks</Link> tab has both
+        guides. <code>git uplink doctor</code> reports if it is not pushed.
       </p>
       <p>
         Coming from an older setup that used the variables <code>UPLINK_PREFLIGHT</code>,{" "}

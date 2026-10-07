@@ -151,7 +151,7 @@ export function HomePage() {
             host="Public GitHub.com"
             points={[
               "Maintainers merge ordinary PRs",
-              "Uplink-Patch-Id trailer survives squash",
+              "A squashed or rebased merge is still recognized, by its public PR",
             ]}
           />
         </div>

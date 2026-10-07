@@ -9,6 +9,7 @@ import { InstallPage } from "./pages/install";
 import { InternalsPage } from "./pages/internals";
 import { LabPage } from "./pages/lab";
 import { HowPage } from "./pages/how";
+import { SecurityPage } from "./pages/security";
 import { SetupPage } from "./pages/setup";
 import { WhyPage } from "./pages/why";
 import "./index.css";
@@ -30,6 +31,7 @@ function App() {
       <Route path="/internals" element={<InternalsPage />} />
       <Route path="/lab" element={<LabPage />} />
       <Route path="/how" element={<HowPage />} />
+      <Route path="/security" element={<SecurityPage />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/why" element={<WhyPage />} />
       <Route path="/playbook" element={<Navigate to="/why" replace />} />
