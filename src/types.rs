@@ -404,6 +404,23 @@ impl TransferDirection {
     }
 }
 
+/// Why a patch is in conflict.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConflictCause {
+    /// It does not apply onto the patches before it.
+    #[default]
+    Apply,
+    /// It applies, and `preflight.sh` fails from it on.
+    Preflight,
+}
+
+impl ConflictCause {
+    fn is_apply(&self) -> bool {
+        matches!(self, Self::Apply)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchConflict {
@@ -419,6 +436,11 @@ pub struct PatchConflict {
     pub pr_number: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_url: Option<String>,
+    #[serde(default, skip_serializing_if = "ConflictCause::is_apply")]
+    pub cause: ConflictCause,
+    /// The end of what `preflight.sh` printed, for [`ConflictCause::Preflight`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -529,6 +551,18 @@ pub struct LastSync {
     pub message: Option<String>,
 }
 
+/// The `uplink/upstream` that is known to pass `preflight.sh`: the base a
+/// failing rebuild is bisected from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifiedUpstream {
+    pub sha: String,
+    /// Names its tree and the hooks it passed with, so a changed
+    /// `preflight.sh` makes it unverified again.
+    pub token: String,
+    pub at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingUpstream {
@@ -567,6 +601,8 @@ pub struct QueueState {
     pub last_sync: Option<LastSync>,
     #[serde(rename = "pendingUpstream", skip_serializing_if = "Option::is_none")]
     pub pending_upstream: Option<PendingUpstream>,
+    #[serde(rename = "verifiedUpstream", skip_serializing_if = "Option::is_none")]
+    pub verified_upstream: Option<VerifiedUpstream>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tooling: Option<Patch>,
     #[serde(default)]
@@ -587,6 +623,7 @@ impl QueueState {
             config,
             last_sync: None,
             pending_upstream: None,
+            verified_upstream: None,
             tooling: None,
             upstream: Vec::new(),
             internal: Vec::new(),
@@ -660,6 +697,8 @@ struct QueueStateWire {
     last_sync: Option<LastSync>,
     #[serde(rename = "pendingUpstream", default)]
     pending_upstream: Option<PendingUpstream>,
+    #[serde(rename = "verifiedUpstream", default)]
+    verified_upstream: Option<VerifiedUpstream>,
     #[serde(default)]
     tooling: Option<Patch>,
     #[serde(default)]
@@ -675,6 +714,7 @@ impl QueueStateWire {
             config: self.config,
             last_sync: self.last_sync,
             pending_upstream: self.pending_upstream,
+            verified_upstream: self.verified_upstream,
             tooling: self.tooling,
             upstream: self.upstream,
             internal: self.internal,

@@ -3332,6 +3332,7 @@ fn patch_status(repo: &Path, id: &str) -> PatchStatus {
 fn merged_pr(patch: &Patch, sha: &str) -> SyncOpts {
     SyncOpts {
         merged_prs: vec![(patch.id.clone(), sha.to_string())],
+        ..SyncOpts::default()
     }
 }
 
@@ -3580,6 +3581,7 @@ fn a_merged_pr_report_outside_the_range_or_the_queue_is_ignored() {
             (hash_patch.id.clone(), "--output=x".into()),
             ("upl_0000000000".into(), rev(&world.upstream)),
         ],
+        ..SyncOpts::default()
     };
     let result = sync_with(company, opts).unwrap();
     assert!(result.needs_approval);
@@ -11503,4 +11505,208 @@ fn rebase_refuses_main_and_dirty_worktrees() {
     let (ok, _, stderr) = run_uplink(&clone, &["rebase"]);
     assert!(!ok);
     assert!(stderr.contains("not a branch to rebase"), "{stderr}");
+}
+
+/// An internal-only patch that adds `file`, landed on main.
+fn add_internal_file(company: &Path, file: &str, contents: &str) -> Patch {
+    git(
+        company,
+        &["checkout", "--quiet", "-b", &format!("feat/{file}"), "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, file, contents);
+    commit_all(company, &format!("add {file}"));
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: format!("Add {file}"),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+/// Three internal patches, and an upstream change that the second one
+/// fails `preflight.sh` with. Returns the patches.
+fn world_where_upstream_breaks_the_second_patch() -> (World, [Patch; 3]) {
+    let world = setup_world();
+    let company = &world.company;
+    let first = add_internal_file(company, "FIRST.md", "first\n");
+    let second = add_internal_file(company, "SECOND.md", "old\n");
+    let third = add_internal_file(company, "THIRD.md", "third\n");
+    set_preflight_script(
+        company,
+        "if [ -f LIMITS.md ] && grep -q old SECOND.md 2>/dev/null; then\n  echo 'limits clash'\n  exit 1\nfi",
+    );
+    write(&world.upstream, "LIMITS.md", "strict\n");
+    commit_all(&world.upstream, "add limits");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    (world, [first, second, third])
+}
+
+#[test]
+fn rebuild_that_fails_preflight_bisects_to_the_patch_and_gates_it() {
+    let (world, [_, second, third]) = world_where_upstream_breaks_the_second_patch();
+    let company = &world.company;
+    let main_before = rev_of(company, "main");
+    assert!(sync(company).unwrap().needs_approval);
+
+    let applied = accept_upstream(company).unwrap();
+    // The upstream passed on its own, so it was promoted and is the known good.
+    assert_eq!(
+        git_ok(company, &["show", "uplink/upstream:LIMITS.md"]).unwrap(),
+        "strict"
+    );
+    let verified = applied.queue.verified_upstream.as_ref().unwrap();
+    assert_eq!(verified.sha, rev_of(company, "uplink/upstream"));
+    // Main stays at the last build that passed.
+    assert_eq!(rev_of(company, "main"), main_before);
+
+    let blamed = patch_of(company, &second.id);
+    assert_eq!(blamed.status, PatchStatus::Conflict);
+    let conflict = blamed.conflict.as_ref().unwrap();
+    assert_eq!(conflict.cause, git_uplink::ConflictCause::Preflight);
+    assert!(conflict.files.is_empty(), "{conflict:?}");
+    assert_eq!(conflict.output.as_deref(), Some("limits clash"));
+    assert_eq!(patch_of(company, &third.id).status, PatchStatus::Queued);
+
+    // Base: the patches before it. Work: with it, ready for the fix.
+    let base = conflict.branch.clone();
+    let work = work_branch_of(&blamed);
+    assert_eq!(
+        conflict.onto.as_deref(),
+        Some(rev_of(company, &base).as_str())
+    );
+    let files = |rev: &str| git_ok(company, &["ls-tree", "--name-only", rev]).unwrap();
+    assert!(files(&base).contains("FIRST.md") && !files(&base).contains("SECOND.md"));
+    assert!(files(&work).contains("SECOND.md") && !files(&work).contains("THIRD.md"));
+    assert_eq!(rev_of(company, &format!("{work}^")), rev_of(company, &base));
+
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "SECOND.md", "new\n");
+    commit_all(company, "work with limits");
+    let queue = resolve_conflict(company, &second.id).unwrap();
+    assert!(
+        queue
+            .all_patches()
+            .all(|p| p.status != PatchStatus::Conflict)
+    );
+    assert_eq!(git_ok(company, &["show", "main:SECOND.md"]).unwrap(), "new");
+    assert_eq!(
+        git_ok(company, &["show", "main:LIMITS.md"]).unwrap(),
+        "strict"
+    );
+    assert_eq!(
+        git_ok(company, &["show", "main:THIRD.md"]).unwrap(),
+        "third"
+    );
+}
+
+#[test]
+fn accept_upstream_refuses_an_upstream_that_fails_preflight() {
+    let world = setup_world();
+    let company = &world.company;
+    add_internal_file(company, "FIRST.md", "first\n");
+    set_preflight_script(company, "! [ -f BROKEN.md ]");
+    write(&world.upstream, "BROKEN.md", "broken\n");
+    commit_all(&world.upstream, "break the build");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let upstream_before = rev_of(company, "uplink/upstream");
+    let main_before = rev_of(company, "main");
+    assert!(sync(company).unwrap().needs_approval);
+
+    let err = accept_upstream(company).unwrap_err();
+    assert!(matches!(err, Error::Preflight(_)), "{err}");
+    assert!(err.to_string().contains("was not moved"), "{err}");
+    assert_eq!(rev_of(company, "uplink/upstream"), upstream_before);
+    assert_eq!(rev_of(company, "main"), main_before);
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert!(queue.pending_upstream.is_some());
+    assert!(queue.verified_upstream.is_none());
+    assert!(
+        queue
+            .all_patches()
+            .all(|p| p.status != PatchStatus::Conflict)
+    );
+}
+
+#[test]
+fn sync_of_only_our_own_patches_runs_no_preflight() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    add_internal_file(company, "FIRST.md", "first\n");
+    let marker = set_counting_preflight_script(company, "exit 1");
+    write(
+        &world.upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(&world.upstream, "Use SHA-256 for tokens");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let result = sync(company).unwrap();
+    assert!(!result.needs_approval);
+    assert_eq!(result.flowed_back, vec![hash_patch.id.clone()]);
+    assert_eq!(runs_of(&marker), 0);
+    assert!(
+        git_ok(company, &["show", "uplink/upstream:src/tokens.js"])
+            .unwrap()
+            .contains("sha256")
+    );
+    // Taken as verified: it is the old upstream plus a patch that passed.
+    assert_eq!(
+        result.queue.verified_upstream.as_ref().unwrap().sha,
+        rev_of(company, "uplink/upstream")
+    );
+    assert_eq!(
+        git_ok(company, &["show", "main:FIRST.md"]).unwrap(),
+        "first"
+    );
+}
+
+#[test]
+fn rebuild_blames_no_patch_when_upstream_fails_preflight_too() {
+    let world = setup_world();
+    let company = &world.company;
+    let first = add_internal_file(company, "FIRST.md", "first\n");
+    let second = add_internal_file(company, "SECOND.md", "second\n");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let marker = set_counting_preflight_script(company, "exit 1");
+    let main_before = rev_of(company, "main");
+
+    // Dropping a patch changes the tree, so the rebuild is tested.
+    let err = drop_patch(company, &second.id, "not needed").unwrap_err();
+    assert!(matches!(err, Error::Preflight(_)), "{err}");
+    assert!(err.to_string().contains("no patch is blamed"), "{err}");
+    // Once on the rebuilt tree, once on uplink/upstream.
+    assert_eq!(runs_of(&marker), 2);
+    assert_eq!(rev_of(company, "main"), main_before);
+    assert_eq!(patch_of(company, &first.id).status, PatchStatus::Queued);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
 }

@@ -51,30 +51,33 @@ pub use ops::{
     AddPatchOpts, AmendMessage, AmendResult, IncomingClaim, InitOpts, InitResult, PushOpts,
     PushResult, QueueCounts, RebasePlan, RebaseResult, RebaseState, RebuildOpts, RebuildResult,
     RefreshResult, ResetResult, StateStatus, StatusReport, StatusSnapshot, SubmitResult, SyncOpts,
-    SyncResult, TransferResult, accept_upstream, accept_upstream_at, add_patch, amend_patch,
-    amend_patch_with, amend_preflight, approval_stale, approve_patch, approve_patch_at,
-    approve_patch_reviewed, assess_patch_for_packet, drop_patch, format_status_table, init,
-    init_repo, init_repo_with_progress, mark_merged, newly_ready_to_submit, push_queue, read_queue,
-    rebase_onto_main, rebase_plan, rebuild, rebuild_with, record_gated_pr, record_pull_request,
-    refresh_from_origin, reset_from_origin, resolve_conflict, stale_approvals, state_status_at,
-    status_report, status_snapshot, store_assess_result, store_patch_extras, submit_patch,
-    submit_patch_with, summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with,
-    transfer_preflight, write_queue,
+    SyncResult, TransferResult, accept_upstream, accept_upstream_at, accept_upstream_with,
+    add_patch, amend_patch, amend_patch_with, amend_preflight, approval_stale, approve_patch,
+    approve_patch_at, approve_patch_reviewed, assess_patch_for_packet, drop_patch,
+    format_status_table, init, init_repo, init_repo_with_progress, mark_merged,
+    newly_ready_to_submit, push_queue, read_queue, rebase_onto_main, rebase_plan, rebuild,
+    rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, reset_from_origin,
+    resolve_conflict, resolve_conflict_with, stale_approvals, state_status_at, status_report,
+    status_snapshot, store_assess_result, store_patch_extras, submit_patch, submit_patch_with,
+    summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight,
+    write_queue,
 };
 pub use preflight::{
-    IncomingPreflight, PreflightReport, ScriptEcho, ScriptVerdict, assert_export_preflight,
-    command_preflight, command_tested, existing_patch_preflight, export_preflight, export_tested,
-    incoming_change_preflight, preflight_existing_patch, preflight_incoming_change,
-    refuse_script_with_credentials, run_preflight_command_in, set_script_echo,
+    FirstBad, IncomingPreflight, PreflightReport, RebuildReport, ScriptEcho, ScriptVerdict,
+    assert_export_preflight, command_preflight, command_tested, existing_patch_preflight,
+    export_preflight, export_tested, incoming_change_preflight, preflight_existing_patch,
+    preflight_incoming_change, refuse_script_with_credentials, run_preflight_command_in,
+    set_script_echo,
 };
 pub use progress::{ProgressMode, StepOutcome, StepProgress, format_step_line};
 pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};
 pub use settings::{SETTINGS_PATH, Settings, SettingsFlags};
 pub use types::{
-    AssessReport, CheckStatus, DEFAULT_CUTOFF, Forge, GateKind, MergeVia, PREVIOUS_MAIN_PATH,
-    Patch, PatchApproval, PatchExtras, PatchIntent, PatchLayer, PatchStatus, PendingMerge,
-    PendingUpstream, PreviousMain, QUEUE_PATH, QUEUE_VERSION, QueueConfig, QueueState,
-    STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
+    AssessReport, CheckStatus, ConflictCause, DEFAULT_CUTOFF, Forge, GateKind, MergeVia,
+    PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchExtras, PatchIntent, PatchLayer,
+    PatchStatus, PendingMerge, PendingUpstream, PreviousMain, QUEUE_PATH, QUEUE_VERSION,
+    QueueConfig, QueueState, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    TransferDirection, VerifiedUpstream,
 };
 
 #[cfg(test)]

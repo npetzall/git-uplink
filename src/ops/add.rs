@@ -115,7 +115,7 @@ pub(super) fn add_patch_once(
     write_queue_file(repo, queue)?;
     commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
     if rebuild {
-        rebuild_once(repo)?;
+        rebuild_once(repo, Some(&opts.preflight))?;
     } else {
         mark_empty_if_already_upstream(repo, &id)?;
     }

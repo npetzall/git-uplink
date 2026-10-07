@@ -28,8 +28,9 @@ use crate::inspect::{
 };
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
 use crate::preflight::{
-    PreflightReport, STAGE_STALE, ScriptVerdict, apply_abs, assert_upstream_layer_applies,
-    command_preflight, export_preflight,
+    FirstBad, PreflightReport, RebuildReport, STAGE_STALE, ScriptVerdict, apply_abs,
+    assert_upstream_layer_applies, bisect_first_bad, command_preflight, export_preflight,
+    is_script_failure, rev_preflight, rev_token, stale_first_bad, upstream_failure,
 };
 use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
@@ -50,10 +51,10 @@ use crate::repo::{
 };
 use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings};
 use crate::types::{
-    ApplyOutcome, AssessReport, Forge, GateKind, LastSync, MergeVia, PREVIOUS_MAIN_PATH, Patch,
-    PatchApproval, PatchConflict, PatchEvent, PatchIntent, PatchLayer, PatchMerged, PatchSource,
-    PatchStatus, PatchUpstream, PendingMerge, PendingUpstream, PreviousMain, QueueConfig,
-    QueueState, STATE_BRANCH, TransferDirection,
+    ApplyOutcome, AssessReport, ConflictCause, Forge, GateKind, LastSync, MergeVia,
+    PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchEvent, PatchIntent, PatchLayer,
+    PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingMerge, PendingUpstream,
+    PreviousMain, QueueConfig, QueueState, STATE_BRANCH, TransferDirection, VerifiedUpstream,
 };
 
 mod add;
