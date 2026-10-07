@@ -10,9 +10,9 @@ Every Uplink job that runs `preflight.sh` calls the hook right before the step t
 
 - **Uplink PR checks:** job *Uplink upstream preflight*;
 - **Uplink gate:** conflict, amend and transfer PRs;
-- **Uplink import**, **Uplink submit**, **Uplink amend** (complete), and **Uplink transfer** (start and complete): their preflight job.
+- **Uplink import**, **Uplink submit**, **Uplink amend** (complete), **Uplink transfer** (start and complete), **Uplink resolve**, **Uplink verify**, and **Uplink sync** (the approved upstream): their preflight job.
 
-Those jobs hold a read-only Actions token and nothing else: no App token, no Environment, no credentials in the checkout. The job that writes (import, submit, amend, transfer) takes the preflight job's result and runs neither the hook nor `preflight.sh`.
+Those jobs hold a read-only Actions token and nothing else: no App token, no Environment, no credentials in the checkout. The one of **Uplink sync** also mints the read-only upstream token, in a step of its own, to fetch the approved upstream. The job that writes takes the preflight job's result and runs neither the hook nor `preflight.sh`.
 
 The forge pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `uplink/hooks` into `.uplink-hooks/` and runs `.github/actions/uplink-toolchain-hook/action.yml` from there. If that file is missing on `uplink/hooks`, the job shows a notice and carries on without it. **A failed hook fails the job.**
 
