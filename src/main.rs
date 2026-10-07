@@ -11,19 +11,21 @@ use git_uplink::{
     FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia, PACKAGE_CHANGE,
     PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode, PushOpts,
     RebuildOpts, STATE_BRANCH, ScriptEcho, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT,
-    accept_upstream_at, add_patch, adopted_next_steps, amend_patch_with, amend_preflight,
-    approve_patch_reviewed, assess_from_message, assess_patch_file, assess_patch_for_packet,
-    change_between, command_preflight, command_tested, commit_queue, depends_on_from_message,
-    doctor, drop_patch, existing_patch_preflight, export_tested, format_approval_receipt,
-    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
-    format_init_summary, format_status_table, from_upstream_report_paths, git_ok,
-    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
-    read_queue, rebase_onto_main, rebase_plan, rebuild_with, record_gated_pr, record_pull_request,
-    refresh_from_origin, refuse_script_with_credentials, report_paths, reset_from_origin,
-    resolve_conflict, review_token, review_token_path, set_script_echo, status_report,
-    status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
-    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
+    accept_upstream_preflight, accept_upstream_with, add_patch, adopted_next_steps,
+    amend_patch_with, amend_preflight, approve_patch_reviewed, assess_from_message,
+    assess_patch_file, assess_patch_for_packet, change_between, command_preflight, command_tested,
+    commit_queue, depends_on_from_message, doctor, drop_patch, existing_patch_preflight,
+    export_tested, fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
+    format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
+    format_status_table, from_upstream_report_paths, git_ok, hooks_publish_hint,
+    incoming_change_preflight, init, load_groups_file, mark_merged, newly_ready_to_submit,
+    parse_github_repo, parse_pull_request_url, patch_text, push_queue, read_queue,
+    rebase_onto_main, rebase_plan, rebuild_preflight, rebuild_with, record_gated_pr,
+    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
+    reset_from_origin, resolve_conflict_with, resolve_preflight, review_token, review_token_path,
+    set_script_echo, status_report, status_snapshot, store_assess_result, store_patch_extras,
+    stored_commit_message, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
+    write_man_pages,
 };
 use git_uplink::{
     ConflictCause, HOOKS_BRANCH, HooksPushAction, Patch, PatchConflict, PatchIntent, PatchStatus,
@@ -1223,7 +1225,11 @@ fn cmd_sync(repo: &Path, merged_pr: Vec<String>) -> Result<(), Error> {
     finish_sync(repo, result, summary.as_deref())
 }
 
-fn cmd_accept_upstream(repo: &Path, sha: Option<&str>) -> Result<(), Error> {
+fn cmd_accept_upstream(
+    repo: &Path,
+    sha: Option<&str>,
+    verdict: &ScriptVerdict,
+) -> Result<(), Error> {
     let queue = read_queue(repo)?;
     let Some(pending) = &queue.pending_upstream else {
         return Err(Error::msg(
@@ -1248,7 +1254,11 @@ fn cmd_accept_upstream(repo: &Path, sha: Option<&str>) -> Result<(), Error> {
     );
     let dest = PathBuf::from(from_upstream_report_paths().2);
     write_markdown_file(repo, &dest, &receipt.text)?;
-    finish_sync(repo, accept_upstream_at(repo, sha)?, Some(&receipt.text))
+    finish_sync(
+        repo,
+        accept_upstream_with(repo, sha, verdict)?,
+        Some(&receipt.text),
+    )
 }
 
 fn cmd_gated(
@@ -1282,6 +1292,7 @@ fn cmd_rebuild(
     branch: Option<String>,
     push: bool,
     push_remote: Option<String>,
+    preflight: ScriptVerdict,
 ) -> Result<(), Error> {
     let result = rebuild_with(
         repo,
@@ -1293,9 +1304,18 @@ fn cmd_rebuild(
             } else {
                 push_remote
             },
-            ..RebuildOpts::default()
+            preflight,
         },
-    )?;
+    );
+    let result = match result {
+        Err(Error::Conflict(err)) => {
+            if let Some(conflict) = find_conflict(&read_queue(repo)?) {
+                eprint_conflict(conflict);
+            }
+            return Err(Error::Conflict(err));
+        }
+        other => other?,
+    };
     if result.preview {
         println!("rebuild preview at {}", result.branch);
         eprintln!(
@@ -1308,9 +1328,9 @@ fn cmd_rebuild(
     Ok(())
 }
 
-fn cmd_resolve(repo: &Path, id: &str) -> Result<(), Error> {
+fn cmd_resolve(repo: &Path, id: &str, verdict: &ScriptVerdict) -> Result<(), Error> {
     let before = read_queue(repo)?;
-    match resolve_conflict(repo, id) {
+    match resolve_conflict_with(repo, id, verdict) {
         Ok(queue) => print_resolve_artifact(repo, id, &before, &queue, false),
         Err(Error::Conflict(_)) => {
             let queue = read_queue(repo)?;
@@ -1610,7 +1630,23 @@ fn run() -> Result<(), Error> {
             push_remote,
         } => cmd_submitted(&repo, &id, &pr_url, pr, &push_remote),
         Commands::Sync { merged_pr } => cmd_sync(&repo, merged_pr),
-        Commands::AcceptUpstream { sha } => cmd_accept_upstream(&repo, sha.as_deref()),
+        Commands::AcceptUpstream {
+            sha,
+            fetch_only,
+            preflight_result,
+            preflight_only,
+        } => {
+            if fetch_only {
+                let fetched = fetch_pending_upstream(&repo, sha.as_deref())?;
+                println!("{fetched}");
+                return Ok(());
+            }
+            if preflight_only {
+                let report = accept_upstream_preflight(&repo, sha.as_deref())?;
+                return finish_preflight_report(report, None);
+            }
+            cmd_accept_upstream(&repo, sha.as_deref(), &script_verdict(preflight_result)?)
+        }
         Commands::Gated {
             id,
             pr_url,
@@ -1623,8 +1659,30 @@ fn run() -> Result<(), Error> {
             branch,
             push,
             push_remote,
-        } => cmd_rebuild(&repo, branch, push, push_remote),
-        Commands::Resolve { id } => cmd_resolve(&repo, &id),
+            preflight_result,
+            preflight_only,
+        } => {
+            if preflight_only {
+                return finish_preflight_report(rebuild_preflight(&repo)?, None);
+            }
+            cmd_rebuild(
+                &repo,
+                branch,
+                push,
+                push_remote,
+                script_verdict(preflight_result)?,
+            )
+        }
+        Commands::Resolve {
+            id,
+            preflight_result,
+            preflight_only,
+        } => {
+            if preflight_only {
+                return finish_preflight_report(resolve_preflight(&repo, &id)?, None);
+            }
+            cmd_resolve(&repo, &id, &script_verdict(preflight_result)?)
+        }
         Commands::Transfer {
             id,
             to_upstream,

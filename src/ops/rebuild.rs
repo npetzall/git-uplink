@@ -389,6 +389,21 @@ pub(super) fn probe_rebuild(
     outcome
 }
 
+/// What `preflight.sh` says about a rebuild of the queue as it is. The
+/// queue and the checkout are left as they were.
+pub fn rebuild_preflight(repo: &Path) -> Result<PreflightReport> {
+    with_queue_lock(repo, || {
+        let queue = read_queue_file(repo)?;
+        let upstream_ref = super::amend::upstream_ref_or_company(repo, &queue)?;
+        ensure_clean_worktree(repo, "a rebuild")?;
+        Ok(PreflightReport::of_rebuild(probe_rebuild(
+            repo,
+            &queue,
+            &upstream_ref,
+        )?))
+    })
+}
+
 /// A probe's report: `checked` on the tree the command tests, and, when
 /// that passed, the rebuild it would end with.
 pub(super) fn probe_report(
@@ -621,62 +636,82 @@ pub fn resolve_conflict_with(
     preflight: &ScriptVerdict,
 ) -> Result<QueueState> {
     with_queue_lock(repo, || {
-        let base = GateKind::Conflict.base_branch(id);
-        let work = GateKind::Conflict.work_branch(id);
-        let head = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-        if head != base && head != work {
-            return Err(Error::msg(format!(
-                "Check out {base} or {work} before resolving {id} (currently on {head})."
-            )));
-        }
-        restore_uplink_from_state(repo)?;
-        let mut queue = read_queue_file(repo)?;
-        let patch = get_patch(&queue, id)?.clone();
-        if patch.status != PatchStatus::Conflict {
-            return Err(Error::msg(format!("{id} is not in conflict")));
-        }
-        assert_resolution_clean(repo)?;
-        let onto = patch
-            .conflict
-            .as_ref()
-            .and_then(|c| c.onto.clone())
-            .unwrap_or(recover_onto(repo, GateKind::Conflict, id, &head)?);
-        let message = company_commit_message(&patch);
-        let before = rev_parse(repo, "HEAD")?;
-        commit_resolution(repo, &onto, &message)?;
-        // The resolution is new code, so the stored assessment no longer
-        // describes it. An upstream-bound resolution must pass; otherwise the
-        // branch is put back as it was so the resolution can be fixed.
-        let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
-        let report = assess_from_message(
-            repo,
-            &queue,
-            &onto,
-            "HEAD",
-            &stored_commit_message(&patch),
-            Some(&patch.title),
-            intent,
-        )?;
-        if !intent.is_internal_only()
-            && let Err(err) = assert_assess_ok(&report, &patch.title)
-        {
-            git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-            return Err(err);
-        }
-        fs::create_dir_all(repo.join(".uplink/patches"))?;
-        fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
-        {
-            let patch = get_patch_mut(&mut queue, id)?;
-            patch.assess = Some(report);
-            patch.conflict = None;
-            let rel = patch_path(id)?.to_string_lossy().into_owned();
-            patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-            patch.status = status_after_rewrite(repo, patch);
-            let detail = rewrite_event_detail(patch.status, "Conflict resolved");
-            add_event(patch, "amended", detail);
-        }
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: amend {id} after conflict"))?;
-        rebuild_checked(repo, preflight)
+        resolve_once(repo, id, Checks::Record(preflight)).map(Checked::recorded)
     })
+}
+
+/// What `preflight.sh` says about the rebuild `resolve` would end with.
+/// The queue is left as it was; the checkout is not, so run it in a clone
+/// made for it.
+pub fn resolve_preflight(repo: &Path, id: &str) -> Result<PreflightReport> {
+    with_queue_lock(repo, || {
+        Ok(Checked::report(resolve_once(repo, id, Checks::Probe)))
+    })
+}
+
+fn resolve_once(repo: &Path, id: &str, checks: Checks<'_>) -> Result<Checked<QueueState>> {
+    let base = GateKind::Conflict.base_branch(id);
+    let work = GateKind::Conflict.work_branch(id);
+    let head = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if head != base && head != work {
+        return Err(Error::msg(format!(
+            "Check out {base} or {work} before resolving {id} (currently on {head})."
+        )));
+    }
+    restore_uplink_from_state(repo)?;
+    let mut queue = read_queue_file(repo)?;
+    let patch = get_patch(&queue, id)?.clone();
+    if patch.status != PatchStatus::Conflict {
+        return Err(Error::msg(format!("{id} is not in conflict")));
+    }
+    assert_resolution_clean(repo)?;
+    let onto = patch
+        .conflict
+        .as_ref()
+        .and_then(|c| c.onto.clone())
+        .unwrap_or(recover_onto(repo, GateKind::Conflict, id, &head)?);
+    let message = company_commit_message(&patch);
+    let before = rev_parse(repo, "HEAD")?;
+    commit_resolution(repo, &onto, &message)?;
+    // The resolution is new code, so the stored assessment no longer
+    // describes it. An upstream-bound resolution must pass; otherwise the
+    // branch is put back as it was so the resolution can be fixed.
+    let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
+    let report = assess_from_message(
+        repo,
+        &queue,
+        &onto,
+        "HEAD",
+        &stored_commit_message(&patch),
+        Some(&patch.title),
+        intent,
+    )?;
+    if !intent.is_internal_only()
+        && let Err(err) = assert_assess_ok(&report, &patch.title)
+    {
+        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+        return Err(err);
+    }
+    fs::create_dir_all(repo.join(".uplink/patches"))?;
+    fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
+    {
+        let patch = get_patch_mut(&mut queue, id)?;
+        patch.assess = Some(report);
+        patch.conflict = None;
+        let rel = patch_path(id)?.to_string_lossy().into_owned();
+        patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
+        patch.status = status_after_rewrite(repo, patch);
+        let detail = rewrite_event_detail(patch.status, "Conflict resolved");
+        add_event(patch, "amended", detail);
+    }
+    if checks.is_probe() {
+        let rebuilt = super::amend::upstream_ref_or_company(repo, &queue)
+            .and_then(|upstream_ref| probe_rebuild(repo, &queue, &upstream_ref));
+        restore_uplink_from_state(repo)?;
+        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+        return Ok(Checked::Probed(PreflightReport::of_rebuild(rebuilt?)));
+    }
+    write_queue_file(repo, &queue)?;
+    commit_queue(repo, &format!("uplink: amend {id} after conflict"))?;
+    rebuild_checked(repo, checks.verdict()).map(Checked::Recorded)
 }

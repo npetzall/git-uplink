@@ -214,6 +214,20 @@ impl PreflightReport {
         }
     }
 
+    /// The report of a command that only rebuilds. Not a pass when the
+    /// upstream it starts from fails: nothing is rebuilt then. A patch the
+    /// script fails on is a pass, and the command gates that patch.
+    pub(crate) fn of_rebuild(rebuild: RebuildReport) -> Self {
+        let failed = rebuild.upstream.as_ref().filter(|upstream| !upstream.ok);
+        Self {
+            ok: failed.is_none(),
+            stage: failed.and_then(|upstream| upstream.stage.clone()),
+            message: failed.and_then(|upstream| upstream.message.clone()),
+            rebuild: Some(Box::new(rebuild)),
+            ..Self::default()
+        }
+    }
+
     pub fn read(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path).map_err(|err| {
             Error::msg(format!(

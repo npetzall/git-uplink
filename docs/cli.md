@@ -38,12 +38,14 @@ git uplink approve <id> [--out <path>] [--reviewed <token>]
 git uplink submit <id> [--push] [--preflight-result <path>]
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink sync [--merged-pr <id=sha>]...
-git uplink accept-upstream [--sha <sha>]
+git uplink accept-upstream [--sha <sha>] [--fetch-only] [--preflight-result <path>]
+            [--preflight-only]
 git uplink gated <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink merged <id> [--via <how>] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
-git uplink resolve <id>
+            [--preflight-result <path>] [--preflight-only]
+git uplink resolve <id> [--preflight-result <path>] [--preflight-only]
 git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
             [--preflight-result <path>] [--preflight-only]
 git uplink amend <id> [--complete] [--title <text>]
@@ -292,7 +294,18 @@ Promote a pending public main after from-upstream environment approval.
 
 Moves `uplink/upstream`, marks the patches the packet listed as merged, and rebuilds `main`.
 
+The pending upstream brings changes that are not ours, so it is promoted only when `preflight.sh` passes on it: that makes `uplink/upstream` the known good commit a failing rebuild is bisected from. When it fails, nothing is moved and the command fails. See `rebuild` for the check on the rebuilt tree.
+
 - `--sha <sha>`: The pending public main that was reviewed. Refuses when the queue now holds a different one.
+- `--fetch-only`: Fetch public upstream so the pending upstream is in this clone, and change nothing.
+
+  For the step of a job without write credentials that holds the upstream token, before the step that runs `--preflight-only` without it.
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the trees this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the pending upstream fails.
 
 ### `merged`
 
@@ -363,9 +376,21 @@ Remove a patch from the queue.
 
 Replay main from the queue.
 
+Applies the active patches in order onto `uplink/upstream`, one commit each. A patch that does not apply goes to the conflict gate.
+
+When every patch applies and the result is not the tree `main` already has, `preflight.sh` runs on it. If it fails, `git bisect` runs the script between `uplink/upstream` (known good) and the rebuilt tree (known bad), and the first patch it fails on goes to the conflict gate: `uplink/conflict/<id>` is the queue before the patch and `uplink/conflict/<id>-work` has the patch applied, for the fix. `main` stays at the last build that passed. When `uplink/upstream` is not known to pass with the current `preflight.sh`, it is tested first; if it fails too, the command fails and no patch is blamed.
+
+Every command that rebuilds does this: `sync`, `accept-upstream`, `resolve`, `amend --complete`, `transfer`, `add`, `drop` and `merged`.
+
 - `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
 - `--push`: Push uplink/state and the rebuilt branch after rebuild.
 - `--push-remote <remote>`: Remote for --push, origin by default.
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the trees this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. Exits 0 also when a patch fails: the command then gates that patch.
 
 ### `gated`
 
@@ -382,11 +407,17 @@ Finish a conflict resolution and put the patch back in the queue.
 
 Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`).
 
-A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `amended` until IP approves the delta. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0.
+A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `amended` until IP approves the delta. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0. That includes a patch `preflight.sh` fails on in the rebuild, which can be the resolved patch again; see `rebuild`.
 
 `readyToSubmit` in the output lists the resolved patch when it is `queued` again, and the queued patches whose last unmerged upstream dependency the rebuild marked merged.
 
 - `<id>`: Patch whose conflict was resolved.
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the trees this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. The checkout is left on the squashed resolution, so use a clone made for it.
 
 ## Tools
 
