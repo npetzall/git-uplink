@@ -242,7 +242,7 @@ pub(super) fn start_transfer(
         let _ = fs::remove_dir_all(repo.join(".uplink"));
         if checks.is_probe() {
             return probe_report(checked.map(|(_, token)| token), || {
-                probe_rebuild_from(repo, &preview, &snapshot, upstream_ref)
+                probe_rebuild_from(repo, &preview, &snapshot, upstream_ref, false)
             })
             .map(Checked::Probed);
         }
@@ -551,7 +551,7 @@ pub(super) fn complete_transfer(
     if checks.is_probe() {
         let report = probe_report(checked.map(|(_, token)| token), || {
             let upstream_ref = super::amend::upstream_ref_or_company(repo, &preview)?;
-            probe_rebuild(repo, &preview, &upstream_ref)
+            probe_rebuild(repo, &preview, &upstream_ref, false)
         });
         restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;

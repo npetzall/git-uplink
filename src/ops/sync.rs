@@ -799,7 +799,7 @@ pub fn accept_upstream_preflight(
             token,
             at: stamp(),
         });
-        let mut rebuild = probe_rebuild(repo, &queue, &pending.sha)?;
+        let mut rebuild = probe_rebuild(repo, &queue, &pending.sha, false)?;
         rebuild.upstream = Some(verdict);
         Ok(PreflightReport::of_rebuild(rebuild))
     })

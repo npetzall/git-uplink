@@ -11921,3 +11921,161 @@ fn imports_of_two_merges_close_together_are_not_preflighted_as_rebuilds() {
             .all(|p| p.status != PatchStatus::Conflict)
     );
 }
+
+#[test]
+fn rebuild_verify_tests_a_main_that_already_has_the_tree() {
+    let world = setup_world();
+    let company = &world.company;
+    add_internal_file(company, "FIRST.md", "first\n");
+    let second = add_internal_file(company, "SECOND.md", "old\n");
+    add_internal_file(company, "THIRD.md", "third\n");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let marker = set_counting_preflight_script(company, "! grep -q old SECOND.md 2>/dev/null");
+
+    // Main has the tree, so a plain rebuild has nothing to test.
+    rebuild(company).unwrap();
+    assert_eq!(runs_of(&marker), 0);
+    let main_before = rev_of(company, "main");
+
+    let report = git_uplink::rebuild_preflight(company, true).unwrap();
+    let blamed = report
+        .rebuild
+        .as_deref()
+        .unwrap()
+        .first_bad
+        .as_ref()
+        .unwrap();
+    assert_eq!(blamed.id, second.id);
+    assert_eq!(patch_of(company, &second.id).status, PatchStatus::Queued);
+    let runs = runs_of(&marker);
+    assert!(runs > 0);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["rebuild", "--verify", "--json", "--preflight-result"])
+        .arg({
+            let path = keep_dir().join("report.json");
+            fs::write(&path, serde_json::to_string(&report).unwrap()).unwrap();
+            path
+        })
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["rebuilt"], false);
+    assert_eq!(value["conflict"]["id"], second.id.as_str());
+    assert_eq!(
+        value["gh"]["prCreate"]["base"],
+        format!("uplink/conflict/{}", second.id).as_str()
+    );
+    assert_eq!(
+        runs_of(&marker),
+        runs,
+        "recording must not run preflight.sh"
+    );
+    let conflict = patch_of(company, &second.id).conflict.unwrap();
+    assert_eq!(conflict.cause, git_uplink::ConflictCause::Preflight);
+    assert_eq!(rev_of(company, "main"), main_before);
+}
+
+#[test]
+fn import_while_the_queue_is_blocked_is_recorded_with_the_conflict() {
+    let world = setup_world();
+    let company = &world.company;
+    // An internal patch that upstream then conflicts with.
+    git(
+        company,
+        &["checkout", "--quiet", "-b", "feat/ttl", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let internal = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Longer TTL".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    write(
+        &world.upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(&world.upstream, "shorten default ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    sync_apply(company);
+    assert_eq!(
+        patch_of(company, &internal.id).status,
+        PatchStatus::Conflict
+    );
+
+    // A pull request merges into main meanwhile. Its import rebuilds, since
+    // it goes under the internal patch, and the rebuild is still blocked.
+    let base = rev_of(company, "main");
+    git(
+        company,
+        &["checkout", "--quiet", "-b", "feat/readme", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "README.md", "tokenkit\n\nHashes and TTLs.\n");
+    commit_all(company, "describe the kit");
+    let head = rev_of(company, "HEAD");
+    land_on_main(company, &head);
+    let main_before = rev_of(company, "main");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args([
+            "add",
+            "--title",
+            "Describe the kit",
+            "--from",
+            &base,
+            "--head",
+            &head,
+            "--json",
+        ])
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["title"], "Describe the kit");
+    assert_eq!(value["conflict"]["id"], internal.id.as_str());
+    assert_eq!(
+        value["gh"]["prCreate"]["head"],
+        format!("uplink/conflict/{}-work", internal.id).as_str()
+    );
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert!(queue.is_upstream(value["id"].as_str().unwrap()));
+    // Main keeps the merge as the pull request left it.
+    assert_eq!(rev_of(company, "main"), main_before);
+}

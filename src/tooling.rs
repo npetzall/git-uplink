@@ -816,6 +816,12 @@ mod embed_tests {
                 "git uplink resolve ",
             ),
             (
+                "uplink-verify.yml",
+                "preflight",
+                "verify",
+                "git uplink rebuild ",
+            ),
+            (
                 "uplink-sync.yml",
                 "accept-preflight",
                 "apply",

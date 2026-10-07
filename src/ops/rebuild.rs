@@ -7,6 +7,8 @@ pub struct RebuildOpts {
     pub push_remote: Option<String>,
     /// Where the verdict of `preflight.sh` on the rebuilt tree comes from.
     pub preflight: ScriptVerdict,
+    /// Get that verdict also when the company branch already has the tree.
+    pub verify: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +47,7 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
         let queue = if preview {
             rebuild_preview(repo, &target)?
         } else {
-            rebuild_once(repo, Some(&opts.preflight))?
+            rebuild_once(repo, Some(&opts.preflight), opts.verify)?
         };
         if opts.push {
             let remote = opts.push_remote.as_deref().unwrap_or("origin");
@@ -232,7 +234,7 @@ fn tree_of(repo: &Path, rev: &str) -> Result<String> {
 
 /// Gets the verdict of `preflight.sh` on a rebuild: `applied` on top of
 /// `upstream_ref`. A tree equal to the company branch has nothing new to
-/// test. When the script fails, `uplink/upstream` is the known good commit
+/// test, unless `force` asks for it anyway. When the script fails, `uplink/upstream` is the known good commit
 /// and the rebuilt tree the known bad one, so `git bisect` finds the patch
 /// to blame. An upstream that is not verified is tested first: when it
 /// fails too, no patch is blamed.
@@ -244,13 +246,17 @@ fn check_rebuilt(
     upstream_ref: &str,
     applied: &[(String, String)],
     verdict: &ScriptVerdict,
+    force: bool,
     mut probe: Option<&mut RebuildReport>,
 ) -> Result<Option<FailedPatch>> {
     let Some((_, head)) = applied.last() else {
         return Ok(None);
     };
     let company_branch = queue.config.internal_branch.clone();
-    if has_ref(repo, &company_branch)? && tree_of(repo, head)? == tree_of(repo, &company_branch)? {
+    if !force
+        && has_ref(repo, &company_branch)?
+        && tree_of(repo, head)? == tree_of(repo, &company_branch)?
+    {
         return Ok(None);
     }
     let built = rev_preflight(
@@ -346,6 +352,7 @@ pub(super) fn probe_rebuild_from(
     queue: &QueueState,
     snapshot: &Path,
     upstream_ref: &str,
+    force: bool,
 ) -> Result<RebuildReport> {
     let mut queue = queue.clone();
     let mut report = RebuildReport::default();
@@ -364,6 +371,7 @@ pub(super) fn probe_rebuild_from(
         upstream_ref,
         &applied,
         &ScriptVerdict::Run,
+        force,
         Some(&mut report),
     );
     match checked {
@@ -379,10 +387,11 @@ pub(super) fn probe_rebuild(
     repo: &Path,
     queue: &QueueState,
     upstream_ref: &str,
+    force: bool,
 ) -> Result<RebuildReport> {
     let (original, original_sha) = checkout_identity(repo)?;
     let snapshot = snapshot_uplink(repo)?;
-    let outcome = probe_rebuild_from(repo, queue, &snapshot, upstream_ref);
+    let outcome = probe_rebuild_from(repo, queue, &snapshot, upstream_ref, force);
     let _ = fs::remove_dir_all(&snapshot);
     restore_checkout(repo, &original, &original_sha)?;
     crate::repo::ensure_state_worktree(repo)?;
@@ -390,8 +399,9 @@ pub(super) fn probe_rebuild(
 }
 
 /// What `preflight.sh` says about a rebuild of the queue as it is. The
-/// queue and the checkout are left as they were.
-pub fn rebuild_preflight(repo: &Path) -> Result<PreflightReport> {
+/// queue and the checkout are left as they were. With `verify` the script
+/// runs also when the company branch already has the rebuilt tree.
+pub fn rebuild_preflight(repo: &Path, verify: bool) -> Result<PreflightReport> {
     with_queue_lock(repo, || {
         let queue = read_queue_file(repo)?;
         let upstream_ref = super::amend::upstream_ref_or_company(repo, &queue)?;
@@ -400,6 +410,7 @@ pub fn rebuild_preflight(repo: &Path) -> Result<PreflightReport> {
             repo,
             &queue,
             &upstream_ref,
+            verify,
         )?))
     })
 }
@@ -419,8 +430,12 @@ pub(super) fn probe_report(
 
 /// Replays the queue onto upstream and publishes the company branch.
 /// `check` is where the verdict of `preflight.sh` on the result comes from;
-/// `None` publishes without one.
-pub(super) fn rebuild_once(repo: &Path, check: Option<&ScriptVerdict>) -> Result<QueueState> {
+/// `None` publishes without one. `force`: see [`RebuildOpts::verify`].
+pub(super) fn rebuild_once(
+    repo: &Path,
+    check: Option<&ScriptVerdict>,
+    force: bool,
+) -> Result<QueueState> {
     let mut queue = read_queue_file(repo)?;
     let company_branch = queue.config.internal_branch.clone();
     ensure_upstream_ref(repo)?;
@@ -462,10 +477,18 @@ pub(super) fn rebuild_once(repo: &Path, check: Option<&ScriptVerdict>) -> Result
         };
 
         if let Some(verdict) = check {
-            let failed = check_rebuilt(repo, &mut queue, upstream_ref, &applied, verdict, None)
-                .inspect_err(|_| {
-                    let _ = restore_company_branch(repo, &company_branch);
-                })?;
+            let failed = check_rebuilt(
+                repo,
+                &mut queue,
+                upstream_ref,
+                &applied,
+                verdict,
+                force,
+                None,
+            )
+            .inspect_err(|_| {
+                let _ = restore_company_branch(repo, &company_branch);
+            })?;
             if let Some(failed) = failed {
                 let patch = get_patch(&queue, &failed.id)?.clone();
                 return Err(Error::Conflict(persist_conflict(
@@ -706,7 +729,7 @@ fn resolve_once(repo: &Path, id: &str, checks: Checks<'_>) -> Result<Checked<Que
     }
     if checks.is_probe() {
         let rebuilt = super::amend::upstream_ref_or_company(repo, &queue)
-            .and_then(|upstream_ref| probe_rebuild(repo, &queue, &upstream_ref));
+            .and_then(|upstream_ref| probe_rebuild(repo, &queue, &upstream_ref, false));
         restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
         return Ok(Checked::Probed(PreflightReport::of_rebuild(rebuilt?)));

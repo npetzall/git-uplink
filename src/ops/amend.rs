@@ -318,7 +318,9 @@ fn complete_amend(
         .and_then(|token| assert_upstream_layer_applies(repo, &queue).map(|_| token))
     };
     if checks.is_probe() {
-        let report = probe_report(layer_checks, || probe_rebuild(repo, &queue, &upstream_ref));
+        let report = probe_report(layer_checks, || {
+            probe_rebuild(repo, &queue, &upstream_ref, false)
+        });
         restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
         return Ok(Checked::Probed(report?));

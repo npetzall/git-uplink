@@ -724,6 +724,44 @@ fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool) -> Result<(), Error> {
             }
             Ok(())
         }
+        // The change is recorded; the rebuild stopped on a patch above it.
+        Err(Error::Conflict(err)) => {
+            let queue = read_queue(repo)?;
+            let added = queue
+                .all_patches()
+                .find(|patch| before.all_patches().all(|old| old.id != patch.id));
+            let (Some(patch), Some(conflict)) = (added, find_conflict(&queue)) else {
+                return Err(Error::Conflict(err));
+            };
+            eprint_conflict(conflict);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "id": patch.id,
+                        "queue": if internal_only { "internal" } else { "upstream" },
+                        "status": patch.status,
+                        "title": patch.title,
+                        "readyToSubmit": newly_ready_to_submit(&before, &queue),
+                        "conflict": conflict_json(conflict),
+                        "gh": { "prCreate": conflict_pr_create_artifact(repo, conflict, None)? },
+                    })
+                );
+            } else {
+                println!(
+                    "{}  {}  {}  {}",
+                    patch.id,
+                    if internal_only {
+                        "internal"
+                    } else {
+                        "upstream"
+                    },
+                    patch.status,
+                    patch.title
+                );
+            }
+            Ok(())
+        }
         Err(err) => {
             print_failure_comment(&err);
             Err(err)
@@ -1293,6 +1331,8 @@ fn cmd_rebuild(
     push: bool,
     push_remote: Option<String>,
     preflight: ScriptVerdict,
+    verify: bool,
+    json: bool,
 ) -> Result<(), Error> {
     let result = rebuild_with(
         repo,
@@ -1305,17 +1345,38 @@ fn cmd_rebuild(
                 push_remote
             },
             preflight,
+            verify,
         },
     );
     let result = match result {
         Err(Error::Conflict(err)) => {
-            if let Some(conflict) = find_conflict(&read_queue(repo)?) {
-                eprint_conflict(conflict);
+            let queue = read_queue(repo)?;
+            let Some(conflict) = find_conflict(&queue) else {
+                return Err(Error::Conflict(err));
+            };
+            eprint_conflict(conflict);
+            if !json {
+                return Err(Error::Conflict(err));
             }
-            return Err(Error::Conflict(err));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "rebuilt": false,
+                    "conflict": conflict_json(conflict),
+                    "gh": { "prCreate": conflict_pr_create_artifact(repo, conflict, None)? },
+                })
+            );
+            return Ok(());
         }
         other => other?,
     };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "rebuilt": true, "branch": result.branch })
+        );
+        return Ok(());
+    }
     if result.preview {
         println!("rebuild preview at {}", result.branch);
         eprintln!(
@@ -1661,9 +1722,11 @@ fn run() -> Result<(), Error> {
             push_remote,
             preflight_result,
             preflight_only,
+            verify,
+            json,
         } => {
             if preflight_only {
-                return finish_preflight_report(rebuild_preflight(&repo)?, None);
+                return finish_preflight_report(rebuild_preflight(&repo, verify)?, None);
             }
             cmd_rebuild(
                 &repo,
@@ -1671,6 +1734,8 @@ fn run() -> Result<(), Error> {
                 push,
                 push_remote,
                 script_verdict(preflight_result)?,
+                verify,
+                json,
             )
         }
         Commands::Resolve {
