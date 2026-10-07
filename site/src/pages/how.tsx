@@ -156,23 +156,24 @@ export function HowPage() {
 
       <Section title="Recognizing a merged contribution">
         <p>
-          Once a patch is marked merged it is never applied again. Detection runs in order, most reliable
-          first:
+          Once a patch is marked merged it is never applied again. A patch counts as merged when either holds:
         </p>
         <ol>
-          <li>The public pull request recorded on the queue was merged.</li>
           <li>
-            An <code>Uplink-Patch-Id</code> trailer on an upstream commit.
+            An upstream commit has the same <code>git patch-id --stable</code> as the patch.
           </li>
-          <li>
-            A <code>git patch-id --stable</code> match.
-          </li>
-          <li>The patch applies empty: the tree already has it.</li>
+          <li>The public pull request recorded on the queue was merged, also when the maintainer squashed or edited it.</li>
         </ol>
         <p>
-          Empty-apply is only a hint. If upstream merged your change and then changed the same lines,
-          re-applying your original patch would bring back the old code. The trailer and PR number make sure
-          the patch is marked merged instead.
+          The exported commit carries an <code>Uplink-Patch-Id</code> trailer, but patch ids are public, so a
+          trailer proves nothing by itself. A commit that names a patch it does not match is shown to the
+          inbound reviewer as a claim.
+        </p>
+        <p>
+          A rebuild also marks an upstream-bound patch that applies empty: the tree already has it. That is
+          only a hint. If upstream merged your change and then changed the same lines, re-applying your
+          original patch would bring back the old code. The patch id and the PR number make sure the patch is
+          marked merged instead.
         </p>
       </Section>
 
@@ -183,6 +184,11 @@ export function HowPage() {
           happens through a gated pull request. Moving a change that was already submitted back to internal also
           withdraws the public pull request after a separate approval.
         </p>
+        <p>
+          A merged change that turns out not to qualify for upstream (its required checks were bypassed, or
+          something moved after them) takes the same path: it is recorded internal-only, and a transfer to
+          upstream is opened for it.
+        </p>
       </Section>
 
       <Section title="Credentials are split by role">
@@ -191,6 +197,8 @@ export function HowPage() {
           public pull request, and push the contribution fork. The fork-write credential exists only inside jobs
           that passed the IP gate. Uplink never uses a developer&apos;s own keys, signing setup, or tokens. The
           preflight script, which builds and runs product code, runs only in jobs that hold a read-only token.
+          The whole model, and what is left to the operator, is on{" "}
+          <Link to="/security">Security</Link>.
         </p>
       </Section>
 
@@ -199,7 +207,7 @@ export function HowPage() {
         <Link to="/internals" className="text-primary underline-offset-4 hover:underline">
           Internals
         </Link>
-        . Configuring a forge:{" "}
+        . Every flow is drawn there. Configuring a forge:{" "}
         <Link to="/setup" className="text-primary underline-offset-4 hover:underline">
           Production setup
         </Link>

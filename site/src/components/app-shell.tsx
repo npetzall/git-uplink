@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/how", label: "How" },
   { href: "/day-to-day", label: "Day to day" },
   { href: "/internals", label: "Internals" },
+  { href: "/security", label: "Security" },
   { href: "/lab", label: "Lab" },
   { href: "/install", label: "Install" },
   { href: "/cli", label: "CLI" },
