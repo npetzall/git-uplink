@@ -11941,6 +11941,14 @@ fn rebuild_verify_tests_a_main_that_already_has_the_tree() {
     rebuild(company).unwrap();
     assert_eq!(runs_of(&marker), 0);
     let main_before = rev_of(company, "main");
+    let replaced = || {
+        git_ok(
+            company,
+            &["show", &format!("{STATE_BRANCH}:{PREVIOUS_MAIN_PATH}")],
+        )
+        .unwrap()
+    };
+    let replaced_before = replaced();
 
     let report = git_uplink::rebuild_preflight(company, true).unwrap();
     let blamed = report
@@ -11985,6 +11993,48 @@ fn rebuild_verify_tests_a_main_that_already_has_the_tree() {
     let conflict = patch_of(company, &second.id).conflict.unwrap();
     assert_eq!(conflict.cause, git_uplink::ConflictCause::Preflight);
     assert_eq!(rev_of(company, "main"), main_before);
+    // Nothing was published, so no main is recorded as replaced: the state
+    // this leaves can be pushed without a main.
+    assert_eq!(replaced(), replaced_before);
+}
+
+#[test]
+fn rebuild_verify_that_passes_records_the_main_it_replaced() {
+    let world = setup_world();
+    let company = &world.company;
+    add_internal_file(company, "FIRST.md", "first\n");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let marker = set_counting_preflight_script(company, "true");
+    let main_before = rev_of(company, "main");
+
+    rebuild_with(
+        company,
+        RebuildOpts {
+            verify: true,
+            ..RebuildOpts::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(runs_of(&marker), 1);
+    // The same tree in new commits, and uplink/state says the old main was
+    // replaced. `git uplink rebase` reads that, so this state must not be
+    // pushed without the main it describes: Uplink verify pushes neither.
+    assert_ne!(rev_of(company, "main"), main_before);
+    assert_eq!(
+        rev_of(company, "main^{tree}"),
+        rev_of(company, &format!("{main_before}^{{tree}}"))
+    );
+    let replaced = git_ok(
+        company,
+        &["show", &format!("{STATE_BRANCH}:{PREVIOUS_MAIN_PATH}")],
+    )
+    .unwrap();
+    assert!(replaced.contains(&main_before), "{replaced}");
 }
 
 #[test]

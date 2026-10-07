@@ -1476,4 +1476,41 @@ mod embed_tests {
             );
         }
     }
+
+    #[test]
+    fn a_verify_that_passes_pushes_nothing() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-verify.yml"))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing uplink-verify.yml"));
+            let job = jobs_of(&text)
+                .into_iter()
+                .find(|(key, _)| key == "verify")
+                .map(|(_, job)| job)
+                .unwrap_or_else(|| panic!("{forge:?} uplink-verify.yml has no job verify"));
+            // It rebuilds main to the tree main has, so main is never pushed,
+            // and no open pull request is told that main was rebuilt.
+            assert!(
+                !job.contains("main --force")
+                    && !job.contains("rebuild --push")
+                    && !text.contains("uplink-rebase-comment"),
+                "{forge:?}\n{job}"
+            );
+            // The rebuild records origin's main as replaced on uplink/state,
+            // which Uplink rebase reads. A pass leaves before any push; only
+            // a conflict, which records no rebuild, is pushed.
+            let passed = job
+                .find("if ! jq -e '.conflict != null' <<<\"$rebuild_json\"")
+                .unwrap_or_else(|| panic!("{forge:?} verify does not branch on the conflict"));
+            let left = passed + job[passed..].find("exit 0").expect("a pass exits");
+            let pushes: Vec<usize> = job.match_indices("git push").map(|(at, _)| at).collect();
+            assert!(
+                !pushes.is_empty() && pushes.iter().all(|at| *at > left),
+                "{forge:?} verify pushes before it knows the rebuild stopped\n{job}"
+            );
+        }
+    }
 }

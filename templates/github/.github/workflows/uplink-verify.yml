@@ -178,11 +178,14 @@ jobs:
           rebuild_json=$(git uplink rebuild --verify --json \
             --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 
-          git push origin uplink/state
+          # A pass pushes nothing: the rebuild made here has the tree main
+          # has, and its record on uplink/state would name origin's main as
+          # one a rebuild replaced, which Uplink rebase reads.
           if ! jq -e '.conflict != null' <<<"$rebuild_json" >/dev/null; then
             echo "preflight.sh passes on main as rebuilt from the queue." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          git push origin uplink/state
 
           conflict_id=$(jq -r '.conflict.id // empty' <<<"$rebuild_json")
           conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$rebuild_json")
