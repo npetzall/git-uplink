@@ -167,6 +167,7 @@ jobs:
         run: |
           git uplink init
           printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
+          main_before=$(git rev-parse --verify --quiet refs/heads/main || true)
           extra=()
           if [ "$INTERNAL_ONLY" = "true" ]; then extra+=(--internal-only); fi
           {
@@ -270,15 +271,14 @@ jobs:
             git uplink gated "$conflict_id" --pr-url "$url"
             exit 0
           fi
-          rebuild=false
-          if [ "$INTERNAL_ONLY" != "true" ]; then
-            active=$(jq '[.internal[]? | select(.status != "merged" and .status != "dropped")] | length' .uplink/queue.json)
-            if [ "$active" != "0" ]; then rebuild=true; fi
-          fi
-          if [ "$rebuild" = "true" ]; then
-            git uplink rebuild --push
-          else
-            git uplink push
+          # State first: a rejected state push leaves origin main alone.
+          # Main is pushed when the import rebuilt it, to put an upstream
+          # patch under the internal ones. It is not rebuilt again here: a
+          # rebuild by itself is preflighted, and this job runs no script.
+          git uplink push
+          main_after=$(git rev-parse --verify --quiet refs/heads/main || true)
+          if [ -n "$main_after" ] && [ "$main_after" != "$main_before" ]; then
+            git push origin main --force
           fi
 
       - name: Dispatch Uplink submit for patches that became ready

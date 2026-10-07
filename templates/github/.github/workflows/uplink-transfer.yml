@@ -220,6 +220,39 @@ jobs:
                 echo "::warning::Failed to dispatch Uplink abandon contrib for ${PATCH_ID}; public PR/branch may remain until abandon-contrib is run."
               fi
             fi
+            # The patch is moved, and preflight.sh fails on the rebuilt tree:
+            # the first patch it fails on gets a conflict PR, as in sync.
+            if jq -e '.conflict != null' <<<"$transfer_json" >/dev/null; then
+              conflict_id=$(jq -r '.conflict.id // empty' <<<"$transfer_json")
+              conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$transfer_json")
+              work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$transfer_json")
+              if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+                echo "transfer recorded a conflict but no conflict patch id was present"
+                exit 1
+              fi
+              if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+                git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+              fi
+              if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
+                git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
+              fi
+
+              title=$(jq -r '.gh.prCreate.title' <<<"$transfer_json")
+              body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$transfer_json")
+              head=$(jq -r '.gh.prCreate.head' <<<"$transfer_json")
+              base=$(jq -r '.gh.prCreate.base' <<<"$transfer_json")
+              existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
+              if [ -z "$existing" ]; then
+                gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
+                # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
+                # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
+                url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+                gh pr edit "$url" --add-label uplink:conflict
+              else
+                url="$existing"
+              fi
+              git uplink gated "$conflict_id" --pr-url "$url"
+            fi
             exit 0
           fi
 
@@ -464,6 +497,39 @@ jobs:
               -f "contrib_branch=${close_branch}"; then
               echo "::warning::Failed to dispatch Uplink abandon contrib for ${id}; public PR/branch may remain until abandon-contrib is run."
             fi
+          fi
+          # The patch is moved, and preflight.sh fails on the rebuilt tree:
+          # the first patch it fails on gets a conflict PR, as in sync.
+          if jq -e '.conflict != null' <<<"$transfer_json" >/dev/null; then
+            conflict_id=$(jq -r '.conflict.id // empty' <<<"$transfer_json")
+            conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$transfer_json")
+            work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$transfer_json")
+            if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+              echo "transfer recorded a conflict but no conflict patch id was present"
+              exit 1
+            fi
+            if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+              git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+            fi
+            if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
+              git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
+            fi
+
+            title=$(jq -r '.gh.prCreate.title' <<<"$transfer_json")
+            body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$transfer_json")
+            head=$(jq -r '.gh.prCreate.head' <<<"$transfer_json")
+            base=$(jq -r '.gh.prCreate.base' <<<"$transfer_json")
+            existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
+            if [ -z "$existing" ]; then
+              gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
+              # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
+              # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
+              url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+              gh pr edit "$url" --add-label uplink:conflict
+            else
+              url="$existing"
+            fi
+            git uplink gated "$conflict_id" --pr-url "$url"
           fi
           git push origin --delete "$BASE_REF" || true
           git push origin --delete "${BASE_REF}-work" || true

@@ -216,4 +216,5 @@ jobs:
             url="$existing"
           fi
           git uplink gated "$conflict_id" --pr-url "$url"
-          echo "preflight.sh fails from \`${conflict_id}\` on: ${url}" >> "$GITHUB_STEP_SUMMARY"
+          # Also when the queue was stopped on this patch before the run.
+          echo "The rebuild stops on \`${conflict_id}\`: ${url}" >> "$GITHUB_STEP_SUMMARY"
