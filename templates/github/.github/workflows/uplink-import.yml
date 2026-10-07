@@ -8,6 +8,12 @@
 # own workflow or not at all. `add --base-branch` refuses it again, in case
 # the filter below is edited.
 #
+# An upstream import rebuilds main so the patch sits under the internal
+# patches. That rebuild is not preflighted: the pull request that merged the
+# change was reviewed and checked. If it stops on a patch (the queue is
+# blocked on a conflict), the change is still recorded and that conflict PR
+# is opened or kept. For a main that turned out broken, run Uplink verify.
+#
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, import dispatches
 # Uplink submit for the patch when no upstream dependency of it is unmerged.
 name: Uplink import
@@ -108,12 +114,6 @@ jobs:
       pull-requests: write
       actions: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
-
       - uses: $/.github/actions/install-git-uplink
         with:
           repo: ${{ vars.UPLINK_SRC }}
@@ -131,6 +131,16 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-workflows: write
+          permission-pull-requests: write
+
+      # The checkout keeps the internal token: a rebuild that stops on a
+      # patch pushes its conflict branches. This job runs no product code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
 
       - name: Import as a queued patch
         id: add
@@ -170,6 +180,44 @@ jobs:
             exit "$code"
           fi
           echo "ready_to_submit=$(jq -c '.readyToSubmit // []' /tmp/uplink-add.out)" >> "$GITHUB_OUTPUT"
+
+          # The change is recorded, and the rebuild that puts it under the
+          # internal patches stopped on a patch: the queue is blocked on a
+          # conflict, old or new. Main keeps the merge as the PR left it.
+          if jq -e '.conflict != null' /tmp/uplink-add.out >/dev/null; then
+            add_json=$(cat /tmp/uplink-add.out)
+            git uplink push
+            conflict_id=$(jq -r '.conflict.id // empty' <<<"$add_json")
+            conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$add_json")
+            work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$add_json")
+            if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+              echo "import recorded a conflict but no conflict patch id was present"
+              exit 1
+            fi
+            if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+              git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+            fi
+            if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
+              git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
+            fi
+
+            title=$(jq -r '.gh.prCreate.title' <<<"$add_json")
+            body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$add_json")
+            head=$(jq -r '.gh.prCreate.head' <<<"$add_json")
+            base=$(jq -r '.gh.prCreate.base' <<<"$add_json")
+            existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
+            if [ -z "$existing" ]; then
+              gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
+              # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
+              # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
+              url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+              gh pr edit "$url" --add-label uplink:conflict
+            else
+              url="$existing"
+            fi
+            git uplink gated "$conflict_id" --pr-url "$url"
+            exit 0
+          fi
           rebuild=false
           if [ "$INTERNAL_ONLY" != "true" ]; then
             active=$(jq '[.internal[]? | select(.status != "merged" and .status != "dropped")] | length' .uplink/queue.json)
