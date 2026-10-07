@@ -12079,3 +12079,187 @@ fn import_while_the_queue_is_blocked_is_recorded_with_the_conflict() {
     // Main keeps the merge as the pull request left it.
     assert_eq!(rev_of(company, "main"), main_before);
 }
+
+#[test]
+fn gated_add_records_a_change_that_needs_an_internal_patch_and_starts_a_transfer() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "--quiet", "-b", "feat/ttl", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let internal_tokens = TOKENS.replace("return 3600;", "return 7200;");
+    write(company, "src/tokens.js", &internal_tokens);
+    commit_all(company, "longer ttl");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Longer TTL".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Merged into main, but written on top of the internal patch.
+    let base = rev_of(company, "main");
+    git(
+        company,
+        &["checkout", "--quiet", "-b", "feat/scale", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &internal_tokens.replace("export function ttl() {", "export function ttl(scale) {"),
+    );
+    commit_all(company, "scale the ttl");
+    let head = rev_of(company, "HEAD");
+    land_on_main(company, &head);
+    let main_before = rev_of(company, "main");
+    let add = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args([
+                "add",
+                "--title",
+                "Scale the TTL",
+                "--from",
+                &base,
+                "--head",
+                &head,
+                "--json",
+            ])
+            .args(extra)
+            .current_dir(company)
+            .output()
+            .unwrap()
+    };
+
+    // Without --gate the change is refused and nothing is recorded.
+    let refused = add(&[]);
+    assert!(!refused.status.success());
+    assert_eq!(
+        git_uplink::read_queue(company).unwrap().patch_refs().len(),
+        1
+    );
+
+    let output = add(&["--gate"]);
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = value["id"].as_str().unwrap();
+    assert_eq!(value["queue"], "internal");
+    assert!(
+        value["fallback"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("does not apply onto public upstream"),
+        "{value}"
+    );
+    let transfer = &value["fallback"]["transfer"];
+    assert_eq!(transfer["gated"], true, "{value}");
+    let gate = format!("uplink/transfer-to-upstream/{id}");
+    assert_eq!(transfer["base"], gate.as_str());
+    assert_eq!(transfer["gh"]["prCreate"]["base"], gate.as_str());
+    assert!(ref_exists(company, &gate));
+    assert!(ref_exists(company, &format!("{gate}-work")));
+    let body =
+        fs::read_to_string(company.join(transfer["gh"]["prCreate"]["bodyFile"].as_str().unwrap()))
+            .unwrap();
+    assert!(body.contains("recorded internal-only"), "{body}");
+
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert!(queue.is_internal(id));
+    assert_eq!(patch_of(company, id).status, PatchStatus::Queued);
+    assert_eq!(rev_of(company, "main"), main_before);
+}
+
+#[test]
+fn gated_add_takes_the_failed_preflight_from_the_probe() {
+    let world = setup_world();
+    let company = &world.company;
+    sha256_change(company);
+    let head = rev_of(company, "HEAD");
+    let base = rev_of(company, "main");
+    land_on_main(company, &head);
+    let marker = set_counting_preflight_script(company, "! grep -q sha256 src/tokens.js");
+    let (ok, report) = probe(
+        company,
+        &[
+            "preflight",
+            "--json",
+            "--title",
+            "Use SHA-256 for tokens",
+            "--from",
+            &base,
+            "--head",
+            &head,
+        ],
+    );
+    assert!(!ok && !report.ok, "{report:?}");
+    let runs = runs_of(&marker);
+
+    let outcome = git_uplink::add_patch_or_gate(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some(base),
+            head_ref: Some(head),
+            preflight: ScriptVerdict::Reported(report),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(runs_of(&marker), runs, "import must not run preflight.sh");
+    let fallback = outcome.fallback.unwrap();
+    assert!(fallback.reason.contains("preflight"), "{}", fallback.reason);
+    let transfer = fallback.transfer.unwrap();
+    assert!(transfer.gated && !transfer.transferred, "{transfer:?}");
+    assert!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .is_internal(&outcome.patch.id)
+    );
+
+    // A stale result says nothing about the change: nothing is recorded.
+    let world = setup_world();
+    let company = &world.company;
+    sha256_change(company);
+    let head = rev_of(company, "HEAD");
+    let base = rev_of(company, "main");
+    land_on_main(company, &head);
+    set_preflight_script(company, "true");
+    let stale = PreflightReport {
+        ok: true,
+        token: Some("0".repeat(40)),
+        ..PreflightReport::default()
+    };
+    let err = git_uplink::add_patch_or_gate(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some(base),
+            head_ref: Some(head),
+            preflight: ScriptVerdict::Reported(stale),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, Error::Preflight(ref e) if e.stage == "stale"),
+        "{err}"
+    );
+    assert!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .patch_refs()
+            .is_empty()
+    );
+}

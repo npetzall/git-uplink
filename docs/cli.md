@@ -19,7 +19,7 @@ git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <na
 git uplink add --title <text> [--message <text> | --message-file <path>] [--from <ref>]
             [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
             [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
-            [--json]
+            [--gate] [--json]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
@@ -115,6 +115,9 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
 
   The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
+- `--gate`: Record a change that fails the upstream checks internal-only and start a gated transfer to upstream.
+
+  For a change that is already merged into `main`, which import has to record whatever it fails. When an upstream-bound change fails its assessment or its export preflight, it is added internal-only, where it sits on `main`, and `transfer --to-upstream` is started for it: that gates on the same failure, so the fix goes through a transfer PR. The output has `fallback` with the reason and the transfer, and the command exits 0. A stale preflight result still fails the command.
 - `--json`: Print the patch as JSON, with `readyToSubmit`.
 
   `readyToSubmit` lists the patches this import made ready to submit: upstream-bound, queued, and every upstream dependency merged. Import dispatches Uplink submit for them when the repository variable `UPLINK_AUTO_SUBMIT` is `true`. When the rebuild after the import stops on a patch that no longer applies, the change is still recorded: the output has `conflict` and `gh.prCreate` for the gated PR, and the command exits 0.
