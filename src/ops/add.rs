@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct AddPatchOpts {
     pub title: String,
     pub message: Option<String>,
@@ -43,6 +43,76 @@ pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
 
     with_queue_lock(repo, || {
         add_patch_attempt(repo, &opts, &from_sha, &head_sha)
+    })
+}
+
+/// A change that is on company main and failed what an upstream-bound
+/// patch has to pass, recorded internal-only instead.
+#[derive(Debug)]
+pub struct ImportFallback {
+    /// The failure that kept it out of the upstream queue.
+    pub reason: String,
+    /// The transfer to upstream started for it: gated on the same failure,
+    /// so the fix goes through a pull request. The error when it could not
+    /// start; the patch stays internal-only then.
+    pub transfer: std::result::Result<TransferResult, String>,
+}
+
+#[derive(Debug)]
+pub struct AddOutcome {
+    pub patch: Patch,
+    pub fallback: Option<ImportFallback>,
+}
+
+/// True for a failure of the change itself: its assessment, or its
+/// preflight on the export tree. A stale preflight result says nothing
+/// about the change.
+fn fails_upstream_checks(err: &Error) -> bool {
+    match err {
+        Error::Assess(_) => true,
+        Error::Preflight(pre) => pre.stage != STAGE_STALE,
+        _ => false,
+    }
+}
+
+/// [`add_patch`] for a change that is already merged into company main, so
+/// it has to be recorded whatever it fails. An upstream-bound change that
+/// fails its assessment or its export preflight is added internal-only,
+/// which is where it sits on main, and a transfer to upstream is started
+/// for it.
+pub fn add_patch_or_gate(repo: &Path, opts: AddPatchOpts) -> Result<AddOutcome> {
+    let failure = match add_patch(repo, opts.clone()) {
+        Ok(patch) => {
+            return Ok(AddOutcome {
+                patch,
+                fallback: None,
+            });
+        }
+        Err(err) if !opts.internal_only && fails_upstream_checks(&err) => err,
+        Err(err) => return Err(err),
+    };
+    let preflight = opts.preflight.clone();
+    let internal = add_patch(
+        repo,
+        AddPatchOpts {
+            internal_only: true,
+            ..opts
+        },
+    )?;
+    let transfer = transfer_patch_with(
+        repo,
+        &internal.id,
+        TransferDirection::ToUpstream,
+        false,
+        &preflight,
+    )
+    .map_err(|err| err.to_string());
+    Ok(AddOutcome {
+        patch: get_patch(&read_queue_file(repo)?, &internal.id)?.clone(),
+        fallback: Some(ImportFallback {
+            reason: failure.to_string(),
+            transfer,
+        }),
     })
 }
 

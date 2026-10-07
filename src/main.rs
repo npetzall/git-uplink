@@ -7,30 +7,30 @@ use std::process::ExitCode;
 use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
+    AddOutcome, ConflictCause, HOOKS_BRANCH, HooksPushAction, Patch, PatchConflict, PatchIntent,
+    PatchStatus, QueueState, SettingsFlags, SubmitResult, SyncOpts, SyncResult, TransferDirection,
+    TransferResult, stdin_is_tty,
+};
+use git_uplink::{
     AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, AssessPackage, Error,
     FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia, PACKAGE_CHANGE,
     PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode, PushOpts,
     RebuildOpts, STATE_BRANCH, ScriptEcho, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT,
-    accept_upstream_preflight, accept_upstream_with, add_patch, adopted_next_steps,
-    amend_patch_with, amend_preflight, approve_patch_reviewed, assess_from_message,
-    assess_patch_file, assess_patch_for_packet, change_between, command_preflight, command_tested,
-    commit_queue, depends_on_from_message, doctor, drop_patch, existing_patch_preflight,
-    export_tested, fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
-    format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
-    format_status_table, from_upstream_report_paths, git_ok, hooks_publish_hint,
-    incoming_change_preflight, init, load_groups_file, mark_merged, newly_ready_to_submit,
-    parse_github_repo, parse_pull_request_url, patch_text, push_queue, read_queue,
-    rebase_onto_main, rebase_plan, rebuild_preflight, rebuild_with, record_gated_pr,
+    accept_upstream_preflight, accept_upstream_with, add_patch, add_patch_or_gate,
+    adopted_next_steps, amend_patch_with, amend_preflight, approve_patch_reviewed,
+    assess_from_message, assess_patch_file, assess_patch_for_packet, change_between,
+    command_preflight, command_tested, commit_queue, depends_on_from_message, doctor, drop_patch,
+    existing_patch_preflight, export_tested, fetch_pending_upstream, format_approval_receipt,
+    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
+    format_init_summary, format_status_table, from_upstream_report_paths, git_ok,
+    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
+    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
+    read_queue, rebase_onto_main, rebase_plan, rebuild_preflight, rebuild_with, record_gated_pr,
     record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
     reset_from_origin, resolve_conflict_with, resolve_preflight, review_token, review_token_path,
     set_script_echo, status_report, status_snapshot, store_assess_result, store_patch_extras,
     stored_commit_message, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
     write_man_pages,
-};
-use git_uplink::{
-    ConflictCause, HOOKS_BRANCH, HooksPushAction, Patch, PatchConflict, PatchIntent, PatchStatus,
-    QueueState, SettingsFlags, SubmitResult, SyncOpts, SyncResult, TransferDirection,
-    TransferResult, stdin_is_tty,
 };
 
 const VERSION: &str = concat!(
@@ -337,6 +337,17 @@ fn print_sync_artifact(
 }
 
 fn print_transfer_artifact(repo: &Path, result: &TransferResult) -> Result<(), Error> {
+    println!("{}", transfer_artifact(repo, result, None)?);
+    Ok(())
+}
+
+/// The JSON of a transfer, with `gh.prCreate` for a gated one. `why` goes
+/// in that pull request's description.
+fn transfer_artifact(
+    repo: &Path,
+    result: &TransferResult,
+    why: Option<&str>,
+) -> Result<serde_json::Value, Error> {
     let mut value = serde_json::json!({
         "id": result.id,
         "direction": result.direction.as_str(),
@@ -356,6 +367,12 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
             result.direction.as_str(),
             result.work_branch.as_deref().unwrap_or("")
         );
+        let body = match why {
+            Some(why) => format!(
+                "{body}\nThis change was merged into `main` and failed what an upstream-bound patch has to pass, so it was recorded internal-only. Merging this PR moves it to the upstream queue. To keep it internal-only, close the PR.\n\n{why}\n"
+            ),
+            None => body,
+        };
         let body_file = match report_paths(&result.id) {
             Ok((dir, _, _)) => format!("{dir}/transfer.md"),
             Err(_) => "transfer.md".into(),
@@ -393,8 +410,7 @@ Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing 
         }
         value["gh"] = serde_json::json!({ "prClose": pr_close });
     }
-    println!("{value}");
-    Ok(())
+    Ok(value)
 }
 
 fn finish_sync(repo: &Path, result: SyncResult, summary: Option<&str>) -> Result<(), Error> {
@@ -694,35 +710,60 @@ fn cmd_doctor(repo: &Path, json: bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool) -> Result<(), Error> {
-    let internal_only = opts.internal_only;
-    if !internal_only {
+/// `git uplink add`. With `gate`, a change that fails what an upstream-bound
+/// patch has to pass is recorded internal-only and a transfer to upstream
+/// is started for it, instead of failing.
+fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool, gate: bool) -> Result<(), Error> {
+    if !opts.internal_only {
         refuse_script_here(repo, &opts.preflight, None)?;
     }
     let before = read_queue(repo)?;
-    match add_patch(repo, opts) {
-        Ok(patch) => {
-            let layer = if internal_only {
-                "internal"
-            } else {
-                "upstream"
-            };
-            if json {
-                let ready = newly_ready_to_submit(&before, &read_queue(repo)?);
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "id": patch.id,
-                        "queue": layer,
-                        "status": patch.status,
-                        "title": patch.title,
-                        "readyToSubmit": ready,
-                    })
+    let layer = |queue: &QueueState, id: &str| {
+        if queue.is_internal(id) {
+            "internal"
+        } else {
+            "upstream"
+        }
+    };
+    let describe = |queue: &QueueState, patch: &Patch| {
+        serde_json::json!({
+            "id": patch.id,
+            "queue": layer(queue, &patch.id),
+            "status": patch.status,
+            "title": patch.title,
+            "readyToSubmit": newly_ready_to_submit(&before, queue),
+        })
+    };
+    let added = if gate {
+        add_patch_or_gate(repo, opts)
+    } else {
+        add_patch(repo, opts).map(|patch| AddOutcome {
+            patch,
+            fallback: None,
+        })
+    };
+    let (patch, extra) = match added {
+        Ok(AddOutcome { patch, fallback }) => {
+            let mut extra = serde_json::Map::new();
+            if let Some(fallback) = fallback {
+                eprintln!(
+                    "{} was recorded internal-only: it fails what an upstream-bound patch has to pass.\n\n{}",
+                    patch.id, fallback.reason
                 );
-            } else {
-                println!("{}  {}  {}  {}", patch.id, layer, patch.status, patch.title);
+                let mut value = serde_json::json!({ "reason": fallback.reason });
+                match &fallback.transfer {
+                    Ok(transfer) => {
+                        value["transfer"] =
+                            transfer_artifact(repo, transfer, Some(&fallback.reason))?;
+                    }
+                    Err(err) => {
+                        eprintln!("The transfer to upstream could not be started: {err}");
+                        value["transferError"] = serde_json::Value::String(err.clone());
+                    }
+                }
+                extra.insert("fallback".into(), value);
             }
-            Ok(())
+            (patch, extra)
         }
         // The change is recorded; the rebuild stopped on a patch above it.
         Err(Error::Conflict(err)) => {
@@ -734,39 +775,36 @@ fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool) -> Result<(), Error> {
                 return Err(Error::Conflict(err));
             };
             eprint_conflict(conflict);
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "id": patch.id,
-                        "queue": if internal_only { "internal" } else { "upstream" },
-                        "status": patch.status,
-                        "title": patch.title,
-                        "readyToSubmit": newly_ready_to_submit(&before, &queue),
-                        "conflict": conflict_json(conflict),
-                        "gh": { "prCreate": conflict_pr_create_artifact(repo, conflict, None)? },
-                    })
-                );
-            } else {
-                println!(
-                    "{}  {}  {}  {}",
-                    patch.id,
-                    if internal_only {
-                        "internal"
-                    } else {
-                        "upstream"
-                    },
-                    patch.status,
-                    patch.title
-                );
-            }
-            Ok(())
+            let mut extra = serde_json::Map::new();
+            extra.insert("conflict".into(), conflict_json(conflict));
+            extra.insert(
+                "gh".into(),
+                serde_json::json!({ "prCreate": conflict_pr_create_artifact(repo, conflict, None)? }),
+            );
+            (patch.clone(), extra)
         }
         Err(err) => {
             print_failure_comment(&err);
-            Err(err)
+            return Err(err);
         }
+    };
+    let queue = read_queue(repo)?;
+    if json {
+        let mut value = describe(&queue, &patch);
+        for (key, item) in extra {
+            value[key] = item;
+        }
+        println!("{value}");
+    } else {
+        println!(
+            "{}  {}  {}  {}",
+            patch.id,
+            layer(&queue, &patch.id),
+            patch.status,
+            patch.title
+        );
     }
+    Ok(())
 }
 
 fn cmd_push(repo: &Path, push_remote: Option<String>) -> Result<(), Error> {
@@ -1540,6 +1578,7 @@ fn run() -> Result<(), Error> {
             depends_on,
             preflight_result,
             json,
+            gate,
         } => {
             let message = read_commit_message(message, message_file, &title)?;
             cmd_add(
@@ -1559,6 +1598,7 @@ fn run() -> Result<(), Error> {
                     ..Default::default()
                 },
                 json,
+                gate,
             )
         }
         Commands::Push { push_remote } => cmd_push(&repo, push_remote),

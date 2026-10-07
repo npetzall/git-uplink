@@ -357,6 +357,18 @@ pub enum Commands {
         /// preflight has to run again.
         #[arg(long = "preflight-result", value_name = "path")]
         preflight_result: Option<PathBuf>,
+        /// Record a change that fails the upstream checks internal-only and start a gated transfer to upstream.
+        ///
+        /// For a change that is already merged into `main`, which import
+        /// has to record whatever it fails. When an upstream-bound change
+        /// fails its assessment or its export preflight, it is added
+        /// internal-only, where it sits on `main`, and `transfer
+        /// --to-upstream` is started for it: that gates on the same
+        /// failure, so the fix goes through a transfer PR. The output has
+        /// `fallback` with the reason and the transfer, and the command
+        /// exits 0. A stale preflight result still fails the command.
+        #[arg(long)]
+        gate: bool,
         /// Print the patch as JSON, with `readyToSubmit`.
         ///
         /// `readyToSubmit` lists the patches this import made ready to
