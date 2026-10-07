@@ -206,6 +206,7 @@ sequenceDiagram
     Inspect->>Inspect: write incoming.md packet
     Apply->>Env: wait for inbound reviewer
     Env-->>Apply: approved
+    Apply->>Apply: preflight.sh on the approved upstream (job without credentials)
     Apply->>Main: git uplink accept-upstream (promote, detect merges, rebuild)
   end
 `;
@@ -336,6 +337,13 @@ export function InternalsPage() {
           <p>
             A blocked patch blocks the rest of the rebuild. There is no skip, so company <code>main</code> stays at
             the last good rebuild until the gated PR merges.
+          </p>
+          <p>
+            A rebuild where every patch applies is then tested with <code>preflight.sh</code>, unless{" "}
+            <code>main</code> already has that tree. <code>uplink/upstream</code> is the known good commit (an
+            approved upstream is only promoted when the script passes on it) and the rebuilt tree the known bad
+            one, so <code>git bisect run</code> finds the first patch the script fails on. It is blocked the same
+            way: the base is the queue before it, and <code>-work</code> has the patch applied.
           </p>
         </Step>
       </Section>

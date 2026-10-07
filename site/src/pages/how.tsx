@@ -146,6 +146,12 @@ export function HowPage() {
           rebuild and becomes a <strong>conflict</strong>. Its owner fixes it in a gated pull request, and the
           rebuild continues.
         </p>
+        <p>
+          Applying is half of it. The preflight script also runs on the rebuilt tree. The approved upstream passed
+          it on its own, so when the rebuilt tree fails, <code>git bisect</code> between the two finds the first
+          patch the script fails on. That patch becomes a conflict in the same way, and company{" "}
+          <code>main</code> stays at the last build that passed.
+        </p>
       </Section>
 
       <Section title="Recognizing a merged contribution">
