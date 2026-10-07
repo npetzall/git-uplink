@@ -11530,14 +11530,14 @@ fn add_internal_file(company: &Path, file: &str, contents: &str) -> Patch {
 }
 
 /// Three internal patches, and an upstream change that the second one
-/// fails `preflight.sh` with. Returns the patches.
-fn world_where_upstream_breaks_the_second_patch() -> (World, [Patch; 3]) {
+/// fails `preflight.sh` with. Returns the patches and the run counter.
+fn world_where_upstream_breaks_the_second_patch() -> (World, [Patch; 3], PathBuf) {
     let world = setup_world();
     let company = &world.company;
     let first = add_internal_file(company, "FIRST.md", "first\n");
     let second = add_internal_file(company, "SECOND.md", "old\n");
     let third = add_internal_file(company, "THIRD.md", "third\n");
-    set_preflight_script(
+    let marker = set_counting_preflight_script(
         company,
         "if [ -f LIMITS.md ] && grep -q old SECOND.md 2>/dev/null; then\n  echo 'limits clash'\n  exit 1\nfi",
     );
@@ -11549,12 +11549,12 @@ fn world_where_upstream_breaks_the_second_patch() -> (World, [Patch; 3]) {
         GitOpts::default(),
     )
     .unwrap();
-    (world, [first, second, third])
+    (world, [first, second, third], marker)
 }
 
 #[test]
 fn rebuild_that_fails_preflight_bisects_to_the_patch_and_gates_it() {
-    let (world, [_, second, third]) = world_where_upstream_breaks_the_second_patch();
+    let (world, [_, second, third], _) = world_where_upstream_breaks_the_second_patch();
     let company = &world.company;
     let main_before = rev_of(company, "main");
     assert!(sync(company).unwrap().needs_approval);
@@ -11709,4 +11709,146 @@ fn rebuild_blames_no_patch_when_upstream_fails_preflight_too() {
         git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
         "main"
     );
+}
+
+#[test]
+fn accept_and_resolve_take_the_rebuild_verdict_from_a_probe() {
+    let (world, [_, second, _], marker) = world_where_upstream_breaks_the_second_patch();
+    let company = &world.company;
+    assert!(sync(company).unwrap().needs_approval);
+    let upstream_before = rev_of(company, "uplink/upstream");
+    let state = rev_of(company, STATE_BRANCH);
+
+    let report = git_uplink::accept_upstream_preflight(company, None).unwrap();
+    // The upstream passes, so the probe is a pass; the patch is in the report.
+    assert!(report.ok, "{report:?}");
+    let rebuild = report.rebuild.as_deref().unwrap();
+    assert!(rebuild.upstream.as_ref().unwrap().ok, "{rebuild:?}");
+    assert!(!rebuild.built.as_ref().unwrap().ok, "{rebuild:?}");
+    assert_eq!(rebuild.first_bad.as_ref().unwrap().id, second.id);
+    assert_eq!(rev_of(company, "uplink/upstream"), upstream_before);
+    assert_eq!(rev_of(company, STATE_BRANCH), state);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    let runs = runs_of(&marker);
+    assert!(runs >= 3, "upstream, rebuilt tree and bisect: {runs}");
+
+    // A blame for another rebuild is refused, and nothing is gated.
+    let mut wrong = report.clone();
+    wrong
+        .rebuild
+        .as_mut()
+        .unwrap()
+        .first_bad
+        .as_mut()
+        .unwrap()
+        .token = "0".repeat(40);
+    let err = git_uplink::accept_upstream_with(company, None, &ScriptVerdict::Reported(wrong))
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Preflight(ref e) if e.stage == "stale"),
+        "{err}"
+    );
+    assert_eq!(patch_of(company, &second.id).status, PatchStatus::Queued);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    // The upstream itself was verified from the report and stays promoted.
+    assert_ne!(rev_of(company, "uplink/upstream"), upstream_before);
+
+    // Recorded from the report, as a plain rebuild now.
+    let err = rebuild_with(
+        company,
+        RebuildOpts {
+            preflight: ScriptVerdict::Reported(report),
+            ..RebuildOpts::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "{err}");
+    let blamed = patch_of(company, &second.id);
+    assert_eq!(blamed.status, PatchStatus::Conflict);
+    assert_eq!(
+        runs_of(&marker),
+        runs,
+        "recording must not run preflight.sh"
+    );
+
+    let work = work_branch_of(&blamed);
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "SECOND.md", "new\n");
+    commit_all(company, "work with limits");
+    let head = rev_of(company, "HEAD");
+    let state = rev_of(company, STATE_BRANCH);
+    let fixed = git_uplink::resolve_preflight(company, &second.id).unwrap();
+    assert!(fixed.ok, "{fixed:?}");
+    let rebuild = fixed.rebuild.as_deref().unwrap();
+    assert!(rebuild.built.as_ref().unwrap().ok, "{rebuild:?}");
+    assert!(rebuild.first_bad.is_none(), "{rebuild:?}");
+    assert_eq!(rev_of(company, "HEAD"), head);
+    assert_eq!(rev_of(company, STATE_BRANCH), state);
+    assert_eq!(patch_of(company, &second.id).status, PatchStatus::Conflict);
+    let runs = runs_of(&marker);
+
+    git_uplink::resolve_conflict_with(company, &second.id, &ScriptVerdict::Reported(fixed))
+        .unwrap();
+    assert_eq!(runs_of(&marker), runs, "resolve must not run preflight.sh");
+    assert_eq!(git_ok(company, &["show", "main:SECOND.md"]).unwrap(), "new");
+    assert_eq!(
+        git_ok(company, &["show", "main:LIMITS.md"]).unwrap(),
+        "strict"
+    );
+}
+
+#[test]
+fn accept_upstream_probe_reports_an_upstream_that_fails() {
+    let world = setup_world();
+    let company = &world.company;
+    add_internal_file(company, "FIRST.md", "first\n");
+    let marker = set_counting_preflight_script(company, "! [ -f BROKEN.md ]");
+    write(&world.upstream, "BROKEN.md", "broken\n");
+    commit_all(&world.upstream, "break the build");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let pending = sync(company).unwrap().pending_sha.unwrap();
+    let upstream_before = rev_of(company, "uplink/upstream");
+
+    let (ok, fetched) = {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(["accept-upstream", "--fetch-only", "--sha", &pending])
+            .current_dir(company)
+            .output()
+            .unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        )
+    };
+    assert!(ok);
+    assert_eq!(fetched, pending);
+
+    let (ok, report) = probe(
+        company,
+        &["accept-upstream", "--sha", &pending, "--preflight-only"],
+    );
+    assert!(!ok && !report.ok, "{report:?}");
+    let rebuild = report.rebuild.as_deref().unwrap();
+    assert!(!rebuild.upstream.as_ref().unwrap().ok, "{rebuild:?}");
+    assert!(rebuild.built.is_none() && rebuild.first_bad.is_none());
+    let runs = runs_of(&marker);
+    assert_eq!(runs, 1);
+
+    let err =
+        git_uplink::accept_upstream_with(company, Some(&pending), &ScriptVerdict::Reported(report))
+            .unwrap_err();
+    assert!(err.to_string().contains("was not moved"), "{err}");
+    assert_eq!(runs_of(&marker), runs);
+    assert_eq!(rev_of(company, "uplink/upstream"), upstream_before);
 }

@@ -700,6 +700,111 @@ pub fn accept_upstream_at(repo: &Path, expected_sha: Option<&str>) -> Result<Syn
     accept_upstream_with(repo, expected_sha, &ScriptVerdict::Run)
 }
 
+/// The pending upstream, checked against the reviewed `expected_sha`.
+fn pending_upstream(queue: &QueueState, expected_sha: Option<&str>) -> Result<PendingUpstream> {
+    let pending = queue
+        .pending_upstream
+        .clone()
+        .ok_or_else(|| Error::msg("No pending upstream to accept. Run `git uplink sync` first."))?;
+    if let Some(expected) = expected_sha
+        && expected != pending.sha
+    {
+        return Err(Error::msg(format!(
+            "Pending upstream is {}, not the reviewed {expected}; review the new packet and approve again.",
+            pending.sha
+        )));
+    }
+    Ok(pending)
+}
+
+fn pending_unavailable(sha: &str) -> Error {
+    Error::msg(format!(
+        "Pending upstream {sha} is not available; fetch public main and try again."
+    ))
+}
+
+/// The patches accepting `pending` marks merged.
+fn pending_merges(
+    repo: &Path,
+    queue: &QueueState,
+    pending: &PendingUpstream,
+) -> Result<Vec<PendingMerge>> {
+    // A packet written before `merges` was recorded only lists ids.
+    if pending.merges.is_empty() && !pending.flowed_back.is_empty() {
+        return Ok(reconcile_incoming(
+            repo,
+            queue,
+            pending.from_sha.as_deref(),
+            &pending.sha,
+            &SyncOpts::default(),
+        )?
+        .merges);
+    }
+    Ok(pending.merges.clone())
+}
+
+/// Fetches public upstream so the pending upstream is in this clone, and
+/// changes nothing else. For the step of a probe job that holds the
+/// upstream token; the step that runs `preflight.sh` holds none.
+pub fn fetch_pending_upstream(repo: &Path, expected_sha: Option<&str>) -> Result<String> {
+    let queue = read_queue_file(repo)?;
+    let pending = pending_upstream(&queue, expected_sha)?;
+    fetch_upstream_remote(repo, &queue)?;
+    if !has_ref(repo, &pending.sha)? {
+        return Err(pending_unavailable(&pending.sha));
+    }
+    Ok(pending.sha)
+}
+
+/// What `preflight.sh` says about the pending upstream and about the
+/// rebuild accepting it would end with. Nothing is promoted or recorded.
+pub fn accept_upstream_preflight(
+    repo: &Path,
+    expected_sha: Option<&str>,
+) -> Result<PreflightReport> {
+    with_queue_lock(repo, || {
+        let mut queue = read_queue_file(repo)?;
+        let pending = pending_upstream(&queue, expected_sha)?;
+        if !has_ref(repo, &pending.sha)? {
+            fetch_upstream_remote(repo, &queue)?;
+        }
+        if !has_ref(repo, &pending.sha)? {
+            return Err(pending_unavailable(&pending.sha));
+        }
+        ensure_clean_worktree(repo, "an accept-upstream preflight")?;
+        let upstream = rev_preflight(repo, &queue, &pending.sha, &ScriptVerdict::Run).map(Some);
+        let verdict = PreflightReport::of_ref(&upstream);
+        let token = match upstream {
+            Ok(token) => token,
+            Err(Error::Preflight(err)) if is_script_failure(&err) => {
+                return Ok(PreflightReport::of_rebuild(RebuildReport {
+                    upstream: Some(verdict),
+                    ..RebuildReport::default()
+                }));
+            }
+            Err(err) => return Err(err),
+        };
+        // The queue as accepting leaves it, before the rebuild.
+        for merge in pending_merges(repo, &queue, &pending)? {
+            if let Some(patch) = queue
+                .upstream
+                .iter_mut()
+                .find(|p| p.id == merge.id && p.status.is_active())
+            {
+                patch.status = PatchStatus::Merged;
+            }
+        }
+        queue.verified_upstream = token.map(|token| VerifiedUpstream {
+            sha: pending.sha.clone(),
+            token,
+            at: stamp(),
+        });
+        let mut rebuild = probe_rebuild(repo, &queue, &pending.sha)?;
+        rebuild.upstream = Some(verdict);
+        Ok(PreflightReport::of_rebuild(rebuild))
+    })
+}
+
 /// [`accept_upstream_at`], taking the verdicts of `preflight.sh` from
 /// `preflight`.
 pub fn accept_upstream_with(
@@ -709,37 +814,12 @@ pub fn accept_upstream_with(
 ) -> Result<SyncResult> {
     with_queue_lock(repo, || {
         let queue = read_queue_file(repo)?;
-        let pending = queue.pending_upstream.clone().ok_or_else(|| {
-            Error::msg("No pending upstream to accept. Run `git uplink sync` first.")
-        })?;
-        if let Some(expected) = expected_sha
-            && expected != pending.sha
-        {
-            return Err(Error::msg(format!(
-                "Pending upstream is {}, not the reviewed {expected}; review the new packet and approve again.",
-                pending.sha
-            )));
-        }
+        let pending = pending_upstream(&queue, expected_sha)?;
         fetch_upstream_remote(repo, &queue)?;
         if !has_ref(repo, &pending.sha)? {
-            return Err(Error::msg(format!(
-                "Pending upstream {} is not available; fetch public main and try again.",
-                pending.sha
-            )));
+            return Err(pending_unavailable(&pending.sha));
         }
-        // A packet written before `merges` was recorded only lists ids.
-        let merges = if pending.merges.is_empty() && !pending.flowed_back.is_empty() {
-            reconcile_incoming(
-                repo,
-                &queue,
-                pending.from_sha.as_deref(),
-                &pending.sha,
-                &SyncOpts::default(),
-            )?
-            .merges
-        } else {
-            pending.merges.clone()
-        };
+        let merges = pending_merges(repo, &queue, &pending)?;
         let applied = apply_fetched_upstream(repo, &pending.sha, &merges, preflight, true)?;
         Ok(SyncResult::applied_with(applied, merges).since(&queue))
     })

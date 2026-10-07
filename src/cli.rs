@@ -698,12 +698,40 @@ pub enum Commands {
     ///
     /// Moves `uplink/upstream`, marks the patches the packet listed as
     /// merged, and rebuilds `main`.
+    ///
+    /// The pending upstream brings changes that are not ours, so it is
+    /// promoted only when `preflight.sh` passes on it: that makes
+    /// `uplink/upstream` the known good commit a failing rebuild is bisected
+    /// from. When it fails, nothing is moved and the command fails. See
+    /// `rebuild` for the check on the rebuilt tree.
     #[command(name = "accept-upstream")]
     AcceptUpstream {
         /// The pending public main that was reviewed. Refuses when the queue
         /// now holds a different one.
         #[arg(long, value_name = "sha")]
         sha: Option<String>,
+        /// Fetch public upstream so the pending upstream is in this clone, and change nothing.
+        ///
+        /// For the step of a job without write credentials that holds the
+        /// upstream token, before the step that runs `--preflight-only`
+        /// without it.
+        #[arg(long = "fetch-only", conflicts_with_all = ["preflight_result", "preflight_only"])]
+        fetch_only: bool,
+        /// Take the verdict of preflight.sh from this file instead of running it.
+        ///
+        /// The file is the output of this command with `--preflight-only`,
+        /// from a job without credentials. It is used only when it is for
+        /// the trees this command builds; otherwise the command fails and
+        /// preflight has to run again.
+        #[arg(long = "preflight-result", value_name = "path")]
+        preflight_result: Option<PathBuf>,
+        /// Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+        ///
+        /// For a job without credentials; pass the output to the same
+        /// command with `--preflight-result`. Exits non-zero when the pending
+        /// upstream fails.
+        #[arg(long = "preflight-only", conflicts_with_all = ["preflight_result"])]
+        preflight_only: bool,
     },
     /// Record the company PR that gates a conflict.
     #[command(alias = "conflicted")]
@@ -749,6 +777,22 @@ pub enum Commands {
         reason: Option<String>,
     },
     /// Replay main from the queue.
+    ///
+    /// Applies the active patches in order onto `uplink/upstream`, one
+    /// commit each. A patch that does not apply goes to the conflict gate.
+    ///
+    /// When every patch applies and the result is not the tree `main`
+    /// already has, `preflight.sh` runs on it. If it fails, `git bisect`
+    /// runs the script between `uplink/upstream` (known good) and the
+    /// rebuilt tree (known bad), and the first patch it fails on goes to the
+    /// conflict gate: `uplink/conflict/<id>` is the queue before the patch
+    /// and `uplink/conflict/<id>-work` has the patch applied, for the fix.
+    /// `main` stays at the last build that passed. When `uplink/upstream`
+    /// is not known to pass with the current `preflight.sh`, it is tested
+    /// first; if it fails too, the command fails and no patch is blamed.
+    ///
+    /// Every command that rebuilds does this: `sync`, `accept-upstream`,
+    /// `resolve`, `amend --complete`, `transfer`, `add`, `drop` and `merged`.
     Rebuild {
         /// Rebuild onto uplink/preview/<name> instead of company main (preview; does not mutate the queue or push).
         #[arg(long, value_name = "name")]
@@ -759,6 +803,25 @@ pub enum Commands {
         /// Remote for --push, origin by default.
         #[arg(long = "push-remote", value_name = "remote")]
         push_remote: Option<String>,
+        /// Take the verdict of preflight.sh from this file instead of running it.
+        ///
+        /// The file is the output of this command with `--preflight-only`,
+        /// from a job without credentials. It is used only when it is for
+        /// the trees this command builds; otherwise the command fails and
+        /// preflight has to run again.
+        #[arg(
+            long = "preflight-result",
+            value_name = "path",
+            conflicts_with = "branch"
+        )]
+        preflight_result: Option<PathBuf>,
+        /// Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+        ///
+        /// For a job without credentials; pass the output to the same
+        /// command with `--preflight-result`. Exits 0 also when a patch fails:
+        /// the command then gates that patch.
+        #[arg(long = "preflight-only", conflicts_with_all = ["preflight_result", "branch", "push"])]
+        preflight_only: bool,
     },
     /// Finish a conflict resolution and put the patch back in the queue.
     ///
@@ -779,7 +842,9 @@ pub enum Commands {
     /// (or `approved`) and needs no other approval. Resolve of a submitted patch
     /// dispatches a new submit for you either way, so the public PR gets
     /// the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for
-    /// the next gated PR and exits 0.
+    /// the next gated PR and exits 0. That includes a patch `preflight.sh`
+    /// fails on in the rebuild, which can be the resolved patch again; see
+    /// `rebuild`.
     ///
     /// `readyToSubmit` in the output lists the resolved patch when it is
     /// `queued` again, and the queued patches whose last unmerged upstream
@@ -788,6 +853,21 @@ pub enum Commands {
         /// Patch whose conflict was resolved.
         #[arg(value_name = "id")]
         id: String,
+        /// Take the verdict of preflight.sh from this file instead of running it.
+        ///
+        /// The file is the output of this command with `--preflight-only`,
+        /// from a job without credentials. It is used only when it is for
+        /// the trees this command builds; otherwise the command fails and
+        /// preflight has to run again.
+        #[arg(long = "preflight-result", value_name = "path")]
+        preflight_result: Option<PathBuf>,
+        /// Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+        ///
+        /// For a job without credentials; pass the output to the same
+        /// command with `--preflight-result`. The checkout is left on the
+        /// squashed resolution, so use a clone made for it.
+        #[arg(long = "preflight-only", conflicts_with_all = ["preflight_result"])]
+        preflight_only: bool,
     },
     /// Move a patch between the internal and upstream queues.
     ///
