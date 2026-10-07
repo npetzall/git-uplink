@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,22 @@ fn script_echo() -> Box<dyn Write> {
         x if x == ScriptEcho::Stderr as u8 => Box::new(io::stderr()),
         _ => Box::new(io::sink()),
     }
+}
+
+/// Tokens of what the script passed on in this process. A command that
+/// tests a tree and then rebuilds to the same one runs the script once.
+static PASSED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn note_passed(token: &str) {
+    if let Ok(mut passed) = PASSED.lock() {
+        passed.push(token.to_string());
+    }
+}
+
+fn has_passed(token: &str) -> bool {
+    PASSED
+        .lock()
+        .is_ok_and(|passed| passed.iter().any(|known| known == token))
 }
 
 /// Copies `from` to `to` as it arrives and returns all of it.
@@ -105,6 +122,43 @@ pub struct PreflightReport {
     /// What the script ran on, one line each: the base, then what was
     /// applied onto it. See [`export_tested`] and [`command_tested`].
     pub tested: Vec<String>,
+    /// What the script said about the rebuild the command ends with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebuild: Option<Box<RebuildReport>>,
+}
+
+/// What `preflight.sh` said about a rebuild. Each part is there when the
+/// rebuild needs it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RebuildReport {
+    /// On the upstream the rebuild starts from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<PreflightReport>,
+    /// On the rebuilt tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub built: Option<PreflightReport>,
+    /// The first patch the script fails from, found by `git bisect`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_bad: Option<FirstBad>,
+}
+
+impl RebuildReport {
+    /// False when the script failed on the upstream or on the rebuilt tree.
+    pub fn ok(&self) -> bool {
+        [&self.upstream, &self.built]
+            .into_iter()
+            .flatten()
+            .all(|part| part.ok)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstBad {
+    pub id: String,
+    /// Names the tree with that patch applied, as the rebuild made it.
+    pub token: String,
 }
 
 /// A job output holds 1 MiB; keep a report well under it.
@@ -132,10 +186,14 @@ impl PreflightReport {
     /// too, without a token: the command that reads it fails the same way
     /// before it needs the script, or refuses the report as stale.
     pub fn of(result: Result<Option<String>>) -> Self {
+        Self::of_ref(&result)
+    }
+
+    pub(crate) fn of_ref(result: &Result<Option<String>>) -> Self {
         match result {
             Ok(token) => Self {
                 ok: true,
-                token,
+                token: token.clone(),
                 ..Self::default()
             },
             Err(Error::Preflight(err)) => Self {
@@ -145,7 +203,7 @@ impl PreflightReport {
                 message: Some(clip(&err.to_string())),
                 suggested_depends_on: err.suggested_depends_on.clone(),
                 output: err.output.as_deref().map(clip),
-                tested: Vec::new(),
+                ..Self::default()
             },
             Err(err) => Self {
                 ok: false,
@@ -193,6 +251,9 @@ impl PreflightReport {
         // A token is set once the tree is built, so a failure that is not the
         // script's came after the script passed (the probe checks more than
         // some commands do). The command makes its own checks.
+        if self.ok {
+            note_passed(token);
+        }
         if self.ok || self.stage.as_deref() != Some(STAGE_COMMAND) {
             return Ok(());
         }
@@ -220,6 +281,35 @@ pub enum ScriptVerdict {
     Reported(PreflightReport),
 }
 
+impl ScriptVerdict {
+    /// Where the verdict on one part of the rebuild comes from. A report
+    /// without that part is for no tree, so it is refused as stale.
+    pub(crate) fn rebuild_part(
+        &self,
+        pick: impl Fn(&RebuildReport) -> Option<&PreflightReport>,
+    ) -> Self {
+        match self {
+            Self::Run => Self::Run,
+            Self::Reported(report) => Self::Reported(
+                report
+                    .rebuild
+                    .as_deref()
+                    .and_then(pick)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+        }
+    }
+
+    /// The patch a reported bisect blamed.
+    pub(crate) fn first_bad(&self) -> Option<&FirstBad> {
+        match self {
+            Self::Run => None,
+            Self::Reported(report) => report.rebuild.as_deref()?.first_bad.as_ref(),
+        }
+    }
+}
+
 /// The `uplink/hooks` commit preflight reads its script from. `None` when
 /// there is no script to run. `hooks_ref` stands in for `uplink/hooks`, to
 /// try a change to the script before it lands there.
@@ -245,11 +335,11 @@ run git uplink init --upgrade to create it, then git uplink push",
     Ok(path_exists_at(repo, &sha, PREFLIGHT_SCRIPT_PATH)?.then_some(sha))
 }
 
-/// Names what a verdict is for: the tree under test at `dir`'s `HEAD`, and
+/// Names what a verdict is for: the tree under test, of `rev` in `dir`, and
 /// the tree of the hooks commit the script (and the files beside it) come
 /// from. Not a secret; it only ties a result to its input.
-fn preflight_token(dir: &Path, source: Option<&str>) -> Result<String> {
-    let tree = rev_parse(dir, "HEAD^{tree}")?;
+fn preflight_token(dir: &Path, rev: &str, source: Option<&str>) -> Result<String> {
+    let tree = rev_parse(dir, &format!("{rev}^{{tree}}"))?;
     let hooks = match source {
         Some(sha) => rev_parse(dir, &format!("{sha}^{{tree}}"))?,
         None => "none".to_string(),
@@ -343,9 +433,39 @@ impl<'a> PreflightScript<'a> {
     }
 
     fn run_to(&self, cwd: &Path, echo: &mut dyn Write) -> (i32, String) {
+        self.shell(cwd, r#"exec sh "$1" 2>&1"#, echo)
+    }
+
+    /// Lets `git bisect` run the script from `bad` back to `good` in `cwd`,
+    /// a checkout made for it, and returns the first commit it fails on.
+    fn bisect(&self, cwd: &Path, good: &str, bad: &str) -> Result<String> {
+        git(cwd, &["bisect", "start", bad, good], GitOpts::default())?;
+        // Any failure is "bad": 125 would skip the commit, and 128 and up
+        // would stop the bisect.
+        let (code, output) = self.shell(
+            cwd,
+            r#"exec git bisect run sh -c 'sh "$1" || exit 1' sh "$1" 2>&1"#,
+            &mut *script_echo(),
+        );
+        let found = git(
+            cwd,
+            &["rev-parse", "--verify", "--quiet", "refs/bisect/bad"],
+            GitOpts::allow_fail(),
+        )?;
+        if code != 0 || found.code != 0 || found.stdout.is_empty() {
+            return Err(Error::msg(format!(
+                "git bisect did not find the patch {PREFLIGHT_SCRIPT_PATH} fails on (exit {code}).\n\n{output}"
+            )));
+        }
+        Ok(found.stdout)
+    }
+
+    /// Runs `script` with `sh -c` in `cwd`, the path of `preflight.sh` as
+    /// its `$1`, without the credentials a job can hold.
+    fn shell(&self, cwd: &Path, script: &str, echo: &mut dyn Write) -> (i32, String) {
         // One pipe for stdout and stderr keeps their lines in order.
         let mut cmd = Command::new("sh");
-        cmd.args(["-c", r#"exec sh "$1" 2>&1"#, "sh"])
+        cmd.args(["-c", script, "sh"])
             .arg(&self.path)
             .current_dir(cwd)
             .stdin(Stdio::null())
@@ -652,7 +772,7 @@ pub fn export_preflight(
             )));
         }
 
-        let token = preflight_token(dir, source.as_deref())?;
+        let token = preflight_token(dir, "HEAD", source.as_deref())?;
         if let ScriptVerdict::Reported(report) = verdict {
             report.replay(&token)?;
             return Ok(Some(token));
@@ -662,6 +782,7 @@ pub fn export_preflight(
         };
         let (code, output) = script.run(dir);
         if code == 0 {
+            note_passed(&token);
             return Ok(Some(token));
         }
         let suggested = suggest_command_deps(repo, queue, candidate_abs, patch, script, dir)?;
@@ -782,7 +903,7 @@ pub fn command_preflight(
     verdict: &ScriptVerdict,
 ) -> Result<Option<String>> {
     let source = script_source(cwd, queue, hooks_ref)?;
-    let token = preflight_token(cwd, source.as_deref())?;
+    let token = preflight_token(cwd, "HEAD", source.as_deref())?;
     if let ScriptVerdict::Reported(report) = verdict {
         report.replay(&token)?;
         return Ok(Some(token));
@@ -794,6 +915,7 @@ pub fn command_preflight(
     let root = git_ok(cwd, &["rev-parse", "--show-toplevel"])?;
     let (code, output) = script.run(Path::new(&root));
     if code == 0 {
+        note_passed(&token);
         return Ok(Some(token));
     }
     let output_suffix = if output.is_empty() {
@@ -814,6 +936,115 @@ pub fn command_preflight(
         )
         .with_token(token),
     ))
+}
+
+/// The token a verdict on `rev` has.
+pub(crate) fn rev_token(repo: &Path, queue: &QueueState, rev: &str) -> Result<String> {
+    let source = script_source(repo, queue, None)?;
+    preflight_token(repo, rev, source.as_deref())
+}
+
+/// Gets the verdict of `preflight.sh` on the commit `rev`, in a checkout
+/// made for it. Returns the token of what was tested.
+pub(crate) fn rev_preflight(
+    repo: &Path,
+    queue: &QueueState,
+    rev: &str,
+    verdict: &ScriptVerdict,
+) -> Result<String> {
+    let source = script_source(repo, queue, None)?;
+    let token = preflight_token(repo, rev, source.as_deref())?;
+    if has_passed(&token) {
+        return Ok(token);
+    }
+    if let ScriptVerdict::Reported(report) = verdict {
+        report.replay(&token)?;
+        return Ok(token);
+    }
+    let Some(source) = &source else {
+        return Ok(token);
+    };
+    refuse_script_with_credentials(repo, queue, None)?;
+    let script = PreflightScript::materialise(repo, source)?;
+    let tree = TempWorktree::add(repo, "uplink-rebuild", rev)?;
+    let (code, output) = script.run(&tree.dir);
+    if code == 0 {
+        note_passed(&token);
+        return Ok(token);
+    }
+    let output_suffix = if output.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{output}")
+    };
+    Err(Error::Preflight(
+        PreflightError::new(
+            format!("Preflight failed ({PREFLIGHT_SCRIPT_PATH}, exit {code}).{output_suffix}"),
+            Vec::new(),
+            STAGE_COMMAND,
+            if output.is_empty() {
+                None
+            } else {
+                Some(output)
+            },
+        )
+        .with_token(token),
+    ))
+}
+
+/// True for a failure of the script itself, not of what came before it.
+pub(crate) fn is_script_failure(err: &PreflightError) -> bool {
+    err.stage == STAGE_COMMAND
+}
+
+/// The failure of the script on an upstream: `what` says which, and what
+/// follows from it.
+pub(crate) fn upstream_failure(what: &str, err: PreflightError) -> Error {
+    let output_suffix = match &err.output {
+        Some(output) => format!("\n\n{output}"),
+        None => String::new(),
+    };
+    let mut failure = PreflightError::new(
+        format!("{what}{output_suffix}"),
+        Vec::new(),
+        STAGE_COMMAND,
+        err.output,
+    );
+    failure.token = err.token;
+    Error::Preflight(failure)
+}
+
+/// The first commit of `good..bad` that `preflight.sh` fails on, found with
+/// `git bisect run`. `good` passes and `bad` fails.
+pub(crate) fn bisect_first_bad(
+    repo: &Path,
+    queue: &QueueState,
+    good: &str,
+    bad: &str,
+) -> Result<String> {
+    let Some(source) = script_source(repo, queue, None)? else {
+        return Err(Error::msg(format!(
+            "No {PREFLIGHT_SCRIPT_PATH} to bisect with."
+        )));
+    };
+    refuse_script_with_credentials(repo, queue, None)?;
+    let script = PreflightScript::materialise(repo, &source)?;
+    // Its own checkout, so the bisect state goes away with it.
+    let tree = TempWorktree::add(repo, "uplink-bisect", bad)?;
+    script.bisect(&tree.dir, good, bad)
+}
+
+/// Refuses a reported bisect that is not for the rebuild made here.
+pub(crate) fn stale_first_bad(token: &str) -> Error {
+    Error::Preflight(
+        PreflightError::new(
+            "The preflight result blames a patch of another rebuild (the queue, uplink/upstream or uplink/hooks changed). Run preflight again and pass its result.",
+            Vec::new(),
+            STAGE_STALE,
+            None,
+        )
+        .with_token(token),
+    )
 }
 
 pub fn assert_upstream_layer_applies(repo: &Path, queue: &QueueState) -> Result<()> {
@@ -1035,18 +1266,18 @@ mod tests {
         let dir = repo_with_hooks();
         let repo = dir.path();
         let first = git_ok(repo, &["rev-parse", "HEAD"]).unwrap();
-        let base = preflight_token(repo, None).unwrap();
-        assert_eq!(base, preflight_token(repo, None).unwrap());
-        assert_ne!(base, preflight_token(repo, Some(&first)).unwrap());
+        let base = preflight_token(repo, "HEAD", None).unwrap();
+        assert_eq!(base, preflight_token(repo, "HEAD", None).unwrap());
+        assert_ne!(base, preflight_token(repo, "HEAD", Some(&first)).unwrap());
 
         // Same tree under another commit: same token.
         git_ok(repo, &["commit", "-q", "--allow-empty", "-m", "again"]).unwrap();
-        assert_eq!(base, preflight_token(repo, None).unwrap());
+        assert_eq!(base, preflight_token(repo, "HEAD", None).unwrap());
 
         let second = commit_file(repo, "b.txt", "two\n");
-        let moved = preflight_token(repo, Some(&first)).unwrap();
-        assert_ne!(base, preflight_token(repo, None).unwrap());
-        assert_ne!(moved, preflight_token(repo, Some(&second)).unwrap());
+        let moved = preflight_token(repo, "HEAD", Some(&first)).unwrap();
+        assert_ne!(base, preflight_token(repo, "HEAD", None).unwrap());
+        assert_ne!(moved, preflight_token(repo, "HEAD", Some(&second)).unwrap());
     }
 
     #[test]

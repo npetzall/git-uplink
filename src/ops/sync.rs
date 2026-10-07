@@ -61,6 +61,8 @@ pub struct SyncOpts {
     /// `(patch id, merge commit)` for each recorded public PR the forge
     /// reports as merged.
     pub merged_prs: Vec<(String, String)>,
+    /// Where the verdict of `preflight.sh` on the rebuild comes from.
+    pub preflight: ScriptVerdict,
 }
 
 /// An upstream commit whose trailer names a patch it does not match.
@@ -406,49 +408,105 @@ pub(super) fn restore_company_branch(repo: &Path, company_branch: &str) -> Resul
     Ok(())
 }
 
-pub(super) fn persist_apply_conflict(
+/// Why a rebuild stopped on a patch.
+pub(super) enum Stopped {
+    /// It does not apply. The checkout holds the failed apply.
+    Apply { files: Vec<String> },
+    /// `preflight.sh` fails from `sha` on, the commit that applied it.
+    Preflight { sha: String, output: Option<String> },
+}
+
+/// The end of what the script printed is where a build reports its error.
+const CONFLICT_OUTPUT_LIMIT: usize = 8 * 1024;
+
+fn output_tail(output: &str) -> String {
+    let mut start = output.len().saturating_sub(CONFLICT_OUTPUT_LIMIT);
+    while !output.is_char_boundary(start) {
+        start += 1;
+    }
+    output[start..].to_string()
+}
+
+/// Puts `patch` in conflict: cuts the protected base at the patches before
+/// it and the work branch at what is to be fixed, records it on
+/// uplink/state, and leaves the company branch as it was.
+pub(super) fn persist_conflict(
     repo: &Path,
     queue: &mut QueueState,
     snapshot: &Path,
     company_branch: &str,
     upstream_ref: &str,
     patch: &Patch,
-    files: Vec<String>,
+    stopped: Stopped,
 ) -> Result<ConflictError> {
-    let onto = rev_parse(repo, "HEAD")?;
-    let (branch, work) = cut_gated_work(
-        repo,
-        GateKind::Conflict,
-        &patch.id,
-        &onto,
-        &format!("uplink: conflict applying {}", patch.id),
-    )?;
-
-    let message = format!(
-        "Patch {} (\"{}\") does not apply onto the current upstream prefix.",
-        patch.id, patch.title
-    );
+    let (onto, branch, work, files, cause, output, message, detail) = match stopped {
+        Stopped::Apply { files } => {
+            let onto = rev_parse(repo, "HEAD")?;
+            let (branch, work) = cut_gated_work(
+                repo,
+                GateKind::Conflict,
+                &patch.id,
+                &onto,
+                &format!("uplink: conflict applying {}", patch.id),
+            )?;
+            let message = format!(
+                "Patch {} (\"{}\") does not apply onto the current upstream prefix.",
+                patch.id, patch.title
+            );
+            let detail = if files.is_empty() {
+                "untracked conflict".into()
+            } else {
+                files.join(", ")
+            };
+            (
+                onto,
+                branch,
+                work,
+                files,
+                ConflictCause::Apply,
+                None,
+                message,
+                detail,
+            )
+        }
+        Stopped::Preflight { sha, output } => {
+            // The work branch is the patch as it applied: the fix goes on top.
+            let onto = rev_parse(repo, &format!("{sha}^"))?;
+            let branch = GateKind::Conflict.base_branch(&patch.id);
+            let work = GateKind::Conflict.work_branch(&patch.id);
+            git(repo, &["branch", "-f", &branch, &onto], GitOpts::default())?;
+            git(repo, &["branch", "-f", &work, &sha], GitOpts::default())?;
+            let message = format!(
+                "Patch {} (\"{}\") applies, but preflight.sh fails once it is applied.",
+                patch.id, patch.title
+            );
+            (
+                onto,
+                branch,
+                work,
+                Vec::new(),
+                ConflictCause::Preflight,
+                output.as_deref().map(output_tail),
+                message,
+                "preflight.sh fails".to_string(),
+            )
+        }
+    };
     {
         let current = get_patch_mut(queue, &patch.id)?;
         current.status = PatchStatus::Conflict;
         current.conflict = Some(PatchConflict {
-            branch: branch.clone(),
+            branch,
             work_branch: Some(work),
             files: files.clone(),
             message: message.clone(),
             onto: Some(onto),
             pr_number: None,
             pr_url: None,
+            cause,
+            output,
         });
-        add_event(
-            current,
-            "conflict",
-            if files.is_empty() {
-                "untracked conflict".into()
-            } else {
-                files.join(", ")
-            },
-        );
+        add_event(current, "conflict", detail);
     }
     queue.last_sync = Some(LastSync {
         at: stamp(),
@@ -467,12 +525,46 @@ pub(super) fn persist_apply_conflict(
 
 /// Moves `uplink/upstream` to `sha`, marks `merges` merged, and rebuilds.
 /// The rebuild still marks an upstream patch that applies empty.
+///
+/// With `verify`, `sha` brings changes that are not ours, and is promoted
+/// only when `preflight.sh` passes on it. Without, it is the old upstream
+/// plus patches that passed as patches, and is taken as verified.
 pub(super) fn apply_fetched_upstream(
     repo: &Path,
     sha: &str,
     merges: &[PendingMerge],
+    preflight: &ScriptVerdict,
+    verify: bool,
 ) -> Result<QueueState> {
+    let queue = read_queue_file(repo)?;
+    let token = if verify {
+        let upstream = preflight.rebuild_part(|report| report.upstream.as_ref());
+        match rev_preflight(repo, &queue, sha, &upstream) {
+            Ok(token) => Some(token),
+            Err(Error::Preflight(err)) if is_script_failure(&err) => {
+                return Err(upstream_failure(
+                    &format!(
+                        "Public upstream {sha} fails preflight.sh. uplink/upstream was not moved and nothing was rebuilt."
+                    ),
+                    err,
+                ));
+            }
+            Err(err) => return Err(err),
+        }
+    } else {
+        rev_token(repo, &queue, sha).ok()
+    };
     promote_upstream(repo, sha)?;
+    if let Some(token) = token {
+        let mut queue = read_queue_file(repo)?;
+        queue.verified_upstream = Some(VerifiedUpstream {
+            sha: sha.to_string(),
+            token,
+            at: stamp(),
+        });
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, "uplink: record verified upstream")?;
+    }
     let mut merged = Vec::new();
     for merge in merges {
         let queue = read_queue_file(repo)?;
@@ -484,7 +576,7 @@ pub(super) fn apply_fetched_upstream(
             merged.push(merge.id.clone());
         }
     }
-    match rebuild(repo) {
+    match rebuild_checked(repo, preflight) {
         Ok(mut queue) => {
             queue.pending_upstream = None;
             queue.last_sync = Some(LastSync {
@@ -547,7 +639,8 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
         }
         let reconciliation = reconcile_incoming(repo, &fetched, from_sha.as_deref(), &sha, &opts)?;
         if reconciliation.residual.is_none() {
-            let queue = apply_fetched_upstream(repo, &sha, &reconciliation.merges)?;
+            let queue =
+                apply_fetched_upstream(repo, &sha, &reconciliation.merges, &opts.preflight, false)?;
             return Ok(SyncResult::applied_with(queue, reconciliation.merges).since(&fetched));
         }
         let report = write_incoming_packet(repo, &fetched, &reconciliation)?;
@@ -604,6 +697,16 @@ pub fn accept_upstream(repo: &Path) -> Result<SyncResult> {
 /// Promotes the pending upstream. With `expected_sha`, refuses when the
 /// pending upstream is not the one that was reviewed.
 pub fn accept_upstream_at(repo: &Path, expected_sha: Option<&str>) -> Result<SyncResult> {
+    accept_upstream_with(repo, expected_sha, &ScriptVerdict::Run)
+}
+
+/// [`accept_upstream_at`], taking the verdicts of `preflight.sh` from
+/// `preflight`.
+pub fn accept_upstream_with(
+    repo: &Path,
+    expected_sha: Option<&str>,
+    preflight: &ScriptVerdict,
+) -> Result<SyncResult> {
     with_queue_lock(repo, || {
         let queue = read_queue_file(repo)?;
         let pending = queue.pending_upstream.clone().ok_or_else(|| {
@@ -637,7 +740,7 @@ pub fn accept_upstream_at(repo: &Path, expected_sha: Option<&str>) -> Result<Syn
         } else {
             pending.merges.clone()
         };
-        let applied = apply_fetched_upstream(repo, &pending.sha, &merges)?;
+        let applied = apply_fetched_upstream(repo, &pending.sha, &merges, preflight, true)?;
         Ok(SyncResult::applied_with(applied, merges).since(&queue))
     })
 }

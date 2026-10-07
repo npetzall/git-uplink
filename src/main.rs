@@ -26,8 +26,9 @@ use git_uplink::{
     submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
 };
 use git_uplink::{
-    HOOKS_BRANCH, HooksPushAction, Patch, PatchIntent, PatchStatus, QueueState, SettingsFlags,
-    SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult, stdin_is_tty,
+    ConflictCause, HOOKS_BRANCH, HooksPushAction, Patch, PatchConflict, PatchIntent, PatchStatus,
+    QueueState, SettingsFlags, SubmitResult, SyncOpts, SyncResult, TransferDirection,
+    TransferResult, stdin_is_tty,
 };
 
 const VERSION: &str = concat!(
@@ -177,9 +178,13 @@ fn print_failure_comment(err: &Error) {
 fn conflict_body(
     id: &str,
     work_branch: &str,
-    onto: Option<&str>,
+    conflict: Option<&PatchConflict>,
     resolved_from: Option<&str>,
 ) -> String {
+    let onto = conflict.and_then(|c| c.onto.as_deref());
+    if let Some(conflict) = conflict.filter(|c| c.cause == ConflictCause::Preflight) {
+        return preflight_conflict_body(id, work_branch, conflict);
+    }
     let intro = if let Some(from) = resolved_from {
         format!(
             "Rebuild after resolving `{from}` stopped on `{id}`. Checkout `{work_branch}`, remove the conflict markers, and open or update the PR into the protected base. Merge runs `git uplink resolve {id}`."
@@ -202,6 +207,35 @@ Remaining patches wait until this id is resolved.\n"
     body
 }
 
+/// The body of the conflict PR for a patch that applies and then fails
+/// `preflight.sh`.
+fn preflight_conflict_body(id: &str, work_branch: &str, conflict: &PatchConflict) -> String {
+    let mut body = format!(
+        "Company `main` is bot-owned. Fix this patch through the gated PR from `{work_branch}` into the protected base.\n\n\
+The rebuild applied every patch, and `preflight.sh` failed on the result. `git bisect` between `uplink/upstream` and the rebuilt tree found `{id}` as the first patch it fails on. `{work_branch}` is the queue up to and including `{id}`: commit the fix there and push. Merge the PR into the protected base to run `git uplink resolve {id}`.\n\n\
+Company `main` stays at the last build that passed, and the remaining patches wait until this id is resolved.\n"
+    );
+    if let Some(compare) = compare_url(conflict.onto.as_deref(), work_branch) {
+        body.push_str(&format!("\nThe patch as it applied: {compare}\n"));
+    }
+    if let Some(output) = conflict.output.as_deref().filter(|text| !text.is_empty()) {
+        // A fence longer than any run of backticks in the output.
+        let fence = "`".repeat(
+            output
+                .split(|c| c != '`')
+                .map(str::len)
+                .max()
+                .unwrap_or(0)
+                .max(2)
+                + 1,
+        );
+        body.push_str(&format!(
+            "\nThe end of what `preflight.sh` printed on the rebuilt tree:\n\n{fence}\n{output}\n{fence}\n"
+        ));
+    }
+    body
+}
+
 fn conflict_pr_create_artifact(
     repo: &Path,
     patch: &Patch,
@@ -213,8 +247,7 @@ fn conflict_pr_create_artifact(
         .and_then(|c| c.work_branch.as_deref())
         .filter(|s| !s.is_empty())
         .unwrap_or(base);
-    let onto = conflict.and_then(|c| c.onto.as_deref());
-    let body = conflict_body(&patch.id, work, onto, resolved_from);
+    let body = conflict_body(&patch.id, work, conflict, resolved_from);
     let body_file = match report_paths(&patch.id) {
         Ok((dir, _, _)) => format!("{dir}/conflict.md"),
         Err(_) => return Ok(serde_json::json!({"error": "invalid patch id"})),
@@ -248,8 +281,17 @@ fn conflict_json(patch: &Patch) -> serde_json::Value {
 }
 
 fn eprint_conflict(patch: &Patch) {
+    let preflight = patch
+        .conflict
+        .as_ref()
+        .is_some_and(|c| c.cause == ConflictCause::Preflight);
     eprintln!(
-        "CONFLICT {} on {}",
+        "{} {} on {}",
+        if preflight {
+            "PREFLIGHT FAILED"
+        } else {
+            "CONFLICT"
+        },
         patch.id,
         patch
             .conflict
@@ -1170,7 +1212,13 @@ fn cmd_sync(repo: &Path, merged_pr: Vec<String>) -> Result<(), Error> {
             }
         }
     }
-    let result = sync_with(repo, SyncOpts { merged_prs })?;
+    let result = sync_with(
+        repo,
+        SyncOpts {
+            merged_prs,
+            ..SyncOpts::default()
+        },
+    )?;
     let summary = result.report.clone();
     finish_sync(repo, result, summary.as_deref())
 }
@@ -1245,6 +1293,7 @@ fn cmd_rebuild(
             } else {
                 push_remote
             },
+            ..RebuildOpts::default()
         },
     )?;
     if result.preview {

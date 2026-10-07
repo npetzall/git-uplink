@@ -5,6 +5,8 @@ pub struct RebuildOpts {
     pub branch: Option<String>,
     pub push: bool,
     pub push_remote: Option<String>,
+    /// Where the verdict of `preflight.sh` on the rebuilt tree comes from.
+    pub preflight: ScriptVerdict,
 }
 
 #[derive(Debug, Clone)]
@@ -16,6 +18,15 @@ pub struct RebuildResult {
 
 pub fn rebuild(repo: &Path) -> Result<QueueState> {
     Ok(rebuild_with(repo, RebuildOpts::default())?.queue)
+}
+
+/// [`rebuild`], taking the verdict of `preflight.sh` from `preflight`.
+pub(super) fn rebuild_checked(repo: &Path, preflight: &ScriptVerdict) -> Result<QueueState> {
+    let opts = RebuildOpts {
+        preflight: preflight.clone(),
+        ..RebuildOpts::default()
+    };
+    Ok(rebuild_with(repo, opts)?.queue)
 }
 
 pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
@@ -34,7 +45,7 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
         let queue = if preview {
             rebuild_preview(repo, &target)?
         } else {
-            rebuild_once(repo)?
+            rebuild_once(repo, Some(&opts.preflight))?
         };
         if opts.push {
             let remote = opts.push_remote.as_deref().unwrap_or("origin");
@@ -168,7 +179,233 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
     outcome
 }
 
-pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
+/// How replaying the queue onto upstream ended.
+enum Replayed {
+    /// Every active patch applied: its id and the commit it made, in order.
+    /// A patch that applied empty made none.
+    Applied(Vec<(String, String)>),
+    /// The queue already holds a patch in conflict.
+    Blocked(Patch),
+    Conflict(Patch, Vec<String>),
+}
+
+/// Applies the active patches in order on the checkout, which is detached
+/// at `upstream_ref`, one commit each.
+fn replay_queue(
+    repo: &Path,
+    queue: &mut QueueState,
+    snapshot: &Path,
+    upstream_ref: &str,
+) -> Result<Replayed> {
+    let mut applied = Vec::new();
+    for patch in apply_order_active(queue)? {
+        if patch.status == PatchStatus::Conflict {
+            return Ok(Replayed::Blocked(patch));
+        }
+        let patch_file = snapshot.join(patch_path(&patch.id)?);
+        let result = apply_patch_file(repo, &patch, &patch_file, false)?;
+        if result == ApplyOutcome::Empty {
+            if queue.is_upstream(&patch.id) {
+                mark_merged_by_empty_rebase(repo, queue, &patch.id, upstream_ref)?;
+            }
+            continue;
+        }
+        if result == ApplyOutcome::Conflict {
+            return Ok(Replayed::Conflict(patch, conflicted_files(repo)?));
+        }
+        refresh_patch_id(repo, queue, &patch.id, &patch_file)?;
+        applied.push((patch.id, rev_parse(repo, "HEAD")?));
+    }
+    Ok(Replayed::Applied(applied))
+}
+
+/// The patch `preflight.sh` first fails on in a rebuild.
+struct FailedPatch {
+    id: String,
+    sha: String,
+    output: Option<String>,
+}
+
+fn tree_of(repo: &Path, rev: &str) -> Result<String> {
+    rev_parse(repo, &format!("{rev}^{{tree}}"))
+}
+
+/// Gets the verdict of `preflight.sh` on a rebuild: `applied` on top of
+/// `upstream_ref`. A tree equal to the company branch has nothing new to
+/// test. When the script fails, `uplink/upstream` is the known good commit
+/// and the rebuilt tree the known bad one, so `git bisect` finds the patch
+/// to blame. An upstream that is not verified is tested first: when it
+/// fails too, no patch is blamed.
+///
+/// `probe` is filled with every verdict the script gave here.
+fn check_rebuilt(
+    repo: &Path,
+    queue: &mut QueueState,
+    upstream_ref: &str,
+    applied: &[(String, String)],
+    verdict: &ScriptVerdict,
+    mut probe: Option<&mut RebuildReport>,
+) -> Result<Option<FailedPatch>> {
+    let Some((_, head)) = applied.last() else {
+        return Ok(None);
+    };
+    let company_branch = queue.config.internal_branch.clone();
+    if has_ref(repo, &company_branch)? && tree_of(repo, head)? == tree_of(repo, &company_branch)? {
+        return Ok(None);
+    }
+    let built = rev_preflight(
+        repo,
+        queue,
+        head,
+        &verdict.rebuild_part(|report| report.built.as_ref()),
+    )
+    .map(Some);
+    if let Some(report) = probe.as_deref_mut() {
+        report.built = Some(PreflightReport::of_ref(&built));
+    }
+    let failure = match built {
+        Ok(_) => return Ok(None),
+        Err(Error::Preflight(err)) if is_script_failure(&err) => err,
+        Err(err) => return Err(err),
+    };
+
+    let upstream_token = rev_token(repo, queue, upstream_ref)?;
+    let verified = queue
+        .verified_upstream
+        .as_ref()
+        .is_some_and(|known| known.token == upstream_token);
+    if !verified {
+        let upstream = rev_preflight(
+            repo,
+            queue,
+            upstream_ref,
+            &verdict.rebuild_part(|report| report.upstream.as_ref()),
+        )
+        .map(Some);
+        if let Some(report) = probe.as_deref_mut() {
+            report.upstream = Some(PreflightReport::of_ref(&upstream));
+        }
+        match upstream {
+            Ok(_) => {
+                queue.verified_upstream = Some(VerifiedUpstream {
+                    sha: rev_parse(repo, upstream_ref)?,
+                    token: upstream_token,
+                    at: stamp(),
+                });
+            }
+            Err(Error::Preflight(err)) if is_script_failure(&err) => {
+                return Err(upstream_failure(
+                    "The rebuild fails preflight.sh, and so does uplink/upstream without any patch, so no patch is blamed. Fix preflight.sh on uplink/hooks, or sync to an upstream that passes.",
+                    err,
+                ));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    let (id, sha) = match verdict.first_bad() {
+        Some(blamed) => {
+            let found = applied.iter().find(|(id, _)| *id == blamed.id);
+            match found {
+                Some(found) if rev_token(repo, queue, &found.1)? == blamed.token => found.clone(),
+                _ => return Err(stale_first_bad(&blamed.token)),
+            }
+        }
+        None if matches!(verdict, ScriptVerdict::Reported(_)) => {
+            return Err(stale_first_bad(failure.token.as_deref().unwrap_or("")));
+        }
+        None if applied.len() == 1 => applied[0].clone(),
+        None => {
+            let sha = bisect_first_bad(repo, queue, upstream_ref, head)?;
+            applied
+                .iter()
+                .find(|(_, commit)| *commit == sha)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::msg(format!("git bisect blamed {sha}, which is not a patch"))
+                })?
+        }
+    };
+    if let Some(report) = probe {
+        report.first_bad = Some(FirstBad {
+            id: id.clone(),
+            token: rev_token(repo, queue, &sha)?,
+        });
+    }
+    Ok(Some(FailedPatch {
+        id,
+        sha,
+        output: failure.output,
+    }))
+}
+
+/// What `preflight.sh` says about the rebuild of `queue` from the patch
+/// files in `snapshot`. Leaves the checkout detached on what it applied.
+pub(super) fn probe_rebuild_from(
+    repo: &Path,
+    queue: &QueueState,
+    snapshot: &Path,
+    upstream_ref: &str,
+) -> Result<RebuildReport> {
+    let mut queue = queue.clone();
+    let mut report = RebuildReport::default();
+    git(
+        repo,
+        &["checkout", "-f", "--quiet", "--detach", upstream_ref],
+        GitOpts::default(),
+    )?;
+    // A rebuild that stops on a conflict never asks for a verdict.
+    let Replayed::Applied(applied) = replay_queue(repo, &mut queue, snapshot, upstream_ref)? else {
+        return Ok(report);
+    };
+    let checked = check_rebuilt(
+        repo,
+        &mut queue,
+        upstream_ref,
+        &applied,
+        &ScriptVerdict::Run,
+        Some(&mut report),
+    );
+    match checked {
+        // In the report.
+        Err(Error::Preflight(err)) if is_script_failure(&err) => Ok(report),
+        other => other.map(|_| report),
+    }
+}
+
+/// [`probe_rebuild_from`] with the patch files in `.uplink`, returning to
+/// the commit that was checked out.
+pub(super) fn probe_rebuild(
+    repo: &Path,
+    queue: &QueueState,
+    upstream_ref: &str,
+) -> Result<RebuildReport> {
+    let (original, original_sha) = checkout_identity(repo)?;
+    let snapshot = snapshot_uplink(repo)?;
+    let outcome = probe_rebuild_from(repo, queue, &snapshot, upstream_ref);
+    let _ = fs::remove_dir_all(&snapshot);
+    restore_checkout(repo, &original, &original_sha)?;
+    crate::repo::ensure_state_worktree(repo)?;
+    outcome
+}
+
+/// A probe's report: `checked` on the tree the command tests, and, when
+/// that passed, the rebuild it would end with.
+pub(super) fn probe_report(
+    checked: Result<Option<String>>,
+    rebuild: impl FnOnce() -> Result<RebuildReport>,
+) -> Result<PreflightReport> {
+    let mut report = PreflightReport::of_ref(&checked);
+    if checked.is_ok() {
+        report.rebuild = Some(Box::new(rebuild()?));
+    }
+    Ok(report)
+}
+
+/// Replays the queue onto upstream and publishes the company branch.
+/// `check` is where the verdict of `preflight.sh` on the result comes from;
+/// `None` publishes without one.
+pub(super) fn rebuild_once(repo: &Path, check: Option<&ScriptVerdict>) -> Result<QueueState> {
     let mut queue = read_queue_file(repo)?;
     let company_branch = queue.config.internal_branch.clone();
     ensure_upstream_ref(repo)?;
@@ -186,8 +423,9 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
             &["checkout", "-f", "--quiet", "--detach", upstream_ref],
             GitOpts::default(),
         )?;
-        for patch in apply_order_active(&queue)? {
-            if patch.status == PatchStatus::Conflict {
+        let applied = match replay_queue(repo, &mut queue, &snapshot, upstream_ref)? {
+            Replayed::Applied(applied) => applied,
+            Replayed::Blocked(patch) => {
                 restore_company_branch(repo, &company_branch)?;
                 return Err(Error::Conflict(ConflictError::new(
                     format!("Queue is blocked on conflict in {}", patch.id),
@@ -195,28 +433,39 @@ pub(super) fn rebuild_once(repo: &Path) -> Result<QueueState> {
                     patch.conflict.map(|c| c.files).unwrap_or_default(),
                 )));
             }
-            let patch_file = snapshot.join(patch_path(&patch.id)?);
-            let result = apply_patch_file(repo, &patch, &patch_file, false)?;
-            if result == ApplyOutcome::Empty {
-                if queue.is_upstream(&patch.id) {
-                    mark_merged_by_empty_rebase(repo, &mut queue, &patch.id, upstream_ref)?;
-                }
-                continue;
-            }
-            if result == ApplyOutcome::Conflict {
-                let files = conflicted_files(repo)?;
-                return Err(Error::Conflict(persist_apply_conflict(
+            Replayed::Conflict(patch, files) => {
+                return Err(Error::Conflict(persist_conflict(
                     repo,
                     &mut queue,
                     &snapshot,
                     &company_branch,
                     upstream_ref,
                     &patch,
-                    files,
+                    Stopped::Apply { files },
                 )?));
             }
+        };
 
-            refresh_patch_id(repo, &mut queue, &patch.id, &patch_file)?;
+        if let Some(verdict) = check {
+            let failed = check_rebuilt(repo, &mut queue, upstream_ref, &applied, verdict, None)
+                .inspect_err(|_| {
+                    let _ = restore_company_branch(repo, &company_branch);
+                })?;
+            if let Some(failed) = failed {
+                let patch = get_patch(&queue, &failed.id)?.clone();
+                return Err(Error::Conflict(persist_conflict(
+                    repo,
+                    &mut queue,
+                    &snapshot,
+                    &company_branch,
+                    upstream_ref,
+                    &patch,
+                    Stopped::Preflight {
+                        sha: failed.sha,
+                        output: failed.output,
+                    },
+                )?));
+            }
         }
 
         publish_rebuilt_company(
@@ -361,6 +610,16 @@ fn publish_rebuilt_company(
 }
 
 pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
+    resolve_conflict_with(repo, id, &ScriptVerdict::Run)
+}
+
+/// [`resolve_conflict`], taking the verdict of `preflight.sh` on the
+/// rebuild from `preflight`.
+pub fn resolve_conflict_with(
+    repo: &Path,
+    id: &str,
+    preflight: &ScriptVerdict,
+) -> Result<QueueState> {
     with_queue_lock(repo, || {
         let base = GateKind::Conflict.base_branch(id);
         let work = GateKind::Conflict.work_branch(id);
@@ -418,6 +677,6 @@ pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
         }
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: amend {id} after conflict"))?;
-        rebuild(repo)
+        rebuild_checked(repo, preflight)
     })
 }

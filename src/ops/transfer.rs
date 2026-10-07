@@ -241,9 +241,10 @@ pub(super) fn start_transfer(
         );
         let _ = fs::remove_dir_all(repo.join(".uplink"));
         if checks.is_probe() {
-            return Ok(Checked::Probed(PreflightReport::of(
-                checked.map(|(_, token)| token),
-            )));
+            return probe_report(checked.map(|(_, token)| token), || {
+                probe_rebuild_from(repo, &preview, &snapshot, upstream_ref)
+            })
+            .map(Checked::Probed);
         }
         let assess_report = match checked {
             Ok((report, _)) => report,
@@ -276,7 +277,8 @@ pub(super) fn start_transfer(
 
         restore_checkout(repo, &original, &original_sha)?;
         crate::repo::ensure_state_worktree(repo)?;
-        finish_successful_transfer(repo, id, direction, assess_report).map(Checked::Recorded)
+        finish_successful_transfer(repo, id, direction, assess_report, checks.verdict())
+            .map(Checked::Recorded)
     })();
     let _ = fs::remove_dir_all(&snapshot);
     match outcome {
@@ -460,6 +462,7 @@ pub(super) fn finish_successful_transfer(
     id: &str,
     direction: TransferDirection,
     assess: Option<AssessReport>,
+    preflight: &ScriptVerdict,
 ) -> Result<TransferResult> {
     let mut queue = read_queue_file(repo)?;
     validate_transfer(&queue, id, direction)?;
@@ -488,7 +491,7 @@ pub(super) fn finish_successful_transfer(
         repo,
         &format!("uplink: transfer {id} {}", direction.as_str()),
     )?;
-    let queue = rebuild(repo)?;
+    let queue = rebuild_checked(repo, preflight)?;
     Ok(TransferResult {
         queue,
         id: id.into(),
@@ -546,11 +549,13 @@ pub(super) fn complete_transfer(
         checks.verdict(),
     );
     if checks.is_probe() {
+        let report = probe_report(checked.map(|(_, token)| token), || {
+            let upstream_ref = super::amend::upstream_ref_or_company(repo, &preview)?;
+            probe_rebuild(repo, &preview, &upstream_ref)
+        });
         restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-        return Ok(Checked::Probed(PreflightReport::of(
-            checked.map(|(_, token)| token),
-        )));
+        return Ok(Checked::Probed(report?));
     }
     let (assess_report, _) = checked?;
 
@@ -565,7 +570,7 @@ pub(super) fn complete_transfer(
         repo,
         &format!("uplink: transfer {id} {}", direction.as_str()),
     )?;
-    let queue = rebuild(repo)?;
+    let queue = rebuild_checked(repo, checks.verdict())?;
     Ok(Checked::Recorded(TransferResult {
         queue,
         id: id.into(),

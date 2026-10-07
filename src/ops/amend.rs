@@ -92,7 +92,7 @@ fn validate_amend(queue: &QueueState, id: &str) -> Result<Patch> {
     }
 }
 
-fn upstream_ref_or_company(repo: &Path, queue: &QueueState) -> Result<String> {
+pub(super) fn upstream_ref_or_company(repo: &Path, queue: &QueueState) -> Result<String> {
     ensure_upstream_ref(repo)?;
     Ok(if has_ref(repo, UPSTREAM_REF)? {
         UPSTREAM_REF.to_string()
@@ -317,12 +317,15 @@ fn complete_amend(
         )
         .and_then(|token| assert_upstream_layer_applies(repo, &queue).map(|_| token))
     };
-    if checks.is_probe() || layer_checks.is_err() {
+    if checks.is_probe() {
+        let report = probe_report(layer_checks, || probe_rebuild(repo, &queue, &upstream_ref));
         restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+        return Ok(Checked::Probed(report?));
     }
-    if checks.is_probe() {
-        return Ok(Checked::Probed(PreflightReport::of(layer_checks)));
+    if layer_checks.is_err() {
+        restore_uplink_from_state(repo)?;
+        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
     }
     layer_checks?;
 
@@ -337,7 +340,7 @@ fn complete_amend(
     }
     write_queue_file(repo, &queue)?;
     commit_queue(repo, &format!("uplink: amend {id}"))?;
-    let queue = rebuild(repo)?;
+    let queue = rebuild_checked(repo, verdict)?;
     Ok(Checked::Recorded(AmendResult {
         queue,
         id: id.into(),
