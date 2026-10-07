@@ -25,7 +25,14 @@ fn main() {
 
     let commit = embed_commit(&manifest);
     println!("cargo:rerun-if-changed=src/cli.rs");
-    generate_man_pages(&commit);
+    // The clap tree is built unoptimized here and outgrows the 1 MiB main thread
+    // stack on Windows.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || generate_man_pages(&commit))
+        .unwrap()
+        .join()
+        .unwrap();
 
     if env::var("GIT_UPLINK_SKIP_WEB_BUILD").ok().as_deref() == Some("1") {
         if !dist.join("index.html").is_file() {
