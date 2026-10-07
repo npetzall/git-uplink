@@ -12,7 +12,8 @@
 # approval. One that leaves those lines as approved leaves it submitted: the
 # run only exports it again.
 # If rebuild stops on a later patch, it publishes that conflict the same
-# way sync does.
+# way sync does. That includes a patch preflight.sh fails on in the rebuilt
+# tree, found with git bisect, which can be the resolved patch again.
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, it dispatches
 # Uplink submit for the resolved patch when it is queued again, and for a
 # queued patch whose last unmerged upstream dependency the rebuild marked
@@ -32,7 +33,61 @@ concurrency:
 permissions: {}
 
 jobs:
+  # preflight.sh builds and runs product code (public upstream's included),
+  # so it runs in this job: read-only token, no App token, no Environment,
+  # no credentials in the checkout. The job that holds the write tokens
+  # takes the result and never runs the script.
+  preflight:
+    name: Preflight the rebuild (no credentials)
+    if: github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.run.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git uplink init
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one. When the script fails on the rebuilt
+      # tree, git bisect runs it here too, to find the patch.
+      - name: Run preflight.sh
+        id: run
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          id="${BASE_REF#uplink/conflict/}"
+          report=$(git uplink resolve "$id" --preflight-only) || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
   resolve:
+    needs: preflight
     if: github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
     permissions:
@@ -128,8 +183,10 @@ jobs:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PREFLIGHT_REPORT: ${{ needs.preflight.outputs.report }}
         run: |
           git uplink init
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
           id="${BASE_REF#uplink/conflict/}"
           if [ -z "$id" ] || [ "$id" = "$BASE_REF" ] || [[ "$id" == *-work ]]; then
             echo "Could not parse patch id from $BASE_REF"
@@ -138,7 +195,8 @@ jobs:
 
           main_before=$(git rev-parse origin/main)
 
-          resolve_json=$(git uplink resolve "$id")
+          resolve_json=$(git uplink resolve "$id" \
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 
           head=$(git rev-parse --abbrev-ref HEAD)
           if [ "$head" != "main" ]; then
@@ -204,6 +262,11 @@ jobs:
               url="$existing"
             fi
             git uplink gated "$conflict_id" --pr-url "$url"
+            # preflight.sh still fails on the resolved patch: its branches
+            # were just published again for the next PR.
+            if [ "$conflict_id" = "$id" ]; then
+              exit 0
+            fi
           fi
 
           git push origin --delete "uplink/conflict/${id}" || true

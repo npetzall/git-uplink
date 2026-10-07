@@ -809,6 +809,18 @@ mod embed_tests {
                 "complete",
                 "git uplink transfer ",
             ),
+            (
+                "uplink-resolve.yml",
+                "preflight",
+                "resolve",
+                "git uplink resolve ",
+            ),
+            (
+                "uplink-sync.yml",
+                "accept-preflight",
+                "apply",
+                "git uplink accept-upstream ",
+            ),
         ];
         // Jobs that only check: (workflow, job, step that runs preflight.sh).
         let checks = [
@@ -854,8 +866,16 @@ mod embed_tests {
                         && !text.contains("persist-credentials: true"),
                     "{forge:?} {workflow} {key} must not keep credentials in its checkout"
                 );
+                // The probe of an approved upstream has to fetch it: it may
+                // mint the upstream token, read-only, and nothing else.
+                let mints = text.matches("create-github-app-token").count();
+                let upstream_only = key == "accept-preflight"
+                    && mints == 1
+                    && text.contains("id: upstream-app")
+                    && text.contains("permission-contents: read")
+                    && !text.contains("UPLINK_INTERNAL_APP");
                 assert!(
-                    !text.contains("create-github-app-token") && !text.contains("environment:"),
+                    (mints == 0 || upstream_only) && !text.contains("environment:"),
                     "{forge:?} {workflow} {key} must not mint a token or use an Environment"
                 );
             };
