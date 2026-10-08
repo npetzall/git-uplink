@@ -49,6 +49,7 @@ jobs:
         with:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mint internal GitHub App token
@@ -188,6 +189,7 @@ jobs:
         with:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Fetch what preflight reads
@@ -238,6 +240,7 @@ jobs:
         with:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mint internal GitHub App token

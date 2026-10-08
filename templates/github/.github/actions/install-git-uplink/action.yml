@@ -13,20 +13,27 @@ inputs:
     description: Token for gh release download. Workflows pass secrets.GITHUB_TOKEN.
     required: false
     default: ""
+  signer:
+    description: Certificate identity that signed the release. Empty means the release workflow of npetzall/git-uplink on main.
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
+    - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
     - name: Install git-uplink
       shell: bash
       env:
         REPO: ${{ inputs.repo }}
         VERSION: ${{ inputs.version }}
         TOKEN: ${{ inputs.token }}
+        SIGNER: ${{ inputs.signer }}
       run: | # zizmor: ignore[github-env] constant PATH entry for release binary
         set -euo pipefail
         REPO="${REPO:-npetzall/git-uplink}"
         # git uplink init writes its own version here.
         VERSION="${VERSION:-@GIT_UPLINK_VERSION@}"
+        SIGNER="${SIGNER:-https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main}"
         if [[ "$VERSION" != "latest" ]]; then
           tag="$VERSION"
           if [[ "$tag" != v* ]]; then
@@ -55,18 +62,21 @@ runs:
         fi
         rm -rf _git-uplink-dl
         mkdir -p _git-uplink-dl "$HOME/.local/bin"
-        download_release --pattern "git-uplink-${target}*" --dir _git-uplink-dl
-        download_release --pattern SHA256SUMS --dir _git-uplink-dl
+        asset="git-uplink-${target}${suffix}"
+        download_release --pattern "$asset" --pattern "$asset.sigstore.json" --pattern SHA256SUMS --dir _git-uplink-dl
         (
           cd _git-uplink-dl
+          if [[ ! -f "$asset" || ! -f "$asset.sigstore.json" ]]; then
+            echo "release asset $asset or its signature $asset.sigstore.json not found" >&2
+            exit 1
+          fi
           sha256sum -c SHA256SUMS --ignore-missing
+          cosign verify-blob "$asset" \
+            --bundle "$asset.sigstore.json" \
+            --certificate-identity "$SIGNER" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
         )
-        bin=$(find _git-uplink-dl -maxdepth 1 -name "git-uplink-${target}*" -type f | head -n 1)
-        if [[ -z "$bin" ]]; then
-          echo "release asset git-uplink-${target}* not found" >&2
-          exit 1
-        fi
-        install -m 755 "$bin" "$HOME/.local/bin/git-uplink"
+        install -m 755 "_git-uplink-dl/$asset" "$HOME/.local/bin/git-uplink"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         rm -rf _git-uplink-dl
         git-uplink -h >/dev/null

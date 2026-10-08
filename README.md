@@ -28,14 +28,17 @@ Download the binary for your platform from [Releases](https://github.com/npetzal
 
 ```bash
 target=aarch64-apple-darwin   # or x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-gh release download --repo npetzall/git-uplink --pattern "git-uplink-$target" --pattern SHA256SUMS
+gh release download --repo npetzall/git-uplink --pattern "git-uplink-$target" --pattern "git-uplink-$target.sigstore.json" --pattern SHA256SUMS
 grep " git-uplink-$target\$" SHA256SUMS | shasum -a 256 -c
+cosign verify-blob "git-uplink-$target" --bundle "git-uplink-$target.sigstore.json" \
+  --certificate-identity https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 chmod +x "git-uplink-$target"
 mkdir -p ~/.local/bin && mv "git-uplink-$target" ~/.local/bin/git-uplink
 git uplink version
 ```
 
-Make sure `~/.local/bin` is on your `PATH`. On Windows, download `git-uplink-x86_64-pc-windows-msvc.exe`, rename it to `git-uplink.exe`, and place it in a directory on `PATH`.
+Every release asset is signed with [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) by the release workflow; the `cosign verify-blob` line checks that. Make sure `~/.local/bin` is on your `PATH`. On Windows, download `git-uplink-x86_64-pc-windows-msvc.exe`, rename it to `git-uplink.exe`, and place it in a directory on `PATH`.
 
 The man pages are in the binary. To make `git uplink --help` and `man git-uplink` work, write them to a `man1` directory on your man path:
 

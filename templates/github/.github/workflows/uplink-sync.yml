@@ -61,6 +61,7 @@ jobs:
         with:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mint internal GitHub App token
@@ -298,6 +299,7 @@ jobs:
         with:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Read upstream and contrib from the queue
@@ -401,6 +403,7 @@ jobs:
         with:
           repo: ${{ vars.UPLINK_SRC }}
           version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mint internal GitHub App token

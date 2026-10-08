@@ -66,6 +66,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -81,6 +82,7 @@ jobs:
         with:
           name: sbom
           path: sbom
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,6 +108,9 @@ jobs:
           )
           cp sbom/git-uplink.cdx.json "staged/git-uplink-${NEXT_VERSION}.cdx.json"
           cp sbom/git-uplink.spdx.json "staged/git-uplink-${NEXT_VERSION}.spdx.json"
+          for f in staged/*; do
+            cosign sign-blob "$f" --bundle "$f.sigstore.json" --yes
+          done
           if [[ "$NEXT_VERSION" != "$CURRENT_VERSION" ]]; then
             gh release create "$NEXT_TAG" staged/* \
               --target "$GITHUB_SHA" \

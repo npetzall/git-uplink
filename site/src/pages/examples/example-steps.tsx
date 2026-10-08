@@ -526,6 +526,9 @@ function VariableTable() {
       <p>
         Jobs install the <code>git-uplink</code> release that wrote the pack, from <code>npetzall/git-uplink</code>. Set{" "}
         <code>UPLINK_SRC</code> or <code>UPLINK_VERSION</code> only to install from a mirror or to pin another release.
+        Every job verifies the binary&apos;s cosign signature against the release workflow of{" "}
+        <code>npetzall/git-uplink</code>, so a mirror must carry the <code>.sigstore.json</code> files. Set{" "}
+        <code>UPLINK_SIGNER</code> only for a mirror that builds and signs its own releases.
       </p>
     </div>
   );
