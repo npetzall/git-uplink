@@ -53,4 +53,4 @@ examples/github/
   stories/
 ```
 
-Actions jobs download the `git-uplink` release that wrote the pack (`git uplink init`); nothing is compiled. The repository variables `UPLINK_SRC` / `UPLINK_VERSION` override the source and the release.
+Actions jobs download the `git-uplink` release that wrote the pack (`git uplink init`); nothing is compiled. The repository variables `UPLINK_SRC` / `UPLINK_VERSION` override the source and the release. Each job verifies the binary's cosign signature; `UPLINK_SIGNER` overrides the expected signer for a mirror that signs its own builds.

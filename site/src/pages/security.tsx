@@ -44,8 +44,8 @@ const LIMITS = [
     "GitHub signs the contribution commit it creates through the API, and marks it Verified only for a GitHub App token.",
   ],
   [
-    "Releases are checksummed, not signed",
-    "SHA256SUMS is published with the binaries, so it protects against a damaged or swapped download, not against a compromised release. Mirror releases you have reviewed with UPLINK_SRC if that matters to you.",
+    "A signature names the workflow, not the source",
+    "Every release asset is signed with cosign by the release workflow on main. That shows which workflow built the file, and that it was not swapped afterwards. It does not vouch for the code that was built, and it does not help if that workflow or the repository is compromised.",
   ],
   [
     "Locally, preflight runs as you",
@@ -255,9 +255,11 @@ export function SecurityPage() {
       <Section id="binary" title="The binary and the local UI">
         <ul>
           <li>
-            Release binaries come with <code>SHA256SUMS</code> and CycloneDX and SPDX SBOMs. The pack&apos;s
-            install action checks the checksum on every job, and installs the release that wrote the pack
-            unless you set <code>UPLINK_VERSION</code>.
+            Release binaries come with <code>SHA256SUMS</code> and CycloneDX and SPDX SBOMs, and every
+            asset has a cosign signature (<code>.sigstore.json</code>) made by the release workflow on{" "}
+            <code>main</code>. The pack&apos;s install action checks the checksum and the signature on every
+            job, also when <code>UPLINK_SRC</code> points at a mirror, and installs the release that wrote
+            the pack unless you set <code>UPLINK_VERSION</code>. A release without a signature stops the job.
           </li>
           <li>
             Dependencies are checked with <code>cargo deny</code>, npm audit and Socket on every change.

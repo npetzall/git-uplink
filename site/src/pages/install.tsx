@@ -23,12 +23,16 @@ export function InstallPage() {
         <section className="space-y-3">
           <h2 className="text-xl font-semibold">macOS and Linux</h2>
           <p className="text-[15px] leading-7 text-muted-foreground">
-            With the <a href="https://cli.github.com/" className={link}>GitHub CLI</a>: download, verify the checksum,
+            With the <a href="https://cli.github.com/" className={link}>GitHub CLI</a>: download, verify the checksum
+            and the <a href="https://docs.sigstore.dev/cosign/system_config/installation/" className={link}>cosign</a> signature,
             make it executable, and move it onto <code className={code}>PATH</code>.
           </p>
           <pre className={pre}>{`target=aarch64-apple-darwin   # or x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-gh release download --repo npetzall/git-uplink --pattern "git-uplink-$target" --pattern SHA256SUMS
+gh release download --repo npetzall/git-uplink --pattern "git-uplink-$target" --pattern "git-uplink-$target.sigstore.json" --pattern SHA256SUMS
 grep " git-uplink-$target\\$" SHA256SUMS | shasum -a 256 -c
+cosign verify-blob "git-uplink-$target" --bundle "git-uplink-$target.sigstore.json" \\
+  --certificate-identity https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main \\
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 chmod +x "git-uplink-$target"
 mkdir -p ~/.local/bin && mv "git-uplink-$target" ~/.local/bin/git-uplink
 git uplink version`}</pre>
