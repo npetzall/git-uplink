@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.98.1
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.98.1
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
@@ -130,7 +130,7 @@ jobs:
           job-summary: errors
       - name: Apply version
         run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
-      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         id: syft
         with:
           syft-version: v1.52.0
@@ -160,7 +160,7 @@ jobs:
         with:
           name: web-dist
           path: web/dist
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.98.1
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
@@ -196,7 +196,7 @@ jobs:
         with:
           name: web-dist
           path: web/dist
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.98.1
           targets: ${{ matrix.target }}
@@ -252,7 +252,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: ".pre-commit-config.yaml"
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.98.1
           components: rustfmt, clippy
