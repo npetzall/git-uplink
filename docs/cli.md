@@ -482,27 +482,18 @@ Moving from repository variables: run `git uplink init --upgrade`, answer with t
 What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, read from the local branch, else `origin/uplink/hooks`.
 
 - How it runs: `sh preflight.sh`, with the root of the tree under test as the working directory: the export tree, or the current checkout for `--command-only`. A non-zero exit fails preflight.
-
 - Output: what the script prints is shown as it runs, stdout and stderr together. `git uplink preflight` shows it on stdout. With `--json`, and in every other command that runs the script, it goes to stderr, because stdout is the result.
-
 - Other files on the branch are checked out beside the script for the run; reach them with `"$(dirname "$0")"`.
-
 - Environment: the caller's, without `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `UPLINK_*_TOKEN` and `UPLINK_*_KEY`.
-
 - Credentials: the script builds and runs product code, so it must not run where credentials are. An emptied environment does not hide them from a process on the same runner. In CI (`CI` or `GITHUB_ACTIONS` set) with a forge recorded, a command that holds a credential refuses to run the script. Run `git uplink preflight --json` (or `transfer` / `amend --complete` with `--preflight-only`) in a job without credentials, and give the output to `add`, `submit`, `transfer` or `amend --complete` with `--preflight-result <file>`. The result carries a token for the tree and the hooks it was tested with; a command accepts it only for the same tree.
-
 - Known limitations: the job that runs the script still holds a read-only token and a clone of the company repository, so code the script runs can read company source. The verdict is the script's exit code, which code it runs could force to 0. Preflight checks that a change builds and passes its tests; it is not a defence against hostile code in the tree.
-
 - Created by `init`, with the answer to its preflight question (or `--preflight <cmd>`) as the script's command. `init --upgrade` adds the script when the branch lacks it, offering the command an older `queue.json` held. An existing script is never rewritten; edit it on `uplink/hooks`.
-
 - No script means preflight runs no command. With a forge recorded, a missing `uplink/hooks` fails preflight.
-
 - Trying a change: commit it on a branch made from `uplink/hooks`, then run `git uplink preflight --command-only --hooks <branch>`. `--hooks` works with every form of `preflight`.
 
 ## Adopting an existing main
 
 If company `main` already matches public upstream, init rebuilds `main` with the tooling patch.
-
 If `main` is fast-forward ahead, init leaves `main` alone and records the unique first-parent commits as patches after tooling.
 
 Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON:
@@ -530,17 +521,11 @@ Bot identity and `commit.gpgsign=false` are process-scoped (`git -c`), so `git u
 Network git picks credentials by remote:
 
 - `origin`: `UPLINK_INTERNAL_KEY` or `UPLINK_INTERNAL_TOKEN`. Required for SSH.
-
 - `contrib`: `UPLINK_CONTRIB_KEY` or `UPLINK_CONTRIB_TOKEN`. Required for SSH.
-
 - `upstream`: `UPLINK_UPSTREAM_KEY` or `UPLINK_UPSTREAM_TOKEN`. An `https://` upstream may omit both and is fetched anonymously.
 
 If both KEY and TOKEN are set, KEY wins.
-
 A KEY is a path to a passwordless private key (`BatchMode=yes`); a passphrase-protected key fails closed.
-
 A TOKEN rewrites SSH remotes to HTTPS for that invocation and is sent when present, including on an already-HTTPS upstream.
-
 Local `file://` remotes need neither.
-
 SSH upstream, origin, and contrib without the matching role's creds fail instead of opening ssh-agent / Touch ID.

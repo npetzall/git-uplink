@@ -121,7 +121,29 @@ fn main_page(command: clap::Command) -> Vec<u8> {
     for (title, body) in cli::TOPICS {
         let mut section = roff::Roff::new();
         section.control("SH", [title.to_uppercase().as_str()]);
-        for line in body.lines() {
+        // Consecutive `- ` lines are a list; roff would fill them into one
+        // paragraph, so each becomes an indented item.
+        let mut in_list = false;
+        let mut lines = body.lines().peekable();
+        while let Some(line) = lines.next() {
+            // `.IP` brings its own blank line.
+            if line.is_empty() && lines.peek().is_some_and(|next| next.starts_with("- ")) {
+                continue;
+            }
+            if let Some(item) = line.strip_prefix("- ") {
+                section.control("IP", ["\\(bu", "2"]);
+                section.text([roff::roman(item)]);
+                in_list = true;
+                continue;
+            }
+            if in_list {
+                // `.PP` ends the indent and is the blank line after the list.
+                if line.is_empty() {
+                    continue;
+                }
+                section.control("PP", []);
+                in_list = false;
+            }
             section.text([roff::roman(line)]);
         }
         section.to_writer(&mut page).unwrap();
