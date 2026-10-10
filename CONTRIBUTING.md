@@ -40,6 +40,8 @@ export PATH="$PWD/target/release:$PATH"
 
 `build.rs` runs `npm ci` and `npm run build` in `web/` and embeds `web/dist` with `rust-embed`. Set `GIT_UPLINK_SKIP_WEB_BUILD=1` to embed an existing `web/dist` instead of running npm. Do not commit `web/dist` or `site/dist`.
 
+To read a man page as your branch builds it, run `scripts/man.sh` for `git-uplink(1)` or `scripts/man.sh <command>` for one command. It writes the pages to `target/man`.
+
 ## Test
 
 ```bash
