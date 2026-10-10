@@ -1,3 +1,5 @@
+import type { FileDelta } from "./patch";
+
 export type QueueSource = "checkout" | "remote";
 
 export type PatchSource = {
@@ -168,4 +170,20 @@ export async function loadFile(
     throw new Error(body.error || `could not read ${path}`);
   }
   return body.content;
+}
+
+/** What changed in a patch between two revisions of its patch file, file by file. */
+export async function loadPatchDiff(
+  id: string,
+  source: QueueSource,
+  from: string,
+  to: string,
+): Promise<FileDelta[]> {
+  const params = new URLSearchParams({ source, from, to });
+  const response = await fetch(`/api/patches/${encodeURIComponent(id)}/diff?${params}`);
+  const body = (await response.json()) as { files?: FileDelta[]; error?: string };
+  if (!response.ok || !body.files) {
+    throw new Error(body.error || `could not compare revisions of ${id}`);
+  }
+  return body.files;
 }
