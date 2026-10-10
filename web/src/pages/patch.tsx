@@ -3,24 +3,34 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { StatusBadge } from "../components/status-badge";
+import {
+  LayoutToggle,
+  PatchView,
+  RevisionDiffView,
+  useDiffLayout,
+} from "../components/diff-view";
 import { NEEDS_APPROVAL } from "../lib/status";
 import {
   loadFile,
   loadPatch,
+  loadPatchDiff,
   parseSource,
   type FileRevision,
   type PatchApproval,
   type PatchResponse,
 } from "../lib/api";
+import type { FileDelta } from "../lib/patch";
 
 function shortSha(sha: string): string {
   return sha === "worktree" ? "worktree" : sha.slice(0, 12);
 }
 
-function revisionLabel(revision: FileRevision): string {
+function revisionLabel(revision: FileRevision, approvals: PatchApproval[]): string {
   const subject = revision.subject || "update";
   const when = revision.at ? ` · ${revision.at}` : "";
-  return `${shortSha(revision.sha)} — ${subject}${when}`;
+  const approved = approvals.find((approval) => approval.sha === revision.sha);
+  const version = approved ? ` · approved v${approved.version}` : "";
+  return `${shortSha(revision.sha)} — ${subject}${when}${version}`;
 }
 
 function approvalLabel(approval: PatchApproval): string {
@@ -41,6 +51,10 @@ export function PatchPage() {
   const [assessmentText, setAssessmentText] = useState<string>("");
   const [approvedPatch, setApprovedPatch] = useState<string>("");
   const [fileError, setFileError] = useState<string | null>(null);
+  const [compareSha, setCompareSha] = useState<string>("");
+  const [delta, setDelta] = useState<FileDelta[] | null>(null);
+  const [deltaError, setDeltaError] = useState<string | null>(null);
+  const [layout, setLayout] = useDiffLayout();
 
   useEffect(() => {
     if (!id) {
@@ -51,6 +65,7 @@ export function PatchPage() {
         setData(body);
         const first = body.revisions[0]?.sha ?? "";
         setPatchSha(first);
+        setCompareSha("");
         setPatchText(body.patchFile ?? "");
         const last = body.patch?.approvals?.at(-1);
         setApprovalSha(last?.sha ?? "");
@@ -103,6 +118,47 @@ export function PatchPage() {
       setApprovedPatch(patch.status === "fulfilled" ? patch.value : "");
     });
   }, [id, source, selectedApproval]);
+
+  const revisions = data?.revisions ?? [];
+  // Approvals made at a commit that did not touch the patch file.
+  const otherApprovals = approvals.filter(
+    (approval) => !revisions.some((revision) => revision.sha === approval.sha),
+  );
+  const comparing = compareSha && compareSha !== patchSha ? compareSha : "";
+  // Revisions are listed newest first. An approval commit outside the list is
+  // taken as the older side.
+  const [olderSha, newerSha] = useMemo(() => {
+    const position = (sha: string) => {
+      const index = revisions.findIndex((revision) => revision.sha === sha);
+      return index === -1 ? revisions.length : index;
+    };
+    return position(comparing) < position(patchSha)
+      ? [patchSha, comparing]
+      : [comparing, patchSha];
+  }, [revisions, comparing, patchSha]);
+
+  useEffect(() => {
+    setDelta(null);
+    setDeltaError(null);
+    if (!id || !comparing) {
+      return;
+    }
+    let current = true;
+    loadPatchDiff(id, source, olderSha, newerSha)
+      .then((files) => {
+        if (current) {
+          setDelta(files);
+        }
+      })
+      .catch((err: Error) => {
+        if (current) {
+          setDeltaError(err.message);
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [id, source, comparing, olderSha, newerSha]);
 
   const patch = data?.patch;
 
@@ -218,28 +274,71 @@ export function PatchPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {data.revisions.length ? (
-                <label className="block text-sm">
-                  <span className="mb-1 block text-xs text-muted-foreground uppercase">
-                    Revision
-                  </span>
-                  <select
-                    className="w-full max-w-xl rounded-md border border-border bg-background px-2 py-1.5 text-sm"
-                    value={patchSha}
-                    onChange={(event) => setPatchSha(event.target.value)}
-                  >
-                    {data.revisions.map((revision) => (
-                      <option key={revision.sha} value={revision.sha}>
-                        {revisionLabel(revision)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="block min-w-0 flex-1 text-sm">
+                    <span className="mb-1 block text-xs text-muted-foreground uppercase">
+                      Revision
+                    </span>
+                    <select
+                      className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                      value={patchSha}
+                      onChange={(event) => setPatchSha(event.target.value)}
+                    >
+                      {data.revisions.map((revision) => (
+                        <option key={revision.sha} value={revision.sha}>
+                          {revisionLabel(revision, approvals)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block min-w-0 flex-1 text-sm">
+                    <span className="mb-1 block text-xs text-muted-foreground uppercase">
+                      Compare with
+                    </span>
+                    <select
+                      className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                      value={comparing}
+                      onChange={(event) => setCompareSha(event.target.value)}
+                    >
+                      <option value="">— (show this revision)</option>
+                      {data.revisions
+                        .filter((revision) => revision.sha !== patchSha)
+                        .map((revision) => (
+                          <option key={revision.sha} value={revision.sha}>
+                            {revisionLabel(revision, approvals)}
+                          </option>
+                        ))}
+                      {otherApprovals.length ? (
+                        <optgroup label="Approvals">
+                          {otherApprovals.map((approval) => (
+                            <option key={`${approval.version}-${approval.sha}`} value={approval.sha}>
+                              {approvalLabel(approval)}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ) : null}
+                    </select>
+                  </label>
+                  <LayoutToggle layout={layout} onChange={setLayout} />
+                </div>
               ) : (
                 <p className="text-sm text-muted-foreground">No patch file history.</p>
               )}
-              <pre className="max-h-[32rem] overflow-auto rounded-md bg-muted p-3 text-xs">
-                {patchText || "(empty)"}
-              </pre>
+              {!comparing ? (
+                <PatchView text={patchText} layout={layout} />
+              ) : deltaError ? (
+                <p className="text-sm text-rose-300">{deltaError}</p>
+              ) : !delta ? (
+                <p className="text-sm text-muted-foreground">Comparing revisions…</p>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Changes from <span className="font-mono text-xs">{shortSha(olderSha)}</span> to{" "}
+                    <span className="font-mono text-xs">{shortSha(newerSha)}</span>
+                  </p>
+                  <RevisionDiffView files={delta} layout={layout} />
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -327,9 +426,9 @@ export function PatchPage() {
                       <summary className="cursor-pointer text-sm text-muted-foreground">
                         Patch file at this approval
                       </summary>
-                      <pre className="mt-2 max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs">
-                        {approvedPatch}
-                      </pre>
+                      <div className="mt-2">
+                        <PatchView text={approvedPatch} layout={layout} />
+                      </div>
                     </details>
                   ) : null}
                 </>
