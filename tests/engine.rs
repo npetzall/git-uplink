@@ -1605,7 +1605,7 @@ fn init_upgrade_cli_reports_already_up_to_date() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "Uplink init: ready\nalready up-to-date\nPublish hooks: git uplink push\n"
+        "Uplink init: ready\nTooling: already up-to-date\nPublish hooks: git uplink push\n"
     );
     let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
     assert_eq!(before, after);
@@ -1643,6 +1643,8 @@ fn init_upgrade_cli_reports_a_tooling_refresh() {
     let id = queue.patch_refs()[0].id.clone();
     fs::write(tooling_patch_path(&world.company, &id), "stale\n").unwrap();
     git_uplink::commit_queue(&world.company, "uplink: stale tooling patch").unwrap();
+    // No origin here, so main is compared with what it was.
+    let before = git_ok(&world.company, &["rev-parse", "--short", "main"]).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
         .args(["init", "--upgrade"])
@@ -1652,13 +1654,463 @@ fn init_upgrade_cli_reports_a_tooling_refresh() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "Uplink init: ready\n\
-tooling has been updated\n\
+        format!(
+            "Uplink init: ready\n\
+Tooling: updated\n\
+Product code: unchanged against {before}\n\
 Company main was rebuilt locally. Nothing was pushed.\n\
-Inspect with: git diff origin/main main\n\
-Publish state: git uplink push\n\
-Publish main: git uplink rebuild --push\n\
-Publish hooks: git uplink push\n"
+Publish: git uplink push\n         \
+git uplink rebuild --push\n"
+        )
+    );
+}
+
+const PR_TEMPLATE: &str = ".github/pull_request_template.md";
+const LEGACY_WORKFLOW: &str = ".github/workflows/uplink-legacy.yml";
+
+fn embedded_pr_template() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("templates/github")
+            .join(PR_TEMPLATE),
+    )
+    .unwrap()
+}
+
+/// Stores the tooling patch as an older pack, the embedded one with `edit`
+/// applied to its tree, and rebuilds main with it.
+fn install_older_pack(company: &Path, edit: impl FnOnce(&Path)) -> String {
+    let id = git_uplink::read_queue(company).unwrap().tooling.unwrap().id;
+    let path = tooling_patch_path(company, &id);
+    let stored = fs::read_to_string(&path).unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "--detach", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["am", "--quiet", path.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    edit(company);
+    git(company, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["commit", "--quiet", "--amend", "--no-edit"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let older = git_ok(company, &["format-patch", "--full-index", "-1", "--stdout"]).unwrap();
+    assert_ne!(older, stored);
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    fs::write(&path, format!("{older}\n")).unwrap();
+    git_uplink::commit_queue(company, "uplink: older tooling pack").unwrap();
+    rebuild(company).unwrap();
+    id
+}
+
+/// An internal-only patch that writes `contents` to `file`, landed on main.
+fn add_internal_change(company: &Path, branch: &str, file: &str, contents: &str) -> Patch {
+    git(
+        company,
+        &["checkout", "--quiet", "-b", branch, "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, file, contents);
+    commit_all(company, &format!("change {file}"));
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: format!("Change {file}"),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+fn upgrade(company: &Path) -> Result<git_uplink::InitResult> {
+    init(
+        company,
+        InitOpts {
+            upgrade: true,
+            ..Default::default()
+        },
+    )
+}
+
+fn push_main_and_state(company: &Path) {
+    git(
+        company,
+        &[
+            "push",
+            "--quiet",
+            "--force",
+            "origin",
+            "main",
+            "uplink/state",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn init_upgrade_cli_reports_tooling_apart_from_product_code() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    publish_origin(company);
+    install_older_pack(company, |dir| write(dir, LEGACY_WORKFLOW, "name: legacy\n"));
+    push_main_and_state(company);
+
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(args)
+            .current_dir(company)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    // The pack dropped the legacy workflow: tooling, not product code.
+    assert_eq!(
+        run(&["init", "--upgrade"]),
+        "Uplink init: ready\n\
+Tooling: updated, 1 file changed\n\
+Product code: unchanged against origin/main\n\
+Company main was rebuilt locally. Nothing was pushed.\n\
+Publish: git uplink push\n         \
+git uplink rebuild --push\n"
+    );
+    assert!(!company.join(LEGACY_WORKFLOW).exists());
+    // Publishing rebuilds to the tree main has, so there is nothing to say again.
+    assert_eq!(
+        run(&["rebuild", "--push"]),
+        "rebuild complete; main unchanged\npushed main to origin\n"
+    );
+    assert_eq!(
+        git_ok(company, &["rev-parse", "main"]).unwrap(),
+        git_ok(company, &["rev-parse", "origin/main"]).unwrap()
+    );
+}
+
+#[test]
+fn init_upgrade_warns_about_product_code_that_differs_from_origin() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    publish_origin(company);
+    install_older_pack(company, |dir| write(dir, LEGACY_WORKFLOW, "name: legacy\n"));
+    push_main_and_state(company);
+    // On local main only.
+    add_internal_file(company, "NOTES.md", "notes\n");
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["init", "--upgrade"])
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "Tooling: updated, 1 file changed\n\
+warning: product code changed in 1 file outside the tooling pack, against origin/main:\n  \
+A NOTES.md\n\
+Inspect with: git diff origin/main main -- NOTES.md\n"
+        ),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn init_upgrade_drops_a_patch_the_new_pack_holds() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let template = embedded_pr_template();
+    install_older_pack(company, |dir| {
+        write(dir, PR_TEMPLATE, &format!("{template}old line\n"))
+    });
+    // The fix the new pack ships, made by hand on main first.
+    let fix = add_internal_change(company, "fix/template", PR_TEMPLATE, &template);
+    let kept = add_internal_file(company, "NOTES.md", "notes\n");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let result = upgrade(company).unwrap();
+    assert!(result.tooling_changed);
+    assert_eq!(result.dropped, [(fix.id.clone(), fix.title.clone())]);
+    assert!(result.overrides.is_empty());
+    let dropped = result.queue.all_patches().find(|p| p.id == fix.id).unwrap();
+    assert_eq!(dropped.status, PatchStatus::Dropped);
+    let other = result
+        .queue
+        .all_patches()
+        .find(|p| p.id == kept.id)
+        .unwrap();
+    assert!(other.status.is_active());
+    assert_eq!(
+        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        template
+    );
+    assert!(company.join("NOTES.md").exists());
+}
+
+/// A world whose main has an older pack, and a patch on it that the new
+/// pack conflicts with: both change the last line of the PR template.
+fn world_with_a_patch_the_new_pack_conflicts_with() -> (World, Patch, String) {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    let template = embedded_pr_template();
+    install_older_pack(company, |dir| {
+        write(dir, PR_TEMPLATE, &format!("{template}old line\n"))
+    });
+    let patch = add_internal_change(
+        company,
+        "fix/template",
+        PR_TEMPLATE,
+        &format!("{template}my line\n"),
+    );
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    (world, patch, template)
+}
+
+fn upgrade_resuming(
+    company: &Path,
+    resume: git_uplink::UpgradeResume,
+) -> Result<git_uplink::InitResult> {
+    init(
+        company,
+        InitOpts {
+            upgrade: true,
+            resume: Some(resume),
+            ..Default::default()
+        },
+    )
+}
+
+/// Runs the upgrade into its pause on `patch` and returns the refs as they
+/// were before it.
+fn pause_upgrade_on(company: &Path, patch: &Patch) -> String {
+    let refs = git_ok(company, &["for-each-ref"]).unwrap();
+    let err = upgrade(company).unwrap_err().to_string();
+    assert!(
+        err.starts_with(&format!(
+            "upgrade paused: {} (\"{}\") changes files of the tooling pack and does not apply on the new pack.\n\
+The checkout holds the new pack with the failed apply. In conflict:\n  {PR_TEMPLATE}\n\
+Resolve them, git add them, then:  git uplink init --upgrade --continue\n",
+            patch.id, patch.title
+        )),
+        "{err}"
+    );
+    // Nothing recorded and no branch cut; the checkout is left on the conflict.
+    assert_eq!(git_ok(company, &["for-each-ref"]).unwrap(), refs);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "HEAD"
+    );
+    assert!(
+        fs::read_to_string(company.join(PR_TEMPLATE))
+            .unwrap()
+            .contains("<<<<<<<")
+    );
+    refs
+}
+
+fn assert_back_on_clean_main(company: &Path) {
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    assert!(
+        git_ok(company, &["status", "--porcelain"])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!company.join(".git/uplink-upgrade.json").exists());
+}
+
+#[test]
+fn init_upgrade_pauses_on_a_conflicting_patch_and_continues_with_the_resolution() {
+    use git_uplink::UpgradeResume;
+    let (world, patch, template) = world_with_a_patch_the_new_pack_conflicts_with();
+    let company = &world.company;
+    pause_upgrade_on(company, &patch);
+
+    // A second upgrade does not start over the paused one.
+    let err = upgrade(company).unwrap_err().to_string();
+    assert!(err.contains("an upgrade is paused on"), "{err}");
+    // Not resolved yet.
+    let err = upgrade_resuming(company, UpgradeResume::Continue)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("unmerged files"), "{err}");
+
+    write(company, PR_TEMPLATE, &format!("{template}my line\n"));
+    git(company, &["add", PR_TEMPLATE], GitOpts::default()).unwrap();
+    let result = upgrade_resuming(company, UpgradeResume::Continue).unwrap();
+    assert!(result.tooling_changed);
+    assert_eq!(result.amended, [(patch.id.clone(), patch.title.clone())]);
+    assert!(result.dropped.is_empty());
+    let amended = result
+        .queue
+        .all_patches()
+        .find(|p| p.id == patch.id)
+        .unwrap();
+    assert_eq!(amended.status, PatchStatus::Queued);
+    assert_eq!(amended.events.last().unwrap().kind, "amended");
+    assert_back_on_clean_main(company);
+    assert_eq!(
+        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        format!("{template}my line\n")
+    );
+    // The stored patch is the amended one: a rebuild applies it again.
+    rebuild(company).unwrap();
+    assert_eq!(
+        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        format!("{template}my line\n")
+    );
+}
+
+#[test]
+fn init_upgrade_continue_drops_a_patch_resolved_to_the_new_pack() {
+    use git_uplink::UpgradeResume;
+    let (world, patch, template) = world_with_a_patch_the_new_pack_conflicts_with();
+    let company = &world.company;
+    pause_upgrade_on(company, &patch);
+    write(company, PR_TEMPLATE, &template);
+    git(company, &["add", PR_TEMPLATE], GitOpts::default()).unwrap();
+
+    let result = upgrade_resuming(company, UpgradeResume::Continue).unwrap();
+    assert!(result.amended.is_empty());
+    assert_eq!(result.dropped, [(patch.id.clone(), patch.title.clone())]);
+    let dropped = result
+        .queue
+        .all_patches()
+        .find(|p| p.id == patch.id)
+        .unwrap();
+    assert_eq!(dropped.status, PatchStatus::Dropped);
+    assert_back_on_clean_main(company);
+    assert_eq!(
+        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        template
+    );
+}
+
+#[test]
+fn init_upgrade_drop_drops_the_patch_it_paused_on() {
+    use git_uplink::UpgradeResume;
+    let (world, patch, template) = world_with_a_patch_the_new_pack_conflicts_with();
+    let company = &world.company;
+    pause_upgrade_on(company, &patch);
+
+    let result = upgrade_resuming(company, UpgradeResume::Drop).unwrap();
+    assert_eq!(result.dropped, [(patch.id.clone(), patch.title.clone())]);
+    assert!(tooling_patch_path(company, &patch.id).is_file());
+    assert_back_on_clean_main(company);
+    assert_eq!(
+        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        template
+    );
+}
+
+#[test]
+fn init_upgrade_abort_leaves_everything_as_it_was() {
+    use git_uplink::UpgradeResume;
+    let (world, patch, template) = world_with_a_patch_the_new_pack_conflicts_with();
+    let company = &world.company;
+    let refs = pause_upgrade_on(company, &patch);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(["init", "--upgrade", "--abort"])
+        .current_dir(company)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Uplink init: ready\nupgrade aborted; nothing was changed\nPublish hooks: git uplink push\n"
+    );
+    assert_eq!(git_ok(company, &["for-each-ref"]).unwrap(), refs);
+    assert_back_on_clean_main(company);
+    assert_eq!(
+        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        format!("{template}my line\n")
+    );
+    let err = upgrade_resuming(company, UpgradeResume::Continue)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no upgrade is paused"), "{err}");
+}
+
+#[test]
+fn init_upgrade_lists_a_patch_that_overrides_the_pack() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    publish_origin(company);
+    let template = embedded_pr_template();
+    install_older_pack(company, |dir| write(dir, LEGACY_WORKFLOW, "name: legacy\n"));
+    let patch = add_internal_change(
+        company,
+        "feat/template",
+        PR_TEMPLATE,
+        &format!("{template}ours\n"),
+    );
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    push_main_and_state(company);
+
+    let result = upgrade(company).unwrap();
+    assert!(result.dropped.is_empty());
+    assert_eq!(result.overrides.len(), 1);
+    assert_eq!(result.overrides[0].id, patch.id);
+    assert_eq!(result.overrides[0].files, [PR_TEMPLATE]);
+    let changes = result.changes.unwrap();
+    assert_eq!(changes.base, "origin/main");
+    assert_eq!(changes.tooling, [LEGACY_WORKFLOW]);
+    assert!(changes.product.is_empty(), "{:?}", changes.product);
+    assert_eq!(
+        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        format!("{template}ours\n")
     );
 }
 
@@ -9518,7 +9970,12 @@ fn init_upgrade_adds_missing_hook_files_without_overwriting() {
         .find(|c| c.id == "hooks-branch")
         .unwrap();
     assert!(step.detail.contains("toolchain-hook.md"), "{}", step.detail);
-    assert!(step.detail.contains("git uplink push"), "{}", step.detail);
+    // How to publish is printed once, by the command.
+    assert!(!step.detail.contains("git uplink push"), "{}", step.detail);
+    assert_eq!(
+        git_uplink::hooks_publish_hint(company).as_deref(),
+        Some("Publish hooks: git uplink push")
+    );
 
     let again = rev_of(company, "uplink/hooks");
     init(
@@ -9620,7 +10077,7 @@ fn init_upgrade_creates_a_missing_hooks_branch() {
             .report
             .checks
             .iter()
-            .any(|c| c.id == "hooks-branch" && c.detail.contains("git uplink push")),
+            .any(|c| c.id == "hooks-branch" && c.detail.contains("created locally")),
         "{:?}",
         result.report.checks
     );

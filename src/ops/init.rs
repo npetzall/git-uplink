@@ -10,6 +10,8 @@ pub struct InitOpts {
     pub internal_branch: Option<String>,
     pub forge: Option<Forge>,
     pub upgrade: bool,
+    /// With `upgrade`: what to do with the upgrade that paused on a patch.
+    pub resume: Option<UpgradeResume>,
     pub adopt_groups: Option<Vec<AdoptGroup>>,
     /// `None` detects a TTY. Tests set `Some(false)` so adopt never opens the TUI.
     pub interactive: Option<bool>,
@@ -22,6 +24,21 @@ pub struct InitOpts {
     pub ask_settings: bool,
 }
 
+/// What `init --upgrade` does with an upgrade that paused on a queued patch
+/// which changes pack files and does not apply on the new pack. The checkout
+/// was left on the new pack with the failed apply, as `git rebase` leaves a
+/// commit that does not apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeResume {
+    /// The files are resolved and added: what they hold becomes the patch.
+    /// A patch resolved to what the new pack has is dropped.
+    Continue,
+    /// Drop the patch.
+    Drop,
+    /// Put the checkout back; nothing was written.
+    Abort,
+}
+
 /// Queue produced by `init`. `tooling_changed` is set only by `--upgrade` when
 /// the embedded pack's patch substance differed from the stored tooling patch.
 #[derive(Debug)]
@@ -29,6 +46,17 @@ pub struct InitResult {
     pub queue: QueueState,
     pub tooling_changed: bool,
     pub report: InitReport,
+    /// What the rebuild of an `--upgrade` that changed the tooling changes
+    /// on company main.
+    pub changes: Option<MainChanges>,
+    /// Patches `--upgrade` dropped, id and title: the new pack holds what
+    /// they change, or they no longer apply on it and the operator chose to.
+    pub dropped: Vec<(String, String)>,
+    /// Patches amended during `--upgrade` to apply on the new pack, by
+    /// resolving the failed apply and `--continue`: id and title.
+    pub amended: Vec<(String, String)>,
+    /// Patches that change pack files on top of the new pack.
+    pub overrides: Vec<ToolingOverride>,
 }
 
 impl std::ops::Deref for InitResult {
@@ -44,6 +72,10 @@ pub(super) fn settled(queue: QueueState, progress: &StepProgress) -> InitResult 
         queue,
         tooling_changed: false,
         report: InitReport::from_checks(progress.checks().to_vec()),
+        changes: None,
+        dropped: Vec::new(),
+        amended: Vec::new(),
+        overrides: Vec::new(),
     }
 }
 
@@ -443,6 +475,19 @@ pub(super) fn init_upgrade(
     opts: &InitOpts,
     progress: &mut StepProgress,
 ) -> Result<InitResult> {
+    if opts.resume.is_some() {
+        // The upgrade that paused did the steps before the tooling.
+        return upgrade_tooling(repo, opts.resume, progress);
+    }
+    if let Some(paused) = read_paused(repo)? {
+        return Err(Error::msg(format!(
+            "an upgrade is paused on {}. Continue it, drop the patch, or abort:\n  \
+git uplink init --upgrade --continue\n  \
+git uplink init --upgrade --drop\n  \
+git uplink init --upgrade --abort",
+            paused.patch_id
+        )));
+    }
     progress.run_step("sync-origin-state", "Sync state from origin", || {
         try_replace_state_from_origin(repo)?;
         Ok((
@@ -471,21 +516,358 @@ pub(super) fn init_upgrade(
             Ok(((), StepOutcome::pass(format!("forge {forge} recorded"))))
         })?;
     }
-    let (queue, tooling_changed) =
-        progress.run_step("upgrade-tooling", "Refresh forge tooling", || {
-            let (queue, changed) = write_tooling_patch(repo, true)?;
-            let detail = if changed {
-                "embedded forge pack updated"
-            } else {
-                "already up-to-date"
-            };
-            Ok(((queue, changed), StepOutcome::pass(detail)))
+    upgrade_tooling(repo, None, progress)
+}
+
+/// The tooling step of `--upgrade`, and what the command reports of it.
+fn upgrade_tooling(
+    repo: &Path,
+    resume: Option<UpgradeResume>,
+    progress: &mut StepProgress,
+) -> Result<InitResult> {
+    crate::lock::with_queue_lock(repo, || {
+        // The command prints what changed, so the step line does not.
+        let outcome = progress.run_step("upgrade-tooling", "Refresh forge tooling", || {
+            Ok(match prepare_tooling_upgrade(repo, resume)? {
+                Prepared::Ready(ready) => (
+                    Ok(Some(finish_tooling_upgrade(repo, *ready)?)),
+                    StepOutcome::pass(""),
+                ),
+                Prepared::Unchanged => (Ok(None), StepOutcome::pass("")),
+                Prepared::Aborted => (Ok(None), StepOutcome::skip("aborted")),
+                Prepared::Paused(paused) => {
+                    let step = StepOutcome::warn(format!("paused on {}", paused.patch_id));
+                    (Err(paused), step)
+                }
+            })
         })?;
-    append_init_health_checks(repo, &queue, progress);
-    Ok(InitResult {
-        queue,
-        tooling_changed,
-        report: InitReport::from_checks(progress.checks().to_vec()),
+        let mut result = settled(read_queue_file(repo)?, progress);
+        match outcome {
+            Err(paused) => return Err(Error::msg(paused.instructions())),
+            Ok(None) => {}
+            Ok(Some(upgraded)) => {
+                result.tooling_changed = true;
+                result.changes = upgraded.changes;
+                result.dropped = upgraded.dropped;
+                result.amended = upgraded.amended;
+                result.overrides = upgraded.overrides;
+            }
+        }
+        append_init_health_checks(repo, &result.queue, progress);
+        result.report = InitReport::from_checks(progress.checks().to_vec());
+        Ok(result)
+    })
+}
+
+/// A patch amended to apply on the new pack, not written yet.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmendedPatch {
+    id: String,
+    title: String,
+    contents: String,
+    assess: AssessReport,
+}
+
+/// An upgrade that stopped on a patch, in `.git/uplink-upgrade.json`: what
+/// was settled before it and where the checkout was. Nothing of it is on
+/// uplink/state yet.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PausedUpgrade {
+    /// The checkout the upgrade started from, as [`checkout_identity`] gives it.
+    original: String,
+    original_sha: String,
+    dropped: Vec<(String, String)>,
+    amended: Vec<AmendedPatch>,
+    patch_id: String,
+    patch_title: String,
+    /// The commit the patch failed to apply on.
+    onto: String,
+    files: Vec<String>,
+    /// An upstream-bound patch is amended with `git uplink amend`, not here.
+    can_amend: bool,
+}
+
+impl PausedUpgrade {
+    fn instructions(&self) -> String {
+        let id = &self.patch_id;
+        let resolve = if self.can_amend {
+            "Resolve them, git add them, then:  git uplink init --upgrade --continue\n\
+Drop the patch instead:            git uplink init --upgrade --drop\n\
+Stop, changing nothing:            git uplink init --upgrade --abort\n\
+A patch resolved to what the new pack has is dropped."
+        } else {
+            "It is upstream-bound, so it is not amended here.\n\
+Drop the patch:          git uplink init --upgrade --drop\n\
+Stop, changing nothing:  git uplink init --upgrade --abort"
+        };
+        format!(
+            "upgrade paused: {id} (\"{}\") changes files of the tooling pack and does not apply on the new pack.\n\
+The checkout holds the new pack with the failed apply. In conflict:\n  {}\n\
+{resolve}\n\
+A dropped patch stays in .uplink/patches/{id}.patch.",
+            self.patch_title,
+            self.files.join("\n  ")
+        )
+    }
+}
+
+fn paused_path(repo: &Path) -> PathBuf {
+    repo.join(".git/uplink-upgrade.json")
+}
+
+fn read_paused(repo: &Path) -> Result<Option<PausedUpgrade>> {
+    match fs::read_to_string(paused_path(repo)) {
+        Ok(raw) => Ok(Some(serde_json::from_str(&raw)?)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Takes up a paused upgrade: settles the patch it stopped on as `resume`
+/// says and puts the checkout back. `None` after an abort.
+fn resume_paused(repo: &Path, resume: UpgradeResume) -> Result<Option<PausedUpgrade>> {
+    let Some(mut paused) = read_paused(repo)? else {
+        return Err(Error::msg(
+            "no upgrade is paused; run git uplink init --upgrade",
+        ));
+    };
+    let patch = (paused.patch_id.clone(), paused.patch_title.clone());
+    match resume {
+        UpgradeResume::Abort => {}
+        UpgradeResume::Drop => paused.dropped.push(patch),
+        UpgradeResume::Continue if !paused.can_amend => {
+            return Err(Error::msg(paused.instructions()));
+        }
+        UpgradeResume::Continue => {
+            assert_resolution_clean(repo)?;
+            let queue = read_queue_file(repo)?;
+            let stored = get_patch(&queue, &paused.patch_id)?;
+            commit_resolution(repo, &paused.onto, &company_commit_message(stored))?;
+            if rev_parse(repo, "HEAD")? == paused.onto {
+                paused.dropped.push(patch);
+            } else {
+                let assess = assess_from_message(
+                    repo,
+                    &queue,
+                    &paused.onto,
+                    "HEAD",
+                    &stored_commit_message(stored),
+                    Some(&stored.title),
+                    PatchIntent::InternalOnly,
+                )?;
+                paused.amended.push(AmendedPatch {
+                    id: patch.0,
+                    title: patch.1,
+                    contents: format_patch_at_head(repo)?,
+                    assess,
+                });
+            }
+        }
+    }
+    restore_checkout(repo, &paused.original, &paused.original_sha)?;
+    ensure_state_worktree(repo)?;
+    fs::remove_file(paused_path(repo))?;
+    Ok((resume != UpgradeResume::Abort).then_some(paused))
+}
+
+/// A tooling refresh that is ready to be written.
+struct ReadyUpgrade {
+    plan: crate::tooling::ToolingPlan,
+    base: Option<ChangeBase>,
+    dropped: Vec<(String, String)>,
+    amended: Vec<AmendedPatch>,
+    overrides: Vec<ToolingOverride>,
+}
+
+/// How far `--upgrade` got with the tooling patch before writing anything.
+enum Prepared {
+    /// The stored patch already holds the embedded pack.
+    Unchanged,
+    /// A paused upgrade was aborted.
+    Aborted,
+    /// A queued patch that changes pack files does not apply on the new
+    /// pack. The checkout is left on the failed apply.
+    Paused(Box<PausedUpgrade>),
+    Ready(Box<ReadyUpgrade>),
+}
+
+/// What `--upgrade` did besides refreshing the tooling patch.
+struct Upgraded {
+    changes: Option<MainChanges>,
+    dropped: Vec<(String, String)>,
+    amended: Vec<(String, String)>,
+    overrides: Vec<ToolingOverride>,
+}
+
+fn upgrade_reason(what: &str) -> String {
+    format!(
+        "{what} by init --upgrade for the tooling pack of git-uplink {}",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// Synthesizes the tooling patch from the embedded pack and replays the
+/// queue on it, writing nothing to uplink/state. A patch that changes pack
+/// files is dealt with here: one the new pack makes empty is dropped, and
+/// one that no longer applies pauses the upgrade on the failed apply, for
+/// `resume` to settle in the next run. The replay starts over after that,
+/// with what was settled so far.
+fn prepare_tooling_upgrade(repo: &Path, resume: Option<UpgradeResume>) -> Result<Prepared> {
+    let (dropped, amended) = match resume {
+        None => (Vec::new(), Vec::new()),
+        Some(resume) => match resume_paused(repo, resume)? {
+            Some(paused) => (paused.dropped, paused.amended),
+            None => return Ok(Prepared::Aborted),
+        },
+    };
+    let Some(plan) = crate::tooling::plan_tooling_refresh(repo)? else {
+        return Ok(Prepared::Unchanged);
+    };
+    let queue = read_queue_file(repo)?;
+    ensure_clean_worktree(repo, "an upgrade")?;
+    let base = ChangeBase::of_company(repo, &queue.config.internal_branch)?;
+    let mut ready = ReadyUpgrade {
+        plan,
+        base,
+        dropped,
+        amended,
+        overrides: Vec::new(),
+    };
+    // A tooling patch that is new, or moves into the tooling layer, has no
+    // place in the queue to replay it from yet.
+    if !queue.is_tooling(&ready.plan.id) {
+        return Ok(Prepared::Ready(Box::new(ready)));
+    }
+    let mut pack = patch_paths(&ready.plan.formatted);
+    pack.extend(tooling_paths(repo, &queue)?);
+    let in_pack = |id: &str| -> Result<Vec<String>> {
+        Ok(stored_patch_paths(repo, id)?
+            .intersection(&pack)
+            .cloned()
+            .collect())
+    };
+
+    let mut trial_queue = queue.clone();
+    for (id, _) in &ready.dropped {
+        mark_dropped(&mut trial_queue, id, "trial")?;
+    }
+    let mut replace = vec![(ready.plan.id.clone(), ready.plan.formatted.clone())];
+    replace.extend(
+        ready
+            .amended
+            .iter()
+            .map(|patch| (patch.id.clone(), patch.contents.clone())),
+    );
+    let (original, original_sha) = checkout_identity(repo)?;
+    let mut paused = None;
+    let trial = trial_replay(
+        repo,
+        &trial_queue,
+        UPSTREAM_REF,
+        &replace,
+        |patch, files| {
+            let touched = in_pack(&patch.id)?;
+            // Any other conflict is recorded by the rebuild, as always.
+            if touched.is_empty() {
+                return Ok(false);
+            }
+            let pause = PausedUpgrade {
+                original,
+                original_sha,
+                dropped: ready.dropped.clone(),
+                amended: ready.amended.clone(),
+                patch_id: patch.id.clone(),
+                patch_title: patch.title.clone(),
+                onto: rev_parse(repo, "HEAD")?,
+                files: if files.is_empty() {
+                    touched
+                } else {
+                    files.to_vec()
+                },
+                can_amend: !queue.is_upstream(&patch.id),
+            };
+            fs::write(paused_path(repo), serde_json::to_string_pretty(&pause)?)?;
+            paused = Some(pause);
+            Ok(true)
+        },
+    )?;
+    if let Some(paused) = paused {
+        return Ok(Prepared::Paused(Box::new(paused)));
+    }
+
+    for id in &trial.empty {
+        let touched = stored_patch_paths(repo, id)?;
+        if !queue.is_tooling(id)
+            && !queue.is_upstream(id)
+            && !touched.is_empty()
+            && touched.is_subset(&pack)
+        {
+            ready
+                .dropped
+                .push((id.clone(), get_patch(&queue, id)?.title.clone()));
+        }
+    }
+    for id in trial.applied.iter().filter(|id| !queue.is_tooling(id)) {
+        let files = in_pack(id)?;
+        if !files.is_empty() {
+            ready.overrides.push(ToolingOverride {
+                id: id.clone(),
+                title: get_patch(&queue, id)?.title.clone(),
+                files,
+            });
+        }
+    }
+    Ok(Prepared::Ready(Box::new(ready)))
+}
+
+/// Writes what [`prepare_tooling_upgrade`] settled, in one commit on
+/// uplink/state, and rebuilds.
+fn finish_tooling_upgrade(repo: &Path, ready: ReadyUpgrade) -> Result<Upgraded> {
+    let ReadyUpgrade {
+        plan,
+        base,
+        dropped,
+        amended,
+        overrides,
+    } = ready;
+    for patch in &amended {
+        fs::write(repo.join(patch_path(&patch.id)?), &patch.contents)?;
+    }
+    crate::tooling::commit_tooling_refresh(repo, plan, |queue| {
+        for (id, _) in &dropped {
+            mark_dropped(queue, id, &upgrade_reason("Dropped"))?;
+        }
+        for amended in &amended {
+            let stable = stable_patch_id_from_contents(repo, &amended.contents)?;
+            let patch = get_patch_mut(queue, &amended.id)?;
+            patch.assess = Some(amended.assess.clone());
+            patch.conflict = None;
+            patch.patch_id_stable = Some(stable);
+            add_event(patch, "amended", upgrade_reason("Amended"));
+        }
+        Ok(())
+    })?;
+    rebuild_once(repo, None, false)?;
+    let queue = read_queue_file(repo)?;
+    let changes = match &base {
+        Some(base) => Some(main_changes(
+            repo,
+            &queue,
+            base,
+            &queue.config.internal_branch,
+        )?),
+        None => None,
+    };
+    Ok(Upgraded {
+        changes,
+        dropped,
+        amended: amended
+            .into_iter()
+            .map(|patch| (patch.id, patch.title))
+            .collect(),
+        overrides,
     })
 }
 
