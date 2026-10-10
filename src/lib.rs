@@ -48,14 +48,15 @@ pub use hooks::{HOOKS_BRANCH, HooksPushAction, TOOLCHAIN_ACTION_PATH, hooks_publ
 pub use init_report::{InitReport, format_init_summary};
 pub use man::write_man_pages;
 pub use ops::{
-    AddOutcome, AddPatchOpts, AmendMessage, AmendResult, ImportFallback, IncomingClaim, InitOpts,
-    InitResult, PushOpts, PushResult, QueueCounts, RebasePlan, RebaseResult, RebaseState,
-    RebuildOpts, RebuildResult, RefreshResult, ResetResult, StateStatus, StatusReport,
-    StatusSnapshot, SubmitResult, SyncOpts, SyncResult, TransferResult, accept_upstream,
-    accept_upstream_at, accept_upstream_preflight, accept_upstream_with, add_patch,
-    add_patch_or_gate, amend_patch, amend_patch_with, amend_preflight, approval_stale,
-    approve_patch, approve_patch_at, approve_patch_reviewed, assess_patch_for_packet, drop_patch,
-    fetch_pending_upstream, format_status_table, init, init_repo, init_repo_with_progress,
+    AddOutcome, AddPatchOpts, AmendMessage, AmendResult, ChangeBase, ImportFallback, IncomingClaim,
+    InitOpts, InitResult, MainChanges, PushOpts, PushResult, QueueCounts, RebasePlan, RebaseResult,
+    RebaseState, RebuildOpts, RebuildResult, RefreshResult, ResetResult, StateStatus, StatusReport,
+    StatusSnapshot, SubmitResult, SyncOpts, SyncResult, ToolingOverride, TransferResult,
+    UpgradeResume, accept_upstream, accept_upstream_at, accept_upstream_preflight,
+    accept_upstream_with, add_patch, add_patch_or_gate, amend_patch, amend_patch_with,
+    amend_preflight, approval_stale, approve_patch, approve_patch_at, approve_patch_reviewed,
+    assess_patch_for_packet, count_files, drop_patch, fetch_pending_upstream,
+    format_product_changes, format_status_table, init, init_repo, init_repo_with_progress,
     mark_merged, newly_ready_to_submit, push_queue, read_queue, rebase_onto_main, rebase_plan,
     rebuild, rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request,
     refresh_from_origin, reset_from_origin, resolve_conflict, resolve_conflict_with,

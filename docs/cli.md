@@ -13,8 +13,8 @@ The binary is `git-uplink`, so Git treats it as `git uplink`. Use `git-uplink -h
 ```text
 git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <name>]
             [--upstream-branch <branch>] [--contrib-remote-name <name>]
-            [--internal-branch <branch>] [--forge <forge>] [--upgrade]
-            [--adopt-groups <path>] [--json] [--preflight <cmd>]
+            [--internal-branch <branch>] [--forge <forge>] [--upgrade] [--continue]
+            [--drop] [--abort] [--adopt-groups <path>] [--json] [--preflight <cmd>]
             [--redact-keyword <word>]... [--internal-domain <domain>]...
 git uplink add --title <text> [--message <text> | --message-file <path>] [--from <ref>]
             [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
@@ -82,6 +82,17 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
 - `--upgrade`: Refresh the tooling patch in its slot; re-run after upgrading the binary.
 
   Also creates `uplink/hooks` for queues initialized before it existed, and adds files a newer pack brings as one commit on top.
+
+  Company main is rebuilt locally and compared with origin's: files of the pack are reported as tooling, any other file that differs as product code, which an upgrade should not change.
+
+  A queued patch that changes pack files is replayed on the new pack before anything is written. One the new pack makes empty is dropped. One that no longer applies pauses the upgrade the way `git rebase` stops on a commit: the checkout is left on the new pack with the failed apply, and `--continue`, `--drop` or `--abort` takes it from there.
+- `--continue`: Continue a paused upgrade with the conflict resolved.
+
+  Resolve the files, `git add` them, and what they hold becomes the patch. A patch resolved to what the new pack has is dropped.
+- `--drop`: Continue a paused upgrade by dropping the patch it stopped on.
+
+  The patch file stays in `.uplink/patches/`.
+- `--abort`: Give up a paused upgrade: the checkout is put back and nothing was written.
 - `--adopt-groups <path>`: JSON file of commit groups when internal is ahead of upstream.
 - `--json`: Print the stored queue config as JSON.
 - `--preflight <cmd>`: Command a new preflight.sh on uplink/hooks starts with (asked in a terminal when omitted).

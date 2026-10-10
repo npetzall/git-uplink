@@ -59,6 +59,7 @@ use crate::types::{
 
 mod add;
 mod amend;
+mod changes;
 mod init;
 mod lifecycle;
 mod push;
@@ -71,6 +72,7 @@ mod transfer;
 
 pub use add::*;
 pub use amend::*;
+pub use changes::*;
 pub use init::*;
 pub use lifecycle::*;
 pub use push::*;

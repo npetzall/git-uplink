@@ -7,9 +7,9 @@ use std::process::ExitCode;
 use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
-    AddOutcome, ConflictCause, HOOKS_BRANCH, HooksPushAction, Patch, PatchConflict, PatchIntent,
-    PatchStatus, QueueState, SettingsFlags, SubmitResult, SyncOpts, SyncResult, TransferDirection,
-    TransferResult, stdin_is_tty,
+    AddOutcome, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, Patch, PatchConflict,
+    PatchIntent, PatchStatus, QueueState, SettingsFlags, SubmitResult, SyncOpts, SyncResult,
+    TransferDirection, TransferResult, UpgradeResume, stdin_is_tty,
 };
 use git_uplink::{
     AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, AssessPackage, Error,
@@ -19,18 +19,18 @@ use git_uplink::{
     accept_upstream_preflight, accept_upstream_with, add_patch, add_patch_or_gate,
     adopted_next_steps, amend_patch_with, amend_preflight, approve_patch_reviewed,
     assess_from_message, assess_patch_file, assess_patch_for_packet, change_between,
-    command_preflight, command_tested, commit_queue, depends_on_from_message, doctor, drop_patch,
-    existing_patch_preflight, export_tested, fetch_pending_upstream, format_approval_receipt,
-    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
-    format_init_summary, format_status_table, from_upstream_report_paths, git_ok,
-    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
-    read_queue, rebase_onto_main, rebase_plan, rebuild_preflight, rebuild_with, record_gated_pr,
-    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
-    reset_from_origin, resolve_conflict_with, resolve_preflight, review_token, review_token_path,
-    set_script_echo, status_report, status_snapshot, store_assess_result, store_patch_extras,
-    stored_commit_message, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
-    write_man_pages,
+    command_preflight, command_tested, commit_queue, count_files, depends_on_from_message, doctor,
+    drop_patch, existing_patch_preflight, export_tested, fetch_pending_upstream,
+    format_approval_receipt, format_assess_markdown, format_contribution_packet_with_extras,
+    format_doctor_summary, format_init_summary, format_product_changes, format_status_table,
+    from_upstream_report_paths, git_ok, hooks_publish_hint, incoming_change_preflight, init,
+    load_groups_file, mark_merged, newly_ready_to_submit, parse_github_repo,
+    parse_pull_request_url, patch_text, push_queue, read_queue, rebase_onto_main, rebase_plan,
+    rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
+    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
+    resolve_preflight, review_token, review_token_path, set_script_echo, status_report,
+    status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
+    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
 };
 
 const VERSION: &str = concat!(
@@ -615,14 +615,40 @@ fn submit_artifact(
     Ok(())
 }
 
-fn upgrade_next_steps(branch: &str) -> String {
-    format!(
-        "tooling has been updated\n\
-Company main was rebuilt locally. Nothing was pushed.\n\
-Inspect with: git diff origin/{branch} {branch}\n\
-Publish state: git uplink push\n\
-Publish main: git uplink rebuild --push"
-    )
+/// What an `init --upgrade` that refreshed the tooling did, and how to
+/// publish it. `git uplink push` covers uplink/hooks too.
+fn upgrade_summary(result: &InitResult) -> String {
+    let branch = &result.queue.config.internal_branch;
+    let mut out = String::from("Tooling: updated");
+    if let Some(changes) = &result.changes {
+        if !changes.tooling.is_empty() {
+            out.push_str(&format!(", {} changed", count_files(changes.tooling.len())));
+        }
+        out.push('\n');
+        out.push_str(&format_product_changes(changes, branch, true));
+    }
+    for (id, title) in &result.dropped {
+        out.push_str(&format!(
+            "\nDropped: {id} \"{title}\" (still in .uplink/patches/{id}.patch)"
+        ));
+    }
+    for (id, title) in &result.amended {
+        out.push_str(&format!("\nAmended: {id} \"{title}\""));
+    }
+    for patch in &result.overrides {
+        out.push_str(&format!(
+            "\nOverrides tooling: {} \"{}\" ({})",
+            patch.id,
+            patch.title,
+            patch.files.join(", ")
+        ));
+    }
+    out.push_str(&format!(
+        "\nCompany {branch} was rebuilt locally. Nothing was pushed.\n\
+Publish: git uplink push\n         \
+git uplink rebuild --push"
+    ));
+    out
 }
 
 struct InitArgs {
@@ -634,6 +660,7 @@ struct InitArgs {
     internal_branch: Option<String>,
     forge: Option<Forge>,
     upgrade: bool,
+    resume: Option<UpgradeResume>,
     adopt_groups: Option<PathBuf>,
     json: bool,
     settings: SettingsFlags,
@@ -662,6 +689,7 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
         internal_branch: args.internal_branch,
         forge: args.forge,
         upgrade: args.upgrade,
+        resume: args.resume,
         adopt_groups,
         interactive: None,
         settings: args.settings,
@@ -686,15 +714,17 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
         println!("{}", serde_json::to_string_pretty(&queue.config)?);
     } else if !hydrate {
         println!("{}", format_init_summary(&result.report));
-        if args.upgrade {
-            if result.tooling_changed {
-                println!("{}", upgrade_next_steps(&queue.config.internal_branch));
-            } else {
-                println!("already up-to-date");
+        if args.upgrade && result.tooling_changed {
+            println!("{}", upgrade_summary(&result));
+        } else {
+            if args.resume == Some(UpgradeResume::Abort) {
+                println!("upgrade aborted; nothing was changed");
+            } else if args.upgrade {
+                println!("Tooling: already up-to-date");
             }
-        }
-        if let Some(hint) = hooks_publish_hint(repo) {
-            println!("{hint}");
+            if let Some(hint) = hooks_publish_hint(repo) {
+                println!("{hint}");
+            }
         }
     }
     if !result.report.ok {
@@ -1372,13 +1402,14 @@ fn cmd_rebuild(
     verify: bool,
     json: bool,
 ) -> Result<(), Error> {
+    let remote = push_remote.clone().unwrap_or_else(|| "origin".into());
     let result = rebuild_with(
         repo,
         RebuildOpts {
             branch,
             push,
             push_remote: if push {
-                Some(push_remote.unwrap_or_else(|| "origin".into()))
+                Some(remote.clone())
             } else {
                 push_remote
             },
@@ -1417,12 +1448,20 @@ fn cmd_rebuild(
     }
     if result.preview {
         println!("rebuild preview at {}", result.branch);
-        eprintln!(
-            "Inspect with: git diff {} {}",
-            result.queue.config.internal_branch, result.branch
-        );
+    } else if !result.tree_changed {
+        // Nothing to compare: the branch has the tree it had.
+        println!("rebuild complete; {} unchanged", result.branch);
     } else {
         println!("rebuild complete");
+    }
+    if let Some(changes) = result.changes.as_ref().filter(|_| result.tree_changed) {
+        if !changes.tooling.is_empty() {
+            println!("Tooling: {} changed", count_files(changes.tooling.len()));
+        }
+        println!("{}", format_product_changes(changes, &result.branch, false));
+    }
+    if push {
+        println!("pushed {} to {remote}", result.branch);
     }
     Ok(())
 }
@@ -1539,6 +1578,9 @@ fn run() -> Result<(), Error> {
             internal_branch,
             forge,
             upgrade,
+            resume,
+            drop,
+            abort,
             adopt_groups,
             json,
             preflight,
@@ -1555,6 +1597,12 @@ fn run() -> Result<(), Error> {
                 internal_branch,
                 forge: forge.map(Forge::from),
                 upgrade,
+                resume: match (resume, drop, abort) {
+                    (true, _, _) => Some(UpgradeResume::Continue),
+                    (_, true, _) => Some(UpgradeResume::Drop),
+                    (_, _, true) => Some(UpgradeResume::Abort),
+                    _ => None,
+                },
                 adopt_groups,
                 json,
                 settings: SettingsFlags {

@@ -355,14 +355,11 @@ pub fn hooks_step_outcome(outcome: HooksOutcome) -> StepOutcome {
     match outcome {
         HooksOutcome::Existing => StepOutcome::pass("uplink/hooks present; left unchanged"),
         HooksOutcome::FromOrigin => StepOutcome::pass("uplink/hooks fetched from origin"),
-        HooksOutcome::Created => StepOutcome::pass(format!(
-            "uplink/hooks created locally; publish with: {PUBLISH}"
-        )),
+        HooksOutcome::Created => StepOutcome::pass("uplink/hooks created locally"),
         HooksOutcome::Missing => StepOutcome::skip("uplink/hooks not on origin"),
-        HooksOutcome::Completed(paths) => StepOutcome::pass(format!(
-            "added {} to uplink/hooks; publish with: {PUBLISH}",
-            paths.join(", ")
-        )),
+        HooksOutcome::Completed(paths) => {
+            StepOutcome::pass(format!("added {} to uplink/hooks", paths.join(", ")))
+        }
         HooksOutcome::Skipped(reason) => StepOutcome::warn(reason),
     }
 }

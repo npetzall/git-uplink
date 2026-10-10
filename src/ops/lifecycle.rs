@@ -158,6 +158,14 @@ pub(super) fn github_run_url_opt() -> Option<String> {
     Some(format!("{server}/{repository}/actions/runs/{run_id}"))
 }
 
+pub(super) fn mark_dropped(queue: &mut QueueState, id: &str, reason: &str) -> Result<()> {
+    let patch = get_patch_mut(queue, id)?;
+    patch.status = PatchStatus::Dropped;
+    patch.conflict = None;
+    add_event(patch, "dropped", reason);
+    Ok(())
+}
+
 pub fn drop_patch(repo: &Path, id: &str, reason: &str) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
@@ -170,12 +178,7 @@ pub fn drop_patch(repo: &Path, id: &str, reason: &str) -> Result<Patch> {
         if !status.is_active() {
             return Err(Error::msg(format!("{id} is already {status}")));
         }
-        {
-            let patch = get_patch_mut(&mut queue, id)?;
-            patch.status = PatchStatus::Dropped;
-            patch.conflict = None;
-            add_event(patch, "dropped", reason);
-        }
+        mark_dropped(&mut queue, id, reason)?;
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: drop {id}"))?;
         rebuild(repo)?;

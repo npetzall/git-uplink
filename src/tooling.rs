@@ -40,7 +40,23 @@ pub struct ToolingRefresh {
     pub changed: bool,
 }
 
-pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
+/// A tooling patch synthesized from the embedded pack that differs from the
+/// stored one, not written yet.
+pub struct ToolingPlan {
+    pub id: String,
+    /// The queue has no tooling patch yet.
+    pub created: bool,
+    /// The patch file.
+    pub formatted: String,
+    forge: Forge,
+    message: String,
+    from_sha: String,
+    head_sha: String,
+}
+
+/// Synthesizes the tooling patch from the embedded pack. `None` when the
+/// stored patch already holds it. Writes nothing to `.uplink`.
+pub fn plan_tooling_refresh(repo: &Path) -> Result<Option<ToolingPlan>> {
     ensure_upstream_ref(repo)?;
     if !has_ref(repo, "uplink/upstream")? {
         return Err(Error::msg(
@@ -79,10 +95,36 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
         let patch_rel = patch_path(&id)?;
         let stored = fs::read_to_string(repo.join(&patch_rel)).unwrap_or_default();
         if patch_substance(&stored) == patch_substance(&formatted) {
-            return Ok(ToolingRefresh { changed: false });
+            return Ok(None);
         }
     }
+    Ok(Some(ToolingPlan {
+        id,
+        created,
+        formatted,
+        forge,
+        message,
+        from_sha,
+        head_sha,
+    }))
+}
 
+/// Writes `plan` to `.uplink` and commits it on uplink/state, together with
+/// what `also` changes in the queue.
+pub fn commit_tooling_refresh(
+    repo: &Path,
+    plan: ToolingPlan,
+    also: impl FnOnce(&mut QueueState) -> Result<()>,
+) -> Result<()> {
+    let ToolingPlan {
+        id,
+        created,
+        formatted,
+        forge,
+        message,
+        from_sha,
+        head_sha,
+    } = plan;
     let new_stable = stable_patch_id_from_contents(repo, &formatted)?;
     ensure_uplink_dirs(repo)?;
     let mut queue = read_queue_file(repo)?;
@@ -101,14 +143,20 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
 
     if created {
         queue.tooling = Some(new_tooling_patch(&id, forge, new_stable, assess));
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: add {id} {TOOLING_PATCH_TITLE}"))?;
     } else {
         upgrade_tooling_patch(&mut queue, &id, forge, new_stable, assess);
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: upgrade {id} {TOOLING_PATCH_TITLE}"))?;
     }
+    also(&mut queue)?;
+    write_queue_file(repo, &queue)?;
+    let verb = if created { "add" } else { "upgrade" };
+    commit_queue(repo, &format!("uplink: {verb} {id} {TOOLING_PATCH_TITLE}"))
+}
 
+pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
+    let Some(plan) = plan_tooling_refresh(repo)? else {
+        return Ok(ToolingRefresh { changed: false });
+    };
+    commit_tooling_refresh(repo, plan, |_| Ok(()))?;
     Ok(ToolingRefresh { changed: true })
 }
 

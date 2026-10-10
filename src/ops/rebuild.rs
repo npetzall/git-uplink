@@ -16,6 +16,11 @@ pub struct RebuildResult {
     pub queue: QueueState,
     pub branch: String,
     pub preview: bool,
+    /// Whether the rebuilt branch has another tree than it had before.
+    pub tree_changed: bool,
+    /// What the rebuild changes against origin's company branch; for a
+    /// preview, against the company branch. `None` without one to compare.
+    pub changes: Option<MainChanges>,
 }
 
 pub fn rebuild(repo: &Path) -> Result<QueueState> {
@@ -44,10 +49,30 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
         if preview {
             check_preview_branch(&target, opts.push)?;
         }
+        let base = if preview {
+            Some(ChangeBase::of(repo, &company_branch)?)
+        } else {
+            match ChangeBase::of_company(repo, &company_branch)? {
+                // The push moves origin's branch, so name the commit.
+                Some(base) if opts.push => Some(base.pinned(repo)?),
+                base => base,
+            }
+        };
+        let tree_before = if !preview && has_ref(repo, &target)? {
+            Some(tree_of(repo, &target)?)
+        } else {
+            None
+        };
         let queue = if preview {
             rebuild_preview(repo, &target)?
         } else {
             rebuild_once(repo, Some(&opts.preflight), opts.verify)?
+        };
+        let tree_changed = tree_before != Some(tree_of(repo, &target)?);
+        // Before the push, which moves origin's branch to the rebuilt one.
+        let changes = match &base {
+            Some(base) => Some(main_changes(repo, &queue, base, &target)?),
+            None => None,
         };
         if opts.push {
             let remote = opts.push_remote.as_deref().unwrap_or("origin");
@@ -59,6 +84,8 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
             queue,
             branch: target,
             preview,
+            tree_changed,
+            changes,
         })
     })
 }
@@ -184,8 +211,11 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
 /// How replaying the queue onto upstream ended.
 enum Replayed {
     /// Every active patch applied: its id and the commit it made, in order.
-    /// A patch that applied empty made none.
-    Applied(Vec<(String, String)>),
+    /// A patch that applied empty made none and is in `empty`.
+    Applied {
+        applied: Vec<(String, String)>,
+        empty: Vec<String>,
+    },
     /// The queue already holds a patch in conflict.
     Blocked(Patch),
     Conflict(Patch, Vec<String>),
@@ -200,6 +230,7 @@ fn replay_queue(
     upstream_ref: &str,
 ) -> Result<Replayed> {
     let mut applied = Vec::new();
+    let mut empty = Vec::new();
     for patch in apply_order_active(queue)? {
         if patch.status == PatchStatus::Conflict {
             return Ok(Replayed::Blocked(patch));
@@ -210,6 +241,7 @@ fn replay_queue(
             if queue.is_upstream(&patch.id) {
                 mark_merged_by_empty_rebase(repo, queue, &patch.id, upstream_ref)?;
             }
+            empty.push(patch.id);
             continue;
         }
         if result == ApplyOutcome::Conflict {
@@ -218,7 +250,68 @@ fn replay_queue(
         refresh_patch_id(repo, queue, &patch.id, &patch_file)?;
         applied.push((patch.id, rev_parse(repo, "HEAD")?));
     }
-    Ok(Replayed::Applied(applied))
+    Ok(Replayed::Applied { applied, empty })
+}
+
+/// How the queue would replay with one patch file replaced.
+pub(super) struct Trial {
+    /// The patches that applied, in order.
+    pub applied: Vec<String>,
+    /// The patches that applied empty.
+    pub empty: Vec<String>,
+}
+
+/// Replays the queue onto `upstream_ref` with the patch files in `replace`
+/// (id and contents) instead of the stored ones. `on_conflict` runs while
+/// the checkout holds the failed apply of the patch the replay stops on,
+/// and says whether to leave it there. The queue, `.uplink` and the company
+/// branch are left as they were, and the checkout is put back otherwise.
+pub(super) fn trial_replay(
+    repo: &Path,
+    queue: &QueueState,
+    upstream_ref: &str,
+    replace: &[(String, String)],
+    on_conflict: impl FnOnce(&Patch, &[String]) -> Result<bool>,
+) -> Result<Trial> {
+    let mut hold = false;
+    let (original, original_sha) = checkout_identity(repo)?;
+    let snapshot = snapshot_uplink(repo)?;
+    let outcome = (|| -> Result<Trial> {
+        for (id, contents) in replace {
+            fs::write(snapshot.join(patch_path(id)?), contents)?;
+        }
+        git(
+            repo,
+            &["checkout", "-f", "--quiet", "--detach", upstream_ref],
+            GitOpts::default(),
+        )?;
+        let mut queue = queue.clone();
+        Ok(
+            match replay_queue(repo, &mut queue, &snapshot, upstream_ref)? {
+                Replayed::Applied { applied, empty } => Trial {
+                    applied: applied.into_iter().map(|(id, _)| id).collect(),
+                    empty,
+                },
+                Replayed::Blocked(_) => Trial {
+                    applied: Vec::new(),
+                    empty: Vec::new(),
+                },
+                Replayed::Conflict(patch, files) => {
+                    hold = on_conflict(&patch, &files)?;
+                    Trial {
+                        applied: Vec::new(),
+                        empty: Vec::new(),
+                    }
+                }
+            },
+        )
+    })();
+    let _ = fs::remove_dir_all(&snapshot);
+    if !hold {
+        restore_checkout(repo, &original, &original_sha)?;
+    }
+    crate::repo::ensure_state_worktree(repo)?;
+    outcome
 }
 
 /// The patch `preflight.sh` first fails on in a rebuild.
@@ -228,7 +321,7 @@ struct FailedPatch {
     output: Option<String>,
 }
 
-fn tree_of(repo: &Path, rev: &str) -> Result<String> {
+pub(super) fn tree_of(repo: &Path, rev: &str) -> Result<String> {
     rev_parse(repo, &format!("{rev}^{{tree}}"))
 }
 
@@ -362,7 +455,8 @@ pub(super) fn probe_rebuild_from(
         GitOpts::default(),
     )?;
     // A rebuild that stops on a conflict never asks for a verdict.
-    let Replayed::Applied(applied) = replay_queue(repo, &mut queue, snapshot, upstream_ref)? else {
+    let Replayed::Applied { applied, .. } = replay_queue(repo, &mut queue, snapshot, upstream_ref)?
+    else {
         return Ok(report);
     };
     let checked = check_rebuilt(
@@ -454,7 +548,7 @@ pub(super) fn rebuild_once(
             GitOpts::default(),
         )?;
         let applied = match replay_queue(repo, &mut queue, &snapshot, upstream_ref)? {
-            Replayed::Applied(applied) => applied,
+            Replayed::Applied { applied, .. } => applied,
             Replayed::Blocked(patch) => {
                 restore_company_branch(repo, &company_branch)?;
                 return Err(Error::Conflict(ConflictError::new(

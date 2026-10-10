@@ -264,8 +264,33 @@ pub enum Commands {
         ///
         /// Also creates `uplink/hooks` for queues initialized before it
         /// existed, and adds files a newer pack brings as one commit on top.
+        ///
+        /// Company main is rebuilt locally and compared with origin's:
+        /// files of the pack are reported as tooling, any other file that
+        /// differs as product code, which an upgrade should not change.
+        ///
+        /// A queued patch that changes pack files is replayed on the new
+        /// pack before anything is written. One the new pack makes empty is
+        /// dropped. One that no longer applies pauses the upgrade the way
+        /// `git rebase` stops on a commit: the checkout is left on the new
+        /// pack with the failed apply, and `--continue`, `--drop` or
+        /// `--abort` takes it from there.
         #[arg(long)]
         upgrade: bool,
+        /// Continue a paused upgrade with the conflict resolved.
+        ///
+        /// Resolve the files, `git add` them, and what they hold becomes
+        /// the patch. A patch resolved to what the new pack has is dropped.
+        #[arg(long = "continue", requires = "upgrade", conflicts_with_all = ["drop", "abort"])]
+        resume: bool,
+        /// Continue a paused upgrade by dropping the patch it stopped on.
+        ///
+        /// The patch file stays in `.uplink/patches/`.
+        #[arg(long, requires = "upgrade", conflicts_with = "abort")]
+        drop: bool,
+        /// Give up a paused upgrade: the checkout is put back and nothing was written.
+        #[arg(long, requires = "upgrade")]
+        abort: bool,
         /// JSON file of commit groups when internal is ahead of upstream.
         #[arg(long = "adopt-groups", value_name = "path")]
         adopt_groups: Option<PathBuf>,
