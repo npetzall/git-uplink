@@ -811,6 +811,7 @@ fn delta_added_section(repo: &Path, old_patch: &str, new_patch: &str) -> String 
         repo,
         ("approved.txt", &changed_lines(old_patch)),
         ("current.txt", &changed_lines(new_patch)),
+        None,
     );
     format!(
         "### Changed lines: approved vs current\n\n\
@@ -848,31 +849,150 @@ fn patch_file_diff(repo: &Path, old_patch: &str, new_patch: &str) -> String {
         repo,
         ("approved.patch", old_patch),
         ("current.patch", new_patch),
+        None,
     )
     .unwrap_or_else(|| "(no textual difference in patch files)".into())
 }
 
 /// `git diff --no-index` of two named texts, or None when they do not differ.
-fn text_diff(repo: &Path, old: (&str, &str), new: (&str, &str)) -> Option<String> {
+/// `git diff --no-index` of two texts. `context` is the number of unchanged
+/// lines around each change, git's default when `None`.
+fn text_diff(
+    repo: &Path,
+    old: (&str, &str),
+    new: (&str, &str),
+    context: Option<usize>,
+) -> Option<String> {
     let dir = RemoveOnDrop(env::temp_dir().join(format!("uplink-delta-{}", uuid::Uuid::new_v4())));
     fs::create_dir_all(&dir.0).ok()?;
     let old_file = dir.0.join(old.0);
     let new_file = dir.0.join(new.0);
     fs::write(&old_file, old.1).ok()?;
     fs::write(&new_file, new.1).ok()?;
-    let result = git(
-        repo,
-        &[
-            "diff",
-            "--no-index",
-            "--",
-            old_file.to_str()?,
-            new_file.to_str()?,
-        ],
-        GitOpts::allow_fail(),
-    )
-    .ok()?;
+    let unified = context.map(|lines| format!("--unified={lines}"));
+    let mut args = vec!["diff", "--no-index"];
+    args.extend(unified.as_deref());
+    args.extend(["--", old_file.to_str()?, new_file.to_str()?]);
+    let result = git(repo, &args, GitOpts::allow_fail()).ok()?;
     Some(result.stdout).filter(|diff| !diff.trim().is_empty())
+}
+
+/// How one file of a patch differs between two revisions of that patch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeltaState {
+    /// Only the newer revision touches the file.
+    Added,
+    /// Only the older revision touches the file.
+    Removed,
+    Changed,
+    Unchanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDelta {
+    pub path: String,
+    /// The file's `diff --git` line.
+    pub header: String,
+    pub state: DeltaState,
+    /// For `Changed`: the file's changed lines in both revisions, each
+    /// prefixed with ' ' (in both), '-' (older only) or '+' (newer only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// For `Added` and `Removed`: the file's changed lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines: Option<String>,
+}
+
+/// [`changed_lines`] of `patch`, split per file into the `diff --git` line
+/// and the lines under it. A `diff --git` line quoted in the commit message
+/// has nothing under it and is left out.
+pub fn changed_lines_by_file(patch: &str) -> Vec<(String, String)> {
+    let mut files: Vec<(String, String)> = Vec::new();
+    for line in changed_lines(patch).lines() {
+        if line.starts_with("diff --git ") {
+            files.push((line.to_string(), String::new()));
+        } else if let Some((_, lines)) = files.last_mut() {
+            lines.push_str(line);
+            lines.push('\n');
+        }
+    }
+    files.retain(|(_, lines)| !lines.is_empty());
+    files
+}
+
+/// The path in a `diff --git a/old b/new` line, the new one when renamed.
+fn delta_path(header: &str) -> String {
+    let names = header.strip_prefix("diff --git ").unwrap_or(header);
+    names
+        .rsplit_once(" b/")
+        .map_or(names, |(_, path)| path)
+        .to_string()
+}
+
+/// What changed between two revisions of a patch, file by file, comparing
+/// the lines each revision adds and removes ([`changed_lines`]). Files are
+/// compared one at a time, so a file one revision dropped is never matched
+/// against one the other picked up. Files come in the newer revision's
+/// order, then the ones only the older revision has.
+pub fn revision_delta(repo: &Path, old_patch: &str, new_patch: &str) -> Result<Vec<FileDelta>> {
+    let old = changed_lines_by_file(old_patch);
+    let new = changed_lines_by_file(new_patch);
+    let delta = |header: &str, state, diff, lines| FileDelta {
+        path: delta_path(header),
+        header: header.to_string(),
+        state,
+        diff,
+        lines,
+    };
+    let mut files = Vec::new();
+    for (header, lines) in &new {
+        let before = old.iter().find(|(other, _)| other == header);
+        files.push(match before {
+            None => delta(header, DeltaState::Added, None, Some(lines.clone())),
+            Some((_, before)) if before == lines => {
+                delta(header, DeltaState::Unchanged, None, None)
+            }
+            Some((_, before)) => {
+                let context = before.lines().count() + lines.lines().count();
+                let diff = text_diff(
+                    repo,
+                    ("older.txt", before),
+                    ("newer.txt", lines),
+                    Some(context),
+                )
+                .ok_or_else(|| Error::msg(format!("could not compare {}", delta_path(header))))?;
+                delta(header, DeltaState::Changed, Some(hunk_body(&diff)), None)
+            }
+        });
+    }
+    for (header, lines) in &old {
+        if !new.iter().any(|(other, _)| other == header) {
+            files.push(delta(
+                header,
+                DeltaState::Removed,
+                None,
+                Some(lines.clone()),
+            ));
+        }
+    }
+    Ok(files)
+}
+
+/// The lines of a one-hunk diff, without the file header and the `@@` line.
+fn hunk_body(diff: &str) -> String {
+    let mut body = String::new();
+    let mut in_hunk = false;
+    for line in diff.lines() {
+        if in_hunk {
+            body.push_str(line);
+            body.push('\n');
+        } else if line.starts_with("@@ ") {
+            in_hunk = true;
+        }
+    }
+    body
 }
 
 fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<String> {
@@ -2003,6 +2123,90 @@ binary 3333333333333333333333333333333333333333\n"
         );
         assert!(find_domain_hits("jane@acme.company", &domains).is_empty());
         assert!(find_domain_hits("jane@acme.com", &[]).is_empty());
+    }
+
+    #[test]
+    fn changed_lines_by_file_skips_the_quoted_diff_line() {
+        let files = changed_lines_by_file(TTL_PATCH);
+        let headers: Vec<&str> = files.iter().map(|(header, _)| header.as_str()).collect();
+        assert_eq!(
+            headers,
+            [
+                "diff --git a/src/tokens.js b/src/tokens.js",
+                "diff --git a/logo.png b/logo.png"
+            ]
+        );
+        assert_eq!(files[0].1, "-  return 3600;\n+  return 7200;\n");
+    }
+
+    /// A patch touching each `(path, body)`; `body` is the text under the `diff --git` line.
+    fn patch_of(files: &[(&str, &str)]) -> String {
+        let mut patch = String::from("Subject: [PATCH] x\n\n---\n");
+        for (path, body) in files {
+            patch.push_str(&format!("diff --git a/{path} b/{path}\n{body}"));
+        }
+        patch
+    }
+
+    const KEEP: &str = "--- a/keep.rs\n+++ b/keep.rs\n@@ -1 +1 @@\n-old\n+new\n";
+    const SHARED: &str = "@@ -1,3 +1,3 @@\n fn main() {\n-    one();\n+    two();\n }\n";
+
+    #[test]
+    fn revision_delta_compares_file_by_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = patch_of(&[
+            ("keep.rs", KEEP),
+            ("edit.rs", "@@ -1 +1 @@\n-a\n+b\n"),
+            ("dropped.rs", SHARED),
+        ]);
+        let newer = patch_of(&[
+            ("keep.rs", KEEP),
+            ("edit.rs", "@@ -1 +1,2 @@\n-a\n+b\n+c\n"),
+            ("picked.rs", SHARED),
+        ]);
+
+        let files = revision_delta(dir.path(), &older, &newer).unwrap();
+        let states: Vec<(&str, DeltaState)> = files
+            .iter()
+            .map(|file| (file.path.as_str(), file.state))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("keep.rs", DeltaState::Unchanged),
+                ("edit.rs", DeltaState::Changed),
+                ("picked.rs", DeltaState::Added),
+                ("dropped.rs", DeltaState::Removed),
+            ]
+        );
+        assert_eq!(files[0].diff, None);
+        assert_eq!(files[0].lines, None);
+        assert_eq!(files[1].diff.as_deref(), Some(" -a\n +b\n++c\n"));
+        // Same lines in the dropped and the picked-up file: each is listed whole.
+        let shared = Some("-    one();\n+    two();\n");
+        assert_eq!(files[2].lines.as_deref(), shared);
+        assert_eq!(files[3].lines.as_deref(), shared);
+
+        let same = revision_delta(dir.path(), &newer, &newer).unwrap();
+        assert!(same.iter().all(|file| file.state == DeltaState::Unchanged));
+    }
+
+    #[test]
+    fn revision_delta_shows_a_file_that_becomes_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = patch_of(&[("gone.rs", "@@ -1,2 +1 @@\n one\n-two\n")]);
+        let newer = patch_of(&[(
+            "gone.rs",
+            "deleted file mode 100644\n@@ -1,2 +0,0 @@\n-one\n-two\n",
+        )]);
+
+        let files = revision_delta(dir.path(), &older, &newer).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].state, DeltaState::Changed);
+        assert_eq!(
+            files[0].diff.as_deref(),
+            Some("+deleted file mode 100644\n+-one\n -two\n")
+        );
     }
 
     #[test]
