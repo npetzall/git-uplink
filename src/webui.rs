@@ -13,6 +13,7 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
+use crate::assess::{FileDelta, revision_delta};
 use crate::ops::{
     QueueCounts, StateStatus, approval_stale, refresh_from_origin, stale_approvals,
     state_status_at, summarize_queue,
@@ -70,6 +71,13 @@ struct FileQuery {
     source: Option<String>,
     sha: Option<String>,
     path: String,
+}
+
+#[derive(Deserialize)]
+struct DiffQuery {
+    source: Option<String>,
+    from: String,
+    to: String,
 }
 
 #[derive(Serialize)]
@@ -130,6 +138,14 @@ struct FileResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DiffResponse {
+    from: String,
+    to: String,
+    files: Vec<FileDelta>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ErrorBody {
     error: String,
 }
@@ -176,6 +192,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/status", get(status))
         .route("/api/refresh", post(refresh))
         .route("/api/patches/{id}", get(patch_detail))
+        .route("/api/patches/{id}/diff", get(patch_diff))
         .route("/api/file", get(file_at))
         .fallback(static_file)
         .layer(middleware::from_fn(loopback_only))
@@ -565,6 +582,36 @@ async fn patch_detail(
     }
 }
 
+/// What changed in a patch between two revisions of its patch file.
+async fn patch_diff(
+    State(state): State<Arc<AppState>>,
+    PathParam(id): PathParam<String>,
+    Query(query): Query<DiffQuery>,
+) -> Result<Json<DiffResponse>, ApiError> {
+    let path = patch_path(&id).map_err(ApiError::bad_request)?;
+    let path = path.to_string_lossy().into_owned();
+    if !is_valid_sha(&query.from) || !is_valid_sha(&query.to) {
+        return Err(ApiError::bad_request("invalid sha"));
+    }
+    let source = QueueSource::parse(query.source.as_deref());
+    let repo = state.repo.clone();
+    let (from, to) = (query.from.clone(), query.to.clone());
+    let files = tokio::task::spawn_blocking(move || {
+        let older =
+            read_uplink_file(&repo, source, Some(&from), &path).map_err(ApiError::not_found)?;
+        let newer =
+            read_uplink_file(&repo, source, Some(&to), &path).map_err(ApiError::not_found)?;
+        revision_delta(&repo, &older, &newer).map_err(ApiError::internal)
+    })
+    .await
+    .map_err(|err| ApiError::internal(format!("diff worker: {err}")))??;
+    Ok(Json(DiffResponse {
+        from: query.from,
+        to: query.to,
+        files,
+    }))
+}
+
 async fn file_at(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FileQuery>,
@@ -803,6 +850,105 @@ mod tests {
                 .is_some_and(|e| e.contains("invalid path component")),
             "expected path-component error, got {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn patch_diff_rejects_bad_ids_and_shas() {
+        let app = test_app(PathBuf::from("/tmp"));
+        let sha = "a".repeat(40);
+        for uri in [
+            format!("/api/patches/upl_abcdefghij/diff?from=--output=x&to={sha}"),
+            format!("/api/patches/upl_abcdefghij/diff?from={sha}&to=HEAD"),
+            format!("/api/patches/..%2Fetc/diff?from={sha}&to={sha}"),
+            format!("/api/patches/upl_abcdefghij/diff?from={sha}"),
+        ] {
+            let response = app.clone().oneshot(local_request(&uri)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_diff_compares_two_revisions() {
+        use crate::git::git_ok;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let file = repo.join(".uplink/patches/upl_abcdefghij.patch");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        git_ok(repo, &["init", "-q"]).unwrap();
+        let commit = |files: &[(&str, &str)]| {
+            let mut patch = String::from("Subject: [PATCH] x\n\n---\n");
+            for (path, lines) in files {
+                patch.push_str(&format!(
+                    "diff --git a/{path} b/{path}\n@@ -1 +1 @@\n{lines}"
+                ));
+            }
+            std::fs::write(&file, patch).unwrap();
+            git_ok(repo, &["add", "."]).unwrap();
+            git_ok(repo, &["commit", "-q", "-m", "patch"]).unwrap();
+            git_ok(repo, &["rev-parse", "HEAD"])
+                .unwrap()
+                .trim()
+                .to_string()
+        };
+        let first = commit(&[
+            ("keep.rs", "-a\n+b\n"),
+            ("edit.rs", "-a\n+b\n"),
+            ("dropped.rs", "-a\n+b\n"),
+        ]);
+        let second = commit(&[
+            ("keep.rs", "-a\n+b\n"),
+            ("edit.rs", "-a\n+c\n"),
+            ("picked.rs", "-a\n+b\n"),
+        ]);
+        let app = test_app(repo.to_path_buf());
+
+        let uri =
+            format!("/api/patches/upl_abcdefghij/diff?source=remote&from={first}&to={second}");
+        let response = app.clone().oneshot(local_request(&uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        let states: Vec<(&str, &str)> = body["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| {
+                (
+                    file["path"].as_str().unwrap(),
+                    file["state"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("keep.rs", "unchanged"),
+                ("edit.rs", "changed"),
+                ("picked.rs", "added"),
+                ("dropped.rs", "removed"),
+            ]
+        );
+        assert_eq!(body["files"][1]["diff"], " -a\n-+b\n++c\n");
+        assert_eq!(body["files"][2]["lines"], "-a\n+b\n");
+
+        // The uncommitted patch file against the last commit.
+        let uri = format!("/api/patches/upl_abcdefghij/diff?from={second}&to=worktree");
+        let response = app.clone().oneshot(local_request(&uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert!(
+            body["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|file| file["state"] == "unchanged"),
+            "{body}"
+        );
+
+        let missing = "b".repeat(40);
+        let uri = format!("/api/patches/upl_abcdefghij/diff?from={missing}&to={second}");
+        let response = app.oneshot(local_request(&uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
