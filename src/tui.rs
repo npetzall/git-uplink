@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::adopt::{AdoptCommit, AdoptGroup, AheadAnalysis, groups_from_numbers, resolve_groups};
 use crate::assess::{assert_assess_ok, assess_from_message};
+use crate::edit::TextEdit;
 use crate::error::{Error, Result};
 use crate::types::{PatchIntent, QueueState};
 
@@ -18,9 +19,9 @@ enum Phase {
 }
 
 struct Form {
-    title: String,
+    title: TextEdit,
     intent: PatchIntent,
-    message: String,
+    message: TextEdit,
 }
 
 enum Field {
@@ -33,7 +34,7 @@ struct AdoptUi {
     commits: Vec<AdoptCommit>,
     numbers: Vec<u32>,
     selected: usize,
-    typing: String,
+    typing: TextEdit,
     entering_number: bool,
     status: String,
     phase: Phase,
@@ -67,7 +68,7 @@ fn run_loop(
         commits: analysis.commits.clone(),
         numbers: (1..=n as u32).collect(),
         selected: 0,
-        typing: String::new(),
+        typing: TextEdit::new(""),
         entering_number: false,
         status: "1-9 set group, [ ] bump, g then digits, Enter to continue, q abort".into(),
         phase: Phase::Assign,
@@ -97,26 +98,25 @@ fn run_loop(
 fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
     if ui.entering_number {
         match key.code {
-            KeyCode::Char(c) if c.is_ascii_digit() => ui.typing.push(c),
-            KeyCode::Backspace => {
-                ui.typing.pop();
-            }
             KeyCode::Enter => {
-                if let Ok(n) = ui.typing.parse::<u32>() {
+                if let Ok(n) = ui.typing.text().parse::<u32>() {
                     if n == 0 {
                         ui.status = "group numbers start at 1".into();
                     } else {
                         ui.numbers[ui.selected] = n;
                     }
                 }
-                ui.typing.clear();
                 ui.entering_number = false;
             }
-            KeyCode::Esc => {
-                ui.typing.clear();
-                ui.entering_number = false;
+            KeyCode::Esc => ui.entering_number = false,
+            KeyCode::Char(c)
+                if !c.is_ascii_digit()
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {}
+            _ => {
+                ui.typing.handle_key(key);
             }
-            _ => {}
         }
         return Ok(());
     }
@@ -149,7 +149,7 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char('g') => {
             ui.entering_number = true;
-            ui.typing.clear();
+            ui.typing = TextEdit::new("");
             ui.status = "type group number, Enter to set".into();
         }
         KeyCode::Enter => match groups_from_numbers(&ui.commits, &ui.numbers) {
@@ -157,16 +157,18 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
                 ui.forms = groups
                     .iter()
                     .map(|g| Form {
-                        title: g.title.clone(),
+                        title: TextEdit::new(g.title.as_str()),
                         intent: g.intent,
-                        message: g.message.clone().unwrap_or_else(|| g.title.clone()),
+                        message: TextEdit::multiline(
+                            g.message.as_deref().unwrap_or(g.title.as_str()),
+                        ),
                     })
                     .collect();
                 ui.groups = groups;
                 ui.field = Field::Title;
                 ui.phase = Phase::Details { index: 0 };
                 ui.status =
-                    "Tab fields, i intent, Ctrl+n/p groups, Ctrl+s finish, Esc back, q abort"
+                    "Tab fields, arrows move, i intent, Ctrl+n/p groups, Ctrl+s finish, Esc back, q abort"
                         .into();
             }
             Err(err) => ui.status = err.to_string(),
@@ -243,25 +245,18 @@ fn handle_details(
                 "adopt grouping aborted; re-run git uplink init to continue",
             ));
         }
-        other => apply_field_input(&mut ui.forms[index], &ui.field, other),
+        _ => apply_field_input(&mut ui.forms[index], &ui.field, key),
     }
     Ok(None)
 }
 
-fn apply_field_input(form: &mut Form, field: &Field, code: KeyCode) {
+fn apply_field_input(form: &mut Form, field: &Field, key: KeyEvent) {
     let target = match field {
         Field::Title => &mut form.title,
         Field::Message => &mut form.message,
         Field::Intent => return,
     };
-    match code {
-        KeyCode::Char(c) => target.push(c),
-        KeyCode::Backspace => {
-            target.pop();
-        }
-        KeyCode::Enter if matches!(field, Field::Message) => target.push('\n'),
-        _ => {}
-    }
+    target.handle_key(key);
 }
 
 fn finish(
@@ -271,9 +266,9 @@ fn finish(
     analysis: &AheadAnalysis,
 ) -> Result<Option<Vec<AdoptGroup>>> {
     for (i, form) in ui.forms.iter().enumerate() {
-        ui.groups[i].title = form.title.trim().to_string();
+        ui.groups[i].title = form.title.text().trim().to_string();
         ui.groups[i].intent = form.intent;
-        ui.groups[i].message = Some(form.message.clone());
+        ui.groups[i].message = Some(form.message.text().to_string());
     }
     match resolve_groups(analysis, &ui.groups) {
         Ok(groups) => {
@@ -337,15 +332,22 @@ fn draw(frame: &mut Frame, ui: &mut AdoptUi) {
         Phase::Assign => draw_assign(frame, ui, chunks[0], chunks[1]),
         Phase::Details { index } => draw_details(frame, ui, index, chunks[0], chunks[1]),
     }
+    let block = Block::default().borders(Borders::ALL).title("Status");
+    let inner = block.inner(chunks[2]);
     let status = if ui.entering_number {
-        format!("group number: {}_", ui.typing)
+        let label = "group number: ";
+        let room = (inner.width as usize).saturating_sub(label.len());
+        let view = ui.typing.view(room, inner.height.min(1) as usize);
+        if let Some(line) = view.lines.first() {
+            frame.set_cursor_position((inner.x + label.len() as u16 + view.cursor.0, inner.y));
+            format!("{label}{line}")
+        } else {
+            label.to_string()
+        }
     } else {
         ui.status.clone()
     };
-    frame.render_widget(
-        Paragraph::new(status).block(Block::default().borders(Borders::ALL).title("Status")),
-        chunks[2],
-    );
+    frame.render_widget(Paragraph::new(status).block(block), chunks[2]);
 }
 
 fn draw_assign(frame: &mut Frame, ui: &mut AdoptUi, list_area: Rect, help_area: Rect) {
@@ -387,55 +389,77 @@ Interleaved numbers (1, 2, 1) are rejected.",
 
 fn draw_details(
     frame: &mut Frame,
-    ui: &AdoptUi,
+    ui: &mut AdoptUi,
     index: usize,
     form_area: Rect,
     commits_area: Rect,
 ) {
-    let form = &ui.forms[index];
+    let warn = index > 0
+        && ui.forms[index - 1].intent.is_internal_only()
+        && !ui.forms[index].intent.is_internal_only();
+    let count = ui.forms.len();
+    let form = &mut ui.forms[index];
     let group = &ui.groups[index];
-    let warn = if index > 0
-        && ui.forms[index.saturating_sub(1)].intent.is_internal_only()
-        && !form.intent.is_internal_only()
-    {
-        "\nWarning: previous group is internal-only; this upstream patch cannot depend on it."
-    } else {
-        ""
-    };
-    let title_mark = if matches!(ui.field, Field::Title) {
-        ">"
-    } else {
-        " "
-    };
-    let intent_mark = if matches!(ui.field, Field::Intent) {
-        ">"
-    } else {
-        " "
-    };
-    let message_mark = if matches!(ui.field, Field::Message) {
-        ">"
-    } else {
-        " "
-    };
-    let body = format!(
-        "Group {} of {}\n\
-{title_mark} Title: {}\n\
-{intent_mark} Intent: {} (i to toggle)\n\
-{message_mark} Message:\n{}\n{warn}",
-        index + 1,
-        ui.forms.len(),
-        form.title,
-        form.intent,
-        form.message
-    );
+    let mark = |focused: bool| if focused { ">" } else { " " };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Group details");
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(if warn { 2 } else { 0 }),
+        ])
+        .split(block.inner(form_area));
+    frame.render_widget(block, form_area);
     frame.render_widget(
-        Paragraph::new(body).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Group details"),
-        ),
-        form_area,
+        Paragraph::new(format!("Group {} of {count}", index + 1)),
+        rows[0],
     );
+
+    let title_focused = matches!(ui.field, Field::Title);
+    let label = format!("{} Title: ", mark(title_focused));
+    let room = (rows[1].width as usize).saturating_sub(label.len());
+    let view = form.title.view(room, rows[1].height as usize);
+    if let Some(line) = view.lines.first() {
+        if title_focused {
+            frame.set_cursor_position((rows[1].x + label.len() as u16 + view.cursor.0, rows[1].y));
+        }
+        frame.render_widget(Paragraph::new(format!("{label}{line}")), rows[1]);
+    }
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{} Intent: {} (i to toggle)",
+            mark(matches!(ui.field, Field::Intent)),
+            form.intent
+        )),
+        rows[2],
+    );
+    let message_focused = matches!(ui.field, Field::Message);
+    frame.render_widget(
+        Paragraph::new(format!("{} Message:", mark(message_focused))),
+        rows[3],
+    );
+    let view = form
+        .message
+        .view(rows[4].width as usize, rows[4].height as usize);
+    if message_focused && !view.lines.is_empty() {
+        frame.set_cursor_position((rows[4].x + view.cursor.0, rows[4].y + view.cursor.1));
+    }
+    frame.render_widget(Paragraph::new(view.lines.join("\n")), rows[4]);
+    if warn {
+        frame.render_widget(
+            Paragraph::new(
+                "Warning: previous group is internal-only; this upstream patch cannot depend on it.",
+            )
+            .wrap(Wrap { trim: true }),
+            rows[5],
+        );
+    }
     let one_liners: Vec<String> = group
         .commits
         .iter()

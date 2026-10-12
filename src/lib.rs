@@ -6,6 +6,7 @@ mod adopt;
 mod assess;
 pub mod cli;
 mod doctor;
+mod edit;
 mod error;
 mod gate;
 mod git;
