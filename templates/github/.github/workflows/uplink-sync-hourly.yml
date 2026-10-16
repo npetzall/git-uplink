@@ -1,8 +1,10 @@
 # GitHub forge pack (`git uplink init --forge github`).
-# Dispatches Uplink sync every hour. The schedule is its own file so a pack
-# overlay can leave it out. try-it-on-github does, so nothing races a
-# walkthrough.
-name: Uplink sync schedule
+# Dispatches Uplink sync every hour. The pack ships hourly, daily and weekly
+# schedules, all enabled: disable the ones you do not want in the Actions UI
+# instead of editing the cron, so an upgrade does not undo it. Each schedule
+# is its own file so it can be disabled alone and a pack overlay can leave it
+# out. try-it-on-github does, so nothing races a walkthrough.
+name: Uplink sync hourly
 
 on:
   schedule:

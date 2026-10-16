@@ -393,7 +393,7 @@ git remote set-url origin {{companyUrl}}`}</Command>
           <>
             <p>
               <strong>Settings → Secrets and variables → Actions → Secrets → New repository secret</strong>. These are
-              repository secrets because sync runs hourly and cannot wait on an Environment.
+              repository secrets because sync runs on a schedule and cannot wait on an Environment.
             </p>
             <ul>
               <li>

@@ -29,7 +29,8 @@
 # whose last unmerged upstream dependency this run marked merged gets Uplink
 # submit dispatched, also when the run ends in a conflict on another patch.
 #
-# Dispatch only. uplink-sync-schedule.yml runs it hourly.
+# Dispatch only. uplink-sync-hourly.yml, -daily.yml and -weekly.yml run it on
+# a schedule.
 name: Uplink sync
 
 on:

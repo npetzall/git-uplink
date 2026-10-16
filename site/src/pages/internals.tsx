@@ -353,7 +353,7 @@ const FLOWS = [
   ["Pull request checks", "PR to main opened or changed", "uplink-pr.yml", "none (required checks)"],
   ["Import", "PR merged into main", "uplink-import.yml", "the merge itself"],
   ["Submit", "dispatch, by hand or by the pack", "uplink-submit.yml", "to-upstream"],
-  ["Sync", "hourly, or dispatch", "uplink-sync.yml", "from-upstream, for foreign commits"],
+  ["Sync", "hourly, daily or weekly, or dispatch", "uplink-sync.yml", "from-upstream, for foreign commits"],
   ["Resolve", "conflict PR merged", "uplink-resolve.yml", "the gated PR"],
   ["Transfer", "dispatch, or a failed import", "uplink-transfer.yml", "transfer PR, when changes are needed"],
   ["Amend", "dispatch", "uplink-amend.yml", "the draft PR"],

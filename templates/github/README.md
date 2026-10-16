@@ -82,7 +82,7 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
 
 ## `uplink-sync.yml` — Uplink sync
 
-- **Runs on:** manual dispatch. `uplink-sync-schedule.yml` (**Uplink sync schedule**) dispatches it every hour with the Actions token (actions write); that is all it does.
+- **Runs on:** manual dispatch. `uplink-sync-hourly.yml` (**Uplink sync hourly**), `uplink-sync-daily.yml` (**Uplink sync daily**) and `uplink-sync-weekly.yml` (**Uplink sync weekly**, Mondays) dispatch it with the Actions token (actions write); that is all they do. All three ship enabled. Disable the ones you do not want (**Actions → the workflow → ⋯ → Disable workflow**) instead of editing the cron, so an upgrade does not undo the change.
 - **Does:**
   - **Merged PRs:** before sync, the job asks the upstream repository whether the public PR recorded for each active upstream patch is merged, and passes each merge commit as `git uplink sync --merged-pr <id>=<sha>`.
   - **Inspect:** `git uplink sync` fetches public upstream without moving `uplink/upstream`. A patch is merged when a commit has its stable patch id or its public PR is merged; an `Uplink-Patch-Id` trailer alone is not enough. When the merged patches explain the whole range, sync promotes, marks them merged, and rebuilds at once. Otherwise it writes the remaining diff to `.uplink/reports/from-upstream/incoming.md`.

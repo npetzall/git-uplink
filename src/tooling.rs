@@ -421,6 +421,7 @@ mod find_tooling_tests {
 #[cfg(test)]
 mod embed_tests {
     use super::*;
+    use crate::types::SYNC_SCHEDULES;
 
     #[test]
     fn github_pack_embeds_workflows_and_shared_pr_template() {
@@ -534,8 +535,7 @@ mod embed_tests {
     }
 
     #[test]
-    fn try_it_on_github_is_the_github_pack_without_the_sync_schedule() {
-        let schedule = ".github/workflows/uplink-sync-schedule.yml";
+    fn try_it_on_github_is_the_github_pack_without_the_sync_schedules() {
         let mut base = composed_files(Forge::Github).unwrap();
         let text = |path: &str| {
             base.iter()
@@ -543,12 +543,14 @@ mod embed_tests {
                 .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
                 .unwrap_or_else(|| panic!("github pack is missing {path}"))
         };
-        let scheduled = text(schedule);
-        assert!(scheduled.contains("schedule:"), "{scheduled}");
-        assert!(
-            scheduled.contains("gh workflow run uplink-sync.yml"),
-            "{scheduled}"
-        );
+        for schedule in SYNC_SCHEDULES {
+            let scheduled = text(schedule);
+            assert!(scheduled.contains("schedule:"), "{schedule}\n{scheduled}");
+            assert!(
+                scheduled.contains("gh workflow run uplink-sync.yml"),
+                "{schedule}\n{scheduled}"
+            );
+        }
         let sync = text(".github/workflows/uplink-sync.yml");
         assert!(sync.contains("workflow_dispatch:"), "{sync}");
         assert!(
@@ -557,7 +559,7 @@ mod embed_tests {
         );
 
         // Anything else that differs must be a deliberate overlay file.
-        base.retain(|(path, _)| path != schedule);
+        base.retain(|(path, _)| !SYNC_SCHEDULES.contains(&path.as_str()));
         assert_eq!(composed_files(Forge::TryItOnGithub).unwrap(), base);
     }
 
