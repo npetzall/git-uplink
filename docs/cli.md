@@ -86,6 +86,8 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
   Company main is rebuilt locally and compared with origin's: files of the pack are reported as tooling, any other file that differs as product code, which an upgrade should not change.
 
   A queued patch that changes pack files is replayed on the new pack before anything is written. One the new pack makes empty is dropped. One that no longer applies pauses the upgrade the way `git rebase` stops on a commit: the checkout is left on the new pack with the failed apply, and `--continue`, `--drop` or `--abort` takes it from there.
+
+  Before anything moves, the upgrade refuses to start while work unrelated to it is pending: changes or untracked files in the checkout, `.uplink/` edits not on `uplink/state`, a local `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of origin's, or company main commits origin's main does not have. Push that work, or discard it with `git uplink reset`.
 - `--continue`: Continue a paused upgrade with the conflict resolved.
 
   Resolve the files, `git add` them, and what they hold becomes the patch. A patch resolved to what the new pack has is dropped.
@@ -145,13 +147,13 @@ If origin moved, it appends local-only patches onto the remote tip and carries t
 
 Fetch origin tracking refs without moving local branches.
 
-The refs are `uplink/state`, `uplink/upstream`, and company main.
+The refs are `uplink/state`, `uplink/upstream`, company main, and `uplink/hooks` when origin has it.
 
 ### `reset`
 
-Fetch origin and hard-reset company main, uplink/state, and uplink/upstream.
+Fetch origin and hard-reset company main, uplink/state, uplink/upstream, and uplink/hooks.
 
-Afterwards the clone matches origin and `.uplink/` is restored.
+Afterwards the clone matches origin and `.uplink/` is restored. A local `uplink/hooks` that origin does not have yet is kept. Untracked files in the checkout are left alone.
 
 ### `rebase`
 

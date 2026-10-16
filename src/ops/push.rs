@@ -7,33 +7,43 @@ pub struct ResetResult {
     pub internal_sha: String,
     pub state_sha: String,
     pub upstream_sha: String,
+    /// `None` when origin has no `uplink/hooks` yet; an upgrade creates it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hooks_sha: Option<String>,
 }
 
 pub type RefreshResult = ResetResult;
 
-/// Fetch origin tracking refs for company main, `uplink/state`, and `uplink/upstream`.
-/// Does not move local branches or restore `.uplink/`.
+/// Fetch origin tracking refs for company main, `uplink/state`, `uplink/upstream`,
+/// and `uplink/hooks` when origin has it. Does not move local branches or restore `.uplink/`.
 pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
     let state_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
     let upstream_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, UPSTREAM_REF)?;
     let queue = queue_at(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?;
     let internal_branch = queue.config.internal_branch.clone();
     let internal_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, &internal_branch)?;
+    let hooks_sha = fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)?;
     Ok(RefreshResult {
         internal_branch,
         internal_sha,
         state_sha,
         upstream_sha,
+        hooks_sha,
     })
 }
 
-/// Fetch origin and hard-reset company main, `uplink/state`, and `uplink/upstream`.
-/// Leaves HEAD on the configured internal branch with `.uplink/` restored from origin.
+/// Fetch origin and hard-reset company main, `uplink/state`, `uplink/upstream`,
+/// and `uplink/hooks` when origin has it. A local `uplink/hooks` origin lacks
+/// is kept. Leaves HEAD on the configured internal branch with `.uplink/`
+/// restored from origin.
 pub fn reset_from_origin(repo: &Path) -> Result<ResetResult> {
     let fetched = refresh_from_origin(repo)?;
     refresh_company_branch(repo, COMPANY_REMOTE, &fetched.internal_branch)?;
     apply_state_sha(repo, STATE_BRANCH, &fetched.state_sha)?;
     point_branch_at(repo, UPSTREAM_REF, &fetched.upstream_sha)?;
+    if let Some(hooks_sha) = &fetched.hooks_sha {
+        point_branch_at(repo, HOOKS_BRANCH, hooks_sha)?;
+    }
     Ok(fetched)
 }
 

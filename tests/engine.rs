@@ -1812,21 +1812,10 @@ fn init_upgrade_warns_about_product_code_that_differs_from_origin() {
     let company = &world.company;
     publish_origin(company);
     install_older_pack(company, |dir| write(dir, LEGACY_WORKFLOW, "name: legacy\n"));
+    // Committed straight to origin's main, never queued: the rebuild drops it.
+    write(company, "NOTES.md", "notes\n");
+    commit_all(company, "add NOTES.md");
     push_main_and_state(company);
-    // On local main only.
-    add_internal_file(company, "NOTES.md", "notes\n");
-    git(
-        company,
-        &["push", "--quiet", "origin", "uplink/state"],
-        GitOpts::default(),
-    )
-    .unwrap();
-    git(
-        company,
-        &["checkout", "--quiet", "main"],
-        GitOpts::default(),
-    )
-    .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
         .args(["init", "--upgrade"])
@@ -1839,7 +1828,7 @@ fn init_upgrade_warns_about_product_code_that_differs_from_origin() {
         stdout.contains(
             "Tooling: updated, 1 file changed\n\
 warning: product code changed in 1 file outside the tooling pack, against origin/main:\n  \
-A NOTES.md\n\
+D NOTES.md\n\
 Inspect with: git diff origin/main main -- NOTES.md\n"
         ),
         "{stdout}"
@@ -2257,6 +2246,213 @@ fn init_upgrade_before_init_errors() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("not initialized"), "{err}");
+}
+
+/// A published queue whose tooling an upgrade would refresh.
+fn published_world_due_an_upgrade() -> World {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    publish_origin(company);
+    install_older_pack(company, |dir| write(dir, LEGACY_WORKFLOW, "name: legacy\n"));
+    push_main_and_state(company);
+    world
+}
+
+/// One commit on `branch` with the same tree, without touching the checkout.
+fn commit_on_top(repo: &Path, branch: &str) {
+    let sha = git_ok(
+        repo,
+        &[
+            "commit-tree",
+            &format!("{branch}^{{tree}}"),
+            "-p",
+            branch,
+            "-m",
+            "local",
+        ],
+    )
+    .unwrap();
+    git(
+        repo,
+        &["update-ref", &format!("refs/heads/{branch}"), &sha],
+        GitOpts::default(),
+    )
+    .unwrap();
+}
+
+/// The upgrade refuses with `needle` in its error and moves no branch and no
+/// file under `.uplink/`.
+fn assert_upgrade_refused(company: &Path, needle: &str) {
+    let refs = git_ok(company, &["for-each-ref", "refs/heads"]).unwrap();
+    let queue = fs::read_to_string(company.join(".uplink/queue.json")).unwrap();
+    let err = upgrade(company).unwrap_err().to_string();
+    assert!(err.starts_with("refusing to upgrade"), "{err}");
+    assert!(err.contains(needle), "{err}");
+    assert_eq!(
+        git_ok(company, &["for-each-ref", "refs/heads"]).unwrap(),
+        refs
+    );
+    assert_eq!(
+        fs::read_to_string(company.join(".uplink/queue.json")).unwrap(),
+        queue
+    );
+}
+
+fn reset_then_upgrade(company: &Path) {
+    reset_from_origin(company).unwrap();
+    assert!(upgrade(company).unwrap().tooling_changed);
+}
+
+#[test]
+fn init_upgrade_refuses_untracked_files_in_the_checkout() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    write(company, "scratch.txt", "mine\n");
+    assert_upgrade_refused(company, "scratch.txt");
+    assert_upgrade_refused(company, "git stash --include-untracked");
+    fs::remove_file(company.join("scratch.txt")).unwrap();
+    assert!(upgrade(company).unwrap().tooling_changed);
+}
+
+#[test]
+fn init_upgrade_refuses_staged_changes() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    write(company, PR_TEMPLATE, "mine\n");
+    git(company, &["add", PR_TEMPLATE], GitOpts::default()).unwrap();
+    assert_upgrade_refused(company, PR_TEMPLATE);
+}
+
+#[test]
+fn init_upgrade_refuses_a_stray_file_under_uplink() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    write(company, ".uplink/stray.txt", "stray\n");
+    assert_upgrade_refused(company, "stray.txt");
+    reset_then_upgrade(company);
+    assert!(!company.join(".uplink/stray.txt").exists());
+}
+
+#[test]
+fn init_upgrade_refuses_an_uncommitted_queue_edit() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    let path = company.join(".uplink/queue.json");
+    let edited = format!("{}\n", fs::read_to_string(&path).unwrap());
+    fs::write(&path, edited).unwrap();
+    let err = upgrade(company).unwrap_err().to_string();
+    assert!(err.contains("queue.json"), "{err}");
+    reset_then_upgrade(company);
+}
+
+#[test]
+fn init_upgrade_refuses_local_state_ahead_of_origin() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    write(company, ".uplink/notes.txt", "local\n");
+    git_uplink::commit_queue(company, "uplink: local").unwrap();
+    assert_upgrade_refused(company, "uplink/state is 1 ahead of origin/uplink/state");
+    reset_then_upgrade(company);
+}
+
+#[test]
+fn init_upgrade_refuses_local_upstream_ahead_of_origin() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    commit_on_top(company, "uplink/upstream");
+    assert_upgrade_refused(
+        company,
+        "uplink/upstream is 1 ahead of origin/uplink/upstream",
+    );
+    reset_then_upgrade(company);
+}
+
+#[test]
+fn init_upgrade_refuses_local_hooks_ahead_of_origin() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    commit_on_top(company, "uplink/hooks");
+    assert_upgrade_refused(company, "uplink/hooks is 1 ahead of origin/uplink/hooks");
+    reset_then_upgrade(company);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "uplink/hooks"]).unwrap(),
+        git_ok(company, &["rev-parse", "origin/uplink/hooks"]).unwrap()
+    );
+}
+
+#[test]
+fn init_upgrade_refuses_main_commits_origin_lacks() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    write(company, "NOTES.md", "notes\n");
+    commit_all(company, "add NOTES.md");
+    assert_upgrade_refused(company, "main has 1 commit(s) origin/main does not have");
+    assert_upgrade_refused(company, "git uplink reset");
+    reset_then_upgrade(company);
+    assert!(!company.join("NOTES.md").exists());
+}
+
+#[test]
+fn init_upgrade_accepts_local_refs_behind_origin() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    // Origin's upstream moves on; the local one stays behind.
+    let ahead = git_ok(
+        company,
+        &[
+            "commit-tree",
+            "uplink/upstream^{tree}",
+            "-p",
+            "uplink/upstream",
+            "-m",
+            "origin",
+        ],
+    )
+    .unwrap();
+    git(
+        company,
+        &[
+            "push",
+            "--quiet",
+            "origin",
+            &format!("{ahead}:refs/heads/uplink/upstream"),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    assert!(upgrade(company).unwrap().tooling_changed);
+}
+
+#[test]
+fn init_upgrade_accepts_hooks_missing_on_origin() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    assert!(
+        git_ok(company, &["ls-remote", "origin", "uplink/hooks"])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(upgrade(company).unwrap().tooling_changed);
+}
+
+#[test]
+fn reset_keeps_local_hooks_origin_does_not_have() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    let hooks = git_ok(company, &["rev-parse", "uplink/hooks"]).unwrap();
+    let result = reset_from_origin(company).unwrap();
+    assert_eq!(result.hooks_sha, None);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "uplink/hooks"]).unwrap(),
+        hooks
+    );
 }
 
 fn rev(repo: &Path) -> String {

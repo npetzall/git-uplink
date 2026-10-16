@@ -881,6 +881,9 @@ fn cmd_refresh(repo: &Path) -> Result<(), Error> {
     println!("origin/{} {}", result.internal_branch, result.internal_sha);
     println!("origin/{} {}", STATE_BRANCH, result.state_sha);
     println!("origin/uplink/upstream {}", result.upstream_sha);
+    if let Some(sha) = &result.hooks_sha {
+        println!("origin/{HOOKS_BRANCH} {sha}");
+    }
     Ok(())
 }
 
@@ -889,6 +892,9 @@ fn cmd_reset(repo: &Path) -> Result<(), Error> {
     println!("{} {}", result.internal_branch, result.internal_sha);
     println!("{} {}", STATE_BRANCH, result.state_sha);
     println!("uplink/upstream {}", result.upstream_sha);
+    if let Some(sha) = &result.hooks_sha {
+        println!("{HOOKS_BRANCH} {sha}");
+    }
     Ok(())
 }
 
