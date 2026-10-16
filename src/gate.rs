@@ -160,6 +160,18 @@ pub(crate) fn ensure_clean_worktree(repo: &Path, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// Tracked changes and untracked, non-ignored files, as `git status --porcelain`
+/// lists them. `.uplink/` is excluded through `.git/info/exclude`.
+pub(crate) fn dirty_paths(repo: &Path) -> Result<Vec<String>> {
+    Ok(
+        git_ok(repo, &["status", "--porcelain", "--untracked-files=all"])?
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 fn worktree_dirty(repo: &Path) -> Result<bool> {
     if !git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
         return Ok(true);

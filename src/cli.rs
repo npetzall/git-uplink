@@ -275,6 +275,13 @@ pub enum Commands {
         /// `git rebase` stops on a commit: the checkout is left on the new
         /// pack with the failed apply, and `--continue`, `--drop` or
         /// `--abort` takes it from there.
+        ///
+        /// Before anything moves, the upgrade refuses to start while work
+        /// unrelated to it is pending: changes or untracked files in the
+        /// checkout, `.uplink/` edits not on `uplink/state`, a local
+        /// `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of
+        /// origin's, or company main commits origin's main does not have.
+        /// Push that work, or discard it with `git uplink reset`.
         #[arg(long)]
         upgrade: bool,
         /// Continue a paused upgrade with the conflict resolved.
@@ -405,11 +412,14 @@ pub enum Commands {
     },
     /// Fetch origin tracking refs without moving local branches.
     ///
-    /// The refs are `uplink/state`, `uplink/upstream`, and company main.
+    /// The refs are `uplink/state`, `uplink/upstream`, company main, and
+    /// `uplink/hooks` when origin has it.
     Refresh,
-    /// Fetch origin and hard-reset company main, uplink/state, and uplink/upstream.
+    /// Fetch origin and hard-reset company main, uplink/state, uplink/upstream, and uplink/hooks.
     ///
     /// Afterwards the clone matches origin and `.uplink/` is restored.
+    /// A local `uplink/hooks` that origin does not have yet is kept.
+    /// Untracked files in the checkout are left alone.
     Reset,
     /// Rebase the current branch onto company main after a rebuild replaced it.
     ///

@@ -24,6 +24,127 @@ pub struct InitOpts {
     pub ask_settings: bool,
 }
 
+/// Refuses an upgrade that would sweep unrelated work into its commits or
+/// throw it away: the upgrade resets `uplink/state`, `uplink/upstream` and
+/// `.uplink/` to origin's, commits all of `.uplink/`, and rebuilds company
+/// main. A ref origin does not have is not checked; `uplink/hooks` missing on
+/// origin is what an upgrade creates.
+fn upgrade_preflight(repo: &Path) -> Result<()> {
+    let mut problems = Vec::new();
+    let mut reset_fixes = false;
+
+    let dirty = crate::gate::dirty_paths(repo)?;
+    if !dirty.is_empty() {
+        problems.push(format!(
+            "The checkout has changes or untracked files; commit them or run \
+`git stash --include-untracked`:\n{}",
+            indent_lines(&dirty)
+        ));
+    }
+    if has_ref(repo, STATE_BRANCH)? {
+        let uplink = uplink_uncommitted_paths(repo, STATE_BRANCH)?;
+        if !uplink.is_empty() {
+            reset_fixes = true;
+            problems.push(format!(
+                ".uplink/ differs from {STATE_BRANCH}:\n{}",
+                indent_lines(&uplink)
+            ));
+        }
+    }
+
+    // A missing origin, or a branch it lacks, fails the fetch: nothing to compare.
+    for branch in [STATE_BRANCH, UPSTREAM_REF, HOOKS_BRANCH] {
+        if let Some(problem) = ahead_of_origin(repo, branch)? {
+            reset_fixes = true;
+            problems.push(problem);
+        }
+    }
+    if crate::hooks::hooks_checked_out(repo) {
+        problems.push(format!(
+            "{HOOKS_BRANCH} is checked out; switch to another branch."
+        ));
+    }
+    if let Some(problem) = main_ahead_of_origin(repo)? {
+        reset_fixes = true;
+        problems.push(problem);
+    }
+
+    if problems.is_empty() {
+        return Ok(());
+    }
+    let mut message = format!(
+        "refusing to upgrade: work unrelated to the upgrade is pending.\n\n{}",
+        problems.join("\n\n")
+    );
+    if reset_fixes {
+        message.push_str(
+            "\n\nPublish local work with `git uplink push` (and push company main), \
+or discard it with `git uplink reset`, which also discards tracked changes in the checkout.",
+        );
+    }
+    Err(Error::msg(message))
+}
+
+fn indent_lines(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A local branch with commits origin's lacks. Behind is fine: the upgrade
+/// fast-forwards it.
+fn ahead_of_origin(repo: &Path, branch: &str) -> Result<Option<String>> {
+    if !has_ref(repo, branch)? {
+        return Ok(None);
+    }
+    let Some(remote) = fetch_state_tracking(repo, COMPANY_REMOTE, branch)? else {
+        return Ok(None);
+    };
+    let (ahead, behind) = ahead_behind(repo, branch, &remote)?;
+    if ahead == 0 {
+        return Ok(None);
+    }
+    let state = if behind == 0 {
+        format!("{ahead} ahead of")
+    } else {
+        format!("diverged from ({ahead} ahead, {behind} behind)")
+    };
+    Ok(Some(format!(
+        "{branch} is {state} {COMPANY_REMOTE}/{branch}."
+    )))
+}
+
+/// Commits on company main that origin's main lacks: the rebuild replaces
+/// main, and only what is published can be told apart from what the queue
+/// holds. Without main on origin there is nothing to compare with.
+fn main_ahead_of_origin(repo: &Path) -> Result<Option<String>> {
+    let Ok(queue) = read_queue_file(repo) else {
+        return Ok(None);
+    };
+    let main = queue.config.internal_branch;
+    if !has_ref(repo, &main)? {
+        return Ok(None);
+    }
+    let Some(remote) = fetch_state_tracking(repo, COMPANY_REMOTE, &main)? else {
+        return Ok(None);
+    };
+    let commits: Vec<String> = git_ok(repo, &["log", "--format=%h %s", &main, "--not", &remote])?
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    if commits.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{main} has {} commit(s) {COMPANY_REMOTE}/{main} does not have:\n{}",
+        commits.len(),
+        indent_lines(&commits)
+    )))
+}
+
 /// What `init --upgrade` does with an upgrade that paused on a queued patch
 /// which changes pack files and does not apply on the new pack. The checkout
 /// was left on the new pack with the failed apply, as `git rebase` leaves a
@@ -488,6 +609,14 @@ git uplink init --upgrade --abort",
             paused.patch_id
         )));
     }
+    progress.run_step(
+        "upgrade-preflight",
+        "Check nothing unrelated is pending",
+        || {
+            upgrade_preflight(repo)?;
+            Ok(((), StepOutcome::pass("nothing unrelated to the upgrade")))
+        },
+    )?;
     progress.run_step("sync-origin-state", "Sync state from origin", || {
         try_replace_state_from_origin(repo)?;
         Ok((

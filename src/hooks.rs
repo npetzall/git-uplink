@@ -257,7 +257,7 @@ reconcile, and re-run git uplink init --upgrade"
     ))
 }
 
-fn hooks_checked_out(repo: &Path) -> bool {
+pub(crate) fn hooks_checked_out(repo: &Path) -> bool {
     git_ok(repo, &["symbolic-ref", "--quiet", "HEAD"]).is_ok_and(|head| head == HOOKS_REF)
 }
 
