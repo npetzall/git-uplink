@@ -130,7 +130,7 @@ export function HowPage() {
       </Section>
 
       <Section title="Staying current with upstream">
-        <p>Sync runs hourly. It fetches public upstream and sorts every new commit into one of two kinds:</p>
+        <p>Sync runs hourly, daily or weekly, whichever schedules you keep enabled. It fetches public upstream and sorts every new commit into one of two kinds:</p>
         <ul>
           <li>
             <strong>Flow-back</strong>: one of our patches, merged upstream. It is recognized and applied

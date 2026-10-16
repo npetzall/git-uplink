@@ -124,6 +124,14 @@ pub enum Forge {
     TryItOnGithub,
 }
 
+/// The GitHub pack's sync schedules. All ship enabled; an operator disables the
+/// ones they do not want.
+pub const SYNC_SCHEDULES: &[&str] = &[
+    ".github/workflows/uplink-sync-hourly.yml",
+    ".github/workflows/uplink-sync-daily.yml",
+    ".github/workflows/uplink-sync-weekly.yml",
+];
+
 impl Forge {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -137,8 +145,8 @@ impl Forge {
     pub fn omitted_paths(self) -> &'static [&'static str] {
         match self {
             Self::Github => &[],
-            // No hourly sync, so nothing races a walkthrough.
-            Self::TryItOnGithub => &[".github/workflows/uplink-sync-schedule.yml"],
+            // No scheduled sync, so nothing races a walkthrough.
+            Self::TryItOnGithub => SYNC_SCHEDULES,
         }
     }
 
