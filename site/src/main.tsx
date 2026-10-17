@@ -1,14 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { HomePage } from "./pages/home";
 import { CliPage } from "./pages/cli";
 import { DayToDayPage } from "./pages/day-to-day";
 import { ExamplesPage } from "./pages/examples";
+import { HomePage } from "./pages/home";
+import { HowPage } from "./pages/how";
 import { InstallPage } from "./pages/install";
 import { InternalsPage } from "./pages/internals";
 import { LabPage } from "./pages/lab";
-import { HowPage } from "./pages/how";
 import { SecurityPage } from "./pages/security";
 import { SetupPage } from "./pages/setup";
 import { WhyPage } from "./pages/why";
@@ -35,14 +35,22 @@ function App() {
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/why" element={<WhyPage />} />
       <Route path="/playbook" element={<Navigate to="/why" replace />} />
-      <Route path="/collaboration" element={<Navigate to="/day-to-day" replace />} />
+      <Route
+        path="/collaboration"
+        element={<Navigate to="/day-to-day" replace />}
+      />
       <Route path="/working" element={<Navigate to="/day-to-day" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) {
+  throw new Error("index.html has no #root element");
+}
+
+ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <BrowserRouter basename={basename}>
       <App />

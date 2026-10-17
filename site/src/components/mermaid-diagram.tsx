@@ -1,5 +1,5 @@
-import { useEffect, useId, useState } from "react";
 import mermaid from "mermaid";
+import { useEffect, useId, useState } from "react";
 
 let initialized = false;
 let renderSeq = 0;
@@ -17,7 +17,13 @@ function ensureMermaid() {
   initialized = true;
 }
 
-export function MermaidDiagram({ chart, title }: { chart: string; title: string }) {
+export function MermaidDiagram({
+  chart,
+  title,
+}: {
+  chart: string;
+  title: string;
+}) {
   const reactId = useId().replace(/:/g, "");
   const [svg, setSvg] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +43,9 @@ export function MermaidDiagram({ chart, title }: { chart: string; title: string 
       .catch((err: unknown) => {
         if (!cancelled) {
           setSvg("");
-          setError(err instanceof Error ? err.message : "Failed to render diagram");
+          setError(
+            err instanceof Error ? err.message : "Failed to render diagram",
+          );
         }
       });
     return () => {
@@ -47,7 +55,10 @@ export function MermaidDiagram({ chart, title }: { chart: string; title: string 
 
   if (error) {
     return (
-      <p role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100">
+      <p
+        role="alert"
+        className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100"
+      >
         {error}
       </p>
     );
@@ -57,8 +68,8 @@ export function MermaidDiagram({ chart, title }: { chart: string; title: string 
     <figure className="space-y-2">
       <div
         className="mermaid-diagram overflow-x-auto rounded-xl border border-border bg-card p-4 [&_svg]:mx-auto"
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: SVG from mermaid.render with securityLevel strict
         dangerouslySetInnerHTML={svg ? { __html: svg } : undefined}
-        aria-label={title}
       />
       <figcaption className="text-xs text-muted-foreground">{title}</figcaption>
     </figure>

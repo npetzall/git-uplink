@@ -1,8 +1,18 @@
+import {
+  ArrowRight,
+  GitPullRequest,
+  ShieldCheck,
+  Waypoints,
+} from "lucide-react";
 import { Link } from "react-router-dom";
-import { ArrowRight, GitPullRequest, ShieldCheck, Waypoints } from "lucide-react";
 import { AppShell } from "../components/app-shell";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
 import { GITHUB_REPO } from "../lib/links";
 
 const GATES = [
@@ -31,9 +41,10 @@ export function HomePage() {
           Contribute to upstream without a second copy of every change.
         </h1>
         <p className="text-lg leading-8 text-muted-foreground text-pretty">
-          git uplink is the Git subcommand for a company with a private forge that builds on a
-          public project, keep private changes private, pass through IP review, and make it easy for
-          upstream maintainers to merge. EMU on GitHub Enterprise Cloud is one such company forge.
+          git uplink is the Git subcommand for a company with a private forge
+          that builds on a public project, keep private changes private, pass
+          through IP review, and make it easy for upstream maintainers to merge.
+          EMU on GitHub Enterprise Cloud is one such company forge.
         </p>
         <div className="flex flex-wrap gap-3">
           <Button asChild>
@@ -65,7 +76,9 @@ export function HomePage() {
             <CardHeader>
               <CardTitle className="text-base">{gate.title}</CardTitle>
             </CardHeader>
-            <CardContent className="text-sm leading-6 text-muted-foreground">{gate.body}</CardContent>
+            <CardContent className="text-sm leading-6 text-muted-foreground">
+              {gate.body}
+            </CardContent>
           </Card>
         ))}
       </div>
@@ -73,13 +86,15 @@ export function HomePage() {
       <section className="mt-12 space-y-4">
         <h2 className="text-xl font-semibold">Two gates, not one</h2>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          <strong className="text-foreground">Gate 1</strong> -{" "} pull requests towards internal main.
-          Merging a PR means it's approved for the internal product.
+          <strong className="text-foreground">Gate 1</strong> - pull requests
+          towards internal main. Merging a PR means it's approved for the
+          internal product.
           <br />
-          <strong className="text-foreground">Gate 2</strong> -{" "} Submit workflow.
+          <strong className="text-foreground">Gate 2</strong> - Submit workflow.
           Submitting a change signals the intention of contributing to upstream.
-          It triggers the IP review and only after approval, is the change pushed to the public contribution fork.
-          Those two gates are outbound. Inbound review of foreign public commits is the{" "}
+          It triggers the IP review and only after approval, is the change
+          pushed to the public contribution fork. Those two gates are outbound.
+          Inbound review of foreign public commits is the{" "}
           <strong className="text-foreground">sync workflow</strong>.
         </p>
         <Button asChild variant="outline" size="sm">
@@ -90,23 +105,39 @@ export function HomePage() {
       </section>
 
       <section className="mt-12 space-y-4">
-        <h2 className="text-xl font-semibold">Then it becomes public maintenance</h2>
+        <h2 className="text-xl font-semibold">
+          Then it becomes public maintenance
+        </h2>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          After IP export and an ordinary upstream merge, the change is public. Sync flows it back,
-          marks the patch merged, so it's skipped during rebuild of
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">internal main</code>.
-          (A merged company contribution is identified by a matching{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">patch-id</code> or its merged
-          public PR; the trailer alone is not enough.) Other public changes wait on the{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">sync workflow</code>{" "}
+          After IP export and an ordinary upstream merge, the change is public.
+          Sync flows it back, marks the patch merged, so it's skipped during
+          rebuild of
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">
+            internal main
+          </code>
+          . (A merged company contribution is identified by a matching{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">
+            patch-id
+          </code>{" "}
+          or its merged public PR; the trailer alone is not enough.) Other
+          public changes wait on the{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">
+            sync workflow
+          </code>{" "}
           approval - we do{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">NOT</code>{" "}silently take unrelated upstream changes into{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-foreground">internal main</code>.
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">
+            NOT
+          </code>{" "}
+          silently take unrelated upstream changes into{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">
+            internal main
+          </code>
+          .
         </p>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          Since the change is in upstream, maintenance has shifted to the upstream repository. Upstream
-          maintainers, third party contributors must make their changes work with ours and not ours work
-          with theirs.
+          Since the change is in upstream, maintenance has shifted to the
+          upstream repository. Upstream maintainers, third party contributors
+          must make their changes work with ours and not ours work with theirs.
         </p>
         <div className="flex flex-wrap gap-3">
           <Button asChild variant="outline" size="sm">
@@ -121,7 +152,9 @@ export function HomePage() {
       </section>
 
       <section className="mt-12 space-y-4">
-        <h2 className="text-xl font-semibold">Three repositories, one patch identity</h2>
+        <h2 className="text-xl font-semibold">
+          Three repositories, one patch identity
+        </h2>
         <div className="grid gap-3 md:grid-cols-3">
           <RepoCard
             icon={<ShieldCheck className="size-4" />}

@@ -1,5 +1,5 @@
-import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
+import { Badge } from "./ui/badge";
 
 const STYLES: Record<string, string> = {
   queued: "border-sky-500/30 bg-sky-500/10 text-sky-300",
@@ -17,7 +17,10 @@ const STYLES: Record<string, string> = {
 
 export function StatusBadge({ value }: { value: string }) {
   return (
-    <Badge variant="outline" className={cn("font-mono capitalize", STYLES[value] ?? "")}>
+    <Badge
+      variant="outline"
+      className={cn("font-mono capitalize", STYLES[value] ?? "")}
+    >
       {value}
     </Badge>
   );

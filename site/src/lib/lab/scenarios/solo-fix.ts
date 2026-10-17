@@ -1,8 +1,9 @@
-import { rebuild, type LabScenario, type SimPatch } from "../../simulator";
+import { type LabScenario, rebuild, type SimPatch } from "../../simulator";
 import {
+  exampleSeed,
+  patchById,
   TOKENS_SALTED,
   TOKENS_SHA256,
-  exampleSeed,
   tree,
 } from "../fixtures";
 import {
@@ -66,14 +67,18 @@ export const soloFix: LabScenario = {
       operations: submitOps("upl_asha"),
       apply: (state) => {
         const patches = state.patches.map((patch) =>
-          patch.id === "upl_asha" ? { ...patch, status: "submitted" as const, prNumber: 412 } : patch,
+          patch.id === "upl_asha"
+            ? { ...patch, status: "submitted" as const, prNumber: 412 }
+            : patch,
         );
-        const asha = patches.find((patch) => patch.id === "upl_asha")!;
+        const asha = patchById(patches, "upl_asha");
         return {
           ...state,
           stepId: "submit-asha",
           patches,
-          contrib: [{ branch: "uplink/upl_asha", files: asha.files, prNumber: 412 }],
+          contrib: [
+            { branch: "uplink/upl_asha", files: asha.files, prNumber: 412 },
+          ],
           log: [
             ...state.log,
             "Approved to-upstream for upl_asha. Opened public PR #412 from uplink/upl_asha.",

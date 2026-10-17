@@ -1,6 +1,11 @@
 import type React from "react";
-import { ModeContext, ModeToggle, type Mode } from "./step";
-import { SetupValuesForm, SetupValuesProvider, type Derive, type Field } from "./values";
+import { type Mode, ModeContext, ModeToggle } from "./step";
+import {
+  type Derive,
+  type Field,
+  SetupValuesForm,
+  SetupValuesProvider,
+} from "./values";
 
 /** Values form, Manual / gh CLI toggle, and the steps of one setup guide. */
 export function SetupGuide({
@@ -21,7 +26,11 @@ export function SetupGuide({
   children: React.ReactNode;
 }) {
   return (
-    <SetupValuesProvider fields={fields} storageKey={storageKey} derive={derive}>
+    <SetupValuesProvider
+      fields={fields}
+      storageKey={storageKey}
+      derive={derive}
+    >
       <ModeContext.Provider value={mode}>
         <div className="space-y-8">
           <div className="flex flex-wrap items-center justify-between gap-3">

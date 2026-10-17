@@ -1,34 +1,45 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Button } from "../components/ui/button";
 import { StatusBadge } from "../components/status-badge";
+import { Button } from "../components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
 import {
   loadStatus,
-  parseSource,
-  refreshRemote,
   type Patch,
+  parseSource,
   type QueueSource,
+  refreshRemote,
   type StatusResponse,
 } from "../lib/api";
-import { cn } from "../lib/utils";
 import { NEEDS_APPROVAL, STATUS_INFO, STATUS_ORDER } from "../lib/status";
+import { cn } from "../lib/utils";
 
 function StatusLegend() {
   return (
     <details className="mb-6 max-w-3xl rounded-xl border border-border bg-card px-4 py-3 text-sm">
-      <summary className="cursor-pointer font-medium">What do the statuses mean?</summary>
+      <summary className="cursor-pointer font-medium">
+        What do the statuses mean?
+      </summary>
       <dl className="mt-3 space-y-3">
         {STATUS_ORDER.map((status) => (
-          <div key={status} className="grid gap-1 sm:grid-cols-[7rem_1fr] sm:gap-3">
+          <div
+            key={status}
+            className="grid gap-1 sm:grid-cols-[7rem_1fr] sm:gap-3"
+          >
             <dt>
               <StatusBadge value={status} />
             </dt>
             <dd className="space-y-1 text-muted-foreground">
               <p>{STATUS_INFO[status].meaning}</p>
               <p>
-                <span className="text-foreground">Next:</span> {STATUS_INFO[status].next}
+                <span className="text-foreground">Next:</span>{" "}
+                {STATUS_INFO[status].next}
               </p>
             </dd>
           </div>
@@ -85,7 +96,9 @@ function PatchTable({
             </td>
             <td className="space-x-1 py-2 pr-3">
               <StatusBadge value={patch.status} />
-              {stale.includes(patch.id) ? <StatusBadge value={NEEDS_APPROVAL} /> : null}
+              {stale.includes(patch.id) ? (
+                <StatusBadge value={NEEDS_APPROVAL} />
+              ) : null}
             </td>
             <td className="py-2 font-mono text-xs text-muted-foreground">
               {(patch.dependsOn ?? []).join(", ") || "—"}
@@ -142,7 +155,7 @@ export function QueuePage() {
   }, [source]);
 
   const empty =
-    !data?.tooling && !(data?.upstream?.length) && !(data?.internal?.length);
+    !data?.tooling && !data?.upstream?.length && !data?.internal?.length;
 
   function setSource(next: QueueSource) {
     if (next === "checkout") {
@@ -175,14 +188,23 @@ export function QueuePage() {
           <p className="text-muted-foreground">
             {source === "remote" ? (
               <>
-                Queue at <code className="rounded bg-muted px-1.5">origin/uplink/state</code>. Local
-                branches are not moved.
+                Queue at{" "}
+                <code className="rounded bg-muted px-1.5">
+                  origin/uplink/state
+                </code>
+                . Local branches are not moved.
               </>
             ) : (
               <>
                 Live queue from the directory where you ran{" "}
-                <code className="rounded bg-muted px-1.5">git uplink web-ui</code>. This is{" "}
-                <code className="rounded bg-muted px-1.5">.uplink/queue.json</code> from{" "}
+                <code className="rounded bg-muted px-1.5">
+                  git uplink web-ui
+                </code>
+                . This is{" "}
+                <code className="rounded bg-muted px-1.5">
+                  .uplink/queue.json
+                </code>{" "}
+                from{" "}
                 <code className="rounded bg-muted px-1.5">uplink/state</code>.
               </>
             )}
@@ -205,7 +227,12 @@ export function QueuePage() {
               Remote
             </Button>
           </div>
-          <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRefresh}
+            disabled={refreshing}
+          >
             {refreshing ? "Refreshing…" : "Refresh remote"}
           </Button>
         </div>
@@ -217,9 +244,7 @@ export function QueuePage() {
         <p
           className={cn(
             "mb-6 text-sm",
-            data.state.behind
-              ? "text-amber-300"
-              : "text-muted-foreground",
+            data.state.behind ? "text-amber-300" : "text-muted-foreground",
           )}
         >
           {syncLabel(data)}
@@ -241,12 +266,17 @@ export function QueuePage() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>
-              Started in <span className="font-mono text-foreground">{data.cwd || "(unknown)"}</span>
+              Started in{" "}
+              <span className="font-mono text-foreground">
+                {data.cwd || "(unknown)"}
+              </span>
               {data.error ? <> — {data.error}</> : null}.
             </p>
             <p>
-              <code className="rounded bg-muted px-1.5">cd</code> into a product repository and run{" "}
-              <code className="rounded bg-muted px-1.5">git uplink init</code>, then open the UI again.
+              <code className="rounded bg-muted px-1.5">cd</code> into a product
+              repository and run{" "}
+              <code className="rounded bg-muted px-1.5">git uplink init</code>,
+              then open the UI again.
             </p>
           </CardContent>
         </Card>
@@ -275,7 +305,10 @@ export function QueuePage() {
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2 text-sm">
                 {Object.entries(data.counts ?? {}).map(([key, value]) => (
-                  <span key={key} className="rounded-md border border-border px-2 py-1 font-mono text-xs">
+                  <span
+                    key={key}
+                    className="rounded-md border border-border px-2 py-1 font-mono text-xs"
+                  >
                     {key} {value}
                   </span>
                 ))}
@@ -288,7 +321,9 @@ export function QueuePage() {
                 <CardTitle className="text-base">Patch queue</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-sm text-muted-foreground">Queue is empty. Company main matches upstream.</p>
+                <p className="text-sm text-muted-foreground">
+                  Queue is empty. Company main matches upstream.
+                </p>
               </CardContent>
             </Card>
           ) : (

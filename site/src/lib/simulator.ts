@@ -74,7 +74,8 @@ function clone(files: SimFileMap): SimFileMap {
 
 function applyPatches(upstream: SimFileMap, patches: SimPatch[]): SimFileMap {
   const next = clone(upstream);
-  const active = (patch: SimPatch) => patch.status !== "merged" && patch.status !== "dropped";
+  const active = (patch: SimPatch) =>
+    patch.status !== "merged" && patch.status !== "dropped";
   const ordered = [
     ...patches.filter((patch) => patch.queue === "upstream" && active(patch)),
     ...patches.filter((patch) => patch.queue === "internal" && active(patch)),

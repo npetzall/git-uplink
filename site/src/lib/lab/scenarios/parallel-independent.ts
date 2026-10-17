@@ -1,9 +1,10 @@
-import { rebuild, type LabScenario, type SimPatch } from "../../simulator";
+import { type LabScenario, rebuild, type SimPatch } from "../../simulator";
 import {
+  exampleSeed,
+  patchById,
   TOKENS_SHA256,
   TOKENS_SHA256_TTL_7200,
   TOKENS_TTL_7200,
-  exampleSeed,
   tree,
 } from "../fixtures";
 import {
@@ -77,18 +78,24 @@ export const parallelIndependent: LabScenario = {
       operations: [...submitOps("upl_asha"), ...submitOps("upl_ben")],
       apply: (state) => {
         const patches = state.patches.map((patch) => {
-          if (patch.id === "upl_asha") return { ...patch, status: "submitted" as const, prNumber: 412 };
-          if (patch.id === "upl_ben") return { ...patch, status: "submitted" as const, prNumber: 413 };
+          if (patch.id === "upl_asha")
+            return { ...patch, status: "submitted" as const, prNumber: 412 };
+          if (patch.id === "upl_ben")
+            return { ...patch, status: "submitted" as const, prNumber: 413 };
           return patch;
         });
-        const asha = patches.find((patch) => patch.id === "upl_asha")!;
+        const asha = patchById(patches, "upl_asha");
         return {
           ...state,
           stepId: "submit-both",
           patches,
           contrib: [
             { branch: "uplink/upl_asha", files: asha.files, prNumber: 412 },
-            { branch: "uplink/upl_ben", files: tree(TOKENS_TTL_7200), prNumber: 413 },
+            {
+              branch: "uplink/upl_ben",
+              files: tree(TOKENS_TTL_7200),
+              prNumber: 413,
+            },
           ],
           log: [
             ...state.log,
@@ -107,20 +114,26 @@ export const parallelIndependent: LabScenario = {
       apply: (state) => {
         const patches = state.patches.map((patch) => {
           if (patch.id === "upl_ben") {
-            return { ...patch, status: "merged" as const, mergedVia: "pr #413" };
+            return {
+              ...patch,
+              status: "merged" as const,
+              mergedVia: "pr #413",
+            };
           }
           if (patch.id === "upl_asha") {
             return { ...patch, files: tree(TOKENS_SHA256_TTL_7200) };
           }
           return patch;
         });
-        const asha = patches.find((patch) => patch.id === "upl_asha")!;
+        const asha = patchById(patches, "upl_asha");
         return rebuild({
           ...state,
           stepId: "merge-ben-first",
           upstream: tree(TOKENS_TTL_7200),
           patches,
-          contrib: [{ branch: "uplink/upl_asha", files: asha.files, prNumber: 412 }],
+          contrib: [
+            { branch: "uplink/upl_asha", files: asha.files, prNumber: 412 },
+          ],
           log: [
             ...state.log,
             "PR #413 merged. Dropped upl_ben. upl_asha still submitted and applied (sha256 + ttl 7200).",
@@ -147,7 +160,10 @@ export const parallelIndependent: LabScenario = {
           upstream: tree(TOKENS_SHA256_TTL_7200),
           patches,
           contrib: [],
-          log: [...state.log, "PR #412 merged. Dropped upl_asha. Company main matches upstream."],
+          log: [
+            ...state.log,
+            "PR #412 merged. Dropped upl_asha. Company main matches upstream.",
+          ],
         });
       },
     },

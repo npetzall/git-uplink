@@ -1,9 +1,9 @@
+import { ExternalLink, GitFork, Menu, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { ExternalLink, GitFork, Menu, X } from "lucide-react";
-import { Button } from "./ui/button";
-import { cn } from "../lib/utils";
 import { GITHUB_REPO } from "../lib/links";
+import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
 
 const LINKS = [
   { href: "/", label: "Overview" },
@@ -51,6 +51,7 @@ function NavLinks({ onClick }: { onClick?: () => void }) {
  */
 function useScrollToHash() {
   const { pathname, hash } = useLocation();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll again when the same hash is opened on another page
   useEffect(() => {
     const id = decodeURIComponent(hash.slice(1));
     if (!id) return;
@@ -76,7 +77,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-20 border-b border-border/80 bg-background/80 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-7xl items-center justify-between px-4">
-          <NavLink to="/" className="flex items-center gap-2 font-semibold tracking-tight">
+          <NavLink
+            to="/"
+            className="flex items-center gap-2 font-semibold tracking-tight"
+          >
             <span className="flex size-8 items-center justify-center rounded-md bg-primary/15 text-primary">
               <GitFork className="size-4" />
             </span>
@@ -113,10 +117,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
         ) : null}
       </header>
-      <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-6 md:py-10">{children}</div>
+      <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-6 md:py-10">
+        {children}
+      </div>
       <footer className="border-t border-border/80">
         <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-4 text-sm text-muted-foreground">
-          <a href={GITHUB_REPO} className="inline-flex items-center gap-1 hover:text-foreground">
+          <a
+            href={GITHUB_REPO}
+            className="inline-flex items-center gap-1 hover:text-foreground"
+          >
             GitHub <ExternalLink className="size-3" />
           </a>
           <NavLink to="/day-to-day" className="hover:text-foreground">
@@ -124,7 +133,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </NavLink>
           <span>
             Local queue UI:{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">git uplink web-ui</code>
+            <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">
+              git uplink web-ui
+            </code>
           </span>
         </div>
       </footer>

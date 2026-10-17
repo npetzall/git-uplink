@@ -1,5 +1,5 @@
-import { useId, useRef } from "react";
 import type React from "react";
+import { useId, useRef } from "react";
 import { cn } from "../../lib/utils";
 
 export type TabItem = { id: string; label: string; content: React.ReactNode };
@@ -41,7 +41,12 @@ export function Tabs({
 
   return (
     <div className="space-y-6">
-      <div role="tablist" aria-label={label} className="flex flex-wrap gap-1 border-b border-border" onKeyDown={onKeyDown}>
+      <div
+        role="tablist"
+        aria-label={label}
+        className="flex flex-wrap gap-1 border-b border-border"
+        onKeyDown={onKeyDown}
+      >
         {items.map((item, i) => {
           const selected = i === index;
           return (
@@ -73,6 +78,7 @@ export function Tabs({
         role="tabpanel"
         id={`${baseId}-panel-${active.id}`}
         aria-labelledby={`${baseId}-tab-${active.id}`}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the WAI-ARIA tabs pattern makes the tab panel focusable
         tabIndex={0}
       >
         {active.content}

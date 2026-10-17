@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { operationsFor, runThrough } from "./simulator";
 import { LAB_SCENARIOS, scenarioById } from "./lab/scenarios";
+import { operationsFor, runThrough } from "./simulator";
 
 const fullLifecycle = scenarioById("full-lifecycle");
 
@@ -15,16 +15,22 @@ function contribTokens(state: ReturnType<typeof runThrough>): string[] {
 describe("full-lifecycle lab scenario", () => {
   it("drops the merged hash patch so the salted upstream fix remains", () => {
     const merged = runThrough(fullLifecycle, stepCount("upstream-merges"));
-    expect(merged.patches.find((patch) => patch.id === "upl_hash")?.status).toBe("merged");
+    expect(
+      merged.patches.find((patch) => patch.id === "upl_hash")?.status,
+    ).toBe("merged");
     expect(merged.company["src/tokens.js"]).toContain("saltedSha256");
-    expect(merged.company["src/tokens.js"]).not.toMatch(/return sha256\(value\)/);
+    expect(merged.company["src/tokens.js"]).not.toMatch(
+      /return sha256\(value\)/,
+    );
     expect(merged.company["src/tokens.js"]).toContain("vendorTelemetry");
   });
 
   it("keeps internal-only patches off the contribution fork until a later export of other work", () => {
     const submitted = runThrough(fullLifecycle, stepCount("approve-submit"));
     expect(submitted.contrib[0]?.files["src/tokens.js"]).toContain("sha256");
-    expect(submitted.contrib[0]?.files["src/tokens.js"]).not.toContain("vendorTelemetry");
+    expect(submitted.contrib[0]?.files["src/tokens.js"]).not.toContain(
+      "vendorTelemetry",
+    );
   });
 
   it("never puts vendorTelemetry on the contribution fork", () => {
@@ -37,15 +43,29 @@ describe("full-lifecycle lab scenario", () => {
 
   it("does not export upl_logs until to-upstream approval", () => {
     const beforeSubmit = runThrough(fullLifecycle, stepCount("resolve"));
-    expect(beforeSubmit.patches.find((patch) => patch.id === "upl_logs")?.status).toBe("queued");
-    expect(beforeSubmit.contrib.some((branch) => branch.branch === "uplink/upl_logs")).toBe(false);
+    expect(
+      beforeSubmit.patches.find((patch) => patch.id === "upl_logs")?.status,
+    ).toBe("queued");
+    expect(
+      beforeSubmit.contrib.some(
+        (branch) => branch.branch === "uplink/upl_logs",
+      ),
+    ).toBe(false);
 
     const submitted = runThrough(fullLifecycle, stepCount("submit-logs"));
-    expect(submitted.patches.find((patch) => patch.id === "upl_logs")?.status).toBe("submitted");
-    const logs = submitted.contrib.find((branch) => branch.branch === "uplink/upl_logs");
+    expect(
+      submitted.patches.find((patch) => patch.id === "upl_logs")?.status,
+    ).toBe("submitted");
+    const logs = submitted.contrib.find(
+      (branch) => branch.branch === "uplink/upl_logs",
+    );
     expect(logs?.prNumber).toBe(418);
-    expect(logs?.files["src/tokens.js"]).toContain('console.log("hash", value)');
-    expect(logs?.files["src/tokens.js"]).toContain("const digest = saltedSha256(value)");
+    expect(logs?.files["src/tokens.js"]).toContain(
+      'console.log("hash", value)',
+    );
+    expect(logs?.files["src/tokens.js"]).toContain(
+      "const digest = saltedSha256(value)",
+    );
     expect(logs?.files["src/tokens.js"]).not.toContain("vendorTelemetry");
   });
 
@@ -53,13 +73,19 @@ describe("full-lifecycle lab scenario", () => {
     const before = runThrough(fullLifecycle, stepCount("upstream-merges"));
     const stopped = runThrough(fullLifecycle, stepCount("conflict"));
     expect(stopped.company).toEqual(before.company);
-    expect(stopped.company["src/tokens.js"]).toContain('console.log("hash", value)');
-    expect(stopped.upstream["src/tokens.js"]).toContain("const digest = saltedSha256(value)");
+    expect(stopped.company["src/tokens.js"]).toContain(
+      'console.log("hash", value)',
+    );
+    expect(stopped.upstream["src/tokens.js"]).toContain(
+      "const digest = saltedSha256(value)",
+    );
     expect(stopped.conflict?.branch).toBe("uplink/conflict/upl_logs");
     expect(stopped.conflict?.phase).toBe("stopped");
     expect(stopped.conflict?.files["src/tokens.js"]).toContain("<<<<<<<");
     expect(stopped.conflict?.blockedIds).toContain("upl_vendor");
-    expect(stopped.patches.find((patch) => patch.id === "upl_logs")?.status).toBe("conflict");
+    expect(
+      stopped.patches.find((patch) => patch.id === "upl_logs")?.status,
+    ).toBe("conflict");
     expect(stopped.contrib).toEqual([]);
   });
 
@@ -67,15 +93,25 @@ describe("full-lifecycle lab scenario", () => {
     const fixed = runThrough(fullLifecycle, stepCount("conflict-fix"));
     expect(fixed.conflict?.phase).toBe("fixed");
     expect(fixed.conflict?.files["src/tokens.js"]).not.toContain("<<<<<<<");
-    expect(fixed.conflict?.files["src/tokens.js"]).toContain("const digest = saltedSha256(value)");
-    expect(fixed.patches.find((patch) => patch.id === "upl_logs")?.status).toBe("conflict");
+    expect(fixed.conflict?.files["src/tokens.js"]).toContain(
+      "const digest = saltedSha256(value)",
+    );
+    expect(fixed.patches.find((patch) => patch.id === "upl_logs")?.status).toBe(
+      "conflict",
+    );
     expect(fixed.contrib).toEqual([]);
 
     const resolved = runThrough(fullLifecycle, stepCount("resolve"));
     expect(resolved.conflict).toBeUndefined();
-    expect(resolved.patches.find((patch) => patch.id === "upl_logs")?.status).toBe("queued");
-    expect(resolved.company["src/tokens.js"]).toContain("const digest = saltedSha256(value)");
-    expect(resolved.company["src/tokens.js"]).toContain('console.log("hash", value)');
+    expect(
+      resolved.patches.find((patch) => patch.id === "upl_logs")?.status,
+    ).toBe("queued");
+    expect(resolved.company["src/tokens.js"]).toContain(
+      "const digest = saltedSha256(value)",
+    );
+    expect(resolved.company["src/tokens.js"]).toContain(
+      'console.log("hash", value)',
+    );
     expect(resolved.company["src/tokens.js"]).toContain("vendorTelemetry");
     expect(resolved.contrib).toEqual([]);
   });
@@ -118,7 +154,9 @@ describe("lab scenarios", () => {
       for (const step of scenario.steps) {
         for (const op of operationsFor(step.operations, "ci")) {
           for (const command of op.commands) {
-            expect(command, `${scenario.id}/${step.id}: ${command}`).toMatch(allowed);
+            expect(command, `${scenario.id}/${step.id}: ${command}`).toMatch(
+              allowed,
+            );
             expect(command).not.toMatch(/\bgit checkout\b/);
             expect(command).not.toMatch(/\bgit commit\b/);
           }
@@ -129,9 +167,16 @@ describe("lab scenarios", () => {
 
   it("keeps Asha queued after Ben merges upstream first", () => {
     const scenario = scenarioById("parallel-independent");
-    const afterBen = runThrough(scenario, stepCount("merge-ben-first", scenario));
-    expect(afterBen.patches.find((patch) => patch.id === "upl_ben")?.status).toBe("merged");
-    expect(afterBen.patches.find((patch) => patch.id === "upl_asha")?.status).toBe("submitted");
+    const afterBen = runThrough(
+      scenario,
+      stepCount("merge-ben-first", scenario),
+    );
+    expect(
+      afterBen.patches.find((patch) => patch.id === "upl_ben")?.status,
+    ).toBe("merged");
+    expect(
+      afterBen.patches.find((patch) => patch.id === "upl_asha")?.status,
+    ).toBe("submitted");
     expect(afterBen.company["src/tokens.js"]).toContain("sha256");
     expect(afterBen.company["src/tokens.js"]).toContain("return 7200");
     expect(afterBen.upstream["src/tokens.js"]).toContain("return 7200");
@@ -146,35 +191,63 @@ describe("lab scenarios", () => {
       }
     }
     const refused = runThrough(scenario, scenario.steps.length);
-    expect(refused.patches.find((patch) => patch.id === "upl_telemetry")?.queue).toBe("internal");
+    expect(
+      refused.patches.find((patch) => patch.id === "upl_telemetry")?.queue,
+    ).toBe("internal");
     expect(refused.contrib).toEqual([]);
   });
 
   it("refuses Ben until Asha is merged, then exports him alone onto public main", () => {
     const scenario = scenarioById("stacked-depends-on");
-    const refused = runThrough(scenario, stepCount("submit-ben-first", scenario));
+    const refused = runThrough(
+      scenario,
+      stepCount("submit-ben-first", scenario),
+    );
     expect(refused.contrib).toEqual([]);
-    expect(refused.patches.find((patch) => patch.id === "upl_ben")?.status).toBe("queued");
+    expect(
+      refused.patches.find((patch) => patch.id === "upl_ben")?.status,
+    ).toBe("queued");
 
     const submitted = runThrough(scenario, stepCount("submit-order", scenario));
-    expect(submitted.patches.find((patch) => patch.id === "upl_asha")?.status).toBe("merged");
-    expect(submitted.patches.find((patch) => patch.id === "upl_ben")?.status).toBe("submitted");
+    expect(
+      submitted.patches.find((patch) => patch.id === "upl_asha")?.status,
+    ).toBe("merged");
+    expect(
+      submitted.patches.find((patch) => patch.id === "upl_ben")?.status,
+    ).toBe("submitted");
     expect(submitted.upstream["src/tokens.js"]).toContain("sha256");
-    expect(submitted.contrib.map((branch) => branch.branch)).toEqual(["uplink/upl_ben"]);
-    expect(submitted.contrib[0]?.files["src/tokens.js"]).toContain("console.log");
+    expect(submitted.contrib.map((branch) => branch.branch)).toEqual([
+      "uplink/upl_ben",
+    ]);
+    expect(submitted.contrib[0]?.files["src/tokens.js"]).toContain(
+      "console.log",
+    );
   });
 
   it("submits Cam only after both siblings have merged", () => {
     const scenario = scenarioById("cam-two-deps");
-    const afterSiblings = runThrough(scenario, stepCount("merge-siblings", scenario));
-    expect(afterSiblings.patches.find((patch) => patch.id === "upl_asha")?.status).toBe("merged");
-    expect(afterSiblings.patches.find((patch) => patch.id === "upl_ben")?.status).toBe("merged");
-    expect(afterSiblings.patches.find((patch) => patch.id === "upl_cam")?.status).toBe("queued");
+    const afterSiblings = runThrough(
+      scenario,
+      stepCount("merge-siblings", scenario),
+    );
+    expect(
+      afterSiblings.patches.find((patch) => patch.id === "upl_asha")?.status,
+    ).toBe("merged");
+    expect(
+      afterSiblings.patches.find((patch) => patch.id === "upl_ben")?.status,
+    ).toBe("merged");
+    expect(
+      afterSiblings.patches.find((patch) => patch.id === "upl_cam")?.status,
+    ).toBe("queued");
     expect(afterSiblings.contrib).toEqual([]);
 
     const submitted = runThrough(scenario, stepCount("submit-cam", scenario));
-    expect(submitted.patches.find((patch) => patch.id === "upl_cam")?.status).toBe("submitted");
-    const cam = submitted.contrib.find((branch) => branch.branch === "uplink/upl_cam");
+    expect(
+      submitted.patches.find((patch) => patch.id === "upl_cam")?.status,
+    ).toBe("submitted");
+    const cam = submitted.contrib.find(
+      (branch) => branch.branch === "uplink/upl_cam",
+    );
     expect(cam?.prNumber).toBe(420);
     expect(cam?.files["src/tokens.js"]).toContain("describeToken");
   });
@@ -182,13 +255,22 @@ describe("lab scenarios", () => {
   it("prepends assessment-hook extras and never exports the workflow file", () => {
     const scenario = scenarioById("assessment-hook");
     const submitted = runThrough(scenario, scenario.steps.length);
-    expect(submitted.company[".github/workflows/uplink-assessment-hook.yml"]).toContain(
-      "Placeholder",
+    expect(
+      submitted.company[".github/workflows/uplink-assessment-hook.yml"],
+    ).toContain("Placeholder");
+    expect(submitted.patches.map((patch) => patch.id)).toEqual([
+      "upl_tooling",
+      "upl_asha",
+    ]);
+    expect(
+      submitted.patches.find((patch) => patch.id === "upl_asha")?.status,
+    ).toBe("submitted");
+    const asha = submitted.contrib.find(
+      (branch) => branch.branch === "uplink/upl_asha",
     );
-    expect(submitted.patches.map((patch) => patch.id)).toEqual(["upl_tooling", "upl_asha"]);
-    expect(submitted.patches.find((patch) => patch.id === "upl_asha")?.status).toBe("submitted");
-    const asha = submitted.contrib.find((branch) => branch.branch === "uplink/upl_asha");
     expect(asha?.files["src/tokens.js"]).toContain("sha256");
-    expect(JSON.stringify(asha?.files)).not.toContain("uplink-assessment-hook.yml");
+    expect(JSON.stringify(asha?.files)).not.toContain(
+      "uplink-assessment-hook.yml",
+    );
   });
 });

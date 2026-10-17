@@ -1,8 +1,8 @@
+import { GitFork, Menu, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
-import { GitFork, Menu, X } from "lucide-react";
-import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
 
 const DOCS = "https://npetzall.github.io/git-uplink/";
 
@@ -12,7 +12,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-20 border-b border-border/80 bg-background/80 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-7xl items-center justify-between px-4">
-          <NavLink to="/" className="flex items-center gap-2 font-semibold tracking-tight">
+          <NavLink
+            to="/"
+            className="flex items-center gap-2 font-semibold tracking-tight"
+          >
             <span className="flex size-8 items-center justify-center rounded-md bg-primary/15 text-primary">
               <GitFork className="size-4" />
             </span>
@@ -88,7 +91,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
         ) : null}
       </header>
-      <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-6 md:py-10">{children}</div>
+      <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-4 py-6 md:py-10">
+        {children}
+      </div>
     </div>
   );
 }

@@ -1,12 +1,21 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type React from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 /** One input on a setup guide's values form. `token` is the placeholder shown until it is filled. */
-export type Field = { key: string; label: string; token: string; initial: string; help?: string };
+export type Field = {
+  key: string;
+  label: string;
+  token: string;
+  initial: string;
+  help?: string;
+};
 
 type Values = Record<string, string>;
 /** Extra template names computed from the filled values. `get` returns a value or its `<TOKEN>`. */
-export type Derive = (get: (key: string) => string, values: Values) => Record<string, string>;
+export type Derive = (
+  get: (key: string) => string,
+  values: Values,
+) => Record<string, string>;
 
 function load(fields: Field[], storageKey: string): Values {
   const base = Object.fromEntries(fields.map((f) => [f.key, f.initial]));
@@ -19,7 +28,12 @@ function load(fields: Field[], storageKey: string): Values {
   return base;
 }
 
-type Ctx = { fields: Field[]; derive?: Derive; values: Values; set: (key: string, value: string) => void };
+type Ctx = {
+  fields: Field[];
+  derive?: Derive;
+  values: Values;
+  set: (key: string, value: string) => void;
+};
 
 const SetupValues = createContext<Ctx | null>(null);
 
@@ -47,7 +61,8 @@ export function SetupValuesProvider({
       fields,
       derive,
       values,
-      set: (key: string, value: string) => setValues((v) => ({ ...v, [key]: value.trim() })),
+      set: (key: string, value: string) =>
+        setValues((v) => ({ ...v, [key]: value.trim() })),
     }),
     [fields, derive, values],
   );
@@ -69,7 +84,11 @@ export function useFill(): (template: string) => string {
     const derived = derive ? derive(get, values) : {};
     return (template: string) =>
       template.replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
-        name in derived ? derived[name] : name in token ? get(name) : `{{${name}}}`,
+        name in derived
+          ? derived[name]
+          : name in token
+            ? get(name)
+            : `{{${name}}}`,
       );
   }, [fields, derive, values]);
 }
@@ -95,7 +114,11 @@ export function SetupValuesForm() {
               spellCheck={false}
               className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-2 focus-visible:outline-primary"
             />
-            {field.help ? <span className="block text-xs text-muted-foreground">{field.help}</span> : null}
+            {field.help ? (
+              <span className="block text-xs text-muted-foreground">
+                {field.help}
+              </span>
+            ) : null}
           </label>
         ))}
       </div>

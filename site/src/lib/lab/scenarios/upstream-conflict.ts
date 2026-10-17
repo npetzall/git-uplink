@@ -1,9 +1,9 @@
-import { rebuild, type LabScenario, type SimPatch } from "../../simulator";
+import { type LabScenario, rebuild, type SimPatch } from "../../simulator";
 import {
+  exampleSeed,
   TOKENS_TTL_1800,
   TOKENS_TTL_7200,
   TOKENS_TTL_CONFLICT,
-  exampleSeed,
   tree,
 } from "../fixtures";
 import {
@@ -50,7 +50,10 @@ export const upstreamConflict: LabScenario = {
           ...state,
           stepId: "import-ben",
           patches: [...state.patches, patch],
-          log: [...state.log, "Imported upl_ben as queued. Company main ttl() == 7200."],
+          log: [
+            ...state.log,
+            "Imported upl_ben as queued. Company main ttl() == 7200.",
+          ],
         });
       },
     },
@@ -74,7 +77,9 @@ export const upstreamConflict: LabScenario = {
       ],
       apply: (state) => {
         const patches = state.patches.map((patch) =>
-          patch.id === "upl_ben" ? { ...patch, status: "conflict" as const } : patch,
+          patch.id === "upl_ben"
+            ? { ...patch, status: "conflict" as const }
+            : patch,
         );
         return {
           ...state,
@@ -131,7 +136,11 @@ export const upstreamConflict: LabScenario = {
       apply: (state) => {
         const patches = state.patches.map((patch) =>
           patch.id === "upl_ben"
-            ? { ...patch, status: "queued" as const, files: tree(TOKENS_TTL_7200) }
+            ? {
+                ...patch,
+                status: "queued" as const,
+                files: tree(TOKENS_TTL_7200),
+              }
             : patch,
         );
         return rebuild({

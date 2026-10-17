@@ -141,7 +141,9 @@ export async function loadStatus(
 export async function refreshRemote(): Promise<void> {
   const response = await fetch("/api/refresh", { method: "POST" });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
     throw new Error(body.error || `refresh failed (${response.status})`);
   }
 }
@@ -151,7 +153,9 @@ export async function loadPatch(
   source: QueueSource,
 ): Promise<PatchResponse> {
   const params = new URLSearchParams({ source });
-  const response = await fetch(`/api/patches/${encodeURIComponent(id)}?${params}`);
+  const response = await fetch(
+    `/api/patches/${encodeURIComponent(id)}?${params}`,
+  );
   return response.json();
 }
 
@@ -180,8 +184,13 @@ export async function loadPatchDiff(
   to: string,
 ): Promise<FileDelta[]> {
   const params = new URLSearchParams({ source, from, to });
-  const response = await fetch(`/api/patches/${encodeURIComponent(id)}/diff?${params}`);
-  const body = (await response.json()) as { files?: FileDelta[]; error?: string };
+  const response = await fetch(
+    `/api/patches/${encodeURIComponent(id)}/diff?${params}`,
+  );
+  const body = (await response.json()) as {
+    files?: FileDelta[];
+    error?: string;
+  };
   if (!response.ok || !body.files) {
     throw new Error(body.error || `could not compare revisions of ${id}`);
   }

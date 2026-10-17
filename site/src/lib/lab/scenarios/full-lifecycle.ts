@@ -1,5 +1,7 @@
-import { rebuild, type LabScenario, type SimPatch } from "../../simulator";
+import { type LabScenario, rebuild, type SimPatch } from "../../simulator";
 import {
+  emptyMirror,
+  patchById,
   TOKENS_CONFLICT,
   TOKENS_DIGEST,
   TOKENS_RESOLVED,
@@ -7,7 +9,6 @@ import {
   TOKENS_SALTED_LOGS,
   TOKENS_SHA256,
   TOKENS_SHA256_LOGS,
-  emptyMirror,
   tree,
   withVendor,
 } from "../fixtures";
@@ -88,7 +89,10 @@ export const fullLifecycle: LabScenario = {
           ...state,
           stepId: "stack-logs",
           patches: [...state.patches, patch],
-          log: [...state.log, "Imported PR #91 as upl_logs, stacked on upl_hash."],
+          log: [
+            ...state.log,
+            "Imported PR #91 as upl_logs, stacked on upl_hash.",
+          ],
         });
       },
     },
@@ -99,7 +103,11 @@ export const fullLifecycle: LabScenario = {
         "Compliance needs a vendor telemetry hook that must not leave the private forge. It is labeled internal-only. It still rebases onto upstream, but Uplink will refuse to export it.",
       why: "Odd case, but supported. The default remains: every other internal change is intended for upstream.",
       operations: [
-        branchPush("feat/telemetry", "internal-telemetry.diff", "Vendor telemetry hook"),
+        branchPush(
+          "feat/telemetry",
+          "internal-telemetry.diff",
+          "Vendor telemetry hook",
+        ),
         ...importOps({ title: "Vendor telemetry hook", internalOnly: true }),
         resetStatus(),
       ],
@@ -132,9 +140,11 @@ export const fullLifecycle: LabScenario = {
       operations: submitOps("upl_hash"),
       apply: (state) => {
         const patches = state.patches.map((patch) =>
-          patch.id === "upl_hash" ? { ...patch, status: "submitted" as const, prNumber: 412 } : patch,
+          patch.id === "upl_hash"
+            ? { ...patch, status: "submitted" as const, prNumber: 412 }
+            : patch,
         );
-        const hash = patches.find((patch) => patch.id === "upl_hash")!;
+        const hash = patchById(patches, "upl_hash");
         return {
           ...state,
           stepId: "approve-submit",
@@ -160,11 +170,14 @@ export const fullLifecycle: LabScenario = {
         "Upstream squash-merges PR #412. They then land a follow-up that salts the hash. Because Uplink recorded the PR (and the Uplink-Patch-Id trailer), the original patch is dropped and the salt fix is kept. The logging delta still applies.",
       why: "If the company kept applying its old SHA-256 patch, the later salt fix would be reverted on the next sync. Drop-on-merge is the whole point of the link between the internal patch and the upstream PR.",
       operations: [
-        you(["gh pr merge 412 --squash"], "On the public upstream pull request."),
+        you(
+          ["gh pr merge 412 --squash"],
+          "On the public upstream pull request.",
+        ),
         ...syncFlowBack(),
         you(
           [
-            "git apply \"$KIT/patches/upstream-salt-hash.diff\"",
+            'git apply "$KIT/patches/upstream-salt-hash.diff"',
             'git commit -am "follow-up: salt the hash"',
             "git push origin main",
           ],
@@ -175,7 +188,11 @@ export const fullLifecycle: LabScenario = {
       apply: (state) => {
         const patches = state.patches.map((patch) => {
           if (patch.id === "upl_hash") {
-            return { ...patch, status: "merged" as const, mergedVia: "pr #412" };
+            return {
+              ...patch,
+              status: "merged" as const,
+              mergedVia: "pr #412",
+            };
           }
           if (patch.id === "upl_logs") {
             return { ...patch, files: tree(TOKENS_SALTED_LOGS) };
@@ -207,7 +224,9 @@ export const fullLifecycle: LabScenario = {
       operations: syncFromUpstream("upl_logs"),
       apply: (state) => {
         const patches = state.patches.map((patch) =>
-          patch.id === "upl_logs" ? { ...patch, status: "conflict" as const } : patch,
+          patch.id === "upl_logs"
+            ? { ...patch, status: "conflict" as const }
+            : patch,
         );
         return {
           ...state,
@@ -264,7 +283,11 @@ export const fullLifecycle: LabScenario = {
       apply: (state) => {
         const patches = state.patches.map((patch) => {
           if (patch.id === "upl_logs") {
-            return { ...patch, status: "queued" as const, files: tree(TOKENS_RESOLVED) };
+            return {
+              ...patch,
+              status: "queued" as const,
+              files: tree(TOKENS_RESOLVED),
+            };
           }
           if (patch.id === "upl_vendor") {
             return { ...patch, files: withVendor(TOKENS_RESOLVED) };
@@ -293,9 +316,11 @@ export const fullLifecycle: LabScenario = {
       operations: submitOps("upl_logs"),
       apply: (state) => {
         const patches = state.patches.map((patch) =>
-          patch.id === "upl_logs" ? { ...patch, status: "submitted" as const, prNumber: 418 } : patch,
+          patch.id === "upl_logs"
+            ? { ...patch, status: "submitted" as const, prNumber: 418 }
+            : patch,
         );
-        const logs = patches.find((patch) => patch.id === "upl_logs")!;
+        const logs = patchById(patches, "upl_logs");
         return {
           ...state,
           stepId: "submit-logs",

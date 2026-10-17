@@ -4,11 +4,24 @@ import type { Derive, Field } from "../../components/setup/values";
 
 export const EXAMPLE_FIELDS: Field[] = [
   { key: "org", label: "Your new organization", token: "ORG", initial: "" },
-  { key: "work", label: "Directory for the three clones", token: "WORK", initial: "~/src" },
-  { key: "checkout", label: "Your git-uplink clone", token: "GIT_UPLINK", initial: "~/src/git-uplink", help: "For the example kit in examples/github" },
+  {
+    key: "work",
+    label: "Directory for the three clones",
+    token: "WORK",
+    initial: "~/src",
+  },
+  {
+    key: "checkout",
+    label: "Your git-uplink clone",
+    token: "GIT_UPLINK",
+    initial: "~/src/git-uplink",
+    help: "For the example kit in examples/github",
+  },
 ];
 
-export const exampleDerive: Derive = (get) => ({ kit: `${get("checkout")}/examples/github` });
+export const exampleDerive: Derive = (get) => ({
+  kit: `${get("checkout")}/examples/github`,
+});
 
 const UPSTREAM = "uplink-example-upstream";
 const CONTRIB = "uplink-example-upstream-contrib";
@@ -16,12 +29,32 @@ const INTERNAL = "uplink-example-internal";
 const repoUrl = (repo: string) => `https://github.com/$ORG/${repo}.git`;
 
 const LABELS = [
-  ["uplink:internal-only", "5319E7", "Never approve or submit this change upstream"],
-  ["uplink:conflict", "B60205", "Uplink sync conflict; resolve via the gated work PR"],
-  ["uplink:transfer-to-upstream", "1D76DB", "Uplink gated transfer to the upstream queue"],
-  ["uplink:transfer-to-internal", "1D76DB", "Uplink gated transfer to the internal queue"],
+  [
+    "uplink:internal-only",
+    "5319E7",
+    "Never approve or submit this change upstream",
+  ],
+  [
+    "uplink:conflict",
+    "B60205",
+    "Uplink sync conflict; resolve via the gated work PR",
+  ],
+  [
+    "uplink:transfer-to-upstream",
+    "1D76DB",
+    "Uplink gated transfer to the upstream queue",
+  ],
+  [
+    "uplink:transfer-to-internal",
+    "1D76DB",
+    "Uplink gated transfer to the internal queue",
+  ],
   ["uplink:amend", "0E8A16", "Uplink gated amend of a patch"],
-  ["uplink:rebase", "FBCA04", "Ask Uplink rebase to rebase this branch onto main"],
+  [
+    "uplink:rebase",
+    "FBCA04",
+    "Ask Uplink rebase to rebase this branch onto main",
+  ],
 ];
 
 const VARIABLES = [
@@ -43,13 +76,27 @@ const TOKENS = [
     "Contents: read · Pull requests: read and write",
     "Fetch public upstream; open (submit) and close (withdraw) the public PR",
   ],
-  ["contrib", CONTRIB, "Contents: read and write", "Push and delete uplink/<id> on the fork"],
+  [
+    "contrib",
+    CONTRIB,
+    "Contents: read and write",
+    "Push and delete uplink/<id> on the fork",
+  ],
 ];
 
 const ENVIRONMENTS = [
-  ["to-upstream", "The IP gate before a contribution leaves. In production: IP / legal."],
-  ["from-upstream", "Review of foreign upstream commits before they land on main."],
-  ["abandon-contrib", "Withdrawing a submitted contribution after it moved to internal."],
+  [
+    "to-upstream",
+    "The IP gate before a contribution leaves. In production: IP / legal.",
+  ],
+  [
+    "from-upstream",
+    "Review of foreign upstream commits before they land on main.",
+  ],
+  [
+    "abandon-contrib",
+    "Withdrawing a submitted contribution after it moved to internal.",
+  ],
 ];
 
 const RULESET = `{
@@ -81,18 +128,26 @@ git push ${replace ? "--force " : ""}origin example-reset
 git switch main`;
 }
 
-function ResetBranch({ script, replace = false }: { script: string; replace?: boolean }) {
+function ResetBranch({
+  script,
+  replace = false,
+}: {
+  script: string;
+  replace?: boolean;
+}) {
   return (
     <>
       <p>
-        Publish the reset branch. It holds the <strong>Reset example</strong> workflow and this repository&apos;s reset
-        script, which every story runs first:
+        Publish the reset branch. It holds the <strong>Reset example</strong>{" "}
+        workflow and this repository&apos;s reset script, which every story runs
+        first:
       </p>
       <Command>{resetBranch(script, replace)}</Command>
       {replace ? (
         <p>
-          <code>--force</code> because a fork that copied all branches already has upstream&apos;s{" "}
-          <code>example-reset</code>; this replaces it with the contrib reset script.
+          <code>--force</code> because a fork that copied all branches already
+          has upstream&apos;s <code>example-reset</code>; this replaces it with
+          the contrib reset script.
         </p>
       ) : null}
     </>
@@ -111,8 +166,8 @@ export function ExampleSteps() {
           <>
             <Before />
             <p>
-              Log in with the <code>workflow</code> scope, because you will push <code>.github/workflows</code>, and let
-              git use that login:
+              Log in with the <code>workflow</code> scope, because you will push{" "}
+              <code>.github/workflows</code>, and let git use that login:
             </p>
             <Command>{`gh auth login --scopes workflow
 gh auth setup-git`}</Command>
@@ -127,13 +182,19 @@ gh auth setup-git`}</Command>
         manual={
           <>
             <p>
-              On github.com, <strong>Your organizations → New organization</strong> (the free plan is enough). A fresh
-              organization keeps the example isolated and lets one fine-grained token cover several repositories.
+              On github.com,{" "}
+              <strong>Your organizations → New organization</strong> (the free
+              plan is enough). A fresh organization keeps the example isolated
+              and lets one fine-grained token cover several repositories.
             </p>
             <p>
-              In <strong>Organization settings → Personal access tokens → Settings</strong>, allow fine-grained personal
-              access tokens. If you require approval, approve your own tokens under <strong>Pending requests</strong>{" "}
-              after step 8.
+              In{" "}
+              <strong>
+                Organization settings → Personal access tokens → Settings
+              </strong>
+              , allow fine-grained personal access tokens. If you require
+              approval, approve your own tokens under{" "}
+              <strong>Pending requests</strong> after step 8.
             </p>
           </>
         }
@@ -146,8 +207,9 @@ gh auth setup-git`}</Command>
         manual={
           <>
             <p>
-              Create a <strong>public</strong>, <strong>empty</strong> repository <code>{UPSTREAM}</code> in{" "}
-              <V>{"{{org}}"}</V> (no README, license, or .gitignore).
+              Create a <strong>public</strong>, <strong>empty</strong>{" "}
+              repository <code>{UPSTREAM}</code> in <V>{"{{org}}"}</V> (no
+              README, license, or .gitignore).
             </p>
             <UpstreamBody />
           </>
@@ -167,8 +229,9 @@ gh auth setup-git`}</Command>
         manual={
           <>
             <p>
-              On <code>{UPSTREAM}</code>, choose <strong>Fork</strong>. Owner: <V>{"{{org}}"}</V>, name:{" "}
-              <code>{CONTRIB}</code>. A fork in the same organization lets fine-grained tokens open the public PR.
+              On <code>{UPSTREAM}</code>, choose <strong>Fork</strong>. Owner:{" "}
+              <V>{"{{org}}"}</V>, name: <code>{CONTRIB}</code>. A fork in the
+              same organization lets fine-grained tokens open the public PR.
             </p>
             <ContribBody />
           </>
@@ -188,8 +251,8 @@ gh auth setup-git`}</Command>
         manual={
           <>
             <p>
-              Create a <strong>private</strong>, <strong>empty</strong> repository <code>{INTERNAL}</code> in{" "}
-              <V>{"{{org}}"}</V>.
+              Create a <strong>private</strong>, <strong>empty</strong>{" "}
+              repository <code>{INTERNAL}</code> in <V>{"{{org}}"}</V>.
             </p>
             <InternalBody />
           </>
@@ -209,7 +272,8 @@ gh auth setup-git`}</Command>
         manual={
           <>
             <p>
-              In <code>{INTERNAL}</code>, <strong>Issues → Labels → New label</strong>:
+              In <code>{INTERNAL}</code>,{" "}
+              <strong>Issues → Labels → New label</strong>:
             </p>
             <ul>
               {LABELS.map(([name, , description]) => (
@@ -237,7 +301,11 @@ gh auth setup-git`}</Command>
         manual={
           <>
             <p>
-              In <code>{INTERNAL}</code>, <strong>Settings → Secrets and variables → Actions → Variables</strong>:
+              In <code>{INTERNAL}</code>,{" "}
+              <strong>
+                Settings → Secrets and variables → Actions → Variables
+              </strong>
+              :
             </p>
             <VariableTable />
           </>
@@ -246,9 +314,10 @@ gh auth setup-git`}</Command>
           <>
             <VariableTable />
             <Command>
-              {VARIABLES.map(([name, value]) => `gh variable set ${name} --repo "$ORG/${INTERNAL}" --body '${value}'`).join(
-                "\n",
-              )}
+              {VARIABLES.map(
+                ([name, value]) =>
+                  `gh variable set ${name} --repo "$ORG/${INTERNAL}" --body '${value}'`,
+              ).join("\n")}
             </Command>
           </>
         }
@@ -259,14 +328,16 @@ gh auth setup-git`}</Command>
         id="actions"
         title="Actions permissions"
         manual={
-          <>
-            <p>
-              In <code>{INTERNAL}</code>, <strong>Settings → Actions → General</strong>: allow all actions, keep{" "}
-              <strong>Workflow permissions</strong> at read (every job declares what it needs), and leave{" "}
-              <strong>Allow GitHub Actions to create and approve pull requests</strong> unchecked. The internal token opens
-              the gated PRs.
-            </p>
-          </>
+          <p>
+            In <code>{INTERNAL}</code>,{" "}
+            <strong>Settings → Actions → General</strong>: allow all actions,
+            keep <strong>Workflow permissions</strong> at read (every job
+            declares what it needs), and leave{" "}
+            <strong>
+              Allow GitHub Actions to create and approve pull requests
+            </strong>{" "}
+            unchecked. The internal token opens the gated PRs.
+          </p>
         }
         gh={
           <Command>{`gh api -X PUT "repos/$ORG/${INTERNAL}/actions/permissions" -F enabled=true -f allowed_actions=all
@@ -282,9 +353,14 @@ gh api -X PUT "repos/$ORG/${INTERNAL}/actions/permissions/workflow" \\
         manual={
           <>
             <p>
-              <strong>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</strong>
-              , three times. <strong>Resource owner</strong>: <V>{"{{org}}"}</V>. <strong>Repository access</strong>: only
-              the listed repositories. Metadata read is added automatically. Keep each token for the next steps.
+              <strong>
+                Settings → Developer settings → Personal access tokens →
+                Fine-grained tokens → Generate new token
+              </strong>
+              , three times. <strong>Resource owner</strong>: <V>{"{{org}}"}</V>
+              . <strong>Repository access</strong>: only the listed
+              repositories. Metadata read is added automatically. Keep each
+              token for the next steps.
             </p>
             <div className="overflow-x-auto">
               <table className="min-w-[640px]">
@@ -319,9 +395,13 @@ gh api -X PUT "repos/$ORG/${INTERNAL}/actions/permissions/workflow" \\
         manual={
           <>
             <p>
-              In <code>{INTERNAL}</code>, <strong>Settings → Environments</strong>, for each environment below: add
-              yourself under <strong>Required reviewers</strong>, leave <strong>Prevent self-review</strong> off (you are
-              the only reviewer), and restrict <strong>Deployment branches and tags</strong> to <code>main</code>.
+              In <code>{INTERNAL}</code>,{" "}
+              <strong>Settings → Environments</strong>, for each environment
+              below: add yourself under <strong>Required reviewers</strong>,
+              leave <strong>Prevent self-review</strong> off (you are the only
+              reviewer), and restrict{" "}
+              <strong>Deployment branches and tags</strong> to <code>main</code>
+              .
             </p>
             <EnvironmentList />
           </>
@@ -348,18 +428,31 @@ done`}</Command>
         title="Store the tokens"
         manual={
           <>
-            <p>In <code>{INTERNAL}</code>:</p>
+            <p>
+              In <code>{INTERNAL}</code>:
+            </p>
             <SecretList />
             <p>
-              Repository secrets: <strong>Settings → Secrets and variables → Actions → New repository secret</strong>.
-              Environment secrets: <strong>Settings → Environments → (name) → Add environment secret</strong>.
+              Repository secrets:{" "}
+              <strong>
+                Settings → Secrets and variables → Actions → New repository
+                secret
+              </strong>
+              . Environment secrets:{" "}
+              <strong>
+                Settings → Environments → (name) → Add environment secret
+              </strong>
+              .
             </p>
           </>
         }
         gh={
           <>
             <SecretList />
-            <p>Each command prompts for the token, so it stays out of your shell history:</p>
+            <p>
+              Each command prompts for the token, so it stays out of your shell
+              history:
+            </p>
             <Command>{`gh secret set UPLINK_INTERNAL_TOKEN --repo "$ORG/${INTERNAL}"
 gh secret set UPLINK_UPSTREAM_TOKEN --repo "$ORG/${INTERNAL}"
 gh secret set UPLINK_CONTRIB_TOKEN --repo "$ORG/${INTERNAL}" --env to-upstream
@@ -375,9 +468,12 @@ gh secret set UPLINK_CONTRIB_TOKEN --repo "$ORG/${INTERNAL}" --env abandon-contr
         manual={
           <>
             <p>
-              In <code>{INTERNAL}</code>, <strong>Settings → Rules → Rulesets → New branch ruleset</strong>: target the
-              default branch, enforcement <strong>Active</strong>, rule <strong>Require status checks to pass</strong>{" "}
-              with <code>Uplink upstream assess</code> and <code>Uplink upstream preflight</code>.
+              In <code>{INTERNAL}</code>,{" "}
+              <strong>Settings → Rules → Rulesets → New branch ruleset</strong>:
+              target the default branch, enforcement <strong>Active</strong>,
+              rule <strong>Require status checks to pass</strong> with{" "}
+              <code>Uplink upstream assess</code> and{" "}
+              <code>Uplink upstream preflight</code>.
             </p>
             <RulesetBypass />
           </>
@@ -399,8 +495,9 @@ EOF`}</Command>
         manual={
           <>
             <p>
-              On each of the three repositories, <strong>Actions → Reset example → Run workflow</strong>. Then in your
-              internal clone:
+              On each of the three repositories,{" "}
+              <strong>Actions → Reset example → Run workflow</strong>. Then in
+              your internal clone:
             </p>
             <StartBody />
           </>
@@ -423,12 +520,14 @@ function Before() {
   return (
     <>
       <p>
-        You need <code>git</code>, <Link to="/install">git-uplink</Link> on your <code>PATH</code>, and for the gh CLI
-        path <a href="https://cli.github.com/">gh</a>. Commands are for bash or zsh. On Windows, use WSL or Git Bash.
+        You need <code>git</code>, <Link to="/install">git-uplink</Link> on your{" "}
+        <code>PATH</code>, and for the gh CLI path{" "}
+        <a href="https://cli.github.com/">gh</a>. Commands are for bash or zsh.
+        On Windows, use WSL or Git Bash.
       </p>
       <p>
-        Clone git-uplink for the example kit, then set the three variables every command below uses. They are the same
-        ones the stories use:
+        Clone git-uplink for the example kit, then set the three variables every
+        command below uses. They are the same ones the stories use:
       </p>
       <Command>{`git clone https://github.com/npetzall/git-uplink.git {{checkout}}
 export ORG={{org}}
@@ -442,8 +541,9 @@ function UpstreamBody() {
   return (
     <>
       <p>
-        Clone it, make the first commit from the kit (the <code>tokenkit</code> project plus the Reset example workflow),
-        and keep a <code>seed</code> branch to reset to:
+        Clone it, make the first commit from the kit (the <code>tokenkit</code>{" "}
+        project plus the Reset example workflow), and keep a <code>seed</code>{" "}
+        branch to reset to:
       </p>
       <Command>{`git clone ${repoUrl(UPSTREAM)} "$WORK/${UPSTREAM}"
 cd "$WORK/${UPSTREAM}"
@@ -461,7 +561,8 @@ function ContribBody() {
   return (
     <>
       <p>
-        Clone it. Leave its <code>main</code> alone: it must stay a fork of upstream <code>main</code>.
+        Clone it. Leave its <code>main</code> alone: it must stay a fork of
+        upstream <code>main</code>.
       </p>
       <Command>{`git clone ${repoUrl(CONTRIB)} "$WORK/${CONTRIB}"
 cd "$WORK/${CONTRIB}"`}</Command>
@@ -474,8 +575,9 @@ function InternalBody() {
   return (
     <>
       <p>
-        Clone it, start <code>main</code> from upstream, and let <code>git uplink init</code> install the example pack as
-        the tooling patch. Then push, and keep seed refs for resets:
+        Clone it, start <code>main</code> from upstream, and let{" "}
+        <code>git uplink init</code> install the example pack as the tooling
+        patch. Then push, and keep seed refs for resets:
       </p>
       <Command>{`git clone ${repoUrl(INTERNAL)} "$WORK/${INTERNAL}"
 cd "$WORK/${INTERNAL}"
@@ -491,9 +593,11 @@ git push origin uplink/state uplink/upstream uplink/hooks
 git branch seed main && git branch seed-state uplink/state && git branch seed-upstream uplink/upstream
 git push origin seed seed-state seed-upstream`}</Command>
       <p>
-        <code>git uplink status</code> shows <strong>Uplink tooling</strong> in the tooling slot. The three{" "}
-        <code>init</code> flags are the stories&apos; settings; <code>init</code> writes them to{" "}
-        <code>preflight.sh</code> and <code>uplink.toml</code> on <code>uplink/hooks</code>.
+        <code>git uplink status</code> shows <strong>Uplink tooling</strong> in
+        the tooling slot. The three <code>init</code> flags are the
+        stories&apos; settings; <code>init</code> writes them to{" "}
+        <code>preflight.sh</code> and <code>uplink.toml</code> on{" "}
+        <code>uplink/hooks</code>.
       </p>
       <ResetBranch script="internal" />
     </>
@@ -524,11 +628,14 @@ function VariableTable() {
         </tbody>
       </table>
       <p>
-        Jobs install the <code>git-uplink</code> release that wrote the pack, from <code>npetzall/git-uplink</code>. Set{" "}
-        <code>UPLINK_SRC</code> or <code>UPLINK_VERSION</code> only to install from a mirror or to pin another release.
-        Every job verifies the binary&apos;s cosign signature against the release workflow of{" "}
-        <code>npetzall/git-uplink</code>, so a mirror must carry the <code>.sigstore.json</code> files. Set{" "}
-        <code>UPLINK_SIGNER</code> only for a mirror that builds and signs its own releases.
+        Jobs install the <code>git-uplink</code> release that wrote the pack,
+        from <code>npetzall/git-uplink</code>. Set <code>UPLINK_SRC</code> or{" "}
+        <code>UPLINK_VERSION</code> only to install from a mirror or to pin
+        another release. Every job verifies the binary&apos;s cosign signature
+        against the release workflow of <code>npetzall/git-uplink</code>, so a
+        mirror must carry the <code>.sigstore.json</code> files. Set{" "}
+        <code>UPLINK_SIGNER</code> only for a mirror that builds and signs its
+        own releases.
       </p>
     </div>
   );
@@ -550,15 +657,19 @@ function SecretList() {
   return (
     <ul>
       <li>
-        <code>UPLINK_INTERNAL_TOKEN</code> (internal token) and <code>UPLINK_UPSTREAM_TOKEN</code> (upstream token) as{" "}
+        <code>UPLINK_INTERNAL_TOKEN</code> (internal token) and{" "}
+        <code>UPLINK_UPSTREAM_TOKEN</code> (upstream token) as{" "}
         <strong>repository</strong> secrets. Sync cannot wait on an environment.
       </li>
       <li>
-        <code>UPLINK_CONTRIB_TOKEN</code> (contrib token) on the <code>to-upstream</code> <strong>and</strong>{" "}
-        <code>abandon-contrib</code> environments. The fork write credential only exists behind a review. Environments
-        don&apos;t share secrets, so store it twice, and never at repository level. GitHub creates the contribution
-        commit with this token, so the machine user is its author. Commits made with a PAT are not shown as Verified;
-        use a GitHub App for that.
+        <code>UPLINK_CONTRIB_TOKEN</code> (contrib token) on the{" "}
+        <code>to-upstream</code> <strong>and</strong>{" "}
+        <code>abandon-contrib</code> environments. The fork write credential
+        only exists behind a review. Environments don&apos;t share secrets, so
+        store it twice, and never at repository level. GitHub creates the
+        contribution commit with this token, so the machine user is its author.
+        Commits made with a PAT are not shown as Verified; use a GitHub App for
+        that.
       </li>
     </ul>
   );
@@ -567,9 +678,11 @@ function SecretList() {
 function RulesetBypass() {
   return (
     <p>
-      Bypass list: <strong>Repository admin</strong> (the internal token is yours, and you are an admin) and{" "}
-      <strong>GitHub Actions</strong> (the Reset example workflow force-pushes <code>main</code> back to{" "}
-      <code>seed</code>). Everyone else merges through PRs with both checks green.
+      Bypass list: <strong>Repository admin</strong> (the internal token is
+      yours, and you are an admin) and <strong>GitHub Actions</strong> (the
+      Reset example workflow force-pushes <code>main</code> back to{" "}
+      <code>seed</code>). Everyone else merges through PRs with both checks
+      green.
     </p>
   );
 }
@@ -582,7 +695,8 @@ git uplink reset
 git fetch origin --prune
 git uplink status`}</Command>
       <p>
-        Setup is done. Open the <strong>Stories</strong> tab and start with <em>01 — Solo fix</em>.
+        Setup is done. Open the <strong>Stories</strong> tab and start with{" "}
+        <em>01 — Solo fix</em>.
       </p>
     </>
   );

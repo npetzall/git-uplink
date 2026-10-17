@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  type DiffLine,
   deltaLineSide,
   parseFileDelta,
   parsePatch,
   patchLineSide,
   splitRows,
-  type DiffLine,
 } from "./patch";
 
 // A removed line whose content is the mbox signature marker `-- `.
@@ -154,14 +154,19 @@ describe("parsePatch", () => {
   });
 
   it("parses a bare diff", () => {
-    const bare = parsePatch("diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n");
+    const bare = parsePatch(
+      "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n",
+    );
     expect(bare.subject).toBeUndefined();
     expect(bare.files).toHaveLength(1);
     expect(bare.files[0].hunks[0].lines).toHaveLength(2);
   });
 
   it("returns text that is not a patch as the message", () => {
-    expect(parsePatch("not a patch\n")).toEqual({ message: "not a patch", files: [] });
+    expect(parsePatch("not a patch\n")).toEqual({
+      message: "not a patch",
+      files: [],
+    });
     expect(parsePatch("")).toEqual({ message: "", files: [] });
   });
 });
@@ -184,15 +189,27 @@ describe("parseFileDelta", () => {
   });
 
   it("puts every line of an added or removed file on one side", () => {
-    const added = parseFileDelta({ ...base, state: "added", lines: "new file mode 100644\n+a\n" });
+    const added = parseFileDelta({
+      ...base,
+      state: "added",
+      lines: "new file mode 100644\n+a\n",
+    });
     expect(added).toEqual([
       { outer: "added", kind: "meta", text: "new file mode 100644" },
       { outer: "added", kind: "add", text: "a" },
     ]);
-    const removed = parseFileDelta({ ...base, state: "removed", lines: "-a\n" });
+    const removed = parseFileDelta({
+      ...base,
+      state: "removed",
+      lines: "-a\n",
+    });
     expect(removed).toEqual([{ outer: "removed", kind: "del", text: "a" }]);
-    expect(splitRows(added, deltaLineSide).every((row) => !row.left)).toBe(true);
-    expect(splitRows(removed, deltaLineSide).every((row) => !row.right)).toBe(true);
+    expect(splitRows(added, deltaLineSide).every((row) => !row.left)).toBe(
+      true,
+    );
+    expect(splitRows(removed, deltaLineSide).every((row) => !row.right)).toBe(
+      true,
+    );
   });
 
   it("has no lines for an unchanged file", () => {
@@ -201,7 +218,10 @@ describe("parseFileDelta", () => {
 });
 
 describe("splitRows", () => {
-  const line = (kind: DiffLine["kind"], text: string): DiffLine => ({ kind, text });
+  const line = (kind: DiffLine["kind"], text: string): DiffLine => ({
+    kind,
+    text,
+  });
 
   it("pairs removed lines with the added lines that follow", () => {
     const rows = splitRows(

@@ -1,5 +1,5 @@
-import { rebuild, type LabScenario, type SimPatch } from "../../simulator";
-import { TOKENS_SHA256, exampleSeed, tree } from "../fixtures";
+import { type LabScenario, rebuild, type SimPatch } from "../../simulator";
+import { exampleSeed, patchById, TOKENS_SHA256, tree } from "../fixtures";
 import {
   ciJob,
   importOps,
@@ -58,15 +58,13 @@ export const assessmentHook: LabScenario = {
         "Asha branches from company main, switches SHA-1 to SHA-256, and opens one internal PR. Merge plus import records upl_asha as queued.",
       why: "The assessment hook runs on this PR with pr and shares one PR comment with assess, updated on every push or edit. That is advice for the author and reviewers: the change is not a patch yet, so import stores nothing from it.",
       operations: [
-        you(
-          [
-            "git checkout -b feat/sha256",
-            'git apply "$KIT/patches/asha-sha256.diff"',
-            "git add -A",
-            'git commit -m "Use SHA-256 for tokens"',
-            "git push -u origin feat/sha256",
-          ],
-        ),
+        you([
+          "git checkout -b feat/sha256",
+          'git apply "$KIT/patches/asha-sha256.diff"',
+          "git add -A",
+          'git commit -m "Use SHA-256 for tokens"',
+          "git push -u origin feat/sha256",
+        ]),
         ...importOps({ title: "Use SHA-256 for tokens" }),
         resetStatus(),
       ],
@@ -99,14 +97,18 @@ export const assessmentHook: LabScenario = {
       operations: submitOps("upl_asha"),
       apply: (state) => {
         const patches = state.patches.map((patch) =>
-          patch.id === "upl_asha" ? { ...patch, status: "submitted" as const, prNumber: 412 } : patch,
+          patch.id === "upl_asha"
+            ? { ...patch, status: "submitted" as const, prNumber: 412 }
+            : patch,
         );
-        const asha = patches.find((patch) => patch.id === "upl_asha")!;
+        const asha = patchById(patches, "upl_asha");
         return {
           ...state,
           stepId: "submit-asha",
           patches,
-          contrib: [{ branch: "uplink/upl_asha", files: asha.files, prNumber: 412 }],
+          contrib: [
+            { branch: "uplink/upl_asha", files: asha.files, prNumber: 412 },
+          ],
           log: [
             ...state.log,
             "Assessed upl_asha; the hook read the assessment package; ## Company review notes sits above # Contribution packet.",

@@ -1,6 +1,6 @@
 import type React from "react";
-import { AppShell } from "./app-shell";
 import { cn } from "../lib/utils";
+import { AppShell } from "./app-shell";
 
 const PROSE =
   "text-[15px] leading-7 text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[13px] [&_code]:text-foreground [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_li]:ms-5 [&_ol]:space-y-2 [&_ol>li]:list-decimal [&_p]:text-pretty [&_strong]:text-foreground [&_ul]:space-y-2 [&_ul>li]:list-disc [&_a]:text-primary [&_a]:underline-offset-4 hover:[&_a]:underline";
@@ -21,8 +21,14 @@ export function DocPage({
     <AppShell>
       <article className="mx-auto w-full max-w-4xl space-y-10">
         <header className="space-y-3">
-          <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">{eyebrow}</p>
-          {title ? <h1 className="text-4xl font-semibold tracking-tight text-balance">{title}</h1> : null}
+          <p className="text-xs font-medium tracking-[0.25em] text-teal-400 uppercase">
+            {eyebrow}
+          </p>
+          {title ? (
+            <h1 className="text-4xl font-semibold tracking-tight text-balance">
+              {title}
+            </h1>
+          ) : null}
           {lead ? (
             <p className="text-lg leading-8 text-pretty text-muted-foreground [&_code]:rounded [&_code]:bg-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[15px] [&_code]:text-foreground">
               {lead}
