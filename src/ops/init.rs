@@ -316,8 +316,14 @@ pub(super) fn ensure_hooks_step(
         None
     };
     let legacy = Settings {
-        redact_keywords: queue.config.redact_keywords.clone(),
-        internal_email_domains: queue.config.internal_email_domains.clone(),
+        banned_words: clean_list(
+            queue
+                .config
+                .redact_keywords
+                .iter()
+                .chain(&queue.config.internal_email_domains)
+                .cloned(),
+        ),
         problem: None,
     };
     let (answers, unanswered) = answer_settings(

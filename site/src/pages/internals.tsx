@@ -153,7 +153,7 @@ sequenceDiagram
   Dev->>PR: open or edit
   par assess
     CI->>CI: git uplink assess
-    Note right of CI: message, cutoff, co-author,<br/>keyword and email scan
+    Note right of CI: message, cutoff, co-author,<br/>banned-word scan
   and preflight
     CI->>CI: git uplink preflight
     Note right of CI: apply on upstream + declared deps<br/>+ tooling + queued upstream,<br/>run preflight.sh (step with no token)

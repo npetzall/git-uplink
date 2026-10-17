@@ -1590,8 +1590,7 @@ fn run() -> Result<(), Error> {
             adopt_groups,
             json,
             preflight,
-            redact_keyword,
-            internal_domain,
+            banned_word,
         } => cmd_init(
             &repo,
             InitArgs {
@@ -1613,8 +1612,7 @@ fn run() -> Result<(), Error> {
                 json,
                 settings: SettingsFlags {
                     preflight,
-                    redact_keywords: redact_keyword,
-                    internal_domains: internal_domain,
+                    banned_words: banned_word,
                 },
             },
         ),

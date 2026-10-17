@@ -21,46 +21,45 @@ const SOURCES: [&str; 2] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingKey {
-    RedactKeywords,
-    InternalEmailDomains,
+    BannedWords,
 }
 
 impl SettingKey {
-    pub const ALL: [SettingKey; 2] = [SettingKey::RedactKeywords, SettingKey::InternalEmailDomains];
+    pub const ALL: [SettingKey; 1] = [SettingKey::BannedWords];
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::RedactKeywords => "redact_keywords",
-            Self::InternalEmailDomains => "internal_email_domains",
+            Self::BannedWords => "banned_words",
         }
     }
 
     fn comment(self) -> &'static str {
         match self {
-            Self::RedactKeywords => "Words that must not appear in a contribution.",
-            Self::InternalEmailDomains => "Email domains flagged in the export.",
+            Self::BannedWords => {
+                "Words that must not appear in a contribution, such as company names and internal domains (case-insensitive, matched anywhere)."
+            }
         }
     }
 
     /// The question `init` asks for this setting.
     pub fn question(self) -> &'static str {
         match self {
-            Self::RedactKeywords => {
-                "Words that must not appear in a contribution (comma-separated, empty for none)"
-            }
-            Self::InternalEmailDomains => {
-                "Internal email domains to flag in the export (comma-separated, empty for none)"
+            Self::BannedWords => {
+                "Words that must not appear in a contribution, such as company names and internal domains (comma-separated, empty for none)"
             }
         }
     }
 }
 
+/// Keys an older binary wrote, replaced by `banned_words`. A file that still
+/// has one fails the scan, so its entries are never silently dropped.
+const RETIRED_KEYS: [&str; 2] = ["redact_keywords", "internal_email_domains"];
+
 /// The settings the CLI works with. `problem` is set when `uplink.toml`
 /// should exist but is missing or does not parse; see [`Settings::usable`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
-    pub redact_keywords: Vec<String>,
-    pub internal_email_domains: Vec<String>,
+    pub banned_words: Vec<String>,
     pub problem: Option<String>,
 }
 
@@ -79,8 +78,7 @@ impl Settings {
             toml::Value::Array(items.iter().cloned().map(toml::Value::String).collect())
         };
         match key {
-            SettingKey::RedactKeywords => list(&self.redact_keywords),
-            SettingKey::InternalEmailDomains => list(&self.internal_email_domains),
+            SettingKey::BannedWords => list(&self.banned_words),
         }
     }
 
@@ -126,13 +124,12 @@ appended safely. Add {} above the first table by hand.",
     }
 }
 
-/// Answers given on the command line (`init --redact-keyword …`).
+/// Answers given on the command line (`init --banned-word …`).
 #[derive(Debug, Clone, Default)]
 pub struct SettingsFlags {
     /// Not a setting: the command `init` seeds `preflight.sh` with.
     pub preflight: Option<String>,
-    pub redact_keywords: Option<Vec<String>>,
-    pub internal_domains: Option<Vec<String>>,
+    pub banned_words: Option<Vec<String>>,
 }
 
 /// Answers `keys` in order of preference: the flag, a question in a terminal
@@ -148,12 +145,10 @@ pub fn answer_settings(
     let mut unanswered = Vec::new();
     for key in keys {
         let flag = match key {
-            SettingKey::RedactKeywords => flags.redact_keywords.clone(),
-            SettingKey::InternalEmailDomains => flags.internal_domains.clone(),
+            SettingKey::BannedWords => flags.banned_words.clone(),
         };
         let default = match key {
-            SettingKey::RedactKeywords => legacy.redact_keywords.clone(),
-            SettingKey::InternalEmailDomains => legacy.internal_email_domains.clone(),
+            SettingKey::BannedWords => legacy.banned_words.clone(),
         };
         let asked = flag.is_some() || interactive;
         let items = match flag {
@@ -167,14 +162,10 @@ pub fn answer_settings(
             None => default,
         };
         match key {
-            SettingKey::RedactKeywords => answers.redact_keywords = clean_list(items),
-            SettingKey::InternalEmailDomains => {
-                answers.internal_email_domains = clean_list(items);
-            }
+            SettingKey::BannedWords => answers.banned_words = clean_list(items),
         }
         let empty = match key {
-            SettingKey::RedactKeywords => answers.redact_keywords.is_empty(),
-            SettingKey::InternalEmailDomains => answers.internal_email_domains.is_empty(),
+            SettingKey::BannedWords => answers.banned_words.is_empty(),
         };
         if empty && !asked {
             unanswered.push(key.name());
@@ -187,8 +178,9 @@ pub fn answer_settings(
 /// binary still parses, and the missing keys can be asked for.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SettingsFile {
-    redact_keywords: Option<Vec<String>>,
-    internal_email_domains: Option<Vec<String>>,
+    banned_words: Option<Vec<String>>,
+    redact_keywords: Option<toml::Value>,
+    internal_email_domains: Option<toml::Value>,
 }
 
 impl SettingsFile {
@@ -203,20 +195,38 @@ impl SettingsFile {
 
     pub fn missing_keys(&self) -> Vec<SettingKey> {
         let mut missing = Vec::new();
-        if self.redact_keywords.is_none() {
-            missing.push(SettingKey::RedactKeywords);
-        }
-        if self.internal_email_domains.is_none() {
-            missing.push(SettingKey::InternalEmailDomains);
+        if self.banned_words.is_none() {
+            missing.push(SettingKey::BannedWords);
         }
         missing
     }
 
+    /// Why the file cannot be used even though it parses: it still has keys
+    /// an older binary wrote.
+    pub fn problem(&self) -> Option<String> {
+        let present = [
+            self.redact_keywords.is_some(),
+            self.internal_email_domains.is_some(),
+        ];
+        let retired: Vec<&str> = RETIRED_KEYS
+            .into_iter()
+            .zip(present)
+            .filter_map(|(key, present)| present.then_some(key))
+            .collect();
+        (!retired.is_empty()).then(|| {
+            format!(
+                "{SETTINGS_PATH} on uplink/hooks still has {}; move the entries into \
+banned_words and delete the old keys",
+                retired.join(", ")
+            )
+        })
+    }
+
     pub fn into_settings(self) -> Settings {
+        let problem = self.problem();
         Settings {
-            redact_keywords: clean_list(self.redact_keywords.unwrap_or_default()),
-            internal_email_domains: clean_list(self.internal_email_domains.unwrap_or_default()),
-            problem: None,
+            banned_words: clean_list(self.banned_words.unwrap_or_default()),
+            problem,
         }
     }
 }
@@ -280,8 +290,7 @@ mod tests {
 
     fn sample() -> Settings {
         Settings {
-            redact_keywords: vec!["AcmeCorp".into(), "say \"hi\"".into()],
-            internal_email_domains: vec!["acme.example".into()],
+            banned_words: vec!["acme".into(), "say \"hi\"".into()],
             problem: None,
         }
     }
@@ -290,10 +299,7 @@ mod tests {
     fn rendered_file_parses_back_to_the_same_settings() {
         let text = sample().render();
         assert!(text.starts_with(HEADER), "{text}");
-        assert!(
-            text.contains("internal_email_domains = [\"acme.example\"]"),
-            "{text}"
-        );
+        assert!(text.contains("banned_words = [\"acme\", "), "{text}");
         let file = SettingsFile::parse(&text).unwrap();
         assert!(file.missing_keys().is_empty());
         assert_eq!(file.into_settings(), sample());
@@ -302,55 +308,65 @@ mod tests {
     #[test]
     fn empty_answers_render_as_empty_values() {
         let text = Settings::default().render();
-        assert!(text.contains("redact_keywords = []"), "{text}");
+        assert!(text.contains("banned_words = []"), "{text}");
         let file = SettingsFile::parse(&text).unwrap();
         assert!(file.missing_keys().is_empty());
         assert_eq!(file.into_settings(), Settings::default());
     }
 
     #[test]
-    fn a_partial_file_reports_its_missing_keys() {
-        let file = SettingsFile::parse("redact_keywords = [\"Acme\"]\n").unwrap();
-        assert_eq!(file.missing_keys(), [SettingKey::InternalEmailDomains]);
-        let settings = file.into_settings();
-        assert_eq!(settings.redact_keywords, ["Acme"]);
-        assert!(settings.internal_email_domains.is_empty());
+    fn an_empty_file_reports_its_missing_keys() {
+        let file = SettingsFile::parse("").unwrap();
+        assert_eq!(file.missing_keys(), [SettingKey::BannedWords]);
+        assert_eq!(file.into_settings(), Settings::default());
     }
 
     #[test]
     fn a_key_that_is_no_longer_a_setting_is_ignored() {
-        let file = SettingsFile::parse("preflight = \"npm test\"\nredact_keywords = []\n").unwrap();
-        assert_eq!(file.missing_keys(), [SettingKey::InternalEmailDomains]);
+        let file = SettingsFile::parse("preflight = \"npm test\"\nbanned_words = []\n").unwrap();
+        assert!(file.missing_keys().is_empty());
+        assert_eq!(file.into_settings(), Settings::default());
+    }
+
+    #[test]
+    fn a_retired_key_makes_the_settings_unusable() {
+        let text = "redact_keywords = [\"acme\"]\ninternal_email_domains = []\nbanned_words = []\n";
+        let settings = SettingsFile::parse(text).unwrap().into_settings();
+        let err = settings.usable().unwrap_err().to_string();
+        assert!(
+            err.contains("redact_keywords, internal_email_domains"),
+            "{err}"
+        );
+        assert!(err.contains("banned_words"), "{err}");
     }
 
     #[test]
     fn appending_keeps_the_existing_text() {
-        let existing = "# ours\nredact_keywords = [\"Acme\"]";
+        let existing = "# ours\npreflight = \"npm test\"";
         let text = sample()
-            .append_to(existing, &[SettingKey::InternalEmailDomains])
+            .append_to(existing, &[SettingKey::BannedWords])
             .unwrap();
         assert!(
-            text.starts_with("# ours\nredact_keywords = [\"Acme\"]\n"),
+            text.starts_with("# ours\npreflight = \"npm test\"\n"),
             "{text}"
         );
         let settings = SettingsFile::parse(&text).unwrap().into_settings();
-        assert_eq!(settings.redact_keywords, ["Acme"]);
-        assert_eq!(settings.internal_email_domains, ["acme.example"]);
+        assert_eq!(settings, sample());
     }
 
     #[test]
     fn appending_refuses_a_file_with_tables() {
         let err = sample()
-            .append_to("[extra]\nkey = 1\n", &[SettingKey::InternalEmailDomains])
+            .append_to("[extra]\nkey = 1\n", &[SettingKey::BannedWords])
             .unwrap_err()
             .to_string();
         assert!(err.contains("table header"), "{err}");
-        assert!(err.contains("internal_email_domains"), "{err}");
+        assert!(err.contains("banned_words"), "{err}");
     }
 
     #[test]
     fn a_broken_file_is_an_error_that_names_it() {
-        let err = SettingsFile::parse("redact_keywords = [\n")
+        let err = SettingsFile::parse("banned_words = [\n")
             .unwrap_err()
             .to_string();
         assert!(err.contains(SETTINGS_PATH), "{err}");

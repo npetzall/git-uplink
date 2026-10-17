@@ -119,7 +119,7 @@ export function HowPage() {
           <li>
             <strong>Assess</strong> rewrites the change as the contribution it will become. The PR title and body
             become the commit message, everything below the cutoff is removed, and the author is set to the
-            export identity. The export is then scanned for company names and internal email domains.
+            export identity. The export is then scanned for banned words: company names and internal domains.
           </li>
           <li>
             <strong>Export preflight</strong> applies the change onto public upstream plus its declared

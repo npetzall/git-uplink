@@ -151,8 +151,8 @@ git switch -c fix/token-hash origin/main`}</Code>
             change internally. Skipped when there is no <code>Uplink-Export-Author</code>.
           </li>
           <li>
-            <code>affiliation-leak</code>: company keywords, product aliases, and internal email domains in the
-            message and the diff.
+            <code>affiliation-leak</code>: the banned words in <code>uplink.toml</code> (company and product
+            names, internal domains) anywhere in the message and the diff.
           </li>
           <li>
             <code>binary-files</code>: binary files the scan cannot read.
@@ -161,7 +161,7 @@ git switch -c fix/token-hash origin/main`}</Code>
         <p>How to fix the common findings:</p>
         <ul>
           <li>
-            <strong>Company name, product alias, or internal email found</strong> (fails). Remove it from the code,
+            <strong>Banned word found</strong> (fails): a company name, product alias, or internal domain. Remove it from the code,
             the tests, and the public part of the message. Test fixtures are the usual culprit. Internal notes
             belong below the cutoff.
           </li>

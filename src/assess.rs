@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use regex::{Regex, RegexSet};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AssessError, Error, Result};
@@ -144,34 +144,16 @@ fn subject_and_body(public_text: &str, fallback: &str) -> (String, String) {
     (subject, body)
 }
 
-fn find_keyword_hits(haystack: &str, keywords: &[String]) -> Vec<String> {
+/// The banned words in `haystack`, ignoring case and matched anywhere.
+fn find_banned_words(haystack: &str, words: &[String]) -> Vec<String> {
     let lower = haystack.to_lowercase();
     let mut hits = Vec::new();
-    for keyword in keywords {
-        if keyword.is_empty() {
+    for word in words {
+        if word.is_empty() {
             continue;
         }
-        if lower.contains(&keyword.to_lowercase()) && !hits.contains(keyword) {
-            hits.push(keyword.clone());
-        }
-    }
-    hits
-}
-
-/// Configured domains are dynamic, so they compile once per call as one set.
-fn find_domain_hits(haystack: &str, domains: &[String]) -> Vec<String> {
-    let set = RegexSet::new(
-        domains
-            .iter()
-            .map(|domain| format!(r"(?i)@{}\b", regex::escape(domain))),
-    )
-    .expect("escaped domain regex");
-    let matched = set.matches(haystack);
-    let mut hits = Vec::new();
-    for (index, domain) in domains.iter().enumerate() {
-        let needle = format!("@{domain}");
-        if matched.matched(index) && !hits.contains(&needle) {
-            hits.push(needle);
+        if lower.contains(&word.to_lowercase()) && !hits.contains(word) {
+            hits.push(word.clone());
         }
     }
     hits
@@ -1418,9 +1400,7 @@ pub struct PackageMessage {
 #[serde(rename_all = "camelCase")]
 pub struct PackageSettings {
     #[serde(default)]
-    pub redact_keywords: Vec<String>,
-    #[serde(default)]
-    pub internal_email_domains: Vec<String>,
+    pub banned_words: Vec<String>,
     /// Why `uplink.toml` could not be used; the scan then fails closed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
@@ -1497,8 +1477,7 @@ impl AssessPackage {
             original_author: report.original_author.clone(),
             original_email: report.original_email.clone(),
             settings: PackageSettings {
-                redact_keywords: queue.settings.redact_keywords.clone(),
-                internal_email_domains: queue.settings.internal_email_domains.clone(),
+                banned_words: queue.settings.banned_words.clone(),
                 problem: queue.settings.problem.clone(),
             },
             change_blob: hash_text(repo, change)?,
@@ -1587,7 +1566,7 @@ struct ExportDiff {
 
 /// The diffs of format-patch text. The mail header and the company commit
 /// message above them are not exported and are left out, and so is the
-/// encoded content of binary files, which the keyword scan cannot read.
+/// encoded content of binary files, which the banned-word scan cannot read.
 fn export_diff(patch_text: &str) -> ExportDiff {
     let mut diff = String::new();
     let mut binaries = Vec::new();
@@ -1642,7 +1621,7 @@ fn assess_export(
         None => checks.push(AssessCheck {
             id: "affiliation-leak".into(),
             status: CheckStatus::Skip,
-            detail: "internal-only patches are not exported; keyword scan skipped.".into(),
+            detail: "internal-only patches are not exported; banned-word scan skipped.".into(),
         }),
         Some(export) => {
             // The co-author trailer lands in the public commit, so it is scanned too.
@@ -1748,7 +1727,7 @@ fn message_checks(
     ]
 }
 
-/// Scans the export surface for configured company keywords and internal email domains.
+/// Scans the export surface for the banned words in `uplink.toml`.
 fn affiliation_check(queue: &QueueState, export_surface: &str) -> AssessCheck {
     let settings = match queue.settings.usable() {
         Ok(settings) => settings,
@@ -1757,25 +1736,18 @@ fn affiliation_check(queue: &QueueState, export_surface: &str) -> AssessCheck {
             return AssessCheck {
                 id: "affiliation-leak".into(),
                 status: CheckStatus::Fail,
-                detail: format!("Cannot scan for company keywords: {err}."),
+                detail: format!("Cannot scan for banned words: {err}."),
             };
         }
     };
-    let keys = &settings.redact_keywords;
-    let domains: Vec<String> = settings
-        .internal_email_domains
-        .iter()
-        .map(|d| d.to_lowercase())
-        .collect();
-    if keys.is_empty() && domains.is_empty() {
+    if settings.banned_words.is_empty() {
         return AssessCheck {
             id: "affiliation-leak".into(),
             status: CheckStatus::Warn,
-            detail: "No redact_keywords / internal_email_domains configured. Set them in uplink.toml on uplink/hooks so tests cannot mention the company.".into(),
+            detail: "No banned_words configured. Set them in uplink.toml on uplink/hooks so tests cannot mention the company.".into(),
         };
     }
-    let mut hits = find_keyword_hits(export_surface, keys);
-    hits.extend(find_domain_hits(export_surface, &domains));
+    let hits = find_banned_words(export_surface, &settings.banned_words);
     AssessCheck {
         id: "affiliation-leak".into(),
         status: if hits.is_empty() {
@@ -1784,17 +1756,17 @@ fn affiliation_check(queue: &QueueState, export_surface: &str) -> AssessCheck {
             CheckStatus::Fail
         },
         detail: if hits.is_empty() {
-            "No configured company keywords or internal email domains in the export surface.".into()
+            "No banned words in the export surface.".into()
         } else {
             format!(
-                "Export diff or public message contains: {}. Remove company names, internal hostnames, and staff emails from the contribution (including tests).",
+                "Export diff or public message contains banned words: {}. Remove company names, internal hostnames, and staff emails from the contribution (including tests).",
                 hits.join(", ")
             )
         },
     }
 }
 
-/// Warns when the export has binary files, which the keyword scan cannot read.
+/// Warns when the export has binary files, which the banned-word scan cannot read.
 fn binary_files_check(binaries: &[String]) -> Option<AssessCheck> {
     if binaries.is_empty() {
         return None;
@@ -1803,7 +1775,7 @@ fn binary_files_check(binaries: &[String]) -> Option<AssessCheck> {
         id: "binary-files".into(),
         status: CheckStatus::Warn,
         detail: format!(
-            "Export contains binary files that the keyword scan cannot read: {}. Check them by hand for company names and internal data.",
+            "Export contains binary files that the banned-word scan cannot read: {}. Check them by hand for company names and internal data.",
             binaries.join(", ")
         ),
     })
@@ -2115,14 +2087,17 @@ binary 3333333333333333333333333333333333333333\n"
     }
 
     #[test]
-    fn domain_hits_ignore_case() {
-        let domains = vec!["acme.com".to_string()];
-        assert_eq!(
-            find_domain_hits("Signed-off-by: Jane <jane@Acme.COM>", &domains),
-            vec!["@acme.com"]
-        );
-        assert!(find_domain_hits("jane@acme.company", &domains).is_empty());
-        assert!(find_domain_hits("jane@acme.com", &[]).is_empty());
+    fn banned_words_match_anywhere_ignoring_case() {
+        let words = vec!["acme".to_string()];
+        for text in [
+            "Signed-off-by: Jane <jane@Acme.COM>",
+            "see https://git.acme.com/x",
+            "class AcmeCorpClient",
+        ] {
+            assert_eq!(find_banned_words(text, &words), ["acme"], "{text}");
+        }
+        assert!(find_banned_words("jane@example.com", &words).is_empty());
+        assert!(find_banned_words("jane@acme.com", &[]).is_empty());
     }
 
     #[test]

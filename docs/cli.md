@@ -15,7 +15,7 @@ git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <na
             [--upstream-branch <branch>] [--contrib-remote-name <name>]
             [--internal-branch <branch>] [--forge <forge>] [--upgrade] [--continue]
             [--drop] [--abort] [--adopt-groups <path>] [--json] [--preflight <cmd>]
-            [--redact-keyword <word>]... [--internal-domain <domain>]...
+            [--banned-word <word>]...
 git uplink add --title <text> [--message <text> | --message-file <path>] [--from <ref>]
             [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
             [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
@@ -64,7 +64,7 @@ Create the queue on uplink/state, or restore this clone from origin.
 
 Writes `.uplink/queue.json` on `uplink/state`, including remote URLs, branch names, and the forge. First-time init also installs that forge's workflows plus the shared GitHub pull request template as the dedicated tooling patch.
 
-Init also creates the local orphan branch `uplink/hooks` for company hooks (assessment hook guide and starter, toolchain hook stub, `preflight.sh`) when neither this clone nor `origin` has it. Init never pushes it and never changes an existing file on it. While creating it, init asks for the settings that `--preflight`, `--redact-keyword`, and `--internal-domain` answer.
+Init also creates the local orphan branch `uplink/hooks` for company hooks (assessment hook guide and starter, toolchain hook stub, `preflight.sh`) when neither this clone nor `origin` has it. Init never pushes it and never changes an existing file on it. While creating it, init asks for the settings that `--preflight` and `--banned-word` answer.
 
 A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `uplink/upstream`, and the configured company branch, materializes that local ref (and `uplink/hooks` when origin has it) without checking it out, and reconstitutes the remotes from the stored URLs. It does not rewrite workflows.
 
@@ -98,8 +98,7 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
 - `--adopt-groups <path>`: JSON file of commit groups when internal is ahead of upstream.
 - `--json`: Print the stored queue config as JSON.
 - `--preflight <cmd>`: Command a new preflight.sh on uplink/hooks starts with (asked in a terminal when omitted).
-- `--redact-keyword <word>`: uplink.toml: word that must not appear in a contribution (repeatable, or comma-separated).
-- `--internal-domain <domain>`: uplink.toml: internal email domain to flag in the export (repeatable, or comma-separated).
+- `--banned-word <word>`: uplink.toml: word that must not appear in a contribution, such as a company name or internal domain (repeatable, or comma-separated).
 
 ## Recording changes
 
@@ -474,21 +473,20 @@ Reports live under `.uplink/reports/<id>/` on `uplink/state`, so a product rebui
 
 ## Settings in uplink.toml
 
-The leak scan's keywords and internal email domains live in `uplink.toml` on `uplink/hooks`, not in environment or repository variables. Every command reads the file from the local `uplink/hooks`, else `origin/uplink/hooks`, so a developer's machine and CI agree.
+The leak scan's banned words live in `uplink.toml` on `uplink/hooks`, not in environment or repository variables. Every command reads the file from the local `uplink/hooks`, else `origin/uplink/hooks`, so a developer's machine and CI agree.
 
-    # Words that must not appear in a contribution.
-    redact_keywords = ["AcmeCorp", "companyTelemetry"]
+    # Words that must not appear in a contribution, such as company names and internal domains (case-insensitive, matched anywhere).
+    banned_words = ["acme", "companyTelemetry"]
 
-    # Email domains flagged in the export.
-    internal_email_domains = ["acme.example"]
+A banned word matches anywhere in the export diff and public message, ignoring case, so `acme` also catches `AcmeCorp`, `jane@acme.com`, and `https://git.acme.com`.
 
 When `init` creates `uplink/hooks` it asks for each setting in a terminal. A flag answers its question. Without a terminal, a setting with no flag is written empty and init says which.
 
 `init --upgrade` adds the file when it is missing and appends settings the file lacks, asking the same way. It offers values an older `queue.json` held. It never changes a value that is already there; edit the file on `uplink/hooks` for that.
 
-With a forge recorded, a missing or unparseable `uplink.toml` fails upstream-bound `assess` instead of scanning for nothing.
+With a forge recorded, a missing or unparseable `uplink.toml` fails upstream-bound `assess` instead of scanning for nothing. So does one that still has `redact_keywords` or `internal_email_domains`, which an older release wrote: move their entries into `banned_words` and delete them.
 
-Moving from repository variables: run `git uplink init --upgrade`, answer with the values of `UPLINK_PREFLIGHT`, `UPLINK_REDACT_KEYWORDS`, and `UPLINK_INTERNAL_DOMAINS`, run `git uplink push`, then delete the three variables. They are no longer read.
+Moving from repository variables: run `git uplink init --upgrade`, answer the preflight question with `UPLINK_PREFLIGHT` and the banned words question with the values of both `UPLINK_REDACT_KEYWORDS` and `UPLINK_INTERNAL_DOMAINS`, run `git uplink push`, then delete the three variables. They are no longer read.
 
 ## Preflight script preflight.sh
 

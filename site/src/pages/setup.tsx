@@ -128,7 +128,7 @@ export function SetupPage() {
 }
 
 const HOOK_FILES = [
-  ["uplink.toml", "Settings the CLI reads: redact_keywords and internal_email_domains. They decide what assess reports as a leak."],
+  ["uplink.toml", "Settings the CLI reads: banned_words. They decide what assess reports as a leak."],
   ["preflight.sh", "The build and test command preflight runs on the export tree and on a rebuilt main."],
   [".github/actions/uplink-toolchain-hook/action.yml", "Toolchain hook: installs what preflight.sh needs, right before it runs."],
   [".github/workflows/uplink-assessment-hook.yml", "Assessment hook (optional): company checks whose result IP reads in the packet. init writes an -example starter."],

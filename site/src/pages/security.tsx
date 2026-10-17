@@ -36,8 +36,8 @@ const LIMITS = [
     "Code the script runs could force it to 0. Preflight checks that a change builds and passes its tests. It is not a defence against hostile code in the tree: the from-upstream review is.",
   ],
   [
-    "Assess is a keyword scan",
-    "It finds the words and email domains in uplink.toml, in the message and the diff. It does not read binary files (it warns), and it does not understand what code reveals. The IP reviewer does.",
+    "Assess is a banned-word scan",
+    "It finds the banned words in uplink.toml anywhere in the message and the diff, ignoring case. It does not read binary files (it warns), and it does not understand what code reveals. The IP reviewer does.",
   ],
   [
     "A PAT commit is unverified",
@@ -179,7 +179,7 @@ export function SecurityPage() {
           </li>
           <li>
             <strong>The message is rebuilt, not trusted.</strong> Everything below the cutoff is removed, the
-            author becomes the export identity, and the result is scanned for the words and email domains in{" "}
+            author becomes the export identity, and the result is scanned for the banned words in{" "}
             <code>uplink.toml</code>. A missing or broken <code>uplink.toml</code> fails the assessment rather
             than scanning for nothing.
           </li>
