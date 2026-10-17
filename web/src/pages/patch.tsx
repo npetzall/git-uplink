@@ -3,12 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { StatusBadge } from "../components/status-badge";
-import {
-  LayoutToggle,
-  PatchView,
-  RevisionDiffView,
-  useDiffLayout,
-} from "../components/diff-view";
+import { PatchView, RevisionDiffView } from "../components/diff-view";
 import { NEEDS_APPROVAL } from "../lib/status";
 import {
   loadFile,
@@ -54,7 +49,6 @@ export function PatchPage() {
   const [compareSha, setCompareSha] = useState<string>("");
   const [delta, setDelta] = useState<FileDelta[] | null>(null);
   const [deltaError, setDeltaError] = useState<string | null>(null);
-  const [layout, setLayout] = useDiffLayout();
 
   useEffect(() => {
     if (!id) {
@@ -319,13 +313,12 @@ export function PatchPage() {
                       ) : null}
                     </select>
                   </label>
-                  <LayoutToggle layout={layout} onChange={setLayout} />
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">No patch file history.</p>
               )}
               {!comparing ? (
-                <PatchView text={patchText} layout={layout} />
+                <PatchView text={patchText} />
               ) : deltaError ? (
                 <p className="text-sm text-rose-300">{deltaError}</p>
               ) : !delta ? (
@@ -336,7 +329,7 @@ export function PatchPage() {
                     Changes from <span className="font-mono text-xs">{shortSha(olderSha)}</span> to{" "}
                     <span className="font-mono text-xs">{shortSha(newerSha)}</span>
                   </p>
-                  <RevisionDiffView files={delta} layout={layout} />
+                  <RevisionDiffView files={delta} />
                 </>
               )}
             </CardContent>
@@ -427,7 +420,7 @@ export function PatchPage() {
                         Patch file at this approval
                       </summary>
                       <div className="mt-2">
-                        <PatchView text={approvedPatch} layout={layout} />
+                        <PatchView text={approvedPatch} />
                       </div>
                     </details>
                   ) : null}
