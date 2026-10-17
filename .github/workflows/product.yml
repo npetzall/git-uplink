@@ -96,6 +96,7 @@ jobs:
       - name: Apply npm version
         run: sfw npm version "$PRODUCT_VERSION" --no-git-tag-version --allow-same-version
       - run: sfw npm ci
+      - run: sfw npm run lint
       - run: sfw npm run typecheck
       - run: sfw npm test
       - run: sfw npm run build

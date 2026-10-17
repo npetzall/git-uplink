@@ -55,6 +55,19 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # Check only, never rewrite: `npm run format` applies the fixes.
+      - id: biome-web
+        name: biome web
+        entry: sfw npm run lint --prefix web
+        language: system
+        pass_filenames: false
+        files: ^web/
+      - id: biome-site
+        name: biome site
+        entry: sfw npm run lint --prefix site
+        language: system
+        pass_filenames: false
+        files: ^site/
   # Check only, never rewrite: lint without fixes, format with --check.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.10
