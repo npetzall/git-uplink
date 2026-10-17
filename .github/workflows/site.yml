@@ -36,6 +36,7 @@ jobs:
           job-summary: errors
       - run: sfw npm audit --package-lock-only
       - run: sfw npm ci
+      - run: sfw npm run lint
       - run: sfw npm run typecheck
       - run: sfw npm test
 
