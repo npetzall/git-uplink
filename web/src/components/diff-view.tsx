@@ -1,6 +1,5 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import {
   deltaLineSide,
@@ -15,55 +14,6 @@ import {
   type FileStatus,
   type PatchFile,
 } from "../lib/patch";
-
-export type DiffLayout = "unified" | "split";
-
-const LAYOUT_KEY = "uplink.diff.layout";
-
-/** The diff layout, remembered in this browser. */
-export function useDiffLayout(): [DiffLayout, (layout: DiffLayout) => void] {
-  const [layout, setLayout] = useState<DiffLayout>(() => {
-    try {
-      return localStorage.getItem(LAYOUT_KEY) === "split" ? "split" : "unified";
-    } catch {
-      return "unified";
-    }
-  });
-  const choose = (next: DiffLayout) => {
-    setLayout(next);
-    try {
-      localStorage.setItem(LAYOUT_KEY, next);
-    } catch {
-      // Storage is blocked: the choice lasts until reload.
-    }
-  };
-  return [layout, choose];
-}
-
-export function LayoutToggle({
-  layout,
-  onChange,
-}: {
-  layout: DiffLayout;
-  onChange: (layout: DiffLayout) => void;
-}) {
-  return (
-    <div className="inline-flex rounded-lg border border-border p-0.5" role="group" aria-label="Diff layout">
-      {(["unified", "split"] as const).map((value) => (
-        <Button
-          key={value}
-          size="sm"
-          variant={layout === value ? "secondary" : "ghost"}
-          aria-pressed={layout === value}
-          className="capitalize"
-          onClick={() => onChange(value)}
-        >
-          {value}
-        </Button>
-      ))}
-    </div>
-  );
-}
 
 const GREEN = "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
 const RED = "border-rose-500/30 bg-rose-500/10 text-rose-300";
@@ -128,8 +78,8 @@ function HunkHeader({ text, span }: { text: string; span: number }) {
   );
 }
 
-/** One column of line numbers when the file exists on one side only. */
-function UnifiedHunks({ file }: { file: PatchFile }) {
+/** An added or deleted file: one side, so one column of line numbers. */
+function SingleSideHunks({ file }: { file: PatchFile }) {
   const showOld = file.status !== "added";
   const showNew = file.status !== "deleted";
   const span = 2 + Number(showOld) + Number(showNew);
@@ -197,7 +147,7 @@ function SplitHunks({ file }: { file: PatchFile }) {
   );
 }
 
-function PatchFileView({ file, layout }: { file: PatchFile; layout: DiffLayout }) {
+function PatchFileView({ file }: { file: PatchFile }) {
   const oneSided = file.status === "added" || file.status === "deleted";
   const moved = file.oldPath && file.newPath && file.oldPath !== file.newPath;
   return (
@@ -220,17 +170,17 @@ function PatchFileView({ file, layout }: { file: PatchFile; layout: DiffLayout }
       {file.binary ? (
         <p className="px-3 py-2 text-xs text-muted-foreground">Binary file, content not shown.</p>
       ) : null}
-      {!file.hunks.length ? null : layout === "split" && !oneSided ? (
-        <SplitHunks file={file} />
+      {!file.hunks.length ? null : oneSided ? (
+        <SingleSideHunks file={file} />
       ) : (
-        <UnifiedHunks file={file} />
+        <SplitHunks file={file} />
       )}
     </FileSection>
   );
 }
 
 /** A `git format-patch` text as a commit header and one diff per file. */
-export function PatchView({ text, layout }: { text: string; layout: DiffLayout }) {
+export function PatchView({ text }: { text: string }) {
   const patch = useMemo(() => parsePatch(text), [text]);
   if (!text.trim()) {
     return <p className="text-sm text-muted-foreground">(empty)</p>;
@@ -260,7 +210,7 @@ export function PatchView({ text, layout }: { text: string; layout: DiffLayout }
         </p>
       ) : null}
       {patch.files.map((file, index) => (
-        <PatchFileView key={`${index}-${file.path}`} file={file} layout={layout} />
+        <PatchFileView key={`${index}-${file.path}`} file={file} />
       ))}
     </div>
   );
@@ -294,7 +244,7 @@ const INNER_STYLE: Record<DeltaLine["kind"], string> = {
 
 const INNER_MARK: Record<DeltaLine["kind"], string> = { add: "+", del: "-", meta: "" };
 
-/** One patch line. In the split layout each side is tinted by itself, not the row. */
+/** One patch line. Side by side, each side is tinted by itself, not the row. */
 function DeltaText({ line, wrap }: { line?: DeltaLine; wrap: boolean }) {
   if (!line) {
     return <td colSpan={2} className={EMPTY_SIDE} />;
@@ -317,7 +267,8 @@ function DeltaText({ line, wrap }: { line?: DeltaLine; wrap: boolean }) {
   );
 }
 
-function UnifiedDelta({ lines }: { lines: DeltaLine[] }) {
+/** A file only one revision touches: one side, marked by what happened to each line. */
+function SingleSideDelta({ lines }: { lines: DeltaLine[] }) {
   return (
     <table className={TABLE}>
       <tbody>
@@ -355,24 +306,20 @@ function SplitDelta({ lines }: { lines: DeltaLine[] }) {
   );
 }
 
-function FileDeltaView({ file, layout }: { file: FileDelta; layout: DiffLayout }) {
+function FileDeltaView({ file }: { file: FileDelta }) {
   const lines = useMemo(() => parseFileDelta(file), [file]);
   if (file.state === "unchanged") {
     return null;
   }
   return (
     <FileSection path={file.path} badge={STATE_LABEL[file.state]} badgeStyle={STATE_STYLE[file.state]}>
-      {layout === "split" && file.state === "changed" ? (
-        <SplitDelta lines={lines} />
-      ) : (
-        <UnifiedDelta lines={lines} />
-      )}
+      {file.state === "changed" ? <SplitDelta lines={lines} /> : <SingleSideDelta lines={lines} />}
     </FileSection>
   );
 }
 
 /** What a patch adds and removes in one revision compared with another, file by file. */
-export function RevisionDiffView({ files, layout }: { files: FileDelta[]; layout: DiffLayout }) {
+export function RevisionDiffView({ files }: { files: FileDelta[] }) {
   const unchanged = files.filter((file) => file.state === "unchanged").length;
   if (unchanged === files.length) {
     return (
@@ -385,21 +332,10 @@ export function RevisionDiffView({ files, layout }: { files: FileDelta[]; layout
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
         Only the lines the patch adds and removes are compared, not the unchanged lines around
-        them.{" "}
-        {layout === "split" ? (
-          <>The older revision is on the left, the newer on the right.</>
-        ) : (
-          <>
-            The first column says what happened to a patch line:{" "}
-            <span className="rounded bg-emerald-500/15 px-1 font-mono text-foreground">+</span> new
-            in the newer revision,{" "}
-            <span className="rounded bg-rose-500/15 px-1 font-mono text-foreground">-</span> gone
-            from it. Dimmed lines are in both.
-          </>
-        )}
+        them. The older revision is on the left, the newer on the right.
       </p>
       {files.map((file) => (
-        <FileDeltaView key={file.header} file={file} layout={layout} />
+        <FileDeltaView key={file.header} file={file} />
       ))}
       {unchanged ? (
         <p className="text-xs text-muted-foreground">
