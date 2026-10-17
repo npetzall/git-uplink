@@ -400,15 +400,21 @@ fn check_github_hooks_branch(repo: &Path) -> StepOutcome {
 Add it back (see toolchain-hook.md on uplink/hooks)"
         ));
     }
-    let incomplete = match missing_settings(repo, &local) {
-        Ok(keys) if keys.len() == SettingKey::ALL.len() => {
+    let incomplete = match settings_text_at(repo, &format!("{local}:{SETTINGS_PATH}")) {
+        None => {
             return StepOutcome::fail(format!(
                 "uplink/hooks has no {SETTINGS_PATH}; assess reads its settings from it. \
 Run git uplink init --upgrade, then {push}"
             ));
         }
-        Ok(keys) => keys,
-        Err(err) => return StepOutcome::fail(err.to_string()),
+        Some(text) => match SettingsFile::parse(&text) {
+            // Assess refuses such a file, so doctor does too.
+            Ok(file) => match file.problem() {
+                Some(problem) => return StepOutcome::fail(format!("{problem}, then {push}")),
+                None => file.missing_keys(),
+            },
+            Err(err) => return StepOutcome::fail(err.to_string()),
+        },
     };
     let short = &local[..local.len().min(7)];
     match remote {

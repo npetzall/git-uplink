@@ -3,7 +3,7 @@
 # Parallel required checks on every internal PR to company main except
 # uplink:internal-only. Assess rewrites the contribution as it would leave
 # the enterprise (PR title/body as the commit message, cutoff, export
-# author, keyword / internal-email scan) and posts the report. Preflight
+# author, banned-word scan) and posts the report. Preflight
 # applies the unique diff onto public upstream plus declared
 # Uplink-Depends-On, then tooling + queued upstream (internal omitted),
 # then preflight.sh from uplink/hooks. Fail these instead of opening a contribution

@@ -49,7 +49,7 @@ use crate::repo::{
     rev_parse, set_state_branch, stable_patch_id, stable_patch_id_from_contents, stamp,
     state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
-use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings};
+use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings, clean_list};
 use crate::types::{
     ApplyOutcome, AssessReport, ConflictCause, Forge, GateKind, LastSync, MergeVia,
     PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchEvent, PatchIntent, PatchLayer,

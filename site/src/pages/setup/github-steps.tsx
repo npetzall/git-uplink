@@ -751,9 +751,9 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
       <p>
         <code>init</code> asks three questions and writes the answers to <code>uplink/hooks</code>: the preflight
         command run on the export tree (for example <code>npm ci &amp;&amp; npm test</code>) goes into the script{" "}
-        <code>preflight.sh</code>; the words that must not appear in a contribution (company and product names) and
-        your internal email domains go into <code>uplink.toml</code>. In a script, pass{" "}
-        <code>--preflight</code>, <code>--redact-keyword</code>, and <code>--internal-domain</code> instead. These
+        <code>preflight.sh</code>; the banned words, which must not appear in a contribution (company and product
+        names, internal domains), go into <code>uplink.toml</code>. In a script, pass <code>--preflight</code> and{" "}
+        <code>--banned-word</code> instead. These
         are not repository variables: the CLI reads both files from the branch, on your machine and in CI alike. To
         change them later, edit the files on <code>uplink/hooks</code>.
       </p>
@@ -767,8 +767,10 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
       <p>
         Coming from an older setup that used the variables <code>UPLINK_PREFLIGHT</code>,{" "}
         <code>UPLINK_REDACT_KEYWORDS</code>, and <code>UPLINK_INTERNAL_DOMAINS</code>? Run{" "}
-        <code>git uplink init --upgrade</code>, answer with their values, run <code>git uplink push</code>, then
-        delete the three variables.
+        <code>git uplink init --upgrade</code>, answer with their values (both lists go into the banned words), run{" "}
+        <code>git uplink push</code>, then delete the three variables. An <code>uplink.toml</code> that still has{" "}
+        <code>redact_keywords</code> or <code>internal_email_domains</code> fails assess: move their entries into{" "}
+        <code>banned_words</code> and delete them.
       </p>
       <details className="rounded-lg border border-border px-4 py-2">
         <summary className="cursor-pointer text-sm text-foreground">

@@ -5077,7 +5077,7 @@ fn export_message_is_the_title_only_without_an_assess_report() {
 fn add_refuses_a_title_with_a_company_keyword_when_the_message_is_clean() {
     let world = setup_world();
     let company = &world.company;
-    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
+    set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
     git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
     write(
         company,
@@ -5163,7 +5163,7 @@ fn resolve_refuses_a_resolution_that_fails_the_assessment() {
     .unwrap();
     assert!(ttl_patch.assess.as_ref().unwrap().ok);
 
-    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
+    set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
 
     write(
         upstream,
@@ -5617,7 +5617,7 @@ fn report_assesses_the_patch_file_with_the_settings_of_today() {
     .unwrap();
 
     // A keyword added after import is applied to the queued patches.
-    set_settings(company, |s| s.redact_keywords = vec!["sha256".into()]);
+    set_settings(company, |s| s.banned_words = vec!["sha256".into()]);
     let found = assess_patch_for_packet(company, &hash_patch.id).unwrap();
     assert!(!found.assess.as_ref().unwrap().ok);
     let dependent = assess_patch_for_packet(company, &notes.id).unwrap();
@@ -5682,10 +5682,7 @@ fn assess_patch_package(repo: &Path, id: &str, dir: &Path) -> serde_json::Value 
 fn assess_writes_a_package_for_a_patch_and_for_a_change() {
     let (world, hash_patch) = world_with_hash_patch();
     let company = &world.company;
-    set_settings(company, |s| {
-        s.redact_keywords = vec!["AcmeCorp".into()];
-        s.internal_email_domains = vec!["acme.example".into()];
-    });
+    set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
 
     let dir = temp_dir();
     let package = assess_patch_package(company, &hash_patch.id, dir.path());
@@ -5700,11 +5697,11 @@ fn assess_writes_a_package_for_a_patch_and_for_a_change() {
     assert_eq!(package["ok"], true);
     assert_eq!(package["title"], "Use SHA-256 for tokens");
     assert_eq!(package["message"]["subject"], "Use SHA-256 for tokens");
-    assert_eq!(package["settings"]["redactKeywords"][0], "AcmeCorp");
     assert_eq!(
-        package["settings"]["internalEmailDomains"][0],
-        "acme.example"
+        package["settings"]["bannedWords"],
+        serde_json::json!(["AcmeCorp"])
     );
+    assert!(package["settings"].get("redactKeywords").is_none());
     assert_eq!(package["queueEntry"]["id"], hash_patch.id.as_str());
     assert_eq!(package["queueEntry"]["status"], "queued");
     assert!(
@@ -5880,7 +5877,7 @@ fn the_package_says_whether_the_stored_hook_result_is_current() {
 fn a_package_with_findings_is_written_before_assess_fails() {
     let (world, hash_patch) = world_with_hash_patch();
     let company = &world.company;
-    set_settings(company, |s| s.redact_keywords = vec!["sha256".into()]);
+    set_settings(company, |s| s.banned_words = vec!["sha256".into()]);
     let dir = temp_dir();
     let output = uplink_cli(
         company,
@@ -5994,7 +5991,7 @@ fn report_stores_an_assessment_only_for_the_patch_as_it_is_now() {
     // uplink.toml changed after the assessment.
     let dir = temp_dir();
     assess_patch_package(company, id, dir.path());
-    set_settings(company, |s| s.redact_keywords = vec!["sha256".into()]);
+    set_settings(company, |s| s.banned_words = vec!["sha256".into()]);
     refused(
         &dir.path().join("assessment.json"),
         "uplink.toml changed since",
@@ -8525,7 +8522,7 @@ Uplink-Depends-On: upl_asha\n"
 fn refuses_import_when_the_export_diff_names_the_company() {
     let world = setup_world();
     let company = &world.company;
-    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
+    set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
 
     git(
         company,
@@ -9505,14 +9502,10 @@ fn assess_warns_about_binary_files_in_the_export() {
     assert!(assess.ok);
 }
 
-#[test]
-fn assess_fails_an_export_author_at_an_internal_domain() {
-    let world = setup_world();
-    let company = &world.company;
-    set_settings(company, |s| {
-        s.internal_email_domains = vec!["acme.com".into()]
-    });
-
+/// Adds a patch on a new branch that changes `tokens.js` to `code`, with
+/// `trailers` below the cutoff, and returns the add error.
+fn add_patch_with_banned_acme(company: &Path, code: &str, trailers: &str) -> Error {
+    set_settings(company, |s| s.banned_words = vec!["acme".into()]);
     git(
         company,
         &["checkout", "-b", "feat/hash"],
@@ -9522,24 +9515,45 @@ fn assess_fails_an_export_author_at_an_internal_domain() {
     write(
         company,
         "src/tokens.js",
-        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+        &TOKENS.replace("return sha1(value);", code),
     );
     commit_all(company, "use sha256");
-    let err = add_landed_patch(
+    add_landed_patch(
         company,
         AddPatchOpts {
             title: "Use SHA-256 for tokens".into(),
             message: Some(format!(
-                "Use SHA-256 for tokens\n\nReplace SHA-1.\n\n{DEFAULT_CUTOFF}\n\n\
-Uplink-Export-Author: Jane <jane@acme.com>\n"
+                "Use SHA-256 for tokens\n\nReplace SHA-1.\n\n{DEFAULT_CUTOFF}\n\n{trailers}"
             )),
             from_ref: Some("main".into()),
             ..Default::default()
         },
     )
-    .unwrap_err();
+    .unwrap_err()
+}
+
+#[test]
+fn assess_fails_an_export_author_at_a_banned_domain() {
+    let world = setup_world();
+    let err = add_patch_with_banned_acme(
+        &world.company,
+        "return sha256(value);",
+        "Uplink-Export-Author: Jane <jane@acme.com>\n",
+    );
     assert!(matches!(err, Error::Assess(_)), "{err}");
-    assert!(err.to_string().contains("@acme.com"), "{err}");
+    assert!(err.to_string().contains("banned words: acme"), "{err}");
+}
+
+#[test]
+fn assess_fails_a_banned_domain_in_a_url() {
+    let world = setup_world();
+    let err = add_patch_with_banned_acme(
+        &world.company,
+        "return sha256(value); // https://git.acme.com/x",
+        "",
+    );
+    assert!(matches!(err, Error::Assess(_)), "{err}");
+    assert!(err.to_string().contains("banned words: acme"), "{err}");
 }
 
 #[test]
@@ -9578,7 +9592,7 @@ fn transfer_to_upstream_moves_immediately_when_apply_and_preflight_pass() {
 fn transfer_to_upstream_gates_on_assess_failure_without_writing_queue() {
     let world = setup_world();
     let company = &world.company;
-    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
+    set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
 
     git(
         company,
@@ -10375,6 +10389,41 @@ fn doctor_fails_when_the_hooks_branch_lacks_the_toolchain_hook() {
 }
 
 #[test]
+fn doctor_fails_on_settings_an_older_binary_wrote() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    edit_hooks(company, "old settings", |dir| {
+        write(dir, "uplink.toml", "redact_keywords = [\"acme\"]\n");
+    });
+    let (status, detail) = hooks_status(&hooks_check(company));
+    assert_eq!(status, CheckStatus::Fail, "{detail}");
+    assert!(detail.contains("still has redact_keywords"), "{detail}");
+    assert!(detail.contains("banned_words"), "{detail}");
+    assert!(!detail.contains("has no uplink.toml"), "{detail}");
+}
+
+#[test]
+fn doctor_warns_when_uplink_toml_lacks_a_setting() {
+    let world = setup_uninitialized();
+    init_with_recorded_urls(&world);
+    let company = &world.company;
+    edit_hooks(company, "no settings", |dir| {
+        write(dir, "uplink.toml", "# nothing yet\n");
+    });
+    publish_origin(company);
+    git(
+        company,
+        &["push", "--quiet", "origin", "uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let (status, detail) = hooks_status(&hooks_check(company));
+    assert_eq!(status, CheckStatus::Warn, "{detail}");
+    assert!(detail.contains("lacks banned_words"), "{detail}");
+}
+
+#[test]
 fn doctor_fails_when_the_hooks_branch_is_missing() {
     let world = setup_uninitialized();
     init_with_recorded_urls(&world);
@@ -10429,8 +10478,7 @@ fn init_writes_the_answers_to_the_hooks_branch() {
             &world,
             SettingsFlags {
                 preflight: Some("npm ci && npm test".into()),
-                redact_keywords: Some(vec!["AcmeCorp,companyTelemetry".into()]),
-                internal_domains: Some(vec!["acme.example".into()]),
+                banned_words: Some(vec!["acme,companyTelemetry".into()]),
             },
         ),
     )
@@ -10441,23 +10489,23 @@ fn init_writes_the_answers_to_the_hooks_branch() {
     let text = hooks_toml(&world.company);
     assert!(!text.contains("preflight"), "{text}");
     assert!(
-        text.contains("redact_keywords = [\"AcmeCorp\", \"companyTelemetry\"]"),
-        "{text}"
-    );
-    assert!(
-        text.contains("internal_email_domains = [\"acme.example\"]"),
+        text.contains("banned_words = [\"acme\", \"companyTelemetry\"]"),
         "{text}"
     );
     assert!(!hooks_step_detail(&result).contains("Left empty"));
 
     let settings = git_uplink::read_queue(&world.company).unwrap().settings;
-    assert_eq!(settings.redact_keywords, ["AcmeCorp", "companyTelemetry"]);
-    assert_eq!(settings.internal_email_domains, ["acme.example"]);
+    assert_eq!(settings.banned_words, ["acme", "companyTelemetry"]);
     assert!(settings.problem.is_none());
 
     // The settings live on uplink/hooks only, never in queue.json.
     let stored = fs::read_to_string(world.company.join(".uplink/queue.json")).unwrap();
-    for key in ["preflightCommand", "redactKeywords", "internalEmailDomains"] {
+    for key in [
+        "preflightCommand",
+        "bannedWords",
+        "redactKeywords",
+        "internalEmailDomains",
+    ] {
         assert!(!stored.contains(key), "{stored}");
     }
 }
@@ -10471,13 +10519,13 @@ fn init_without_answers_writes_empty_settings_and_says_so() {
     )
     .unwrap();
     let text = hooks_toml(&world.company);
-    assert!(text.contains("redact_keywords = []"), "{text}");
+    assert!(text.contains("banned_words = []"), "{text}");
     // The stub has the contract and no command.
     let script = hooks_file(&world.company, "preflight.sh");
     assert!(script.trim_end().ends_with("\nset -eu"), "{script}");
     let detail = hooks_step_detail(&result);
     assert!(
-        detail.contains("Left empty in uplink.toml: redact_keywords, internal_email_domains"),
+        detail.contains("Left empty in uplink.toml: banned_words"),
         "{detail}"
     );
     assert!(result.report.ok, "{:?}", result.report.checks);
@@ -10498,7 +10546,7 @@ fn init_upgrade_adds_a_missing_uplink_toml_from_flags_and_the_old_queue() {
         &path,
         stored.replacen(
             "\"config\": {",
-            "\"config\": {\n    \"redactKeywords\": [\"LegacyCo\"],",
+            "\"config\": {\n    \"redactKeywords\": [\"LegacyCo\"],\n    \"internalEmailDomains\": [\"legacy-co.net\"],",
             1,
         ),
     )
@@ -10525,20 +10573,24 @@ fn init_upgrade_adds_a_missing_uplink_toml_from_flags_and_the_old_queue() {
     )
     .unwrap();
     let text = hooks_toml(company);
-    assert!(text.contains("redact_keywords = [\"LegacyCo\"]"), "{text}");
+    assert!(
+        text.contains("banned_words = [\"LegacyCo\", \"legacy-co.net\"]"),
+        "{text}"
+    );
     // preflight.sh was already there, so the flag seeds nothing.
     assert!(!hooks_file(company, "preflight.sh").contains("make check"));
     let detail = hooks_step_detail(&result);
     assert!(detail.contains("uplink.toml"), "{detail}");
-    assert!(
-        detail.contains("Left empty in uplink.toml: internal_email_domains"),
-        "{detail}"
+    assert!(!detail.contains("Left empty"), "{detail}");
+    assert_eq!(
+        result.queue.settings.banned_words,
+        ["LegacyCo", "legacy-co.net"]
     );
-    assert_eq!(result.queue.settings.redact_keywords, ["LegacyCo"]);
 }
 
 #[test]
 fn init_upgrade_appends_missing_settings_and_keeps_the_rest() {
+    // An older binary wrote redact_keywords; it stays and blocks the scan.
     let world = setup_uninitialized();
     init_with_recorded_urls(&world);
     let company = &world.company;
@@ -10557,18 +10609,18 @@ fn init_upgrade_appends_missing_settings_and_keeps_the_rest() {
         )
         .unwrap()
     };
-    upgrade(SettingsFlags {
+    let result = upgrade(SettingsFlags {
         preflight: None,
-        redact_keywords: Some(vec!["Ignored".into()]),
-        internal_domains: None,
+        banned_words: Some(vec!["acme".into()]),
     });
     let text = format!("{}\n", hooks_toml(company));
-    assert!(text.starts_with(ours), "{text}");
     assert!(
-        !text.contains("Ignored"),
-        "existing values are never changed\n{text}"
+        text.starts_with(ours),
+        "existing text is never changed\n{text}"
     );
-    assert!(text.contains("internal_email_domains = []"), "{text}");
+    assert!(text.contains("banned_words = [\"acme\"]"), "{text}");
+    let problem = result.queue.settings.usable().unwrap_err().to_string();
+    assert!(problem.contains("still has redact_keywords"), "{problem}");
 
     let tip = rev_of(company, "uplink/hooks");
     upgrade(SettingsFlags {
@@ -11156,7 +11208,7 @@ fn amend_complete_of_a_submitted_patch_takes_the_pr_message_and_is_amended() {
 fn amend_complete_refuses_a_leaking_message_and_keeps_the_branch() {
     let world = setup_world();
     let company = &world.company;
-    set_settings(company, |s| s.redact_keywords = vec!["AcmeCorp".into()]);
+    set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
     let patch = add_ttl_patch(company);
     amend_patch(company, &patch.id, false, None).unwrap();
     amend_on_work_and_squash(

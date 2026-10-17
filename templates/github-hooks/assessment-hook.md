@@ -32,7 +32,7 @@ Before it runs the hook, the caller runs `git uplink assess` and uploads the res
 | `title` | The public pull request title |
 | `message` | `stored` (the whole message), `subject` and `body` (what is public), `coAuthor` |
 | `ok`, `checks` | The result. Each check has `id`, `status` (`pass`, `warn`, `fail`, `skip`) and `detail`. For `patch` there is a `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream |
-| `settings` | `redactKeywords` and `internalEmailDomains` from `uplink.toml`, or `problem` when it could not be read |
+| `settings` | `bannedWords` from `uplink.toml`, or `problem` when it could not be read |
 | `changeBlob` | Git blob id of `change.patch` |
 | `storedExtras` | For `patch`: `fresh` (whether a hook result stored by an earlier submit is still for this patch content) and its `source`. Submit uses it to decide whether to run the hook |
 | `queueEntry` | For `patch`: the patch as it is in `queue.json` (status, dependencies, approvals, public PR) |

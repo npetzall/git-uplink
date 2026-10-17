@@ -484,7 +484,7 @@ git remote add contrib ${repoUrl(CONTRIB)}
 git fetch upstream
 git checkout -B main upstream/main
 git uplink init --upstream ${repoUrl(UPSTREAM)} --contrib ${repoUrl(CONTRIB)} --forge try-it-on-github \\
-  --preflight 'npm test' --redact-keyword companyTelemetry,AcmeCorp --internal-domain acme.example
+  --preflight 'npm test' --banned-word companyTelemetry,acme
 git uplink status
 git push -u origin main
 git push origin uplink/state uplink/upstream uplink/hooks
