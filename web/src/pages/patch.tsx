@@ -1,26 +1,34 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { StatusBadge } from "../components/status-badge";
 import { PatchView, RevisionDiffView } from "../components/diff-view";
-import { NEEDS_APPROVAL } from "../lib/status";
+import { StatusBadge } from "../components/status-badge";
 import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
+import {
+  type FileRevision,
   loadFile,
   loadPatch,
   loadPatchDiff,
-  parseSource,
-  type FileRevision,
   type PatchApproval,
   type PatchResponse,
+  parseSource,
 } from "../lib/api";
 import type { FileDelta } from "../lib/patch";
+import { NEEDS_APPROVAL } from "../lib/status";
 
 function shortSha(sha: string): string {
   return sha === "worktree" ? "worktree" : sha.slice(0, 12);
 }
 
-function revisionLabel(revision: FileRevision, approvals: PatchApproval[]): string {
+function revisionLabel(
+  revision: FileRevision,
+  approvals: PatchApproval[],
+): string {
   const subject = revision.subject || "update";
   const when = revision.at ? ` · ${revision.at}` : "";
   const approved = approvals.find((approval) => approval.sha === revision.sha);
@@ -76,7 +84,8 @@ export function PatchPage() {
 
   const approvals = data?.patch?.approvals ?? [];
   const selectedApproval = useMemo(
-    () => approvals.find((item) => item.sha === approvalSha) ?? approvals.at(-1),
+    () =>
+      approvals.find((item) => item.sha === approvalSha) ?? approvals.at(-1),
     [approvals, approvalSha],
   );
 
@@ -108,7 +117,9 @@ export function PatchPage() {
       loadFile(`.uplink/patches/${id}.patch`, source, selectedApproval.sha),
     ]).then(([approval, assessment, patch]) => {
       setApprovalText(approval.status === "fulfilled" ? approval.value : "");
-      setAssessmentText(assessment.status === "fulfilled" ? assessment.value : "");
+      setAssessmentText(
+        assessment.status === "fulfilled" ? assessment.value : "",
+      );
       setApprovedPatch(patch.status === "fulfilled" ? patch.value : "");
     });
   }, [id, source, selectedApproval]);
@@ -170,7 +181,9 @@ export function PatchPage() {
         {patch ? (
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={patch.status} />
-            {data?.approvalStale ? <StatusBadge value={NEEDS_APPROVAL} /> : null}
+            {data?.approvalStale ? (
+              <StatusBadge value={NEEDS_APPROVAL} />
+            ) : null}
             {data?.layer ? <StatusBadge value={data.layer} /> : null}
             <span className="text-lg text-foreground">{patch.title}</span>
           </div>
@@ -190,7 +203,9 @@ export function PatchPage() {
         </Card>
       ) : (
         <div className="space-y-6">
-          {fileError ? <p className="text-sm text-rose-300">{fileError}</p> : null}
+          {fileError ? (
+            <p className="text-sm text-rose-300">{fileError}</p>
+          ) : null}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Details</CardTitle>
@@ -198,22 +213,32 @@ export function PatchPage() {
             <CardContent className="space-y-3 text-sm">
               <dl className="grid gap-2 sm:grid-cols-2">
                 <div>
-                  <dt className="text-xs text-muted-foreground uppercase">Created</dt>
+                  <dt className="text-xs text-muted-foreground uppercase">
+                    Created
+                  </dt>
                   <dd>{patch.createdAt ?? "—"}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-muted-foreground uppercase">Updated</dt>
+                  <dt className="text-xs text-muted-foreground uppercase">
+                    Updated
+                  </dt>
                   <dd>{patch.updatedAt ?? "—"}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-muted-foreground uppercase">Depends on</dt>
+                  <dt className="text-xs text-muted-foreground uppercase">
+                    Depends on
+                  </dt>
                   <dd className="font-mono text-xs">
                     {(patch.dependsOn ?? []).join(", ") || "—"}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-muted-foreground uppercase">Stable patch-id</dt>
-                  <dd className="font-mono text-xs">{patch.patchIdStable ?? "—"}</dd>
+                  <dt className="text-xs text-muted-foreground uppercase">
+                    Stable patch-id
+                  </dt>
+                  <dd className="font-mono text-xs">
+                    {patch.patchIdStable ?? "—"}
+                  </dd>
                 </div>
               </dl>
               {patch.upstream?.prUrl ? (
@@ -233,10 +258,7 @@ export function PatchPage() {
                 <p className="text-amber-300">
                   Conflict on {patch.conflict.branch}
                   {patch.conflict.workBranch ? (
-                    <>
-                      {" "}
-                      · work {patch.conflict.workBranch}
-                    </>
+                    <> · work {patch.conflict.workBranch}</>
                   ) : null}
                   {patch.conflict.prUrl ? (
                     <>
@@ -305,7 +327,10 @@ export function PatchPage() {
                       {otherApprovals.length ? (
                         <optgroup label="Approvals">
                           {otherApprovals.map((approval) => (
-                            <option key={`${approval.version}-${approval.sha}`} value={approval.sha}>
+                            <option
+                              key={`${approval.version}-${approval.sha}`}
+                              value={approval.sha}
+                            >
                               {approvalLabel(approval)}
                             </option>
                           ))}
@@ -315,19 +340,29 @@ export function PatchPage() {
                   </label>
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">No patch file history.</p>
+                <p className="text-sm text-muted-foreground">
+                  No patch file history.
+                </p>
               )}
               {!comparing ? (
                 <PatchView text={patchText} />
               ) : deltaError ? (
                 <p className="text-sm text-rose-300">{deltaError}</p>
               ) : !delta ? (
-                <p className="text-sm text-muted-foreground">Comparing revisions…</p>
+                <p className="text-sm text-muted-foreground">
+                  Comparing revisions…
+                </p>
               ) : (
                 <>
                   <p className="text-sm text-muted-foreground">
-                    Changes from <span className="font-mono text-xs">{shortSha(olderSha)}</span> to{" "}
-                    <span className="font-mono text-xs">{shortSha(newerSha)}</span>
+                    Changes from{" "}
+                    <span className="font-mono text-xs">
+                      {shortSha(olderSha)}
+                    </span>{" "}
+                    to{" "}
+                    <span className="font-mono text-xs">
+                      {shortSha(newerSha)}
+                    </span>
                   </p>
                   <RevisionDiffView files={delta} />
                 </>
@@ -342,12 +377,14 @@ export function PatchPage() {
             <CardContent className="space-y-3">
               {data?.approvalStale ? (
                 <p className="text-sm text-rose-300">
-                  The patch changed since its last approval. Submit refuses it until a new packet is
-                  approved.
+                  The patch changed since its last approval. Submit refuses it
+                  until a new packet is approved.
                 </p>
               ) : null}
               {!approvals.length ? (
-                <p className="text-sm text-muted-foreground">No approvals recorded.</p>
+                <p className="text-sm text-muted-foreground">
+                  No approvals recorded.
+                </p>
               ) : (
                 <>
                   <label className="block text-sm">
@@ -360,7 +397,10 @@ export function PatchPage() {
                       onChange={(event) => setApprovalSha(event.target.value)}
                     >
                       {approvals.map((approval) => (
-                        <option key={`${approval.version}-${approval.sha}`} value={approval.sha}>
+                        <option
+                          key={`${approval.version}-${approval.sha}`}
+                          value={approval.sha}
+                        >
                           {approvalLabel(approval)}
                         </option>
                       ))}
@@ -369,22 +409,34 @@ export function PatchPage() {
                   {selectedApproval ? (
                     <dl className="grid gap-2 text-sm sm:grid-cols-2">
                       <div>
-                        <dt className="text-xs text-muted-foreground uppercase">At</dt>
+                        <dt className="text-xs text-muted-foreground uppercase">
+                          At
+                        </dt>
                         <dd>{selectedApproval.at}</dd>
                       </div>
                       <div>
-                        <dt className="text-xs text-muted-foreground uppercase">Queue commit</dt>
-                        <dd className="font-mono text-xs">{selectedApproval.sha}</dd>
+                        <dt className="text-xs text-muted-foreground uppercase">
+                          Queue commit
+                        </dt>
+                        <dd className="font-mono text-xs">
+                          {selectedApproval.sha}
+                        </dd>
                       </div>
                       {selectedApproval.reviewed ? (
                         <div className="sm:col-span-2">
-                          <dt className="text-xs text-muted-foreground uppercase">Review token</dt>
-                          <dd className="font-mono text-xs">{selectedApproval.reviewed}</dd>
+                          <dt className="text-xs text-muted-foreground uppercase">
+                            Review token
+                          </dt>
+                          <dd className="font-mono text-xs">
+                            {selectedApproval.reviewed}
+                          </dd>
                         </div>
                       ) : null}
                       {selectedApproval.runUrl ? (
                         <div className="sm:col-span-2">
-                          <dt className="text-xs text-muted-foreground uppercase">Run</dt>
+                          <dt className="text-xs text-muted-foreground uppercase">
+                            Run
+                          </dt>
                           <dd>
                             <a
                               href={selectedApproval.runUrl}
@@ -437,10 +489,15 @@ export function PatchPage() {
               <CardContent>
                 <ul className="space-y-2 text-sm">
                   {patch.events.map((event, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: the event log is append-only
                     <li key={`${event.at}-${index}`}>
-                      <span className="font-mono text-xs text-muted-foreground">{event.at}</span>{" "}
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {event.at}
+                      </span>{" "}
                       <span className="font-medium">{event.type}</span>{" "}
-                      <span className="text-muted-foreground">{event.detail}</span>
+                      <span className="text-muted-foreground">
+                        {event.detail}
+                      </span>
                     </li>
                   ))}
                 </ul>

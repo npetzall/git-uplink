@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
-import type React from "react";
 import { X } from "lucide-react";
+import type React from "react";
+import { useEffect, useRef } from "react";
 
 /**
  * Modal on the native <dialog>: focus trap, Esc to close, and the page behind does not scroll.
@@ -38,6 +38,7 @@ export function Modal({
   }, [open]);
 
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: closes on a backdrop click; Escape closes the dialog natively
     <dialog
       ref={ref}
       aria-label={title}
@@ -60,7 +61,9 @@ export function Modal({
             <X className="size-4" />
           </button>
         </header>
-        <div className="overflow-y-auto overscroll-contain px-5 py-4">{children}</div>
+        <div className="overflow-y-auto overscroll-contain px-5 py-4">
+          {children}
+        </div>
       </div>
     </dialog>
   );

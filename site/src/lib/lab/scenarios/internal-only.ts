@@ -1,10 +1,10 @@
-import { rebuild, type LabScenario, type SimPatch } from "../../simulator";
-import { TOKENS_TELEMETRY, exampleSeed, tree } from "../fixtures";
+import { type LabScenario, rebuild, type SimPatch } from "../../simulator";
+import { exampleSeed, TOKENS_TELEMETRY, tree } from "../fixtures";
 import {
+  assessCi,
   branchPush,
   ciJob,
   importOps,
-  assessCi,
   resetStatus,
   startExample,
   you,
@@ -26,7 +26,11 @@ export const internalOnly: LabScenario = {
         "Open a PR for vendor telemetry without uplink:internal-only. Uplink upstream assess fails: the export surface contains companyTelemetry (in banned_words, uplink.toml). Close this PR.",
       why: "Affiliation scan is the guard. Internal-only is an explicit label, not a silent default.",
       operations: [
-        branchPush("feat/telemetry-public", "internal-telemetry.diff", "Vendor telemetry"),
+        branchPush(
+          "feat/telemetry-public",
+          "internal-telemetry.diff",
+          "Vendor telemetry",
+        ),
         you(
           [
             'git uplink assess --title "Vendor telemetry" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>',
@@ -51,7 +55,11 @@ export const internalOnly: LabScenario = {
         "Open a new PR and add label uplink:internal-only before Create (Uplink PR checks only see labels that exist when the check runs). Merge. The patch is queued on the internal queue. Company main calls companyTelemetry().",
       why: "The label appends to internal[] and skips both Uplink PR checks. Tooling from setup is the same class of change.",
       operations: [
-        branchPush("feat/telemetry", "internal-telemetry.diff", "Vendor telemetry"),
+        branchPush(
+          "feat/telemetry",
+          "internal-telemetry.diff",
+          "Vendor telemetry",
+        ),
         ...importOps({ title: "Vendor telemetry", internalOnly: true }),
         resetStatus(),
       ],
@@ -83,7 +91,10 @@ export const internalOnly: LabScenario = {
       why: "Internal-only is the odd case. Almost every internal contribution is also contributed upstream.",
       operations: [
         you(
-          ["git uplink approve upl_telemetry", "git uplink submit upl_telemetry"],
+          [
+            "git uplink approve upl_telemetry",
+            "git uplink submit upl_telemetry",
+          ],
           "Refused: patch is internal-only.",
         ),
         ciJob(

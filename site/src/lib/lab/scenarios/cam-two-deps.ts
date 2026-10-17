@@ -1,9 +1,10 @@
-import { rebuild, type LabScenario, type SimPatch } from "../../simulator";
+import { type LabScenario, rebuild, type SimPatch } from "../../simulator";
 import {
+  exampleSeed,
+  patchById,
   TOKENS_CAM,
   TOKENS_SHA256,
   TOKENS_SHA256_TTL_7200,
-  exampleSeed,
   tree,
 } from "../fixtures";
 import {
@@ -62,7 +63,10 @@ export const camTwoDeps: LabScenario = {
           ...state,
           stepId: "import-siblings",
           patches: [...state.patches, asha, ben],
-          log: [...state.log, "Imported upl_asha and upl_ben. Both queued, independent."],
+          log: [
+            ...state.log,
+            "Imported upl_asha and upl_ben. Both queued, independent.",
+          ],
         });
       },
     },
@@ -73,8 +77,15 @@ export const camTwoDeps: LabScenario = {
         "Cam’s PR body lists Uplink-Depends-On for both ids. Approve and submit of Cam are refused until each upstream-bound dependency is merged upstream.",
       why: "Cam’s patch file is only Cam’s unique delta against a tree that already had Asha and Ben.",
       operations: [
-        branchPush("feat/cam", "cam-wire.diff", "Wire hash into a describe helper"),
-        ...importOps({ title: "Wire hash into a describe helper", dependsOn: ["upl_asha", "upl_ben"] }),
+        branchPush(
+          "feat/cam",
+          "cam-wire.diff",
+          "Wire hash into a describe helper",
+        ),
+        ...importOps({
+          title: "Wire hash into a describe helper",
+          dependsOn: ["upl_asha", "upl_ben"],
+        }),
         resetStatus(),
       ],
       apply: (state) => {
@@ -122,10 +133,20 @@ export const camTwoDeps: LabScenario = {
       apply: (state) => {
         const patches = state.patches.map((patch) => {
           if (patch.id === "upl_asha") {
-            return { ...patch, status: "merged" as const, mergedVia: "pr #412", prNumber: 412 };
+            return {
+              ...patch,
+              status: "merged" as const,
+              mergedVia: "pr #412",
+              prNumber: 412,
+            };
           }
           if (patch.id === "upl_ben") {
-            return { ...patch, status: "merged" as const, mergedVia: "pr #413", prNumber: 413 };
+            return {
+              ...patch,
+              status: "merged" as const,
+              mergedVia: "pr #413",
+              prNumber: 413,
+            };
           }
           return patch;
         });
@@ -151,14 +172,18 @@ export const camTwoDeps: LabScenario = {
       operations: submitOps("upl_cam"),
       apply: (state) => {
         const patches = state.patches.map((patch) =>
-          patch.id === "upl_cam" ? { ...patch, status: "submitted" as const, prNumber: 420 } : patch,
+          patch.id === "upl_cam"
+            ? { ...patch, status: "submitted" as const, prNumber: 420 }
+            : patch,
         );
-        const cam = patches.find((patch) => patch.id === "upl_cam")!;
+        const cam = patchById(patches, "upl_cam");
         return {
           ...state,
           stepId: "submit-cam",
           patches,
-          contrib: [{ branch: "uplink/upl_cam", files: cam.files, prNumber: 420 }],
+          contrib: [
+            { branch: "uplink/upl_cam", files: cam.files, prNumber: 420 },
+          ],
           log: [
             ...state.log,
             "Submitted upl_cam (#420). Public tree is describeToken on sha256 + ttl 7200; no replay of the siblings.",

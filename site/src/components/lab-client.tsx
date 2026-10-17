@@ -1,21 +1,31 @@
+import { ArrowRight, Play, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowRight, RotateCcw, Play } from "lucide-react";
-import { Button } from "./ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
-import { StatusBadge } from "./status-badge";
 import {
-  operationsFor,
-  runThrough,
+  DEFAULT_SCENARIO_ID,
+  LAB_SCENARIOS,
+  scenarioById,
+} from "../lib/lab/scenarios";
+import {
   type LabMode,
   type LabOperation,
+  operationsFor,
+  runThrough,
   type SimFileMap,
   type SimPatch,
 } from "../lib/simulator";
-import { DEFAULT_SCENARIO_ID, LAB_SCENARIOS, scenarioById } from "../lib/lab/scenarios";
 import { cn } from "../lib/utils";
+import { StatusBadge } from "./status-badge";
+import { Button } from "./ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
-function FileView({ files, highlight }: { files: SimFileMap; highlight?: string }) {
+function FileView({
+  files,
+  highlight,
+}: {
+  files: SimFileMap;
+  highlight?: string;
+}) {
   const entries = Object.entries(files);
   return (
     <div className="space-y-3">
@@ -29,7 +39,9 @@ function FileView({ files, highlight }: { files: SimFileMap; highlight?: string 
             <pre
               className={cn(
                 "overflow-x-auto rounded-lg bg-black/40 p-3 font-mono text-xs leading-5 text-zinc-200",
-                highlight && contents.includes(highlight) && "ring-1 ring-teal-400/40",
+                highlight &&
+                  contents.includes(highlight) &&
+                  "ring-1 ring-teal-400/40",
                 conflicted && "ring-1 ring-rose-400/40",
               )}
             >
@@ -52,7 +64,13 @@ function patchLink(patch: SimPatch, blockedBy?: string) {
   return "queued";
 }
 
-function OperationsView({ operations, mode }: { operations: LabOperation[]; mode: LabMode }) {
+function OperationsView({
+  operations,
+  mode,
+}: {
+  operations: LabOperation[];
+  mode: LabMode;
+}) {
   if (operations.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -65,11 +83,14 @@ function OperationsView({ operations, mode }: { operations: LabOperation[]; mode
   return (
     <div className="space-y-4" data-testid="lab-operations">
       {operations.map((op, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: a step's operations are a fixed list
         <div key={`${op.actor}-${index}`}>
           <p className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
             {op.workflow ?? op.actor}
           </p>
-          {op.note ? <p className="mb-2 text-sm text-muted-foreground">{op.note}</p> : null}
+          {op.note ? (
+            <p className="mb-2 text-sm text-muted-foreground">{op.note}</p>
+          ) : null}
           {op.commands.length > 0 ? (
             <pre className="overflow-x-auto rounded-lg bg-black/40 p-3 font-mono text-xs leading-5 text-zinc-200">
               {op.commands.join("\n")}
@@ -91,15 +112,22 @@ export function LabClient() {
   const scenario = scenarioById(params.get("scenario") ?? DEFAULT_SCENARIO_ID);
   const mode = parseMode(params.get("mode"));
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: start over at step 0 when the scenario changes
   useEffect(() => {
     setStepCount(0);
   }, [scenario.id]);
 
-  const state = useMemo(() => runThrough(scenario, stepCount), [scenario, stepCount]);
+  const state = useMemo(
+    () => runThrough(scenario, stepCount),
+    [scenario, stepCount],
+  );
   const current = stepCount === 0 ? undefined : scenario.steps[stepCount - 1];
   const canAdvance = stepCount < scenario.steps.length;
-  const conflictIndex = state.patches.findIndex((patch) => patch.status === "conflict");
-  const blockedBy = conflictIndex >= 0 ? state.patches[conflictIndex]?.id : undefined;
+  const conflictIndex = state.patches.findIndex(
+    (patch) => patch.status === "conflict",
+  );
+  const blockedBy =
+    conflictIndex >= 0 ? state.patches[conflictIndex]?.id : undefined;
   const operations = operationsFor(
     current?.operations ?? scenario.startOperations,
     mode,
@@ -119,7 +147,9 @@ export function LabClient() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <label className="grid gap-1.5 text-sm">
-          <span className="text-xs tracking-wide text-muted-foreground uppercase">Scenario</span>
+          <span className="text-xs tracking-wide text-muted-foreground uppercase">
+            Scenario
+          </span>
           <select
             data-testid="lab-scenario"
             value={scenario.id}
@@ -136,7 +166,12 @@ export function LabClient() {
             ))}
           </select>
         </label>
-        <div className="flex rounded-lg border border-border p-0.5" role="group" aria-label="Command mode">
+        {/* biome-ignore lint/a11y/useSemanticElements: a toggle-button group, not a set of form fields */}
+        <div
+          className="flex rounded-lg border border-border p-0.5"
+          role="group"
+          aria-label="Command mode"
+        >
           <Button
             type="button"
             size="sm"
@@ -195,9 +230,12 @@ export function LabClient() {
           <Card>
             <CardHeader className="gap-3">
               <p className="text-xs font-medium tracking-[0.2em] text-teal-400 uppercase">
-                Scenario · {scenario.title} · {mode} · step {stepCount} of {scenario.steps.length}
+                Scenario · {scenario.title} · {mode} · step {stepCount} of{" "}
+                {scenario.steps.length}
               </p>
-              <CardTitle className="text-2xl">{current?.title ?? scenario.title}</CardTitle>
+              <CardTitle className="text-2xl">
+                {current?.title ?? scenario.title}
+              </CardTitle>
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
                 {current?.summary ?? scenario.blurb}
               </p>
@@ -210,7 +248,11 @@ export function LabClient() {
                 <Button
                   type="button"
                   data-testid="lab-next"
-                  onClick={() => setStepCount((count) => Math.min(count + 1, scenario.steps.length))}
+                  onClick={() =>
+                    setStepCount((count) =>
+                      Math.min(count + 1, scenario.steps.length),
+                    )
+                  }
                   disabled={!canAdvance}
                 >
                   {stepCount === 0 ? (
@@ -257,15 +299,27 @@ export function LabClient() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Public upstream</CardTitle>
-                <p className="text-xs text-muted-foreground">github.com/upstream/tokenkit</p>
+                <p className="text-xs text-muted-foreground">
+                  github.com/upstream/tokenkit
+                </p>
               </CardHeader>
               <CardContent>
-                <FileView files={state.upstream} highlight={scenario.highlight} />
+                <FileView
+                  files={state.upstream}
+                  highlight={scenario.highlight}
+                />
               </CardContent>
             </Card>
-            <Card className={cn("ring-1 ring-teal-400/20", state.conflict && "ring-rose-400/30")}>
+            <Card
+              className={cn(
+                "ring-1 ring-teal-400/20",
+                state.conflict && "ring-rose-400/30",
+              )}
+            >
               <CardHeader>
-                <CardTitle className="text-base">Company main (what you build)</CardTitle>
+                <CardTitle className="text-base">
+                  Company main (what you build)
+                </CardTitle>
                 <p className="text-xs text-muted-foreground">
                   {state.conflict
                     ? "Rebuild blocked · last successful main"
@@ -273,7 +327,10 @@ export function LabClient() {
                 </p>
               </CardHeader>
               <CardContent>
-                <FileView files={state.company} highlight={scenario.highlight} />
+                <FileView
+                  files={state.company}
+                  highlight={scenario.highlight}
+                />
               </CardContent>
             </Card>
             <Card>
@@ -286,8 +343,8 @@ export function LabClient() {
               <CardContent>
                 {state.contrib.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    Nothing exported yet. Internal work stays on the private forge until to-upstream
-                    Environment approval.
+                    Nothing exported yet. Internal work stays on the private
+                    forge until to-upstream Environment approval.
                   </p>
                 ) : (
                   <div className="space-y-4">
@@ -307,10 +364,17 @@ export function LabClient() {
           </div>
 
           {state.conflict ? (
-            <Card data-testid="lab-conflict-branch" className="border-rose-500/30">
+            <Card
+              data-testid="lab-conflict-branch"
+              className="border-rose-500/30"
+            >
               <CardHeader>
-                <CardTitle className="text-base">Conflict working tree</CardTitle>
-                <p className="font-mono text-xs text-rose-200">{state.conflict.branch}</p>
+                <CardTitle className="text-base">
+                  Conflict working tree
+                </CardTitle>
+                <p className="font-mono text-xs text-rose-200">
+                  {state.conflict.branch}
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {state.conflict.phase === "fixed"
                     ? "Markers resolved and staged. Status stays conflict until git uplink resolve."
@@ -345,10 +409,16 @@ export function LabClient() {
                   </thead>
                   <tbody>
                     {state.patches.map((patch, index) => {
-                      const waiting = conflictIndex >= 0 && index > conflictIndex;
+                      const waiting =
+                        conflictIndex >= 0 && index > conflictIndex;
                       return (
-                        <tr key={patch.id} className="border-b border-border/60">
-                          <td className="py-2 pr-3 font-mono text-xs">{patch.id}</td>
+                        <tr
+                          key={patch.id}
+                          className="border-b border-border/60"
+                        >
+                          <td className="py-2 pr-3 font-mono text-xs">
+                            {patch.id}
+                          </td>
                           <td className="py-2 pr-3">{patch.title}</td>
                           <td className="py-2 pr-3">
                             <StatusBadge value={patch.queue} />
@@ -357,7 +427,9 @@ export function LabClient() {
                             <div className="flex flex-wrap items-center gap-2">
                               <StatusBadge value={patch.status} />
                               {waiting ? (
-                                <span className="text-xs text-rose-200/80">· blocked</span>
+                                <span className="text-xs text-rose-200/80">
+                                  · blocked
+                                </span>
                               ) : null}
                             </div>
                           </td>
@@ -381,12 +453,13 @@ export function LabClient() {
                       <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-xs">
                         git uplink resolve {state.conflict.patchId}
                       </code>{" "}
-                      will refresh that patch file and rebuild. It will not push the contribution
-                      fork.
+                      will refresh that patch file and rebuild. It will not push
+                      the contribution fork.
                     </>
                   ) : (
                     <>
-                      Queue stopped on {state.conflict.patchId}. Company main is frozen.{" "}
+                      Queue stopped on {state.conflict.patchId}. Company main is
+                      frozen.{" "}
                       {state.conflict.blockedIds.length
                         ? `${state.conflict.blockedIds.join(", ")} wait. `
                         : null}
@@ -409,8 +482,12 @@ export function LabClient() {
             <CardContent>
               <ol className="space-y-2 font-mono text-xs leading-5 text-zinc-400">
                 {state.log.map((line, index) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: the log is append-only
                   <li key={`${index}-${line}`}>
-                    <span className="text-teal-500">{String(index + 1).padStart(2, "0")}</span> {line}
+                    <span className="text-teal-500">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>{" "}
+                    {line}
                   </li>
                 ))}
               </ol>

@@ -1,13 +1,4 @@
 import { Link, useSearchParams } from "react-router-dom";
-import { DocPage } from "../components/doc-page";
-import { SetupGuide } from "../components/setup/guide";
-import type { Mode } from "../components/setup/step";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Modal } from "../components/ui/modal";
-import { Tabs } from "../components/ui/tabs";
-import { GITHUB_BLOB } from "../lib/links";
-import { renderRepoMarkdown } from "../lib/markdown";
-import { EXAMPLE_FIELDS, ExampleSteps, exampleDerive } from "./examples/example-steps";
 import story01 from "../../../examples/github/stories/01-solo-fix.md?raw";
 import story02 from "../../../examples/github/stories/02-parallel-independent.md?raw";
 import story03 from "../../../examples/github/stories/03-stacked-depends-on.md?raw";
@@ -16,6 +7,24 @@ import story05 from "../../../examples/github/stories/05-cam-two-deps.md?raw";
 import story06 from "../../../examples/github/stories/06-internal-only.md?raw";
 import story07 from "../../../examples/github/stories/07-assessment-hook.md?raw";
 import exampleWorkflows from "../../../templates/try-it-on-github/README.md?raw";
+import { DocPage } from "../components/doc-page";
+import { SetupGuide } from "../components/setup/guide";
+import type { Mode } from "../components/setup/step";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
+import { Modal } from "../components/ui/modal";
+import { Tabs } from "../components/ui/tabs";
+import { GITHUB_BLOB } from "../lib/links";
+import { renderRepoMarkdown } from "../lib/markdown";
+import {
+  EXAMPLE_FIELDS,
+  ExampleSteps,
+  exampleDerive,
+} from "./examples/example-steps";
 
 const STORIES = [
   {
@@ -95,8 +104,10 @@ export function ExamplesPage() {
       title="Try it on GitHub"
       lead={
         <>
-          Run the whole model on three repositories in a new GitHub organization, wired with fine-grained tokens. Set it
-          up once, then walk the stories: apply a patch, open a PR, and let Actions import, submit, and sync. The{" "}
+          Run the whole model on three repositories in a new GitHub
+          organization, wired with fine-grained tokens. Set it up once, then
+          walk the stories: apply a patch, open a PR, and let Actions import,
+          submit, and sync. The{" "}
           <Link to="/lab" className={link}>
             live lab
           </Link>{" "}
@@ -106,9 +117,18 @@ export function ExamplesPage() {
     >
       <section className="space-y-3">
         <div className="grid gap-3 md:grid-cols-3">
-          <RepoCard name="uplink-example-upstream" role="Public tokenkit project" />
-          <RepoCard name="uplink-example-upstream-contrib" role="Fork used as the contribution fork" />
-          <RepoCard name="uplink-example-internal" role="Company product (Actions live here)" />
+          <RepoCard
+            name="uplink-example-upstream"
+            purpose="Public tokenkit project"
+          />
+          <RepoCard
+            name="uplink-example-upstream-contrib"
+            purpose="Fork used as the contribution fork"
+          />
+          <RepoCard
+            name="uplink-example-internal"
+            purpose="Company product (Actions live here)"
+          />
         </div>
       </section>
 
@@ -127,7 +147,12 @@ export function ExamplesPage() {
                 derive={exampleDerive}
                 mode={mode}
                 onMode={(m) => update({ mode: m })}
-                intro={<>From an empty organization to three wired repositories, ready for the first story.</>}
+                intro={
+                  <>
+                    From an empty organization to three wired repositories,
+                    ready for the first story.
+                  </>
+                }
               >
                 <ExampleSteps />
               </SetupGuide>
@@ -139,9 +164,16 @@ export function ExamplesPage() {
             content: (
               <div className="space-y-4">
                 <p className="text-[15px] leading-7 text-muted-foreground">
-                  Reset all three repos at the start of each story (<strong className="text-foreground">Actions → Reset
-                  example</strong>), then <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">git uplink reset</code>{" "}
-                  in the internal clone. What each flow means for developers is in{" "}
+                  Reset all three repos at the start of each story (
+                  <strong className="text-foreground">
+                    Actions → Reset example
+                  </strong>
+                  ), then{" "}
+                  <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">
+                    git uplink reset
+                  </code>{" "}
+                  in the internal clone. What each flow means for developers is
+                  in{" "}
                   <Link to="/day-to-day" className={link}>
                     day to day
                   </Link>
@@ -164,10 +196,17 @@ export function ExamplesPage() {
                       <CardContent className="space-y-2 text-sm leading-6 text-muted-foreground">
                         <p>{s.body}</p>
                         <p className="flex flex-wrap gap-x-4">
-                          <button type="button" onClick={() => update({ story: s.scenario })} className={link}>
+                          <button
+                            type="button"
+                            onClick={() => update({ story: s.scenario })}
+                            className={link}
+                          >
                             Read the story
                           </button>
-                          <Link to={`/lab?scenario=${s.scenario}`} className={link}>
+                          <Link
+                            to={`/lab?scenario=${s.scenario}`}
+                            className={link}
+                          >
                             Play it in the lab
                           </Link>
                         </p>
@@ -184,8 +223,12 @@ export function ExamplesPage() {
             content: (
               <div
                 className="markdown-body"
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: Markdown from this repository, rendered at build time
                 dangerouslySetInnerHTML={{
-                  __html: renderRepoMarkdown(exampleWorkflows, "templates/try-it-on-github/README.md"),
+                  __html: renderRepoMarkdown(
+                    exampleWorkflows,
+                    "templates/try-it-on-github/README.md",
+                  ),
                 }}
               />
             ),
@@ -203,7 +246,10 @@ export function ExamplesPage() {
               <Link to={`/lab?scenario=${story.scenario}`} className={link}>
                 Lab
               </Link>
-              <a href={`${GITHUB_BLOB}/examples/github/stories/${story.file}`} className={link}>
+              <a
+                href={`${GITHUB_BLOB}/examples/github/stories/${story.file}`}
+                className={link}
+              >
                 GitHub
               </a>
             </span>
@@ -213,8 +259,12 @@ export function ExamplesPage() {
         {story ? (
           <div
             className="markdown-body"
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: Markdown from this repository, rendered at build time
             dangerouslySetInnerHTML={{
-              __html: renderRepoMarkdown(story.markdown, `examples/github/stories/${story.file}`),
+              __html: renderRepoMarkdown(
+                story.markdown,
+                `examples/github/stories/${story.file}`,
+              ),
             }}
           />
         ) : null}
@@ -223,11 +273,11 @@ export function ExamplesPage() {
   );
 }
 
-function RepoCard({ name, role }: { name: string; role: string }) {
+function RepoCard({ name, purpose }: { name: string; purpose: string }) {
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <h3 className="font-mono text-sm font-medium">{name}</h3>
-      <p className="mt-2 text-sm text-muted-foreground">{role}</p>
+      <p className="mt-2 text-sm text-muted-foreground">{purpose}</p>
     </div>
   );
 }

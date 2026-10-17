@@ -7,7 +7,11 @@ export function you(commands: string[], note?: string): LabOperation {
   return { modes: MANUAL, actor: "You", commands, note };
 }
 
-export function ciJob(workflow: string, commands: string[], note?: string): LabOperation {
+export function ciJob(
+  workflow: string,
+  commands: string[],
+  note?: string,
+): LabOperation {
   return { modes: CI, actor: workflow, workflow, commands, note };
 }
 
@@ -29,7 +33,11 @@ export function startLifecycle(): LabOperation[] {
   ];
 }
 
-export function branchPush(branch: string, patchFile: string, message: string): LabOperation {
+export function branchPush(
+  branch: string,
+  patchFile: string,
+  message: string,
+): LabOperation {
   return you([
     `git checkout -b ${branch}`,
     `git apply "$KIT/patches/${patchFile}"`,
@@ -43,7 +51,11 @@ export function resetStatus(): LabOperation {
   return you(["git uplink reset", "git uplink status"]);
 }
 
-function addCommand(opts: { title: string; internalOnly?: boolean; dependsOn?: string[] }): string {
+function addCommand(opts: {
+  title: string;
+  internalOnly?: boolean;
+  dependsOn?: string[];
+}): string {
   const flags = [
     opts.internalOnly ? "--internal-only" : "",
     ...(opts.dependsOn ?? []).map((id) => `--depends-on ${id}`),
@@ -83,9 +95,14 @@ export function importOps(opts: {
   dependsOn?: string[];
 }): LabOperation[] {
   const add = addCommand(opts);
-  const publish = opts.internalOnly ? "git uplink push" : "git uplink rebuild --push";
+  const publish = opts.internalOnly
+    ? "git uplink push"
+    : "git uplink rebuild --push";
   return [
-    you([add, publish], "After engineering review. Merge is the internal product gate."),
+    you(
+      [add, publish],
+      "After engineering review. Merge is the internal product gate.",
+    ),
     ...(opts.internalOnly
       ? []
       : [assessCi(opts.title), preflightCi(opts.title)]),
@@ -117,12 +134,15 @@ export function importOps(opts: {
 
 export function submitOps(id: string): LabOperation[] {
   return [
-    you([
-      `git uplink report ${id}`,
-      `git uplink approve ${id}`,
-      `git uplink submit ${id} --push`,
-      `git uplink submitted ${id} --pr-url <url>`,
-    ], "Locally, --push force-pushes the export commit unsigned. The workflow lets GitHub create a signed one."),
+    you(
+      [
+        `git uplink report ${id}`,
+        `git uplink approve ${id}`,
+        `git uplink submit ${id} --push`,
+        `git uplink submitted ${id} --pr-url <url>`,
+      ],
+      "Locally, --push force-pushes the export commit unsigned. The workflow lets GitHub create a signed one.",
+    ),
     ciJob(
       "Uplink submit",
       [
@@ -134,7 +154,10 @@ export function submitOps(id: string): LabOperation[] {
     ),
     ciJob(
       "Uplink submit",
-      ["git uplink init", `git uplink report ${id} --assess-result <package>/assessment.json --extra-dir <artifact> --store-extras`],
+      [
+        "git uplink init",
+        `git uplink report ${id} --assess-result <package>/assessment.json --extra-dir <artifact> --store-extras`,
+      ],
       "Packet job, under uplink-mutate: stores the assessment of the package, then writes assessment.md once, extras first. Stops on findings, or when the package is not for the patch as it is now. No environment secrets yet.",
     ),
     ciJob(
@@ -169,7 +192,12 @@ export function syncFlowBack(): LabOperation[] {
 
 export function syncFromUpstream(conflictId?: string): LabOperation[] {
   return [
-    you(["git uplink sync", "git uplink accept-upstream", "git uplink reset", "git uplink status"]),
+    you([
+      "git uplink sync",
+      "git uplink accept-upstream",
+      "git uplink reset",
+      "git uplink status",
+    ]),
     ciJob(
       "Uplink sync",
       ["git uplink init", "git uplink sync"],
@@ -180,7 +208,9 @@ export function syncFromUpstream(conflictId?: string): LabOperation[] {
       [
         "git uplink init",
         "git uplink accept-upstream",
-        ...(conflictId ? [`git uplink gated ${conflictId} --pr-url <url>`] : []),
+        ...(conflictId
+          ? [`git uplink gated ${conflictId} --pr-url <url>`]
+          : []),
       ],
       "After from-upstream approval. Patch apply conflicts are recorded after promotion.",
     ),
@@ -205,7 +235,10 @@ export function fixConflict(id: string): LabOperation[] {
 
 export function resolveOps(id: string): LabOperation[] {
   return [
-    you([`git uplink resolve ${id}`], "If the resolve workflow is not installed."),
+    you(
+      [`git uplink resolve ${id}`],
+      "If the resolve workflow is not installed.",
+    ),
     ciJob(
       "Uplink resolve",
       ["git uplink init", `git uplink resolve ${id}`],
@@ -215,5 +248,8 @@ export function resolveOps(id: string): LabOperation[] {
 }
 
 export function mergeUpstream(pr: string): LabOperation {
-  return you([`gh pr merge ${pr} --squash`], "On the public upstream pull request.");
+  return you(
+    [`gh pr merge ${pr} --squash`],
+    "On the public upstream pull request.",
+  );
 }

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { defineConfig } from "vitest/config";
-import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -16,7 +16,9 @@ function pagesSpaFallback() {
   return {
     name: "pages-spa-fallback",
     closeBundle() {
-      const dist = path.resolve(fileURLToPath(new URL("./dist", import.meta.url)));
+      const dist = path.resolve(
+        fileURLToPath(new URL("./dist", import.meta.url)),
+      );
       const index = path.join(dist, "index.html");
       if (!fs.existsSync(index)) return;
       fs.copyFileSync(index, path.join(dist, "404.html"));

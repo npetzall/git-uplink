@@ -6,11 +6,13 @@ export const STATUS_INFO: Record<string, { meaning: string; next: string }> = {
     next: "Dispatch Uplink submit when it should go upstream; with UPLINK_AUTO_SUBMIT the pack does, once its upstream dependencies are merged. Internal-only patches stay queued.",
   },
   approved: {
-    meaning: "IP approved the to-upstream Environment. The same run submits it.",
+    meaning:
+      "IP approved the to-upstream Environment. The same run submits it.",
     next: "Submit pushes it to the contribution fork. If it stays here, submit failed (for example preflight); check that run.",
   },
   submitted: {
-    meaning: "On the public contribution fork with an open upstream pull request. This is the first time it is public.",
+    meaning:
+      "On the public contribution fork with an open upstream pull request. This is the first time it is public.",
     next: "Maintainers review and merge. Sync then marks it merged.",
   },
   amended: {
@@ -19,7 +21,8 @@ export const STATUS_INFO: Record<string, { meaning: string; next: string }> = {
     next: "IP reviews the delta on the re-dispatched Uplink submit. Approval force-pushes the same public pull request.",
   },
   conflict: {
-    meaning: "No longer applies on the new upstream. Company main is frozen at the last good rebuild until it is fixed.",
+    meaning:
+      "No longer applies on the new upstream. Company main is frozen at the last good rebuild until it is fixed.",
     next: "The owner fixes it on uplink/conflict/<id>-work and merges the gated pull request. Resolve then rebuilds.",
   },
   merged: {
@@ -40,4 +43,12 @@ export const STATUS_INFO: Record<string, { meaning: string; next: string }> = {
 
 export const NEEDS_APPROVAL = "needs approval";
 
-export const STATUS_ORDER = ["queued", "approved", "submitted", "amended", "conflict", "merged", "dropped"];
+export const STATUS_ORDER = [
+  "queued",
+  "approved",
+  "submitted",
+  "amended",
+  "conflict",
+  "merged",
+  "dropped",
+];

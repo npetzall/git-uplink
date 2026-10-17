@@ -1,6 +1,6 @@
-import { Badge } from "./ui/badge";
-import { cn } from "../lib/utils";
 import { STATUS_INFO } from "../lib/status";
+import { cn } from "../lib/utils";
+import { Badge } from "./ui/badge";
 
 const STYLES: Record<string, string> = {
   queued: "border-sky-500/30 bg-sky-500/10 text-sky-300",

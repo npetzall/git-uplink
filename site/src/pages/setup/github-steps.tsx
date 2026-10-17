@@ -4,18 +4,84 @@ import type { Derive, Field } from "../../components/setup/values";
 import { GITHUB_BLOB } from "../../lib/links";
 
 export const GITHUB_FIELDS: Field[] = [
-  { key: "host", label: "Company GitHub host", token: "COMPANY_HOST", initial: "github.com", help: "github.com, or your GHE.com subdomain" },
-  { key: "companyOrg", label: "Company organization", token: "COMPANY_ORG", initial: "" },
-  { key: "productRepo", label: "Product repository", token: "PRODUCT_REPO", initial: "" },
-  { key: "upstreamUrl", label: "Public upstream URL", token: "UPSTREAM_URL", initial: "", help: "https://github.com/owner/project.git" },
-  { key: "contribOrg", label: "Contribution fork organization", token: "CONTRIB_ORG", initial: "", help: "On public github.com; same org as upstream to use Apps" },
-  { key: "contribRepo", label: "Contribution fork name", token: "CONTRIB_REPO", initial: "" },
-  { key: "ipTeam", label: "IP reviewer team (slug)", token: "IP_TEAM", initial: "" },
-  { key: "inboundTeam", label: "Inbound reviewer team (slug)", token: "INBOUND_TEAM", initial: "" },
-  { key: "abandonTeam", label: "Withdraw reviewer team (slug)", token: "ABANDON_TEAM", initial: "" },
-  { key: "internalAppId", label: "Internal App ID", token: "INTERNAL_APP_ID", initial: "", help: "From step 2" },
-  { key: "upstreamAppId", label: "Upstream App ID", token: "UPSTREAM_APP_ID", initial: "", help: "From step 2" },
-  { key: "contribAppId", label: "Contrib App ID", token: "CONTRIB_APP_ID", initial: "", help: "From step 2" },
+  {
+    key: "host",
+    label: "Company GitHub host",
+    token: "COMPANY_HOST",
+    initial: "github.com",
+    help: "github.com, or your GHE.com subdomain",
+  },
+  {
+    key: "companyOrg",
+    label: "Company organization",
+    token: "COMPANY_ORG",
+    initial: "",
+  },
+  {
+    key: "productRepo",
+    label: "Product repository",
+    token: "PRODUCT_REPO",
+    initial: "",
+  },
+  {
+    key: "upstreamUrl",
+    label: "Public upstream URL",
+    token: "UPSTREAM_URL",
+    initial: "",
+    help: "https://github.com/owner/project.git",
+  },
+  {
+    key: "contribOrg",
+    label: "Contribution fork organization",
+    token: "CONTRIB_ORG",
+    initial: "",
+    help: "On public github.com; same org as upstream to use Apps",
+  },
+  {
+    key: "contribRepo",
+    label: "Contribution fork name",
+    token: "CONTRIB_REPO",
+    initial: "",
+  },
+  {
+    key: "ipTeam",
+    label: "IP reviewer team (slug)",
+    token: "IP_TEAM",
+    initial: "",
+  },
+  {
+    key: "inboundTeam",
+    label: "Inbound reviewer team (slug)",
+    token: "INBOUND_TEAM",
+    initial: "",
+  },
+  {
+    key: "abandonTeam",
+    label: "Withdraw reviewer team (slug)",
+    token: "ABANDON_TEAM",
+    initial: "",
+  },
+  {
+    key: "internalAppId",
+    label: "Internal App ID",
+    token: "INTERNAL_APP_ID",
+    initial: "",
+    help: "From step 2",
+  },
+  {
+    key: "upstreamAppId",
+    label: "Upstream App ID",
+    token: "UPSTREAM_APP_ID",
+    initial: "",
+    help: "From step 2",
+  },
+  {
+    key: "contribAppId",
+    label: "Contrib App ID",
+    token: "CONTRIB_APP_ID",
+    initial: "",
+    help: "From step 2",
+  },
 ];
 
 function upstreamSlug(url: string): string {
@@ -26,25 +92,52 @@ function upstreamSlug(url: string): string {
 export const githubDerive: Derive = (get, values) => ({
   companyRepo: `${get("companyOrg")}/${get("productRepo")}`,
   ghRepo:
-    (values.host && values.host !== "github.com" ? `${values.host}/` : "") + `${get("companyOrg")}/${get("productRepo")}`,
+    (values.host && values.host !== "github.com" ? `${values.host}/` : "") +
+    `${get("companyOrg")}/${get("productRepo")}`,
   companyUrl: `https://${get("host")}/${get("companyOrg")}/${get("productRepo")}.git`,
   contribUrl: `https://github.com/${get("contribOrg")}/${get("contribRepo")}.git`,
-  upstreamSlug: upstreamSlug(values.upstreamUrl ?? "") || "<UPSTREAM_OWNER>/<UPSTREAM_REPO>",
+  upstreamSlug:
+    upstreamSlug(values.upstreamUrl ?? "") ||
+    "<UPSTREAM_OWNER>/<UPSTREAM_REPO>",
 });
 
 const LABELS = [
-  ["uplink:internal-only", "5319E7", "Never approve or submit this change upstream"],
-  ["uplink:conflict", "B60205", "Uplink sync conflict; resolve via the gated work PR"],
-  ["uplink:transfer-to-upstream", "1D76DB", "Uplink gated transfer to the upstream queue"],
-  ["uplink:transfer-to-internal", "1D76DB", "Uplink gated transfer to the internal queue"],
+  [
+    "uplink:internal-only",
+    "5319E7",
+    "Never approve or submit this change upstream",
+  ],
+  [
+    "uplink:conflict",
+    "B60205",
+    "Uplink sync conflict; resolve via the gated work PR",
+  ],
+  [
+    "uplink:transfer-to-upstream",
+    "1D76DB",
+    "Uplink gated transfer to the upstream queue",
+  ],
+  [
+    "uplink:transfer-to-internal",
+    "1D76DB",
+    "Uplink gated transfer to the internal queue",
+  ],
   ["uplink:amend", "0E8A16", "Uplink gated amend of a patch"],
-  ["uplink:rebase", "FBCA04", "Ask Uplink rebase to rebase this branch onto main"],
+  [
+    "uplink:rebase",
+    "FBCA04",
+    "Ask Uplink rebase to rebase this branch onto main",
+  ],
 ];
 
 const VARIABLES = [
   ["UPLINK_INTERNAL_AUTH", "app", "app or pat"],
   ["UPLINK_UPSTREAM_AUTH", "app", "app or pat"],
-  ["UPLINK_CONTRIB_AUTH", "app", "app or pat. Only app gives Verified contribution commits"],
+  [
+    "UPLINK_CONTRIB_AUTH",
+    "app",
+    "app or pat. Only app gives Verified contribution commits",
+  ],
   [
     "UPLINK_AUTO_SUBMIT",
     "false",
@@ -61,13 +154,15 @@ const APPS = [
   {
     name: "Internal App",
     where: "Your enterprise organization ({{host}}), owned by {{companyOrg}}",
-    perms: "Contents: read and write · Workflows: read and write · Pull requests: read and write",
+    perms:
+      "Contents: read and write · Workflows: read and write · Pull requests: read and write",
     install: "{{companyRepo}} only",
     why: "Import, sync, resolve, and transfer force-push company main and the gated branches, which contain workflow files, and open the gated pull requests.",
   },
   {
     name: "Upstream App",
-    where: "Public github.com, owned by {{contribOrg}} (the org that owns upstream and the fork)",
+    where:
+      "Public github.com, owned by {{contribOrg}} (the org that owns upstream and the fork)",
     perms: "Contents: read · Pull requests: read and write",
     install: "{{upstreamSlug}} and {{contribOrg}}/{{contribRepo}}",
     why: "Fetches public upstream, opens the public PR on submit, closes it on withdraw. No write access to code.",
@@ -82,9 +177,30 @@ const APPS = [
 ];
 
 const ENVIRONMENTS = [
-  { name: "to-upstream", team: "ipTeam", teamVar: "IP_TEAM_ID", who: "IP / legal", secrets: true, what: "The IP gate before a contribution leaves." },
-  { name: "from-upstream", team: "inboundTeam", teamVar: "INBOUND_TEAM_ID", who: "security / engineering", secrets: false, what: "Review of foreign upstream commits before they land on main." },
-  { name: "abandon-contrib", team: "abandonTeam", teamVar: "ABANDON_TEAM_ID", who: "engineering", secrets: true, what: "Withdrawing a submitted contribution after it moved to internal." },
+  {
+    name: "to-upstream",
+    team: "ipTeam",
+    teamVar: "IP_TEAM_ID",
+    who: "IP / legal",
+    secrets: true,
+    what: "The IP gate before a contribution leaves.",
+  },
+  {
+    name: "from-upstream",
+    team: "inboundTeam",
+    teamVar: "INBOUND_TEAM_ID",
+    who: "security / engineering",
+    secrets: false,
+    what: "Review of foreign upstream commits before they land on main.",
+  },
+  {
+    name: "abandon-contrib",
+    team: "abandonTeam",
+    teamVar: "ABANDON_TEAM_ID",
+    who: "engineering",
+    secrets: true,
+    what: "Withdrawing a submitted contribution after it moved to internal.",
+  },
 ];
 
 const MAIN_RULESET = `{
@@ -168,19 +284,26 @@ export function GithubSteps() {
             <p>You need three people, or one person with all three hats:</p>
             <ul>
               <li>
-                An <strong>admin of the company organization</strong> on <V>{"{{host}}"}</V>, to create the product
-                repository, its Environments, rulesets, and the internal App.
+                An <strong>admin of the company organization</strong> on{" "}
+                <V>{"{{host}}"}</V>, to create the product repository, its
+                Environments, rulesets, and the internal App.
               </li>
               <li>
-                An <strong>owner of the public organization</strong> <V>{"{{contribOrg}}"}</V> on github.com, using a
-                normal (non-EMU) account, to create the fork and the two public Apps.
+                An <strong>owner of the public organization</strong>{" "}
+                <V>{"{{contribOrg}}"}</V> on github.com, using a normal
+                (non-EMU) account, to create the fork and the two public Apps.
               </li>
-              <li>The <strong>team slugs</strong> of the people who review each gate.</li>
+              <li>
+                The <strong>team slugs</strong> of the people who review each
+                gate.
+              </li>
             </ul>
             <p>
-              On your machine: <code>git</code>, <Link to="/install">git-uplink</Link>, and for the gh CLI path{" "}
-              <a href="https://cli.github.com/">gh</a>. Fill in <strong>Your values</strong> above; every command on
-              this page uses them.
+              On your machine: <code>git</code>,{" "}
+              <Link to="/install">git-uplink</Link>, and for the gh CLI path{" "}
+              <a href="https://cli.github.com/">gh</a>. Fill in{" "}
+              <strong>Your values</strong> above; every command on this page
+              uses them.
             </p>
             <p>
               Commands are for bash or zsh. On Windows, use WSL or Git Bash.
@@ -190,15 +313,18 @@ export function GithubSteps() {
         gh={
           <>
             <p>
-              Log in to both hosts. Pushing the pack later includes <code>.github/workflows</code>, so your company
-              credential needs the <code>workflow</code> scope. <code>gh auth setup-git</code> makes git use it.
+              Log in to both hosts. Pushing the pack later includes{" "}
+              <code>.github/workflows</code>, so your company credential needs
+              the <code>workflow</code> scope. <code>gh auth setup-git</code>{" "}
+              makes git use it.
             </p>
             <Command>{`gh auth login --hostname {{host}} --scopes workflow
 gh auth setup-git --hostname {{host}}
 gh auth login --hostname github.com`}</Command>
             <p>
-              If the company organization is also on github.com, gh keeps both accounts; use{" "}
-              <code>gh auth switch</code> to change between the public-org steps (1, 2) and the company steps.
+              If the company organization is also on github.com, gh keeps both
+              accounts; use <code>gh auth switch</code> to change between the
+              public-org steps (1, 2) and the company steps.
             </p>
           </>
         }
@@ -211,13 +337,17 @@ gh auth login --hostname github.com`}</Command>
         manual={
           <>
             <p>
-              As the public org owner, open the upstream repository on github.com, choose <strong>Fork</strong>, set the
-              owner to <V>{"{{contribOrg}}"}</V> and the name to <V>{"{{contribRepo}}"}</V>, and uncheck{" "}
-              <strong>Copy the main branch only</strong> if you want all branches (not required).
+              As the public org owner, open the upstream repository on
+              github.com, choose <strong>Fork</strong>, set the owner to{" "}
+              <V>{"{{contribOrg}}"}</V> and the name to{" "}
+              <V>{"{{contribRepo}}"}</V>, and uncheck{" "}
+              <strong>Copy the main branch only</strong> if you want all
+              branches (not required).
             </p>
             <p>
-              Put the fork in the <strong>same organization as upstream</strong> if you can. Only then can a GitHub App
-              (or a fine-grained token) open the public PR from fork to upstream.
+              Put the fork in the <strong>same organization as upstream</strong>{" "}
+              if you can. Only then can a GitHub App (or a fine-grained token)
+              open the public PR from fork to upstream.
             </p>
           </>
         }
@@ -233,13 +363,18 @@ gh auth login --hostname github.com`}</Command>
         manual={
           <>
             <p>
-              Each role gets its own App so that no job holds more access than it needs (
-              <Link to="/security#credentials">Security</Link> has the model). For each App:{" "}
-              <strong>Settings → Developer settings → GitHub Apps → New GitHub App</strong> on the owning organization.
-              Any homepage URL works. Turn <strong>Webhook → Active</strong> off. Choose{" "}
-              <strong>Only on this account</strong>. After creating it, note the <strong>App ID</strong>,{" "}
-              <strong>Generate a private key</strong> (a <code>.pem</code> download), then{" "}
-              <strong>Install App</strong> on the listed repositories.
+              Each role gets its own App so that no job holds more access than
+              it needs (<Link to="/security#credentials">Security</Link> has the
+              model). For each App:{" "}
+              <strong>
+                Settings → Developer settings → GitHub Apps → New GitHub App
+              </strong>{" "}
+              on the owning organization. Any homepage URL works. Turn{" "}
+              <strong>Webhook → Active</strong> off. Choose{" "}
+              <strong>Only on this account</strong>. After creating it, note the{" "}
+              <strong>App ID</strong>, <strong>Generate a private key</strong>{" "}
+              (a <code>.pem</code> download), then <strong>Install App</strong>{" "}
+              on the listed repositories.
             </p>
             <div className="overflow-x-auto">
               <table className="min-w-[640px]">
@@ -274,11 +409,15 @@ gh auth login --hostname github.com`}</Command>
                 </li>
               ))}
               <li>
-                Register the public Apps from a normal github.com account. An App registered from an EMU account is
-                enterprise-scoped and cannot see public repositories.
+                Register the public Apps from a normal github.com account. An
+                App registered from an EMU account is enterprise-scoped and
+                cannot see public repositories.
               </li>
             </ul>
-            <p>Enter the three App IDs in Your values; the ruleset and secret steps use them.</p>
+            <p>
+              Enter the three App IDs in Your values; the ruleset and secret
+              steps use them.
+            </p>
           </>
         }
         alternative={{
@@ -286,14 +425,17 @@ gh auth login --hostname github.com`}</Command>
           body: (
             <>
               <p>
-                Set the matching <code>UPLINK_*_AUTH</code> variable to <code>pat</code> in step 5 and store{" "}
-                <code>UPLINK_*_TOKEN</code> instead of the App ID and key in steps 6 and 7. Same permissions as the
-                table.
+                Set the matching <code>UPLINK_*_AUTH</code> variable to{" "}
+                <code>pat</code> in step 5 and store <code>UPLINK_*_TOKEN</code>{" "}
+                instead of the App ID and key in steps 6 and 7. Same permissions
+                as the table.
               </p>
               <p>
-                If the fork is <strong>not</strong> in the same organization as upstream, the upstream and contrib
-                roles must be a <strong>classic PAT of a machine user</strong> with access to both repositories. Apps
-                and fine-grained tokens are limited to one owner and cannot open the public PR. One classic PAT may
+                If the fork is <strong>not</strong> in the same organization as
+                upstream, the upstream and contrib roles must be a{" "}
+                <strong>classic PAT of a machine user</strong> with access to
+                both repositories. Apps and fine-grained tokens are limited to
+                one owner and cannot open the public PR. One classic PAT may
                 fill both secrets.
               </p>
             </>
@@ -308,16 +450,19 @@ gh auth login --hostname github.com`}</Command>
         manual={
           <>
             <p>
-              In <V>{"{{companyOrg}}"}</V> create a <strong>private</strong>, <strong>empty</strong> repository named{" "}
-              <V>{"{{productRepo}}"}</V> (no README, license, or .gitignore). Then start your local copy from public
-              upstream and point <code>origin</code> at the company repository:
+              In <V>{"{{companyOrg}}"}</V> create a <strong>private</strong>,{" "}
+              <strong>empty</strong> repository named <V>{"{{productRepo}}"}</V>{" "}
+              (no README, license, or .gitignore). Then start your local copy
+              from public upstream and point <code>origin</code> at the company
+              repository:
             </p>
             <Command>{`git clone {{upstreamUrl}} {{productRepo}}
 cd {{productRepo}}
 git remote set-url origin {{companyUrl}}`}</Command>
             <p>
-              Already have a product repository with your own commits? Skip creation and clone it instead. Step 10
-              covers adopting those commits.
+              Already have a product repository with your own commits? Skip
+              creation and clone it instead. Step 10 covers adopting those
+              commits.
             </p>
           </>
         }
@@ -328,7 +473,8 @@ git clone {{upstreamUrl}} {{productRepo}}
 cd {{productRepo}}
 git remote set-url origin {{companyUrl}}`}</Command>
             <p>
-              Already have a product repository with your own commits? Clone it instead; step 10 covers adopting them.
+              Already have a product repository with your own commits? Clone it
+              instead; step 10 covers adopting them.
             </p>
           </>
         }
@@ -341,17 +487,27 @@ git remote set-url origin {{companyUrl}}`}</Command>
         manual={
           <>
             <p>
-              In the product repository, <strong>Settings → Actions → General → Workflow permissions</strong>:
+              In the product repository,{" "}
+              <strong>
+                Settings → Actions → General → Workflow permissions
+              </strong>
+              :
             </p>
             <ul>
               <li>
-                <strong>Read repository contents and packages permissions</strong> is enough. Every Uplink job declares
-                the permissions it needs.
+                <strong>
+                  Read repository contents and packages permissions
+                </strong>{" "}
+                is enough. Every Uplink job declares the permissions it needs.
               </li>
               <li>
-                Leave <strong>Allow GitHub Actions to create and approve pull requests</strong> unchecked. The gated pull
-                requests are opened by the internal App, so Actions never needs to create, and can never approve, a pull
-                request.
+                Leave{" "}
+                <strong>
+                  Allow GitHub Actions to create and approve pull requests
+                </strong>{" "}
+                unchecked. The gated pull requests are opened by the internal
+                App, so Actions never needs to create, and can never approve, a
+                pull request.
               </li>
             </ul>
           </>
@@ -369,7 +525,11 @@ git remote set-url origin {{companyUrl}}`}</Command>
         manual={
           <>
             <p>
-              <strong>Settings → Secrets and variables → Actions → Variables → New repository variable</strong>:
+              <strong>
+                Settings → Secrets and variables → Actions → Variables → New
+                repository variable
+              </strong>
+              :
             </p>
             <VariableTable />
           </>
@@ -378,7 +538,10 @@ git remote set-url origin {{companyUrl}}`}</Command>
           <>
             <VariableTable />
             <Command>
-              {VARIABLES.map(([name, value]) => `gh variable set ${name} --repo {{ghRepo}} --body '${value}'`).join("\n")}
+              {VARIABLES.map(
+                ([name, value]) =>
+                  `gh variable set ${name} --repo {{ghRepo}} --body '${value}'`,
+              ).join("\n")}
             </Command>
             <p>Replace the values in angle brackets before running.</p>
           </>
@@ -392,20 +555,31 @@ git remote set-url origin {{companyUrl}}`}</Command>
         manual={
           <>
             <p>
-              <strong>Settings → Secrets and variables → Actions → Secrets → New repository secret</strong>. These are
-              repository secrets because sync runs on a schedule and cannot wait on an Environment.
+              <strong>
+                Settings → Secrets and variables → Actions → Secrets → New
+                repository secret
+              </strong>
+              . These are repository secrets because sync runs on a schedule and
+              cannot wait on an Environment.
             </p>
             <ul>
               <li>
-                <code>UPLINK_INTERNAL_APP_ID</code> = <V>{"{{internalAppId}}"}</V>, <code>UPLINK_INTERNAL_APP_PRIVATE_KEY</code>{" "}
-                = contents of the internal App <code>.pem</code>
+                <code>UPLINK_INTERNAL_APP_ID</code> ={" "}
+                <V>{"{{internalAppId}}"}</V>,{" "}
+                <code>UPLINK_INTERNAL_APP_PRIVATE_KEY</code> = contents of the
+                internal App <code>.pem</code>
               </li>
               <li>
-                <code>UPLINK_UPSTREAM_APP_ID</code> = <V>{"{{upstreamAppId}}"}</V>, <code>UPLINK_UPSTREAM_APP_PRIVATE_KEY</code>{" "}
-                = contents of the upstream App <code>.pem</code>
+                <code>UPLINK_UPSTREAM_APP_ID</code> ={" "}
+                <V>{"{{upstreamAppId}}"}</V>,{" "}
+                <code>UPLINK_UPSTREAM_APP_PRIVATE_KEY</code> = contents of the
+                upstream App <code>.pem</code>
               </li>
             </ul>
-            <p>Do not store the contrib App here; it goes on Environments in the next step.</p>
+            <p>
+              Do not store the contrib App here; it goes on Environments in the
+              next step.
+            </p>
           </>
         }
         gh={
@@ -414,7 +588,10 @@ git remote set-url origin {{companyUrl}}`}</Command>
 gh secret set UPLINK_INTERNAL_APP_PRIVATE_KEY --repo {{ghRepo}} < internal-app.pem
 gh secret set UPLINK_UPSTREAM_APP_ID --repo {{ghRepo}} --body {{upstreamAppId}}
 gh secret set UPLINK_UPSTREAM_APP_PRIVATE_KEY --repo {{ghRepo}} < upstream-app.pem`}</Command>
-            <p>Delete the downloaded <code>.pem</code> files once every secret is stored.</p>
+            <p>
+              Delete the downloaded <code>.pem</code> files once every secret is
+              stored.
+            </p>
           </>
         }
         alternative={{
@@ -433,17 +610,21 @@ gh secret set UPLINK_UPSTREAM_TOKEN --repo {{ghRepo}}`}</Command>
         manual={
           <>
             <p>
-              <strong>Settings → Environments → New environment</strong>, once per row. The names must match exactly.
-              For each: add the team under <strong>Required reviewers</strong>, turn on{" "}
-              <strong>Prevent self-review</strong>, and under <strong>Deployment branches and tags</strong> choose{" "}
+              <strong>Settings → Environments → New environment</strong>, once
+              per row. The names must match exactly. For each: add the team
+              under <strong>Required reviewers</strong>, turn on{" "}
+              <strong>Prevent self-review</strong>, and under{" "}
+              <strong>Deployment branches and tags</strong> choose{" "}
               <strong>Selected branches</strong> and add <code>main</code>.
             </p>
             <EnvironmentTable />
             <p>
-              On <code>to-upstream</code> <strong>and</strong> <code>abandon-contrib</code>, add environment secrets{" "}
-              <code>UPLINK_CONTRIB_APP_ID</code> = <V>{"{{contribAppId}}"}</V> and{" "}
-              <code>UPLINK_CONTRIB_APP_PRIVATE_KEY</code> = the contrib <code>.pem</code>. Environments don&apos;t share
-              secrets, so add them twice. Never at repository or organization level.
+              On <code>to-upstream</code> <strong>and</strong>{" "}
+              <code>abandon-contrib</code>, add environment secrets{" "}
+              <code>UPLINK_CONTRIB_APP_ID</code> = <V>{"{{contribAppId}}"}</V>{" "}
+              and <code>UPLINK_CONTRIB_APP_PRIVATE_KEY</code> = the contrib{" "}
+              <code>.pem</code>. Environments don&apos;t share secrets, so add
+              them twice. Never at repository or organization level.
             </p>
           </>
         }
@@ -451,7 +632,9 @@ gh secret set UPLINK_UPSTREAM_TOKEN --repo {{ghRepo}}`}</Command>
           <>
             <EnvironmentTable />
             {ENVIRONMENTS.map((env) => (
-              <Command key={env.name}>{`${env.teamVar}=$(${API} orgs/{{companyOrg}}/teams/{{${env.team}}} --jq .id)
+              <Command
+                key={env.name}
+              >{`${env.teamVar}=$(${API} orgs/{{companyOrg}}/teams/{{${env.team}}} --jq .id)
 ${API} -X PUT repos/{{companyRepo}}/environments/${env.name} --input - <<EOF
 { "prevent_self_review": true,
   "reviewers": [ { "type": "Team", "id": $${env.teamVar} } ],
@@ -472,8 +655,10 @@ gh secret set UPLINK_CONTRIB_APP_PRIVATE_KEY --repo {{ghRepo}} --env ${env.name}
           body: (
             <>
               <p>
-                GitHub creates the contribution commit through its API and signs it, but marks it Verified only for
-                a GitHub App token. With a PAT the commit is authored by the machine user and shows as unverified.
+                GitHub creates the contribution commit through its API and signs
+                it, but marks it Verified only for a GitHub App token. With a
+                PAT the commit is authored by the machine user and shows as
+                unverified.
               </p>
               <Command>{`gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env to-upstream
 gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env abandon-contrib`}</Command>
@@ -489,7 +674,8 @@ gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env abandon-contrib`}</Co
         manual={
           <>
             <p>
-              <strong>Issues → Labels → New label</strong>. The workflows read and apply these names:
+              <strong>Issues → Labels → New label</strong>. The workflows read
+              and apply these names:
             </p>
             <LabelList />
           </>
@@ -511,20 +697,22 @@ gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env abandon-contrib`}</Co
         manual={
           <>
             <p>
-              Create these under <strong>Settings → Rules → Rulesets → New branch ruleset</strong> with{" "}
-              <strong>Enforcement status: Disabled</strong>. You push <code>main</code> yourself in step 10; step 11
-              turns them on.
+              Create these under{" "}
+              <strong>Settings → Rules → Rulesets → New branch ruleset</strong>{" "}
+              with <strong>Enforcement status: Disabled</strong>. You push{" "}
+              <code>main</code> yourself in step 10; step 11 turns them on.
             </p>
             <RulesetList />
             <BypassExplainer />
             <p>
-              In each ruleset, under <strong>Bypass list → Add bypass</strong>, pick the internal App from the{" "}
-              <strong>Apps</strong> list (only Apps installed on the repository appear) and set it to{" "}
+              In each ruleset, under <strong>Bypass list → Add bypass</strong>,
+              pick the internal App from the <strong>Apps</strong> list (only
+              Apps installed on the repository appear) and set it to{" "}
               <strong>Always allow</strong>.
             </p>
             <p>
-              Faster: <strong>New ruleset → Import a ruleset</strong> with the JSON from the gh CLI view. It already
-              contains the bypass list.
+              Faster: <strong>New ruleset → Import a ruleset</strong> with the
+              JSON from the gh CLI view. It already contains the bypass list.
             </p>
           </>
         }
@@ -548,20 +736,28 @@ EOF`}</Command>
           body: (
             <>
               <p>
-                A bypass is not a property of the token. A PAT acts as the account that created it, so the ruleset must
-                let <strong>that account</strong> bypass. Use a dedicated machine user, never a person&apos;s account.
+                A bypass is not a property of the token. A PAT acts as the
+                account that created it, so the ruleset must let{" "}
+                <strong>that account</strong> bypass. Use a dedicated machine
+                user, never a person&apos;s account.
               </p>
               <ol>
                 <li>
-                  Create a team, for example <code>uplink-bot</code>, in <V>{"{{companyOrg}}"}</V> with only the machine
-                  user in it, and give the team <strong>Write</strong> access to <V>{"{{companyRepo}}"}</V>.
+                  Create a team, for example <code>uplink-bot</code>, in{" "}
+                  <V>{"{{companyOrg}}"}</V> with only the machine user in it,
+                  and give the team <strong>Write</strong> access to{" "}
+                  <V>{"{{companyRepo}}"}</V>.
                 </li>
                 <li>
-                  In each ruleset, add that team to the bypass list (<strong>Add bypass → Teams</strong>) instead of the
-                  internal App.
+                  In each ruleset, add that team to the bypass list (
+                  <strong>Add bypass → Teams</strong>) instead of the internal
+                  App.
                 </li>
               </ol>
-              <p>With gh, look up the team id and use it in place of the internal App entry in the JSON:</p>
+              <p>
+                With gh, look up the team id and use it in place of the internal
+                App entry in the JSON:
+              </p>
               <Command>{`${API} orgs/{{companyOrg}}/teams/uplink-bot --jq .id
 # then in each ruleset's bypass_actors, replace the Integration {{internalAppId}} entry with:
 #   { "actor_id": <TEAM_ID>, "actor_type": "Team", "bypass_mode": "always" }`}</Command>
@@ -585,12 +781,15 @@ EOF`}</Command>
         manual={
           <>
             <p>
-              <strong>Settings → Rules → Rulesets</strong>: open each <code>Uplink:</code> ruleset and set{" "}
+              <strong>Settings → Rules → Rulesets</strong>: open each{" "}
+              <code>Uplink:</code> ruleset and set{" "}
               <strong>Enforcement status</strong> to <strong>Active</strong>.
             </p>
             <p>
-              Then <strong>Actions → Uplink sync → Run workflow</strong> on <code>main</code>. A green run confirms the
-              internal and upstream credentials. Your first change is a normal pull request to <code>main</code>.
+              Then <strong>Actions → Uplink sync → Run workflow</strong> on{" "}
+              <code>main</code>. A green run confirms the internal and upstream
+              credentials. Your first change is a normal pull request to{" "}
+              <code>main</code>.
             </p>
           </>
         }
@@ -630,11 +829,14 @@ function VariableTable() {
         </tbody>
       </table>
       <p>
-        Jobs install the <code>git-uplink</code> release that wrote the pack, from <code>npetzall/git-uplink</code>. Set{" "}
-        <code>UPLINK_SRC</code> or <code>UPLINK_VERSION</code> only to install from a mirror or to pin another release.
-        Every job verifies the binary&apos;s cosign signature against the release workflow of{" "}
-        <code>npetzall/git-uplink</code>, so a mirror must carry the <code>.sigstore.json</code> files. Set{" "}
-        <code>UPLINK_SIGNER</code> only for a mirror that builds and signs its own releases.
+        Jobs install the <code>git-uplink</code> release that wrote the pack,
+        from <code>npetzall/git-uplink</code>. Set <code>UPLINK_SRC</code> or{" "}
+        <code>UPLINK_VERSION</code> only to install from a mirror or to pin
+        another release. Every job verifies the binary&apos;s cosign signature
+        against the release workflow of <code>npetzall/git-uplink</code>, so a
+        mirror must carry the <code>.sigstore.json</code> files. Set{" "}
+        <code>UPLINK_SIGNER</code> only for a mirror that builds and signs its
+        own releases.
       </p>
     </div>
   );
@@ -685,28 +887,47 @@ function RulesetList() {
   return (
     <ul>
       <li>
-        <strong>Uplink: company main</strong> (default branch): pull request with one approval, required checks{" "}
-        <code>Uplink upstream assess</code> and <code>Uplink upstream preflight</code>, no force-push or deletion. Bypass:
-        the internal App, which rebuilds <code>main</code>.
+        <strong>Uplink: company main</strong> (default branch): pull request
+        with one approval, required checks <code>Uplink upstream assess</code>{" "}
+        and <code>Uplink upstream preflight</code>, no force-push or deletion.
+        Bypass: the internal App, which rebuilds <code>main</code>.
       </li>
       <li>
-        <strong>Uplink: gated bases</strong> (<code>uplink/conflict/**</code>, <code>uplink/transfer-to-*/**</code>, <code>uplink/amend/**</code>,
-        excluding <code>*-work</code>): pull request with one approval, required check <code>Uplink gate</code>, no direct creation, deletion, or force-push. Bypass: the internal App, which creates and deletes these branches.
+        <strong>Uplink: gated bases</strong> (<code>uplink/conflict/**</code>,{" "}
+        <code>uplink/transfer-to-*/**</code>, <code>uplink/amend/**</code>,
+        excluding <code>*-work</code>): pull request with one approval, required
+        check <code>Uplink gate</code>, no direct creation, deletion, or
+        force-push. Bypass: the internal App, which creates and deletes these
+        branches.
       </li>
       <li>
-        <strong>Uplink: pack files</strong> (same refs, including <code>*-work</code>): nobody but the bots may change{" "}
-        <code>.github/workflows/uplink-*.yml</code>, <code>.github/actions/install-git-uplink/**</code>,{" "}
-        <code>.github/actions/uplink-*/**</code>,{" "}
-        <code>.github/uplink/**</code>, or <code>.uplink/**</code> on a gated
-        branch. Product workflows stay editable. Bypass: the internal App. Sample:{" "}
-        <a href={`${GITHUB_BLOB}/templates/github/.github/uplink-pack-files-ruleset.json`}>uplink-pack-files-ruleset.json</a>.
+        <strong>Uplink: pack files</strong> (same refs, including{" "}
+        <code>*-work</code>): nobody but the bots may change{" "}
+        <code>.github/workflows/uplink-*.yml</code>,{" "}
+        <code>.github/actions/install-git-uplink/**</code>,{" "}
+        <code>.github/actions/uplink-*/**</code>, <code>.github/uplink/**</code>
+        , or <code>.uplink/**</code> on a gated branch. Product workflows stay
+        editable. Bypass: the internal App. Sample:{" "}
+        <a
+          href={`${GITHUB_BLOB}/templates/github/.github/uplink-pack-files-ruleset.json`}
+        >
+          uplink-pack-files-ruleset.json
+        </a>
+        .
       </li>
       <li>
-        <strong>Uplink: hooks branch</strong> (<code>uplink/hooks</code>): pull request with one approval, no deletion or
-        force-push. The assessment hook on this branch runs on every PR check and submit, and the toolchain hook and{" "}
-        <code>preflight.sh</code> before every import, submit, amend, transfer, resolve, verify and accepted upstream. No bypass:
-        nothing in Actions writes this branch. Sample:{" "}
-        <a href={`${GITHUB_BLOB}/templates/github/.github/uplink-hooks-ruleset.json`}>uplink-hooks-ruleset.json</a>.
+        <strong>Uplink: hooks branch</strong> (<code>uplink/hooks</code>): pull
+        request with one approval, no deletion or force-push. The assessment
+        hook on this branch runs on every PR check and submit, and the toolchain
+        hook and <code>preflight.sh</code> before every import, submit, amend,
+        transfer, resolve, verify and accepted upstream. No bypass: nothing in
+        Actions writes this branch. Sample:{" "}
+        <a
+          href={`${GITHUB_BLOB}/templates/github/.github/uplink-hooks-ruleset.json`}
+        >
+          uplink-hooks-ruleset.json
+        </a>
+        .
       </li>
     </ul>
   );
@@ -718,13 +939,16 @@ function BypassExplainer() {
       <p className="mb-2 text-foreground">Who bypasses, and why</p>
       <ul>
         <li>
-          <strong>Internal App</strong> (<code>Integration</code>, id <V>{"{{internalAppId}}"}</V>): rebuilds and
-          force-pushes <code>main</code>, and creates and deletes the gated branches. It needs bypass on every ruleset.
-          A ruleset can only list an App that is installed on the repository, which step 2 did.
+          <strong>Internal App</strong> (<code>Integration</code>, id{" "}
+          <V>{"{{internalAppId}}"}</V>): rebuilds and force-pushes{" "}
+          <code>main</code>, and creates and deletes the gated branches. It
+          needs bypass on every ruleset. A ruleset can only list an App that is
+          installed on the repository, which step 2 did.
         </li>
         <li>
-          <strong>GitHub Actions</strong> (<code>GITHUB_TOKEN</code>) needs no bypass. It only reads, comments, labels,
-          and fast-forwards <code>uplink/state</code>, which none of these rulesets cover.
+          <strong>GitHub Actions</strong> (<code>GITHUB_TOKEN</code>) needs no
+          bypass. It only reads, comments, labels, and fast-forwards{" "}
+          <code>uplink/state</code>, which none of these rulesets cover.
         </li>
         <li>People never bypass. They merge through pull requests.</li>
       </ul>
@@ -736,41 +960,52 @@ function InitBody() {
   return (
     <>
       <p>
-        In your local copy from step 3, record the queue, install the pack as the tooling patch, and push. This is the
-        only time a person pushes <code>main</code>.
+        In your local copy from step 3, record the queue, install the pack as
+        the tooling patch, and push. This is the only time a person pushes{" "}
+        <code>main</code>.
       </p>
       <Command>{`git uplink init --upstream {{upstreamUrl}} --contrib {{contribUrl}} --forge github
 git uplink status
 git push -u origin main
 git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
       <p>
-        <code>status</code> should show <strong>Uplink tooling</strong> in the tooling slot and an empty queue. If
-        upstream&apos;s default branch is not <code>main</code>, add <code>--upstream-branch &lt;name&gt;</code> to{" "}
-        <code>init</code>.
+        <code>status</code> should show <strong>Uplink tooling</strong> in the
+        tooling slot and an empty queue. If upstream&apos;s default branch is
+        not <code>main</code>, add <code>--upstream-branch &lt;name&gt;</code>{" "}
+        to <code>init</code>.
       </p>
       <p>
-        <code>init</code> asks three questions and writes the answers to <code>uplink/hooks</code>: the preflight
-        command run on the export tree (for example <code>npm ci &amp;&amp; npm test</code>) goes into the script{" "}
-        <code>preflight.sh</code>; the banned words, which must not appear in a contribution (company and product
-        names, internal domains), go into <code>uplink.toml</code>. In a script, pass <code>--preflight</code> and{" "}
-        <code>--banned-word</code> instead. These
-        are not repository variables: the CLI reads both files from the branch, on your machine and in CI alike. To
-        change them later, edit the files on <code>uplink/hooks</code>.
+        <code>init</code> asks three questions and writes the answers to{" "}
+        <code>uplink/hooks</code>: the preflight command run on the export tree
+        (for example <code>npm ci &amp;&amp; npm test</code>) goes into the
+        script <code>preflight.sh</code>; the banned words, which must not
+        appear in a contribution (company and product names, internal domains),
+        go into <code>uplink.toml</code>. In a script, pass{" "}
+        <code>--preflight</code> and <code>--banned-word</code> instead. These
+        are not repository variables: the CLI reads both files from the branch,
+        on your machine and in CI alike. To change them later, edit the files on{" "}
+        <code>uplink/hooks</code>.
       </p>
       <p>
-        <code>init</code> also creates the orphan branch <code>uplink/hooks</code> locally: the assessment hook guide and
-        starter, and the toolchain hook that sets up the runner before preflight. Edit{" "}
-        <code>.github/actions/uplink-toolchain-hook/action.yml</code> there to install what{" "}
-        <code>preflight.sh</code> needs. The <Link to="/setup?forge=github&amp;view=hooks">Hooks</Link> tab has both
+        <code>init</code> also creates the orphan branch{" "}
+        <code>uplink/hooks</code> locally: the assessment hook guide and
+        starter, and the toolchain hook that sets up the runner before
+        preflight. Edit{" "}
+        <code>.github/actions/uplink-toolchain-hook/action.yml</code> there to
+        install what <code>preflight.sh</code> needs. The{" "}
+        <Link to="/setup?forge=github&amp;view=hooks">Hooks</Link> tab has both
         guides. <code>git uplink doctor</code> reports if it is not pushed.
       </p>
       <p>
-        Coming from an older setup that used the variables <code>UPLINK_PREFLIGHT</code>,{" "}
-        <code>UPLINK_REDACT_KEYWORDS</code>, and <code>UPLINK_INTERNAL_DOMAINS</code>? Run{" "}
-        <code>git uplink init --upgrade</code>, answer with their values (both lists go into the banned words), run{" "}
-        <code>git uplink push</code>, then delete the three variables. An <code>uplink.toml</code> that still has{" "}
-        <code>redact_keywords</code> or <code>internal_email_domains</code> fails assess: move their entries into{" "}
-        <code>banned_words</code> and delete them.
+        Coming from an older setup that used the variables{" "}
+        <code>UPLINK_PREFLIGHT</code>, <code>UPLINK_REDACT_KEYWORDS</code>, and{" "}
+        <code>UPLINK_INTERNAL_DOMAINS</code>? Run{" "}
+        <code>git uplink init --upgrade</code>, answer with their values (both
+        lists go into the banned words), run <code>git uplink push</code>, then
+        delete the three variables. An <code>uplink.toml</code> that still has{" "}
+        <code>redact_keywords</code> or <code>internal_email_domains</code>{" "}
+        fails assess: move their entries into <code>banned_words</code> and
+        delete them.
       </p>
       <details className="rounded-lg border border-border px-4 py-2">
         <summary className="cursor-pointer text-sm text-foreground">
@@ -778,8 +1013,9 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
         </summary>
         <div className="mt-3 space-y-3">
           <p>
-            <code>init</code> leaves <code>main</code> alone and turns each first-parent commit (or group you choose) into
-            a queued patch after the tooling. Preview the rebuilt tree, compare, then publish:
+            <code>init</code> leaves <code>main</code> alone and turns each
+            first-parent commit (or group you choose) into a queued patch after
+            the tooling. Preview the rebuilt tree, compare, then publish:
           </p>
           <Command>{`git uplink init --upstream {{upstreamUrl}} --contrib {{contribUrl}} --forge github
 git uplink rebuild --branch uplink/preview/verify
@@ -787,8 +1023,8 @@ git diff main uplink/preview/verify
 git uplink rebuild --push
 git push origin uplink/upstream`}</Command>
           <p>
-            If company <code>main</code> is behind upstream, merge upstream first; <code>init</code> refuses diverged
-            history.
+            If company <code>main</code> is behind upstream, merge upstream
+            first; <code>init</code> refuses diverged history.
           </p>
         </div>
       </details>

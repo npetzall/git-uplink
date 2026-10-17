@@ -1,9 +1,23 @@
-import { rebuild, type SimFileMap, type SimPatch, type SimState } from "../simulator";
+import {
+  rebuild,
+  type SimFileMap,
+  type SimPatch,
+  type SimState,
+} from "../simulator";
 
 export const README = "tokenkit\n";
 
 export function tree(tokens: string, extra: SimFileMap = {}): SimFileMap {
   return { "src/tokens.js": tokens, "README.md": README, ...extra };
+}
+
+/** The patch a scenario step created earlier; a missing one is a scenario bug. */
+export function patchById(patches: SimPatch[], id: string): SimPatch {
+  const patch = patches.find((candidate) => candidate.id === id);
+  if (!patch) {
+    throw new Error(`scenario has no patch ${id}`);
+  }
+  return patch;
 }
 
 export function withVendor(tokens: string): SimFileMap {
@@ -159,7 +173,8 @@ export function ttl() {
 `;
 
 export const TOOLING_FILES: SimFileMap = {
-  ".github/pull_request_template.md": "<!-- installed by git uplink init --forge github -->\n",
+  ".github/pull_request_template.md":
+    "<!-- installed by git uplink init --forge github -->\n",
   ".github/workflows/uplink-assessment-hook.yml":
     "# Placeholder: the real hook lives on uplink/hooks.\nname: Uplink assessment hook\n",
 };

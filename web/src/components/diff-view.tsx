@@ -1,19 +1,19 @@
-import { Fragment, useMemo, type ReactNode } from "react";
-import { Badge } from "./ui/badge";
-import { cn } from "../lib/utils";
+import { Fragment, type ReactNode, useMemo } from "react";
 import {
+  type DeltaLine,
+  type DeltaState,
+  type DiffLine,
   deltaLineSide,
+  type FileDelta,
+  type FileStatus,
+  type PatchFile,
   parseFileDelta,
   parsePatch,
   patchLineSide,
   splitRows,
-  type DeltaLine,
-  type DeltaState,
-  type DiffLine,
-  type FileDelta,
-  type FileStatus,
-  type PatchFile,
 } from "../lib/patch";
+import { cn } from "../lib/utils";
+import { Badge } from "./ui/badge";
 
 const GREEN = "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
 const RED = "border-rose-500/30 bg-rose-500/10 text-rose-300";
@@ -30,7 +30,8 @@ const STATUS_STYLE: Record<FileStatus, string> = {
 };
 
 const TABLE = "w-full border-collapse font-mono text-xs leading-5";
-const NUM = "w-12 px-2 text-right align-top text-muted-foreground/60 select-none";
+const NUM =
+  "w-12 px-2 text-right align-top text-muted-foreground/60 select-none";
 const MARK = "w-5 text-center align-top select-none";
 const EMPTY_SIDE = "bg-muted/40";
 
@@ -52,7 +53,9 @@ function FileSection({
       <summary className="flex cursor-pointer flex-wrap items-center gap-2 bg-muted px-3 py-2 text-sm">
         <span className="font-mono text-xs break-all">{path}</span>
         <Badge className={badgeStyle}>{badge}</Badge>
-        {counts ? <span className="ml-auto font-mono text-xs">{counts}</span> : null}
+        {counts ? (
+          <span className="ml-auto font-mono text-xs">{counts}</span>
+        ) : null}
       </summary>
       <div className="overflow-x-auto">{children}</div>
     </details>
@@ -66,7 +69,12 @@ const LINE_STYLE: Record<DiffLine["kind"], string> = {
   meta: "text-muted-foreground italic",
 };
 
-const LINE_MARK: Record<DiffLine["kind"], string> = { add: "+", del: "-", ctx: "", meta: "" };
+const LINE_MARK: Record<DiffLine["kind"], string> = {
+  add: "+",
+  del: "-",
+  ctx: "",
+  meta: "",
+};
 
 function HunkHeader({ text, span }: { text: string; span: number }) {
   return (
@@ -87,14 +95,18 @@ function SingleSideHunks({ file }: { file: PatchFile }) {
     <table className={TABLE}>
       <tbody>
         {file.hunks.map((hunk, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
           <Fragment key={index}>
             <HunkHeader text={hunk.header} span={span} />
             {hunk.lines.map((line, row) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
               <tr key={row} className={LINE_STYLE[line.kind]}>
                 {showOld ? <td className={NUM}>{line.oldNo}</td> : null}
                 {showNew ? <td className={NUM}>{line.newNo}</td> : null}
                 <td className={MARK}>{LINE_MARK[line.kind]}</td>
-                <td className="w-full pr-3 whitespace-pre">{line.text || " "}</td>
+                <td className="w-full pr-3 whitespace-pre">
+                  {line.text || " "}
+                </td>
               </tr>
             ))}
           </Fragment>
@@ -111,8 +123,15 @@ function SplitCell({ line, number }: { line?: DiffLine; number?: number }) {
   return (
     <>
       <td className={cn(NUM, LINE_STYLE[line.kind])}>{number}</td>
-      <td className={cn(MARK, LINE_STYLE[line.kind])}>{LINE_MARK[line.kind]}</td>
-      <td className={cn("pr-3 break-all whitespace-pre-wrap", LINE_STYLE[line.kind])}>
+      <td className={cn(MARK, LINE_STYLE[line.kind])}>
+        {LINE_MARK[line.kind]}
+      </td>
+      <td
+        className={cn(
+          "pr-3 break-all whitespace-pre-wrap",
+          LINE_STYLE[line.kind],
+        )}
+      >
         {line.text || " "}
       </td>
     </>
@@ -132,9 +151,11 @@ function SplitHunks({ file }: { file: PatchFile }) {
       </colgroup>
       <tbody>
         {file.hunks.map((hunk, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
           <Fragment key={index}>
             <HunkHeader text={hunk.header} span={6} />
             {splitRows(hunk.lines, patchLineSide).map((row, at) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
               <tr key={at}>
                 <SplitCell line={row.left} number={row.left?.oldNo} />
                 <SplitCell line={row.right} number={row.right?.newNo} />
@@ -165,10 +186,14 @@ function PatchFileView({ file }: { file: PatchFile }) {
       }
     >
       {file.meta.length ? (
-        <pre className="px-3 py-1 text-xs text-muted-foreground">{file.meta.join("\n")}</pre>
+        <pre className="px-3 py-1 text-xs text-muted-foreground">
+          {file.meta.join("\n")}
+        </pre>
       ) : null}
       {file.binary ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">Binary file, content not shown.</p>
+        <p className="px-3 py-2 text-xs text-muted-foreground">
+          Binary file, content not shown.
+        </p>
       ) : null}
       {!file.hunks.length ? null : oneSided ? (
         <SingleSideHunks file={file} />
@@ -191,25 +216,30 @@ export function PatchView({ text }: { text: string }) {
     <div className="space-y-3">
       {patch.subject || patch.message ? (
         <div className="space-y-1 rounded-md bg-muted p-3 text-sm">
-          {patch.subject ? <p className="font-medium">{patch.subject}</p> : null}
+          {patch.subject ? (
+            <p className="font-medium">{patch.subject}</p>
+          ) : null}
           {patch.from || patch.date ? (
             <p className="text-xs text-muted-foreground">
               {[patch.from, patch.date].filter(Boolean).join(" · ")}
             </p>
           ) : null}
           {patch.message ? (
-            <pre className="pt-1 font-mono text-xs whitespace-pre-wrap">{patch.message}</pre>
+            <pre className="pt-1 font-mono text-xs whitespace-pre-wrap">
+              {patch.message}
+            </pre>
           ) : null}
         </div>
       ) : null}
       {patch.files.length ? (
         <p className="text-xs text-muted-foreground">
-          {patch.files.length} {patch.files.length === 1 ? "file" : "files"} changed,{" "}
-          <span className="text-emerald-300">+{additions}</span>{" "}
+          {patch.files.length} {patch.files.length === 1 ? "file" : "files"}{" "}
+          changed, <span className="text-emerald-300">+{additions}</span>{" "}
           <span className="text-rose-300">−{deletions}</span>
         </p>
       ) : null}
       {patch.files.map((file, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: a patch lists its files in a fixed order
         <PatchFileView key={`${index}-${file.path}`} file={file} />
       ))}
     </div>
@@ -234,7 +264,11 @@ const OUTER_STYLE: Record<DeltaLine["outer"], string> = {
   same: "opacity-60",
 };
 
-const OUTER_MARK: Record<DeltaLine["outer"], string> = { added: "+", removed: "-", same: "" };
+const OUTER_MARK: Record<DeltaLine["outer"], string> = {
+  added: "+",
+  removed: "-",
+  same: "",
+};
 
 const INNER_STYLE: Record<DeltaLine["kind"], string> = {
   add: "text-emerald-300",
@@ -242,7 +276,11 @@ const INNER_STYLE: Record<DeltaLine["kind"], string> = {
   meta: "text-muted-foreground italic",
 };
 
-const INNER_MARK: Record<DeltaLine["kind"], string> = { add: "+", del: "-", meta: "" };
+const INNER_MARK: Record<DeltaLine["kind"], string> = {
+  add: "+",
+  del: "-",
+  meta: "",
+};
 
 /** One patch line. Side by side, each side is tinted by itself, not the row. */
 function DeltaText({ line, wrap }: { line?: DeltaLine; wrap: boolean }) {
@@ -252,7 +290,9 @@ function DeltaText({ line, wrap }: { line?: DeltaLine; wrap: boolean }) {
   const tint = wrap ? OUTER_STYLE[line.outer] : "";
   return (
     <>
-      <td className={cn(MARK, tint, INNER_STYLE[line.kind])}>{INNER_MARK[line.kind]}</td>
+      <td className={cn(MARK, tint, INNER_STYLE[line.kind])}>
+        {INNER_MARK[line.kind]}
+      </td>
       <td
         className={cn(
           "pr-3",
@@ -273,8 +313,14 @@ function SingleSideDelta({ lines }: { lines: DeltaLine[] }) {
     <table className={TABLE}>
       <tbody>
         {lines.map((line, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
           <tr key={index} className={OUTER_STYLE[line.outer]}>
-            <td className={cn(MARK, "border-r border-border font-bold text-foreground")}>
+            <td
+              className={cn(
+                MARK,
+                "border-r border-border font-bold text-foreground",
+              )}
+            >
               {OUTER_MARK[line.outer]}
             </td>
             <DeltaText line={line} wrap={false} />
@@ -296,6 +342,7 @@ function SplitDelta({ lines }: { lines: DeltaLine[] }) {
       </colgroup>
       <tbody>
         {splitRows(lines, deltaLineSide).map((row, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
           <tr key={index}>
             <DeltaText line={row.left} wrap />
             <DeltaText line={row.right} wrap />
@@ -312,8 +359,16 @@ function FileDeltaView({ file }: { file: FileDelta }) {
     return null;
   }
   return (
-    <FileSection path={file.path} badge={STATE_LABEL[file.state]} badgeStyle={STATE_STYLE[file.state]}>
-      {file.state === "changed" ? <SplitDelta lines={lines} /> : <SingleSideDelta lines={lines} />}
+    <FileSection
+      path={file.path}
+      badge={STATE_LABEL[file.state]}
+      badgeStyle={STATE_STYLE[file.state]}
+    >
+      {file.state === "changed" ? (
+        <SplitDelta lines={lines} />
+      ) : (
+        <SingleSideDelta lines={lines} />
+      )}
     </FileSection>
   );
 }
@@ -331,15 +386,17 @@ export function RevisionDiffView({ files }: { files: FileDelta[] }) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Only the lines the patch adds and removes are compared, not the unchanged lines around
-        them. The older revision is on the left, the newer on the right.
+        Only the lines the patch adds and removes are compared, not the
+        unchanged lines around them. The older revision is on the left, the
+        newer on the right.
       </p>
       {files.map((file) => (
         <FileDeltaView key={file.header} file={file} />
       ))}
       {unchanged ? (
         <p className="text-xs text-muted-foreground">
-          {unchanged} {unchanged === 1 ? "file is" : "files are"} the same in both revisions.
+          {unchanged} {unchanged === 1 ? "file is" : "files are"} the same in
+          both revisions.
         </p>
       ) : null}
     </div>

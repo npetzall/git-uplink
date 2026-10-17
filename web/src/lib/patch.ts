@@ -12,7 +12,13 @@ export type Hunk = {
   lines: DiffLine[];
 };
 
-export type FileStatus = "added" | "deleted" | "renamed" | "copied" | "mode" | "modified";
+export type FileStatus =
+  | "added"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "mode"
+  | "modified";
 
 export type PatchFile = {
   /** The path to show: the new one, or the old one of a deleted file. */
@@ -126,7 +132,8 @@ function newFile(header: string): PatchFile {
 }
 
 function finishFile(file: PatchFile) {
-  const has = (prefix: string) => file.meta.some((line) => line.startsWith(prefix));
+  const has = (prefix: string) =>
+    file.meta.some((line) => line.startsWith(prefix));
   if (has("new file mode ")) {
     file.status = "added";
     file.oldPath = undefined;
@@ -165,25 +172,25 @@ export function parsePatch(text: string): ParsedPatch {
   let inBinary = false;
 
   for (const line of lines.slice(start)) {
-    if (oldLeft > 0 || newLeft > 0) {
+    if (file && hunk && (oldLeft > 0 || newLeft > 0)) {
       const mark = line[0];
       if (mark === "+" && newLeft > 0) {
-        hunk!.lines.push({ kind: "add", text: line.slice(1), newNo });
-        file!.additions += 1;
+        hunk.lines.push({ kind: "add", text: line.slice(1), newNo });
+        file.additions += 1;
         newNo += 1;
         newLeft -= 1;
         continue;
       }
       if (mark === "-" && oldLeft > 0) {
-        hunk!.lines.push({ kind: "del", text: line.slice(1), oldNo });
-        file!.deletions += 1;
+        hunk.lines.push({ kind: "del", text: line.slice(1), oldNo });
+        file.deletions += 1;
         oldNo += 1;
         oldLeft -= 1;
         continue;
       }
       // A mail client may have stripped the single space of an empty context line.
       if ((mark === " " || line === "") && oldLeft > 0 && newLeft > 0) {
-        hunk!.lines.push({ kind: "ctx", text: line.slice(1), oldNo, newNo });
+        hunk.lines.push({ kind: "ctx", text: line.slice(1), oldNo, newNo });
         oldNo += 1;
         newNo += 1;
         oldLeft -= 1;
@@ -191,7 +198,7 @@ export function parsePatch(text: string): ParsedPatch {
         continue;
       }
       if (mark === "\\") {
-        hunk!.lines.push({ kind: "meta", text: line });
+        hunk.lines.push({ kind: "meta", text: line });
         continue;
       }
       // The hunk is shorter than its header says.
@@ -223,7 +230,10 @@ export function parsePatch(text: string): ParsedPatch {
       hunk.lines.push({ kind: "meta", text: line });
     } else if (hunk) {
       // Between hunks only `@@` and `diff --git` matter; the rest is the mbox signature.
-    } else if (line === "GIT binary patch" || line.startsWith("Binary files ")) {
+    } else if (
+      line === "GIT binary patch" ||
+      line.startsWith("Binary files ")
+    ) {
       file.binary = true;
       inBinary = true;
     } else if (line.startsWith("--- ")) {
@@ -294,7 +304,8 @@ export function parseFileDelta(file: FileDelta): DeltaLine[] {
     return bodyLines(file.lines).map((line) => innerLine(outer, line));
   }
   return bodyLines(file.diff).map((line) => {
-    const outer = line[0] === "+" ? "added" : line[0] === "-" ? "removed" : "same";
+    const outer =
+      line[0] === "+" ? "added" : line[0] === "-" ? "removed" : "same";
     return innerLine(outer, line.slice(1));
   });
 }
@@ -311,12 +322,19 @@ export type SplitRow<T> = {
  * right-only lines is paired up row by row; a line on both sides gets a row
  * of its own.
  */
-export function splitRows<T>(lines: T[], side: (line: T) => Side): SplitRow<T>[] {
+export function splitRows<T>(
+  lines: T[],
+  side: (line: T) => Side,
+): SplitRow<T>[] {
   const rows: SplitRow<T>[] = [];
   let left: T[] = [];
   let right: T[] = [];
   const flush = () => {
-    for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    for (
+      let index = 0;
+      index < Math.max(left.length, right.length);
+      index += 1
+    ) {
       rows.push({ left: left[index], right: right[index] });
     }
     left = [];
@@ -345,5 +363,9 @@ export function patchLineSide(line: DiffLine): Side {
 }
 
 export function deltaLineSide(line: DeltaLine): Side {
-  return line.outer === "removed" ? "left" : line.outer === "added" ? "right" : "both";
+  return line.outer === "removed"
+    ? "left"
+    : line.outer === "added"
+      ? "right"
+      : "both";
 }
