@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
+import { CopyButton } from "../components/copy-button";
 import { StatusBadge } from "../components/status-badge";
 import { Button } from "../components/ui/button";
 import {
@@ -79,12 +80,18 @@ function PatchTable({
         {patches.map((patch) => (
           <tr key={patch.id} className="border-b border-border/60">
             <td className="py-2 pr-3 font-mono text-xs">
-              <Link
-                to={`/patches/${encodeURIComponent(patch.id)}${query}`}
-                className="text-primary hover:underline"
-              >
-                {patch.id}
-              </Link>
+              <span className="inline-flex items-center gap-1">
+                <Link
+                  to={`/patches/${encodeURIComponent(patch.id)}${query}`}
+                  className="text-primary hover:underline"
+                >
+                  {patch.id}
+                </Link>
+                <CopyButton
+                  value={patch.id}
+                  label={`Copy patch id ${patch.id}`}
+                />
+              </span>
             </td>
             <td className="py-2 pr-3">
               <Link

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
+import { CopyButton } from "../components/copy-button";
 import { PatchView, RevisionDiffView } from "../components/diff-view";
 import { StatusBadge } from "../components/status-badge";
 import {
@@ -175,9 +176,12 @@ export function PatchPage() {
             ← Queue
           </Link>
         </p>
-        <h1 className="text-3xl font-semibold tracking-tight font-mono">
-          {id || "Patch"}
-        </h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-3xl font-semibold tracking-tight font-mono">
+            {id || "Patch"}
+          </h1>
+          {id ? <CopyButton value={id} label={`Copy patch id ${id}`} /> : null}
+        </div>
         {patch ? (
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge value={patch.status} />
