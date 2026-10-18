@@ -5,9 +5,9 @@ Conventions (commit style, required checks) are in [AGENTS.md](AGENTS.md). This 
 ## Toolchain
 
 - **Rust 1.98+** (`rust-toolchain.toml` pins 1.98.1)
-- **Node.js 22** and `npm` (for the embedded operator UI and the site)
+- **Node.js 22** and **pnpm** (for the embedded operator UI and the site). Install the standalone pnpm from [pnpm.io](https://pnpm.io/installation); it switches to the version in the root `package.json` `packageManager` field on first use.
 
-Prefix every `npm` and `cargo` command with `sfw` ([Socket Firewall Free](https://docs.socket.dev/docs/socket-firewall-free)).
+Prefix every `pnpm` and `cargo` command with `sfw` ([Socket Firewall Free](https://docs.socket.dev/docs/socket-firewall-free)).
 
 ## Layout
 
@@ -16,6 +16,7 @@ Prefix every `npm` and `cargo` command with `sfw` ([Socket Firewall Free](https:
 | `src/` | The `git-uplink` crate |
 | `web/` | Operator UI (Vite + React + Tailwind), embedded in the binary |
 | `site/` | Public site on GitHub Pages (same stack) |
+| `pnpm-workspace.yaml` | pnpm workspace of `web/` and `site/`, with the catalog of the dependency versions they share |
 | `templates/` | Forge packs installed by `git uplink init` |
 | `examples/github/` | Worked example on three GitHub repositories |
 | `docs/` | Reference docs, also rendered on the site |
@@ -38,7 +39,7 @@ export PATH="$PWD/target/release:$PATH"
 
 `git uplink version` shows the commit the binary was built from, with `-dirty` when the tree had local changes.
 
-`build.rs` runs `npm ci` and `npm run build` in `web/` and embeds `web/dist` with `rust-embed`. Set `GIT_UPLINK_SKIP_WEB_BUILD=1` to embed an existing `web/dist` instead of running npm. Do not commit `web/dist` or `site/dist`.
+`build.rs` runs `pnpm install --frozen-lockfile --filter git-uplink-web...` and `pnpm --filter git-uplink-web run build` and embeds `web/dist` with `rust-embed`. Set `GIT_UPLINK_SKIP_WEB_BUILD=1` to embed an existing `web/dist` instead of running pnpm. Do not commit `web/dist` or `site/dist`.
 
 To read a man page as your branch builds it, run `scripts/man.sh` for `git-uplink(1)` or `scripts/man.sh <command>` for one command. It writes the pages to `target/man`.
 
@@ -46,14 +47,16 @@ To read a man page as your branch builds it, run `scripts/man.sh` for `git-uplin
 
 ```bash
 sfw cargo test --locked
-sfw npm test --prefix site
+sfw pnpm -r test
+sfw pnpm audit
 sfw cargo deny check
 sfw cargo clippy --locked --all-targets -- -D warnings
 ```
 
 - **Rust suite** drives real git in temp repos: stacked patches, drop-on-merge, conflicts, concurrent adds, export preflight, assess/scrub, contribution packets, plus a check that the UI was embedded.
 - **Lab scenario tests** in `site/`: drop-on-merge, internal-only staying off the fork, queued work staying off the fork until to-upstream approval, and every lab step completing.
-- **Typecheck**: `sfw npm run typecheck --prefix site` and `sfw npm run typecheck --prefix web`.
+- **Typecheck**: `sfw pnpm -r run typecheck`.
+- **Lint**: `sfw pnpm -r run lint` checks, `sfw pnpm -r run format` applies the fixes.
 
 ## CI
 
@@ -70,8 +73,8 @@ Runs on every PR. The `Changed scopes` job passes the changed paths to `.github/
 
 For the product scope, `pr.yml` calculates the next version and calls `product.yml` with a pre-release suffix `-pr.<number>.<run>.<attempt>`.
 
-1. `cargo deny` and the `web/` `npm audit --package-lock-only` run first.
-2. Then `web/` is built once (`sfw npm ci`, typecheck, production build) and CycloneDX and SPDX SBOMs are generated.
+1. `cargo deny` and `pnpm audit` of the workspace lockfile run first.
+2. Then `web/` is built once (`sfw pnpm install`, lint, typecheck, vitest, production build) and CycloneDX and SPDX SBOMs are generated.
 3. Test, the musl Linux binary, and pre-commit (rustfmt, clippy, cargo deny, [zizmor](https://zizmor.sh/)) run in parallel with `GIT_UPLINK_SKIP_WEB_BUILD=1`.
 
 CodeQL for Rust and `web/`, zizmor, and Socket start immediately and do not gate the build. Each job that compiles or scans the crate writes the version into `Cargo.toml` and `Cargo.lock`. SBOMs are always uploaded as an artifact.
@@ -80,12 +83,12 @@ CodeQL for Rust and `web/`, zizmor, and Socket start immediately and do not gate
 
 Called by `pr.yml` for the site scope, and by `publish-site.yml`.
 
-- `sfw npm audit`, typecheck, and vitest run in parallel with site CodeQL, zizmor, and Socket, then a separate build job.
+- `sfw pnpm audit`, lint, typecheck, and vitest run in parallel with site CodeQL, zizmor, and Socket, then a separate build job.
 - The build uses the Pages base path and uploads the Pages artifact only when the caller sets `pages: true`.
 
 ### GitHub Pages (`publish-site.yml`)
 
-Runs on push to `main` when `site/`, the markdown it renders, or the site workflows change.
+Runs on push to `main` when `site/`, the markdown it renders, the pnpm workspace files, or the site workflows change.
 
 - It calls `site.yml` with `pages: true`, and deploys only after every job in it succeeds.
 - A push that only changes the site does not run the product release.

@@ -1,24 +1,14 @@
 version: 2
 updates:
+  # The pnpm workspace (web and site) and its catalog.
   - package-ecosystem: "npm"
-    directory: "/site"
+    directory: "/"
     schedule:
       interval: "weekly"
     cooldown:
       default-days: 7
     groups:
-      site-npm:
-        patterns:
-          - "*"
-
-  - package-ecosystem: "npm"
-    directory: "/web"
-    schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 7
-    groups:
-      web-npm:
+      js-deps:
         patterns:
           - "*"
 

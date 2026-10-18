@@ -14,7 +14,9 @@ fn main() {
     let dist = web.join("dist");
 
     println!("cargo:rerun-if-changed=web/package.json");
-    println!("cargo:rerun-if-changed=web/package-lock.json");
+    println!("cargo:rerun-if-changed=package.json");
+    println!("cargo:rerun-if-changed=pnpm-lock.yaml");
+    println!("cargo:rerun-if-changed=pnpm-workspace.yaml");
     println!("cargo:rerun-if-changed=web/index.html");
     println!("cargo:rerun-if-changed=web/vite.config.ts");
     println!("cargo:rerun-if-changed=web/src");
@@ -44,9 +46,24 @@ fn main() {
         return;
     }
 
-    let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-    run(npm, &["ci", "--no-fund", "--no-audit"], &web);
-    run(npm, &["run", "build"], &web);
+    // web/ is a member of the pnpm workspace at the root; install only its
+    // dependencies. The standalone pnpm is an executable on every platform.
+    let pnpm = "pnpm";
+    run(
+        pnpm,
+        &[
+            "install",
+            "--frozen-lockfile",
+            "--filter",
+            "git-uplink-web...",
+        ],
+        &manifest,
+    );
+    run(
+        pnpm,
+        &["--filter", "git-uplink-web", "run", "build"],
+        &manifest,
+    );
     if !dist.join("index.html").is_file() {
         panic!("vite did not write web/dist/index.html");
     }
