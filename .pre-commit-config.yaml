@@ -9,6 +9,8 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
       - id: check-yaml
+        # pnpm writes the lockfile as several YAML documents.
+        exclude: ^pnpm-lock\.yaml$
       - id: check-json
       - id: check-toml
       - id: check-added-large-files
@@ -43,28 +45,22 @@ repos:
         pass_filenames: false
         files: ^(Cargo\.(toml|lock)|deny\.toml)$
       # Every commit: advisories are published without the lockfile changing.
-      - id: npm-audit-web
-        name: npm audit web
-        entry: sfw npm audit --package-lock-only --prefix web
+      - id: pnpm-audit
+        name: pnpm audit
+        entry: sfw pnpm audit
         language: system
         pass_filenames: false
         always_run: true
-      - id: npm-audit-site
-        name: npm audit site
-        entry: sfw npm audit --package-lock-only --prefix site
-        language: system
-        pass_filenames: false
-        always_run: true
-      # Check only, never rewrite: `npm run format` applies the fixes.
+      # Check only, never rewrite: `pnpm run format` applies the fixes.
       - id: biome-web
         name: biome web
-        entry: sfw npm run lint --prefix web
+        entry: sfw pnpm --filter git-uplink-web run lint
         language: system
         pass_filenames: false
         files: ^web/
       - id: biome-site
         name: biome site
-        entry: sfw npm run lint --prefix site
+        entry: sfw pnpm --filter git-uplink-site run lint
         language: system
         pass_filenames: false
         files: ^site/

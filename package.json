@@ -1,0 +1,11 @@
+{
+  "name": "git-uplink-workspace",
+  "private": true,
+  "packageManager": "pnpm@12.9.1",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "22"
+    }
+  }
+}

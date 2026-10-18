@@ -8,6 +8,9 @@ on:
       - docs/**
       - templates/*/README.md
       - examples/github/stories/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
       - .github/workflows/site.yml
       - .github/workflows/publish-site.yml
       - .github/workflows/codeql.yml

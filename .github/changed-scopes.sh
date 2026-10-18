@@ -14,6 +14,8 @@ product_patterns=(
   'build\.rs$'
   'Cross\.toml$'
   'rust-toolchain\.toml$'
+  'package\.json$'
+  'pnpm-(lock|workspace)\.yaml$'
   'ruff\.toml$'
   '\.pre-commit-config\.yaml$'
   '\.github/calculate-version\.sh$'
@@ -28,6 +30,8 @@ site_patterns=(
   'docs/'
   'examples/github/stories/'
   'templates/[^/]+/README\.md$'
+  'package\.json$'
+  'pnpm-(lock|workspace)\.yaml$'
   '\.github/changed-scopes\.sh$'
   '\.github/workflows/(pr|site|publish-site|codeql|zizmor|socket)\.yml$'
   '\.github/codeql/site\.yml$'
@@ -80,6 +84,8 @@ self_check() {
   expect_scopes false true ".github/workflows/publish-site.yml"
   expect_scopes true true "docs/cli.md"
   expect_scopes true true "templates/github/README.md"
+  expect_scopes true true "pnpm-lock.yaml"
+  expect_scopes true true "package.json"
   expect_scopes true true ".github/workflows/pr.yml"
   expect_scopes true true "README.md" "src/cli.rs" "site/package.json"
   printf 'self-check ok\n'

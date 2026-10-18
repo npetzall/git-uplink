@@ -328,8 +328,8 @@ export function SecurityPage() {
             release without a signature stops the job.
           </li>
           <li>
-            Dependencies are checked with <code>cargo deny</code>, npm audit and
-            Socket on every change.
+            Dependencies are checked with <code>cargo deny</code>, pnpm audit
+            and Socket on every change.
           </li>
           <li>
             <code>git uplink web-ui</code> listens on <code>127.0.0.1</code>{" "}
