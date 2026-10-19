@@ -446,10 +446,11 @@ export function SecurityPage() {
             secrets.
           </li>
           <li>
-            <strong>All four rulesets active:</strong> company <code>main</code>
-            , the gated bases, the pack files, and <code>uplink/hooks</code>.
-            Only the internal App bypasses, and nothing bypasses{" "}
-            <code>uplink/hooks</code>.
+            <strong>All six rulesets active:</strong> company <code>main</code>,
+            the gated bases, the pack files, <code>uplink/hooks</code>,{" "}
+            <code>uplink/state</code>, and <code>uplink/upstream</code>. Only
+            the internal App bypasses, and nothing bypasses{" "}
+            <code>uplink/hooks</code> or <code>uplink/state</code>.
           </li>
           <li>
             <strong>

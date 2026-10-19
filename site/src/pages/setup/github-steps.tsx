@@ -270,6 +270,34 @@ const PACK_RULESET = `{
   ]
 }`;
 
+const STATE_RULESET = `{
+  "name": "Uplink: state branch",
+  "target": "branch",
+  "enforcement": "disabled",
+  "bypass_actors": [],
+  "conditions": { "ref_name": { "include": ["refs/heads/uplink/state"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" }
+  ]
+}`;
+
+const UPSTREAM_RULESET = `{
+  "name": "Uplink: upstream branch",
+  "target": "branch",
+  "enforcement": "disabled",
+  "bypass_actors": [
+    { "actor_id": {{internalAppId}}, "actor_type": "Integration", "bypass_mode": "always" }
+  ],
+  "conditions": { "ref_name": { "include": ["refs/heads/uplink/upstream"], "exclude": [] } },
+  "rules": [
+    { "type": "creation" },
+    { "type": "update" },
+    { "type": "deletion" },
+    { "type": "non_fast_forward" }
+  ]
+}`;
+
 const API = "gh api --hostname {{host}}";
 
 export function GithubSteps() {
@@ -729,6 +757,12 @@ EOF`}</Command>
             <Command>{`${API} -X POST repos/{{companyRepo}}/rulesets --input - <<'EOF'
 ${PACK_RULESET}
 EOF`}</Command>
+            <Command>{`${API} -X POST repos/{{companyRepo}}/rulesets --input - <<'EOF'
+${STATE_RULESET}
+EOF`}</Command>
+            <Command>{`${API} -X POST repos/{{companyRepo}}/rulesets --input - <<'EOF'
+${UPSTREAM_RULESET}
+EOF`}</Command>
           </>
         }
         alternative={{
@@ -929,6 +963,31 @@ function RulesetList() {
         </a>
         .
       </li>
+      <li>
+        <strong>Uplink: state branch</strong> (<code>uplink/state</code>): no
+        deletion or force-push. It holds the queue, the packets and the
+        approvals. No bypass: <code>git uplink push</code> only fast-forwards
+        it. Sample:{" "}
+        <a
+          href={`${GITHUB_BLOB}/templates/github/.github/uplink-state-ruleset.json`}
+        >
+          uplink-state-ruleset.json
+        </a>
+        .
+      </li>
+      <li>
+        <strong>Uplink: upstream branch</strong> (<code>uplink/upstream</code>
+        ): nobody may create, update, force-push or delete it. It is the
+        accepted public base, and only <strong>Uplink sync</strong> moves it.
+        Bypass: the internal App, which force-pushes it when sync promotes.
+        Sample:{" "}
+        <a
+          href={`${GITHUB_BLOB}/templates/github/.github/uplink-upstream-ruleset.json`}
+        >
+          uplink-upstream-ruleset.json
+        </a>
+        .
+      </li>
     </ul>
   );
 }
@@ -941,14 +1000,15 @@ function BypassExplainer() {
         <li>
           <strong>Internal App</strong> (<code>Integration</code>, id{" "}
           <V>{"{{internalAppId}}"}</V>): rebuilds and force-pushes{" "}
-          <code>main</code>, and creates and deletes the gated branches. It
-          needs bypass on every ruleset. A ruleset can only list an App that is
+          <code>main</code> and <code>uplink/upstream</code>, and creates and
+          deletes the gated branches. It needs bypass on every ruleset except
+          the state and hooks branches. A ruleset can only list an App that is
           installed on the repository, which step 2 did.
         </li>
         <li>
           <strong>GitHub Actions</strong> (<code>GITHUB_TOKEN</code>) needs no
           bypass. It only reads, comments, labels, and fast-forwards{" "}
-          <code>uplink/state</code>, which none of these rulesets cover.
+          <code>uplink/state</code>, which its ruleset allows.
         </li>
         <li>People never bypass. They merge through pull requests.</li>
       </ul>
