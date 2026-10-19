@@ -97,7 +97,8 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
   - Environment `from-upstream` with inbound reviewers and no secrets;
   - `preflight.sh` on `uplink/hooks`;
   - label `uplink:conflict`;
-  - concurrency group `uplink-sync` for the workflow and `uplink-mutate` for inspect and apply.
+  - concurrency group `uplink-sync` for the workflow and `uplink-mutate` for inspect and apply;
+  - recommended: import [`uplink-upstream-ruleset.json`](.github/uplink-upstream-ruleset.json). Inspect and apply are the only jobs that push `uplink/upstream`, with `--force`, so the ruleset lets nobody else create, update, force-push or delete it. Add the internal App to its bypass list (**Always allow**; with a PAT, a team with only the machine user), then set it to **Active**. It is imported disabled because without that bypass sync cannot promote.
 
 ## `uplink-resolve.yml` — Uplink resolve
 
@@ -194,6 +195,7 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
 - **Read from** the local `uplink/hooks`, else `origin/uplink/hooks`. Every job runs `git uplink init`, which fetches the branch. Gated jobs read the branch, never the pull request, so a PR cannot change the command they run.
 - **Missing or broken `uplink.toml`:** upstream-bound assess fails rather than scan for nothing. So does a file that still has `redact_keywords` or `internal_email_domains` from an older release: move their entries into `banned_words` and delete them. `git uplink doctor` reports both.
 - **Protect it:** the file decides what CI runs and what counts as a leak. Import [`uplink-hooks-ruleset.json`](.github/uplink-hooks-ruleset.json) so changes need a reviewed pull request.
+- **Protect `uplink/state`:** it holds the queue, the packets and the approvals. Import [`uplink-state-ruleset.json`](.github/uplink-state-ruleset.json) so nobody can delete or force-push it. It has no bypass: `git uplink push` only fast-forwards it, from the workflows (the internal App, and the Actions token for submit's packet) and from an operator after `init --upgrade`. Protect `uplink/upstream` as well; see **Uplink sync**.
 
 ## Assessment hook
 

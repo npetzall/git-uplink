@@ -1339,6 +1339,59 @@ mod embed_tests {
     }
 
     #[test]
+    fn state_and_upstream_rulesets_match_who_pushes_them() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let ruleset = |name: &str| -> serde_json::Value {
+                let (_, body) = files
+                    .iter()
+                    .find(|(p, _)| p == &format!(".github/{name}"))
+                    .unwrap_or_else(|| panic!("{forge:?} missing {name}"));
+                serde_json::from_slice(body).unwrap()
+            };
+            let rules = |set: &serde_json::Value| -> Vec<String> {
+                set["rules"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|r| r["type"].as_str().unwrap().to_string())
+                    .collect()
+            };
+            // `git uplink push` only fast-forwards uplink/state, so nothing
+            // needs to bypass a ban on force-push and deletion.
+            let state = ruleset("uplink-state-ruleset.json");
+            assert_eq!(
+                state["conditions"]["ref_name"]["include"],
+                serde_json::json!(["refs/heads/uplink/state"])
+            );
+            assert_eq!(rules(&state), ["deletion", "non_fast_forward"]);
+            assert_eq!(state["bypass_actors"], serde_json::json!([]));
+            // Only sync writes uplink/upstream, with the internal App.
+            let upstream = ruleset("uplink-upstream-ruleset.json");
+            assert_eq!(
+                upstream["conditions"]["ref_name"]["include"],
+                serde_json::json!(["refs/heads/uplink/upstream"])
+            );
+            for rule in ["creation", "update", "deletion", "non_fast_forward"] {
+                assert!(
+                    rules(&upstream).iter().any(|r| r == rule),
+                    "{forge:?} upstream ruleset must have {rule}"
+                );
+            }
+            for (path, body) in &files {
+                let text = String::from_utf8_lossy(body);
+                let pushes = text
+                    .lines()
+                    .any(|l| l.contains("git push") && l.contains("uplink/upstream"));
+                assert!(
+                    !pushes || path == ".github/workflows/uplink-sync.yml",
+                    "{forge:?} {path} pushes uplink/upstream; only sync may, see uplink-upstream-ruleset.json"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn preflight_verdict_is_commented_on_every_run() {
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
