@@ -759,6 +759,7 @@ fn cmd_adopt(repo: &Path, args: AdoptArgs) -> Result<(), Error> {
             write_groups: args.write_groups,
             resume: args.resume,
             decide: None,
+            progress: ProgressMode::Auto,
         },
     )?;
     let branch = &result.branch;
@@ -769,6 +770,11 @@ fn cmd_adopt(repo: &Path, args: AdoptArgs) -> Result<(), Error> {
 its patches were checked against current upstream."
         );
     }
+    let aborted = match result.aborted {
+        Some(AdoptResume::Abort) => Some("reset"),
+        Some(_) => Some("kept"),
+        None => None,
+    };
     let Some(adoption) = &result.adoption else {
         if args.json {
             println!(
@@ -776,13 +782,19 @@ its patches were checked against current upstream."
                 serde_json::to_string_pretty(&serde_json::json!({
                     "branch": branch,
                     "behind": result.behind,
-                    "aborted": result.aborted,
+                    "aborted": aborted,
                     "adopted": [],
                     "groupsFile": groups_file,
                 }))?
             );
-        } else if result.aborted {
-            println!("adopt aborted; nothing was changed.\nGroups file: {groups_file}");
+        } else if aborted == Some("reset") {
+            println!(
+                "adopt aborted; local uplink/state is back where the run started.\nGroups file: {groups_file}"
+            );
+        } else if aborted.is_some() {
+            println!(
+                "adopt aborted; the patches it added stay on local uplink/state.\nGroups file: {groups_file}"
+            );
         } else {
             println!(
                 "Groups written to {groups_file}; nothing was adopted.\n\
@@ -813,7 +825,8 @@ Adopt them with: git uplink adopt --branch {branch} --groups {groups_file}"
             serde_json::to_string_pretty(&serde_json::json!({
                 "branch": branch,
                 "behind": result.behind,
-                "aborted": false,
+                "aborted": null,
+                "stopped": adoption.stopped,
                 "adopted": rows,
                 "groupsFile": groups_file,
             }))?
@@ -821,25 +834,15 @@ Adopt them with: git uplink adopt --branch {branch} --groups {groups_file}"
         return Ok(());
     }
     let n = adopted.len();
+    let stopped = if adoption.stopped {
+        "; stopped before the end"
+    } else {
+        ""
+    };
     println!(
-        "Adopted {n} patch{} from {branch} (local only; nothing pushed, main unchanged).",
+        "Adopted {n} patch{} from {branch}{stopped} (local only; nothing pushed, main unchanged).",
         if n == 1 { "" } else { "es" }
     );
-    for p in adopted {
-        let deps = if p.depends_on.is_empty() {
-            String::new()
-        } else {
-            format!(", depends on {}", p.depends_on.join(", "))
-        };
-        let mut notes = String::new();
-        if p.amended {
-            notes.push_str(", amended");
-        }
-        if p.preflight_ignored {
-            notes.push_str(", preflight failure ignored");
-        }
-        println!("  {} \"{}\" ({}{deps}{notes})", p.id, p.title, p.intent);
-    }
     let test_branches: Vec<&str> = adopted
         .iter()
         .filter_map(|p| p.test_branch.as_deref())
@@ -1695,6 +1698,8 @@ fn run() -> Result<(), Error> {
     // Only plain `preflight` has a stdout that is for reading.
     set_script_echo(match &cli.command {
         Commands::Preflight { json: false, .. } => ScriptEcho::Stdout,
+        // Adopt shows a spinner per patch, and the output only on a failure.
+        Commands::Adopt { .. } => ScriptEcho::Off,
         _ => ScriptEcho::Stderr,
     });
     match cli.command {
@@ -1783,6 +1788,7 @@ fn run() -> Result<(), Error> {
             resume,
             skip,
             abort,
+            abort_keep,
             keep_test_branches,
             json,
         } => cmd_adopt(
@@ -1791,10 +1797,11 @@ fn run() -> Result<(), Error> {
                 branch,
                 groups,
                 write_groups,
-                resume: match (resume, skip, abort) {
-                    (true, _, _) => Some(AdoptResume::Continue),
-                    (_, true, _) => Some(AdoptResume::Skip),
-                    (_, _, true) => Some(AdoptResume::Abort),
+                resume: match (resume, skip, abort, abort_keep) {
+                    (true, ..) => Some(AdoptResume::Continue),
+                    (_, true, ..) => Some(AdoptResume::Skip),
+                    (_, _, true, _) => Some(AdoptResume::Abort),
+                    (.., true) => Some(AdoptResume::AbortKeep),
                     _ => None,
                 },
                 keep_test_branches,

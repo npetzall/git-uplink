@@ -7,10 +7,14 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::adopt::{AdoptCommit, AdoptGroup, AheadAnalysis, groups_from_numbers, resolve_groups};
+use crate::adopt::{
+    AdoptCommit, AdoptDecision, AdoptFailure, AdoptFailureKind, AdoptGroup, AheadAnalysis,
+    groups_from_numbers, resolve_groups,
+};
 use crate::assess::{assert_assess_ok, assess_from_message};
 use crate::edit::TextEdit;
 use crate::error::{Error, Result};
+use crate::prompt::{Choice, Selection, next_selection};
 use crate::types::{PatchIntent, QueueState};
 
 enum Phase {
@@ -536,4 +540,167 @@ fn draw_details(
             .block(Block::default().borders(Borders::ALL).title("Commits")),
         commits_area,
     );
+}
+
+/// Shows a failing adopt group, with what `preflight.sh` printed or why it
+/// does not apply, and asks what to do with it. Esc aborts.
+pub fn choose_on_failure(
+    failure: &AdoptFailure,
+    options: &[(Choice, AdoptDecision)],
+) -> Result<AdoptDecision> {
+    let mut terminal = ratatui::init();
+    let result = failure_loop(&mut terminal, failure, options);
+    ratatui::restore();
+    result
+}
+
+/// The first of `len` output lines shown in `height` rows when `top` is
+/// asked for: never past the point where the last line reaches the bottom.
+fn clamp_top(top: usize, len: usize, height: usize) -> usize {
+    top.min(len.saturating_sub(height))
+}
+
+fn failure_loop(
+    terminal: &mut DefaultTerminal,
+    failure: &AdoptFailure,
+    options: &[(Choice, AdoptDecision)],
+) -> Result<AdoptDecision> {
+    let output: Vec<&str> = failure.output.lines().collect();
+    let choices: Vec<Choice> = options.iter().map(|(choice, _)| *choice).collect();
+    let mut selected = 0;
+    // Starts at the end, where a failing script says why.
+    let mut top = usize::MAX;
+    let mut height = 1;
+    loop {
+        terminal.draw(|frame| {
+            height = draw_failure(frame, failure, &output, &choices, selected, &mut top);
+        })?;
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        let page = height.saturating_sub(1).max(1);
+        let shown = clamp_top(top, output.len(), height);
+        match key.code {
+            KeyCode::Up => top = shown.saturating_sub(1),
+            KeyCode::Down => top = clamp_top(shown + 1, output.len(), height),
+            KeyCode::PageUp => top = shown.saturating_sub(page),
+            KeyCode::PageDown => top = clamp_top(shown + page, output.len(), height),
+            KeyCode::Home => top = 0,
+            KeyCode::End => top = usize::MAX,
+            code => {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                match next_selection(&choices, selected, code, ctrl) {
+                    Selection::Move(i) => selected = i,
+                    Selection::Picked(i) => return Ok(options[i].1),
+                    Selection::Cancel => return Ok(AdoptDecision::Abort),
+                    Selection::Ignore => {}
+                }
+            }
+        }
+    }
+}
+
+/// Draws the failure window; returns the rows the output has.
+fn draw_failure(
+    frame: &mut Frame,
+    failure: &AdoptFailure,
+    output: &[&str],
+    choices: &[Choice],
+    selected: usize,
+    top: &mut usize,
+) -> usize {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(3),
+            Constraint::Length(4),
+        ])
+        .split(frame.area());
+    let what = match failure.kind {
+        AdoptFailureKind::Apply => "Does not apply",
+        AdoptFailureKind::Preflight => "Preflight failed",
+    };
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{} - {} - {}\n{}",
+            failure.id, failure.sha, failure.title, failure.message
+        ))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("{what}: group {}", failure.group))
+                .border_style(Style::default().fg(Color::Red)),
+        ),
+        chunks[0],
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(match failure.kind {
+            AdoptFailureKind::Apply => "Why",
+            AdoptFailureKind::Preflight => "preflight.sh output",
+        });
+    let height = block.inner(chunks[1]).height as usize;
+    *top = clamp_top(*top, output.len(), height);
+    let shown = output
+        .iter()
+        .skip(*top)
+        .take(height)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    frame.render_widget(Paragraph::new(shown).block(block), chunks[1]);
+
+    let mut buttons = Vec::new();
+    for (i, choice) in choices.iter().enumerate() {
+        if i > 0 {
+            buttons.push(Span::raw("  "));
+        }
+        let base = if i == selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        buttons.push(Span::styled("[ ", base));
+        let mut underlined = false;
+        for c in choice.label.chars() {
+            let style = if !underlined && c.eq_ignore_ascii_case(&choice.key) {
+                underlined = true;
+                base.add_modifier(Modifier::UNDERLINED)
+            } else {
+                base
+            };
+            buttons.push(Span::styled(c.to_string(), style));
+        }
+        buttons.push(Span::styled(" ]", base));
+    }
+    let mut hint = "←/→ choose · Enter confirm · ↑/↓ PgUp/PgDn scroll · Esc abort".to_string();
+    if !choices.iter().any(|c| c.label == "Amend") {
+        hint.push_str(" · Amend needs a checkout without uncommitted changes");
+    }
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(buttons),
+            Line::styled(hint, Style::default().add_modifier(Modifier::DIM)),
+        ])
+        .block(Block::default().borders(Borders::ALL).title("What now?")),
+        chunks[2],
+    );
+    height
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_top;
+
+    #[test]
+    fn output_scroll_stops_at_both_ends() {
+        assert_eq!(clamp_top(usize::MAX, 50, 10), 40);
+        assert_eq!(clamp_top(45, 50, 10), 40);
+        assert_eq!(clamp_top(3, 50, 10), 3);
+        assert_eq!(clamp_top(7, 5, 10), 0);
+    }
 }

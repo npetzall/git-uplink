@@ -93,7 +93,8 @@ pub struct Choice {
     pub key: char,
 }
 
-/// What a key does to a row of buttons.
+/// What a key does to a row of buttons. Up and Down are left to the caller,
+/// which may scroll with them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Selection {
     /// Move the highlight to this button.
@@ -105,7 +106,7 @@ pub enum Selection {
     Ignore,
 }
 
-/// What `key` does with `selected` highlighted among `choices`. Arrows and
+/// What `key` does with `selected` highlighted among `choices`. ←/→ and
 /// Tab move and wrap around, Enter picks the highlighted button, a button's
 /// key picks it directly.
 pub fn next_selection(choices: &[Choice], selected: usize, code: KeyCode, ctrl: bool) -> Selection {
@@ -117,94 +118,14 @@ pub fn next_selection(choices: &[Choice], selected: usize, code: KeyCode, ctrl: 
         KeyCode::Char('c') if ctrl => Selection::Cancel,
         KeyCode::Esc => Selection::Cancel,
         KeyCode::Enter => Selection::Picked(selected.min(n - 1)),
-        KeyCode::Left | KeyCode::BackTab | KeyCode::Up => Selection::Move((selected + n - 1) % n),
-        KeyCode::Right | KeyCode::Tab | KeyCode::Down => Selection::Move((selected + 1) % n),
+        KeyCode::Left | KeyCode::BackTab => Selection::Move((selected + n - 1) % n),
+        KeyCode::Right | KeyCode::Tab => Selection::Move((selected + 1) % n),
         KeyCode::Char(c) => choices
             .iter()
             .position(|choice| choice.key.eq_ignore_ascii_case(&c))
             .map_or(Selection::Ignore, Selection::Picked),
         _ => Selection::Ignore,
     }
-}
-
-/// Asks the operator to pick one of `choices`, drawn as a row of buttons on
-/// stderr below `question`. Returns the index picked, or `None` for Esc.
-/// Without a terminal, the button's key is read from a line instead.
-pub fn choose(question: &str, choices: &[Choice]) -> Result<Option<usize>> {
-    if std::io::stdin().is_terminal()
-        && std::io::stderr().is_terminal()
-        && terminal::enable_raw_mode().is_ok()
-    {
-        let _raw = RawMode;
-        return choose_buttons(question, choices);
-    }
-    let keys: Vec<String> = choices
-        .iter()
-        .map(|c| format!("{}={}", c.key, c.label))
-        .collect();
-    let answer = read_line(&format!("{question} ({})", keys.join(", ")), "")?;
-    let mut chars = answer.chars();
-    Ok(match (chars.next(), chars.next()) {
-        (Some(c), None) => choices
-            .iter()
-            .position(|choice| choice.key.eq_ignore_ascii_case(&c)),
-        _ => None,
-    })
-}
-
-fn choose_buttons(question: &str, choices: &[Choice]) -> Result<Option<usize>> {
-    use ratatui::crossterm::style::{Attribute, SetAttribute};
-    let mut err = std::io::stderr();
-    write!(err, "{}\r\n", question.replace('\n', "\r\n"))?;
-    let mut selected = 0;
-    let picked = loop {
-        queue!(err, MoveToColumn(0))?;
-        for (i, choice) in choices.iter().enumerate() {
-            if i > 0 {
-                queue!(err, Print("  "))?;
-            }
-            if i == selected {
-                queue!(err, SetAttribute(Attribute::Reverse))?;
-            }
-            queue!(err, Print("[ "))?;
-            let mut underlined = false;
-            for c in choice.label.chars() {
-                if !underlined && c.eq_ignore_ascii_case(&choice.key) {
-                    underlined = true;
-                    queue!(
-                        err,
-                        SetAttribute(Attribute::Underlined),
-                        Print(c),
-                        SetAttribute(Attribute::NoUnderline)
-                    )?;
-                } else {
-                    queue!(err, Print(c))?;
-                }
-            }
-            queue!(err, Print(" ]"))?;
-            if i == selected {
-                queue!(err, SetAttribute(Attribute::NoReverse))?;
-            }
-        }
-        queue!(err, Clear(ClearType::UntilNewLine))?;
-        err.flush()?;
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind == KeyEventKind::Release {
-            continue;
-        }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match next_selection(choices, selected, key.code, ctrl) {
-            Selection::Move(i) => selected = i,
-            Selection::Picked(i) => break Some(i),
-            Selection::Cancel => break None,
-            Selection::Ignore => {}
-        }
-    };
-    write!(err, "\r\n")?;
-    err.flush()?;
-    Ok(picked)
 }
 
 fn columns() -> usize {

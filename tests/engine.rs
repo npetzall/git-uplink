@@ -13228,7 +13228,7 @@ fn adopt_branch_appends_picked_commits_with_detected_dependencies() {
             .starts_with("adopted from main-fork ")
     );
     assert_eq!(rev_of(company, "main"), main_before);
-    assert_eq!(state_commits(company), state_before + 1);
+    assert_eq!(state_commits(company), state_before + 3);
 
     rebuild_with(
         company,
@@ -13238,7 +13238,7 @@ fn adopt_branch_appends_picked_commits_with_detected_dependencies() {
         },
     )
     .unwrap();
-    assert_eq!(state_commits(company), state_before + 1);
+    assert_eq!(state_commits(company), state_before + 3);
     let show = |path: &str| git_ok(company, &["show", &format!("uplink/preview/verify:{path}")]);
     assert!(show("src/limits.js").unwrap().contains("min = 1"));
     assert!(show("src/tokens.js").unwrap().contains("sha512"));
@@ -13268,7 +13268,8 @@ fn adopt_branch_rejects_duplicates_and_groups_across_skipped_commits() {
         false,
     )
     .unwrap_err();
-    assert!(err.to_string().contains(&fork.queued.id), "{err}");
+    // Its change is queued already, so it is skipped, and nothing is left.
+    assert!(err.to_string().contains("every group was skipped"), "{err}");
 
     let err = adopt_fork(
         company,
@@ -13734,10 +13735,12 @@ fn adopt_branch_pauses_to_amend_and_continues() {
 }
 
 #[test]
-fn adopt_branch_abort_and_skip_a_paused_group() {
+fn adopt_branch_abort_abort_keep_and_skip_a_paused_group() {
+    use git_uplink::AdoptResume;
     for resume in [
-        git_uplink::AdoptResume::Abort,
-        git_uplink::AdoptResume::Skip,
+        AdoptResume::Abort,
+        AdoptResume::AbortKeep,
+        AdoptResume::Skip,
     ] {
         let world = setup_world();
         let company = &world.company;
@@ -13759,22 +13762,94 @@ fn adopt_branch_abort_and_skip_a_paused_group() {
             git_uplink::AdoptDecision::Amend,
         )
         .unwrap_err();
+        // The first group was committed before the run paused on the second.
+        assert_ne!(rev_of(company, STATE_BRANCH), state_before);
         let result = adopt_resume(company, resume).unwrap();
         assert!(!company.join(".git/uplink-adopt.json").exists());
         assert_eq!(
             git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
             "main"
         );
-        if resume == git_uplink::AdoptResume::Abort {
-            assert!(result.aborted);
-            assert!(result.adoption.is_none());
-            assert_eq!(rev_of(company, STATE_BRANCH), state_before);
-            assert_eq!(patches(), patches_before);
-        } else {
-            let adopted = &result.adoption.as_ref().unwrap().adopted;
-            assert_eq!(adopted.len(), 1);
-            assert_eq!(adopted[0].title, "Add limits");
-            assert_eq!(fork_groups_file(company).len(), 1);
+        let queue = git_uplink::read_queue(company).unwrap();
+        let has_limits = queue.all_patches().any(|p| p.title == "Add limits");
+        match resume {
+            AdoptResume::Abort => {
+                assert_eq!(result.aborted, Some(AdoptResume::Abort));
+                assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+                assert_eq!(patches(), patches_before);
+                assert!(!has_limits);
+            }
+            AdoptResume::AbortKeep => {
+                assert_eq!(result.aborted, Some(AdoptResume::AbortKeep));
+                assert!(result.adoption.is_none());
+                assert_eq!(patches(), patches_before + 1);
+                assert!(has_limits);
+            }
+            _ => {
+                let adopted = &result.adoption.as_ref().unwrap().adopted;
+                assert_eq!(adopted.len(), 1);
+                assert_eq!(adopted[0].title, "Add limits");
+                assert_eq!(fork_groups_file(company).len(), 1);
+                assert!(has_limits);
+            }
         }
     }
+}
+
+#[test]
+fn adopt_branch_stop_keeps_what_was_added_and_a_rerun_skips_it() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    set_preflight_script(company, "exit 1");
+    let state_before = state_commits(company);
+    let groups = vec![
+        adopt_group(&[&fork.notes], "Fork notes", PatchIntent::InternalOnly),
+        adopt_group(&[&fork.new_file], "Add limits", PatchIntent::Upstream),
+    ];
+    let result = adopt_fork_deciding(company, groups, git_uplink::AdoptDecision::Stop).unwrap();
+    let adoption = result.adoption.as_ref().unwrap();
+    assert!(adoption.stopped);
+    assert_eq!(adoption.adopted.len(), 1);
+    assert_eq!(adoption.adopted[0].title, "Fork notes");
+    assert_eq!(state_commits(company), state_before + 1);
+
+    // The groups file still has both groups; the first is queued already.
+    let groups = fork_groups_file(company);
+    assert_eq!(groups.len(), 2);
+    let result =
+        adopt_fork_deciding(company, groups, git_uplink::AdoptDecision::IgnorePreflight).unwrap();
+    let adoption = result.adoption.as_ref().unwrap();
+    assert_eq!(adoption.adopted.len(), 1);
+    assert_eq!(adoption.adopted[0].title, "Add limits");
+    assert!(adoption.adopted[0].preflight_ignored);
+    assert_eq!(state_commits(company), state_before + 2);
+}
+
+#[test]
+fn adopt_branch_failure_mid_run_resets_uplink_state() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    set_preflight_script(company, "exit 1");
+    let state_before = rev_of(company, STATE_BRANCH);
+    let patches = || {
+        fs::read_dir(company.join(".uplink/patches"))
+            .unwrap()
+            .count()
+    };
+    let patches_before = patches();
+    adopt_fork(
+        company,
+        vec![
+            adopt_group(&[&fork.notes], "Fork notes", PatchIntent::InternalOnly),
+            adopt_group(&[&fork.new_file], "Add limits", PatchIntent::Upstream),
+        ],
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    assert_eq!(patches(), patches_before);
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert!(!queue.all_patches().any(|p| p.title == "Fork notes"));
 }

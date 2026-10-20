@@ -580,13 +580,16 @@ export function InternalsPage() {
             <code>git uplink adopt --branch &lt;ref&gt;</code>. Picked groups
             are appended to the queue, each upstream-bound one depending only on
             the queued patches it needs to apply onto upstream and to pass{" "}
-            <code>preflight.sh</code>. A group that still fails can be adopted
-            with the failure ignored, made internal-only, skipped, or amended
-            inline: the run pauses in <code>.git/uplink-adopt.json</code> until{" "}
+            <code>preflight.sh</code>. Each patch gets its own local{" "}
+            <code>uplink/state</code> commit as soon as it passes. A group that
+            still fails opens a window with the preflight output: adopt it with
+            the failure ignored, make it internal-only, skip it, stop, abort
+            (resetting <code>uplink/state</code> to the start), or amend it
+            inline, which pauses in <code>.git/uplink-adopt.json</code> until{" "}
             <code>--continue</code>. Every decision goes to{" "}
             <code>.git/uplink/adopt/&lt;branch&gt;.json</code>, which{" "}
-            <code>--groups</code> replays. It runs locally only and writes one{" "}
-            <code>uplink/state</code> commit.
+            <code>--groups</code> replays, skipping groups already queued. It
+            runs locally only.
           </li>
         </ul>
       </Section>
