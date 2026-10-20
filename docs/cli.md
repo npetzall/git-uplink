@@ -141,7 +141,9 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 
 Pick commits from another local branch and queue them as patches.
 
-Lists the first-parent commits of `--branch` since it left `uplink/upstream`. Group them in the terminal UI, or pass `--groups`; a commit in no group is skipped. Commits already on company `main` start out skipped. A group is one contiguous run, so it cannot span a skipped commit. Ctrl+w in the UI writes the groups file and exits without adopting.
+Lists the first-parent commits of `--branch` since it left `uplink/upstream`. Group them in the terminal UI, or pass `--groups`; a commit in no group is skipped. Commits already on company `main` start out skipped. A group is one contiguous run, so it cannot span a skipped commit.
+
+The UI is a tree of groups and their commits beside the selected commit's change (`git show`) or group's form: title, an Upstream box (unticked is internal-only), and the message, ending with the internal cutoff line. A new group starts from its first commit's subject and message. Enter or a double-click on a commit offers New group, Move to (or Add to) the previous or next group, and Skip; commits keep their order. ←/→ moves between the panes; text fields take Ctrl+a/Ctrl+e and Alt+←/→. Ctrl+s adopts and Ctrl+w writes the groups file and exits, each after a confirmation. The mouse selects rows, places the cursor, ticks the box and scrolls.
 
 The patches are added after the ones already in the queue. Each upstream-bound patch is applied onto `uplink/upstream`, alone and then with queued patches, and depends only on the patches it needs to apply. It must then pass the export preflight (`preflight.sh`); when the script passes only with more queued patches, it depends on those too (`--no-preflight-deps` skips that search).
 
@@ -541,7 +543,7 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
 If company `main` already matches public upstream, init rebuilds `main` with the tooling patch.
 If `main` is fast-forward ahead, init leaves `main` alone and records the unique first-parent commits as patches after tooling.
 
-Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON:
+Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON. The UI shows the commits as a tree of groups beside the selected commit's change or group's form (title, an Upstream box, and the message, ending with the internal cutoff line). Enter or a double-click on a commit offers New group, Move/Add to previous or next group, and Skip; commits keep their order. Ctrl+s adopts after a confirmation. The mouse selects, places the cursor and ticks the box. The JSON:
 
     [{ "commits": ["abc123", "def456"], "title": "...", "intent": "upstream" }]
 
