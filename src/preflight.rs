@@ -648,6 +648,74 @@ pub fn suggest_depends_on(
     })
 }
 
+/// The active upstream patches `candidate_abs` needs to apply onto public
+/// upstream: none when it applies alone, else the smallest set found by
+/// trying each patch alone, then growing prefixes, then dropping every
+/// entry it applies without. `None` when no set makes it apply.
+/// With `keep_branch`, that branch is left at upstream + the set + the
+/// candidate for inspection.
+pub(crate) fn detect_depends_on(
+    repo: &Path,
+    queue: &QueueState,
+    candidate_abs: &Path,
+    title: &str,
+    keep_branch: Option<&str>,
+) -> Result<Option<Vec<String>>> {
+    let candidates: Vec<String> = active_upstream(queue)
+        .into_iter()
+        .map(|p| p.id.clone())
+        .collect();
+    with_upstream_worktree(repo, |dir| {
+        let applies_with = |deps: &[String]| -> Result<bool> {
+            reset_export(dir, repo)?;
+            Ok(
+                apply_deps(dir, repo, queue, deps)? != ApplyOutcome::Conflict
+                    && apply_abs(dir, candidate_abs, title)? != ApplyOutcome::Conflict,
+            )
+        };
+        let mut found = None;
+        if applies_with(&[])? {
+            found = Some(Vec::new());
+        }
+        for id in &candidates {
+            if found.is_some() {
+                break;
+            }
+            if applies_with(std::slice::from_ref(id))? {
+                found = Some(vec![id.clone()]);
+            }
+        }
+        let mut prefix = Vec::new();
+        for id in &candidates {
+            if found.is_some() {
+                break;
+            }
+            prefix.push(id.clone());
+            if applies_with(&prefix)? {
+                found = Some(prefix.clone());
+            }
+        }
+        let Some(mut deps) = found else {
+            return Ok(None);
+        };
+        for i in (0..deps.len()).rev() {
+            if deps.len() < 2 {
+                break;
+            }
+            let mut fewer = deps.clone();
+            fewer.remove(i);
+            if applies_with(&fewer)? {
+                deps = fewer;
+            }
+        }
+        if let Some(branch) = keep_branch {
+            applies_with(&deps)?;
+            git(dir, &["branch", "-f", branch, "HEAD"], GitOpts::default())?;
+        }
+        Ok(Some(deps))
+    })
+}
+
 /// Commits listed by [`command_tested`] before the rest is counted.
 const TESTED_COMMITS_LIMIT: usize = 50;
 

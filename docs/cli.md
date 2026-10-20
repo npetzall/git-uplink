@@ -20,6 +20,7 @@ git uplink add --title <text> [--message <text> | --message-file <path>] [--from
             [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
             [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
             [--gate] [--json]
+git uplink adopt --branch <ref> [--groups <path>] [--keep-test-branches] [--json]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
@@ -133,6 +134,21 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - `--json`: Print the patch as JSON, with `readyToSubmit`.
 
   `readyToSubmit` lists the patches this import made ready to submit: upstream-bound, queued, and every upstream dependency merged. Import dispatches Uplink submit for them when the repository variable `UPLINK_AUTO_SUBMIT` is `true`. When the rebuild after the import stops on a patch that no longer applies, the change is still recorded: the output has `conflict` and `gh.prCreate` for the gated PR, and the command exits 0.
+
+### `adopt`
+
+Pick commits from another local branch and queue them as patches.
+
+Lists the first-parent commits of `--branch` since it left `uplink/upstream`. Group them in the terminal UI, or pass `--groups`; a commit in no group is skipped. Commits already on company `main` start out skipped. A group is one contiguous run, so it cannot span a skipped commit.
+
+The patches are added after the ones already in the queue. Each upstream-bound patch is applied onto `uplink/upstream`, alone and then with queued patches, and depends only on the patches it needs to apply. It must then pass the export preflight (`preflight.sh`).
+
+Adopt runs locally only: it makes no network calls, so `--branch`, `uplink/upstream`, the company branch and `uplink/hooks` must already be in this clone (fetch them first). It writes one commit on local `uplink/state`, never rebuilds or pushes, and leaves `main` alone.
+
+- `--branch <ref>`: Local branch to pick commits from.
+- `--groups <path>`: JSON file of commit groups, as for `init --adopt-groups` (`-` reads stdin).
+- `--keep-test-branches`: Leave `uplink/adopt-test/<n>-<id>` at upstream + dependencies + each upstream-bound patch.
+- `--json`: Print the adopted patches as JSON.
 
 ### `push`
 
@@ -518,6 +534,8 @@ Then preview and publish:
     git uplink rebuild --branch uplink/preview/verify
     git diff main uplink/preview/verify
     git uplink rebuild --push
+
+Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends only on the patches it needs to apply onto upstream and must pass preflight. Adopt is local only: fetch the branch first. Preview and publish as above.
 
 ## Gated PRs
 

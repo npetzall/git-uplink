@@ -41,6 +41,8 @@ struct AdoptUi {
     forms: Vec<Form>,
     groups: Vec<AdoptGroup>,
     field: Field,
+    /// `0` leaves a commit out (adopting from a branch).
+    allow_skip: bool,
 }
 
 pub fn run_adopt(
@@ -63,18 +65,37 @@ fn run_loop(
     queue: &QueueState,
     analysis: &AheadAnalysis,
 ) -> Result<Vec<AdoptGroup>> {
-    let n = analysis.commits.len();
+    let allow_skip = analysis.allow_skip;
+    let mut next = 0;
+    let numbers = analysis
+        .commits
+        .iter()
+        .map(|commit| {
+            if allow_skip && commit.on_main {
+                0
+            } else {
+                next += 1;
+                next
+            }
+        })
+        .collect();
+    let status = if allow_skip {
+        "1-9 set group, s skip, [ ] bump, g then digits, Enter to continue, q abort"
+    } else {
+        "1-9 set group, [ ] bump, g then digits, Enter to continue, q abort"
+    };
     let mut ui = AdoptUi {
         commits: analysis.commits.clone(),
-        numbers: (1..=n as u32).collect(),
+        numbers,
         selected: 0,
         typing: TextEdit::new(""),
         entering_number: false,
-        status: "1-9 set group, [ ] bump, g then digits, Enter to continue, q abort".into(),
+        status: status.into(),
         phase: Phase::Assign,
         forms: Vec::new(),
         groups: Vec::new(),
         field: Field::Title,
+        allow_skip,
     };
     loop {
         terminal.draw(|frame| draw(frame, &mut ui))?;
@@ -100,7 +121,7 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Enter => {
                 if let Ok(n) = ui.typing.text().parse::<u32>() {
-                    if n == 0 {
+                    if n == 0 && !ui.allow_skip {
                         ui.status = "group numbers start at 1".into();
                     } else {
                         ui.numbers[ui.selected] = n;
@@ -122,9 +143,14 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
     }
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => {
-            return Err(Error::msg(
-                "adopt grouping aborted; re-run git uplink init to continue",
-            ));
+            return Err(Error::msg(if ui.allow_skip {
+                "adopt aborted; nothing was changed"
+            } else {
+                "adopt grouping aborted; re-run git uplink init to continue"
+            }));
+        }
+        KeyCode::Char('s' | '0') if ui.allow_skip => {
+            ui.numbers[ui.selected] = 0;
         }
         KeyCode::Up => {
             if ui.selected > 0 {
@@ -140,7 +166,7 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
             ui.numbers[ui.selected] = c.to_digit(10).unwrap_or(1);
         }
         KeyCode::Char('[') => {
-            if ui.numbers[ui.selected] > 1 {
+            if ui.numbers[ui.selected] > 1 || (ui.allow_skip && ui.numbers[ui.selected] == 1) {
                 ui.numbers[ui.selected] -= 1;
             }
         }
@@ -152,7 +178,7 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
             ui.typing = TextEdit::new("");
             ui.status = "type group number, Enter to set".into();
         }
-        KeyCode::Enter => match groups_from_numbers(&ui.commits, &ui.numbers) {
+        KeyCode::Enter => match groups_from_numbers(&ui.commits, &ui.numbers, ui.allow_skip) {
             Ok(groups) => {
                 ui.forms = groups
                     .iter()
@@ -361,10 +387,20 @@ fn draw_assign(frame: &mut Frame, ui: &mut AdoptUi, list_area: Rect, help_area: 
             } else {
                 String::new()
             };
-            ListItem::new(format!(
-                "{:>3}  {}{marker}  {}",
-                ui.numbers[i], commit.short, commit.subject
-            ))
+            let on_main = if commit.on_main { "  (on main)" } else { "" };
+            let number = match ui.numbers[i] {
+                0 => "skip".to_string(),
+                n => n.to_string(),
+            };
+            let item = ListItem::new(format!(
+                "{number:>4}  {}{marker}  {}{on_main}",
+                commit.short, commit.subject
+            ));
+            if ui.numbers[i] == 0 {
+                item.style(Style::default().add_modifier(Modifier::DIM))
+            } else {
+                item
+            }
         })
         .collect();
     let mut state = ListState::default().with_selected(Some(ui.selected));
@@ -377,10 +413,13 @@ fn draw_assign(frame: &mut Frame, ui: &mut AdoptUi, list_area: Rect, help_area: 
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     frame.render_stateful_widget(list, list_area, &mut state);
     frame.render_widget(
-        Paragraph::new(
+        Paragraph::new(if ui.allow_skip {
+            "Each merge is one row. Related commits share a number; s skips a commit.\n\
+A group cannot span a skipped commit. Interleaved numbers (1, 2, 1) are rejected."
+        } else {
             "Each merge is one row. Related rebase commits share a number.\n\
-Interleaved numbers (1, 2, 1) are rejected.",
-        )
+Interleaved numbers (1, 2, 1) are rejected."
+        })
         .wrap(Wrap { trim: true })
         .block(Block::default().borders(Borders::ALL).title("Help")),
         help_area,

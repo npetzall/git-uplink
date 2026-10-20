@@ -8,6 +8,7 @@ use crate::assess::{assert_assess_ok, assess_from_message, company_commit_messag
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::lock::with_queue_lock;
+use crate::preflight::{ScriptVerdict, detect_depends_on, export_preflight};
 use crate::queue::{
     add_event, cannot_depend_on, get_patch, patch_path, read_queue as read_queue_file,
     write_queue as write_queue_file,
@@ -28,6 +29,8 @@ pub struct AdoptCommit {
     pub is_merge: bool,
     pub parent_count: usize,
     pub first_parent: String,
+    /// An equivalent change is already on company main.
+    pub on_main: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +49,8 @@ pub struct AheadAnalysis {
     pub head_sha: String,
     pub commits: Vec<AdoptCommit>,
     pub behind: bool,
+    /// Commits may be left out of every group (adopting from a branch).
+    pub allow_skip: bool,
 }
 
 struct ResolvedGroup {
@@ -74,6 +79,7 @@ pub fn analyze_ahead(repo: &Path) -> Result<AheadAnalysis> {
             head_sha: String::new(),
             commits: Vec::new(),
             behind: false,
+            allow_skip: false,
         });
     }
     let upstream_sha = rev_parse(repo, "uplink/upstream")?;
@@ -90,9 +96,55 @@ pub fn analyze_ahead(repo: &Path) -> Result<AheadAnalysis> {
             head_sha,
             commits: Vec::new(),
             behind: true,
+            allow_skip: false,
         });
     }
-    let range = format!("uplink/upstream..{tip}");
+    let commits = list_first_parent(repo, "uplink/upstream", tip)?;
+    Ok(AheadAnalysis {
+        upstream_sha,
+        head_sha,
+        commits,
+        behind: false,
+        allow_skip: false,
+    })
+}
+
+/// Commits on `branch` since it left public upstream, for adopting from a
+/// branch other than company main. `behind` here only means the branch
+/// forked from an older upstream; the commits are listed all the same.
+/// Every ref must already be local: nothing is fetched.
+pub fn analyze_branch(repo: &Path, branch: &str, company_branch: &str) -> Result<AheadAnalysis> {
+    let upstream_sha = rev_parse(repo, "uplink/upstream")?;
+    let head_sha = rev_parse(repo, branch)?;
+    let merge_base = git(
+        repo,
+        &["merge-base", "uplink/upstream", &head_sha],
+        GitOpts::allow_fail(),
+    )?;
+    if merge_base.code != 0 || merge_base.stdout.is_empty() {
+        return Err(Error::msg(format!(
+            "{branch} shares no history with uplink/upstream; nothing to adopt from it."
+        )));
+    }
+    let base = merge_base.stdout;
+    let mut commits = list_first_parent(repo, &base, &head_sha)?;
+    let unique = commits_not_on_main(repo, company_branch, &head_sha, &base)?;
+    for commit in &mut commits {
+        commit.on_main = !unique.contains(&commit.sha);
+    }
+    Ok(AheadAnalysis {
+        behind: base != upstream_sha,
+        upstream_sha,
+        head_sha,
+        commits,
+        allow_skip: true,
+    })
+}
+
+/// First-parent commits in `base..tip`, oldest first, without root commits
+/// and commits that change nothing outside `.uplink`.
+fn list_first_parent(repo: &Path, base: &str, tip: &str) -> Result<Vec<AdoptCommit>> {
+    let range = format!("{base}..{tip}");
     let listed = git_ok(repo, &["rev-list", "--first-parent", "--reverse", &range])?;
     let mut commits = Vec::new();
     for sha in listed.lines().filter(|line| !line.is_empty()) {
@@ -104,12 +156,24 @@ pub fn analyze_ahead(repo: &Path) -> Result<AheadAnalysis> {
         }
         commits.push(commit);
     }
-    Ok(AheadAnalysis {
-        upstream_sha,
-        head_sha,
-        commits,
-        behind: false,
-    })
+    Ok(commits)
+}
+
+/// Commits in `base..tip` whose change is not on `company_branch`. `git
+/// cherry` marks an equivalent change `-` and leaves out commits that are
+/// on it already, so only `+` counts.
+fn commits_not_on_main(
+    repo: &Path,
+    company_branch: &str,
+    tip: &str,
+    base: &str,
+) -> Result<Vec<String>> {
+    let listed = git_ok(repo, &["cherry", company_branch, tip, base])?;
+    Ok(listed
+        .lines()
+        .filter_map(|line| line.strip_prefix("+ "))
+        .map(str::to_string)
+        .collect())
 }
 
 pub fn behind_error(analysis: &AheadAnalysis) -> Error {
@@ -185,7 +249,67 @@ pub fn apply_groups(
     groups: &[AdoptGroup],
 ) -> Result<QueueState> {
     let resolved = resolve_group_runs(analysis, groups)?;
-    with_queue_lock(repo, || apply_groups_locked(repo, resolved))
+    with_queue_lock(repo, || {
+        apply_groups_locked(repo, resolved, &ApplyMode::Initial).map(|(queue, _)| queue)
+    })
+}
+
+/// One patch adopted from a branch.
+#[derive(Debug, Clone)]
+pub struct BranchAdopted {
+    pub id: String,
+    pub title: String,
+    pub intent: PatchIntent,
+    pub depends_on: Vec<String>,
+    /// Left at upstream + dependencies + this patch, when asked for.
+    pub test_branch: Option<String>,
+    /// Token of the tree the export preflight ran on; None for internal-only.
+    pub preflight: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BranchAdoption {
+    pub queue: QueueState,
+    pub adopted: Vec<BranchAdopted>,
+}
+
+pub const ADOPT_TEST_BRANCH_PREFIX: &str = "uplink/adopt-test/";
+
+/// Appends `groups` of `branch` to the queue after what is already there.
+/// Each upstream-bound group depends only on the patches it needs to apply
+/// onto public upstream, found by trying, and must pass the export
+/// preflight. Writes one uplink/state commit; nothing else moves.
+pub fn apply_branch_groups(
+    repo: &Path,
+    analysis: &AheadAnalysis,
+    groups: &[AdoptGroup],
+    branch: &str,
+    verdict: &ScriptVerdict,
+    keep_test_branches: bool,
+) -> Result<BranchAdoption> {
+    let resolved = resolve_group_runs(analysis, groups)?;
+    let mode = ApplyMode::Branch {
+        branch,
+        verdict,
+        keep_test_branches,
+    };
+    with_queue_lock(repo, || {
+        let (queue, adopted) = apply_groups_locked(repo, resolved, &mode)?;
+        Ok(BranchAdoption { queue, adopted })
+    })
+}
+
+enum ApplyMode<'a> {
+    /// init: the queue holds only tooling, every group chains onto the
+    /// previous upstream-bound one.
+    Initial,
+    /// adopt --branch: appended after existing patches, dependencies found
+    /// by applying onto public upstream.
+    Branch {
+        branch: &'a str,
+        verdict: &'a ScriptVerdict,
+        keep_test_branches: bool,
+    },
 }
 
 pub fn adopted_next_steps() -> &'static str {
@@ -212,6 +336,7 @@ fn describe_commit(repo: &Path, sha: &str) -> Result<Option<AdoptCommit>> {
         is_merge: parent_count >= 2,
         parent_count,
         first_parent: parent_list[0].clone(),
+        on_main: false,
     }))
 }
 
@@ -259,9 +384,11 @@ fn resolve_group_runs(
         return Err(Error::msg("no unique first-parent commits to adopt"));
     }
     if groups.is_empty() {
-        return Err(Error::msg(
-            "internal is ahead of uplink/upstream; pass --adopt-groups <file> or re-run in a terminal to group commits",
-        ));
+        return Err(Error::msg(if analysis.allow_skip {
+            "no adopt groups; pass --groups <file> or re-run in a terminal to pick commits"
+        } else {
+            "internal is ahead of uplink/upstream; pass --adopt-groups <file> or re-run in a terminal to group commits"
+        }));
     }
     let mut assigned = vec![None; analysis.commits.len()];
     let runs = groups
@@ -308,8 +435,13 @@ fn resolve_group(
     let first = indices[0];
     let last = *indices.last().unwrap();
     if last + 1 - first != indices.len() {
+        let skipped = if analysis.allow_skip {
+            "; a group cannot span a skipped commit"
+        } else {
+            ""
+        };
         return Err(Error::msg(format!(
-            "adopt group \"{}\" is not a contiguous first-parent run",
+            "adopt group \"{}\" is not a contiguous first-parent run{skipped}",
             group.title
         )));
     }
@@ -337,9 +469,13 @@ fn resolve_group(
     })
 }
 
-/// Every commit must be in a group, and group numbers must not interleave along history.
+/// Every commit must be in a group, unless the analysis allows skipping, and
+/// group numbers must not interleave along history. A group is already a
+/// contiguous run of the full list, so it never spans a skipped commit.
 fn check_group_order(analysis: &AheadAnalysis, assigned: &[Option<usize>]) -> Result<()> {
-    if let Some(idx) = assigned.iter().position(|g| g.is_none()) {
+    if !analysis.allow_skip
+        && let Some(idx) = assigned.iter().position(|g| g.is_none())
+    {
         return Err(Error::msg(format!(
             "commit {} is not assigned to an adopt group",
             analysis.commits[idx].short
@@ -366,40 +502,119 @@ fn check_group_order(analysis: &AheadAnalysis, assigned: &[Option<usize>]) -> Re
     Ok(())
 }
 
-fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueState> {
+fn apply_groups_locked(
+    repo: &Path,
+    groups: Vec<ResolvedGroup>,
+    mode: &ApplyMode<'_>,
+) -> Result<(QueueState, Vec<BranchAdopted>)> {
     let mut queue = read_queue_file(repo)?;
-    if queue.tooling.is_none() {
+    if matches!(mode, ApplyMode::Initial) && queue.tooling.is_none() {
         return Err(Error::msg(
             "Uplink tooling patch is missing; cannot adopt history until init installs it.",
         ));
     }
-    if has_product_patches(&queue) {
+    if matches!(mode, ApplyMode::Initial) && has_product_patches(&queue) {
         return Err(Error::msg(
             "queue already has product patches; delete uplink/adopt-from or reset uplink/state before adopting again",
         ));
     }
     let mut written = Vec::new();
+    let mut test_branches = Vec::new();
+    let mut adopted = Vec::new();
     let mut last_upstream_id: Option<String> = None;
     let outcome = (|| -> Result<()> {
-        for group in &groups {
+        for (index, group) in groups.iter().enumerate() {
             let internal_only = group.intent.is_internal_only();
-            let mut patch = adopted_patch(repo, &queue, group, last_upstream_id.as_deref())?;
+            let chained = match mode {
+                ApplyMode::Initial => last_upstream_id.as_deref(),
+                ApplyMode::Branch { .. } => None,
+            };
+            let source = match mode {
+                ApplyMode::Initial => None,
+                ApplyMode::Branch { branch, .. } => Some(*branch),
+            };
+            let mut patch = adopted_patch(repo, &queue, group, chained, source)?;
             let id = patch.id.clone();
             let message = company_commit_message(&patch);
             write_product_patch(repo, &id, &group.from_sha, &message, &group.head_sha)?;
             written.push(id.clone());
             let rel = patch_path(&id)?.to_string_lossy().into_owned();
             patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
+            let mut done = BranchAdopted {
+                id: id.clone(),
+                title: patch.title.clone(),
+                intent: group.intent,
+                depends_on: Vec::new(),
+                test_branch: None,
+                preflight: None,
+            };
+            if let ApplyMode::Branch {
+                verdict,
+                keep_test_branches,
+                ..
+            } = mode
+            {
+                if let Some(existing) = queue.all_patches().find(|item| {
+                    item.patch_id_stable.is_some() && item.patch_id_stable == patch.patch_id_stable
+                }) {
+                    return Err(Error::msg(format!(
+                        "\"{}\" is already in the queue as {} \"{}\"; skip those commits.",
+                        group.title, existing.id, existing.title
+                    )));
+                }
+                if !internal_only {
+                    let test_branch = keep_test_branches
+                        .then(|| format!("{ADOPT_TEST_BRANCH_PREFIX}{}-{id}", index + 1));
+                    let candidate_abs = repo.join(&rel);
+                    let deps = detect_depends_on(
+                        repo,
+                        &queue,
+                        &candidate_abs,
+                        &patch.title,
+                        test_branch.as_deref(),
+                    )?
+                    .ok_or_else(|| {
+                        Error::msg(format!(
+                            "\"{}\" does not apply onto public upstream, alone or on top of the queued upstream patches. \
+Rebase those commits onto current upstream, or adopt them internal-only.",
+                            group.title
+                        ))
+                    })?;
+                    if let Some(branch) = test_branch {
+                        test_branches.push(branch.clone());
+                        done.test_branch = Some(branch);
+                    }
+                    if !deps.is_empty() {
+                        add_event(
+                            &mut patch,
+                            "depends-on",
+                            format!("Needs {} to apply onto public upstream", deps.join(", ")),
+                        );
+                    }
+                    patch.depends_on = deps.clone();
+                    done.depends_on = deps;
+                    done.preflight =
+                        export_preflight(repo, &queue, &patch, &candidate_abs, None, verdict)?;
+                }
+            }
             if !internal_only {
                 last_upstream_id = Some(id);
             }
             queue.push_patch(patch, internal_only);
+            adopted.push(done);
         }
         write_queue_file(repo, &queue)?;
         let n = written.len();
+        let from = match mode {
+            ApplyMode::Initial => String::new(),
+            ApplyMode::Branch { branch, .. } => format!(" from {branch}"),
+        };
         commit_queue(
             repo,
-            &format!("uplink: adopt {n} patch{}", if n == 1 { "" } else { "es" }),
+            &format!(
+                "uplink: adopt {n} patch{}{from}",
+                if n == 1 { "" } else { "es" }
+            ),
         )?;
         Ok(())
     })();
@@ -409,22 +624,26 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
                 let _ = fs::remove_file(repo.join(rel));
             }
         }
+        for branch in test_branches {
+            let _ = git(repo, &["branch", "-D", &branch], GitOpts::allow_fail());
+        }
     }
     outcome?;
-    read_queue_file(repo)
+    Ok((read_queue_file(repo)?, adopted))
 }
 
-/// Builds and assesses the queued patch for one adopt group. Upstream-bound groups
-/// depend on the previous upstream-bound group.
+/// Builds and assesses the queued patch for one adopt group, depending on
+/// `chained` (the previous upstream-bound group in init) when upstream-bound.
 fn adopted_patch(
     repo: &Path,
     queue: &QueueState,
     group: &ResolvedGroup,
-    last_upstream_id: Option<&str>,
+    chained: Option<&str>,
+    source: Option<&str>,
 ) -> Result<Patch> {
     let intent = group.intent;
     let depends_on: Vec<String> = if !intent.is_internal_only() {
-        last_upstream_id.map(str::to_string).into_iter().collect()
+        chained.map(str::to_string).into_iter().collect()
     } else {
         Vec::new()
     };
@@ -437,11 +656,15 @@ fn adopted_patch(
             )));
         }
     }
-    let range = format!(
+    let shas = format!(
         "{}..{}",
         &group.from_sha[..group.from_sha.len().min(8)],
         &group.head_sha[..group.head_sha.len().min(8)]
     );
+    let range = match source {
+        Some(branch) => format!("{branch} {shas}"),
+        None => shas,
+    };
     let created_at = stamp();
     let mut patch = Patch {
         id: new_patch_id(),
@@ -494,25 +717,37 @@ pub fn default_title_for(commits: &[AdoptCommit]) -> String {
         .unwrap_or_else(|| "Adopted change".into())
 }
 
-pub fn groups_from_numbers(commits: &[AdoptCommit], numbers: &[u32]) -> Result<Vec<AdoptGroup>> {
+/// Groups from one number per commit. With `allow_skip`, `0` leaves the
+/// commit out; a skipped commit ends the run of the group before it.
+pub fn groups_from_numbers(
+    commits: &[AdoptCommit],
+    numbers: &[u32],
+    allow_skip: bool,
+) -> Result<Vec<AdoptGroup>> {
     if commits.len() != numbers.len() {
         return Err(Error::msg("group assignment does not match commit list"));
     }
-    if numbers.contains(&0) {
+    if !allow_skip && numbers.contains(&0) {
         return Err(Error::msg("every commit must be assigned a group number"));
     }
     let mut groups = Vec::new();
     let mut i = 0;
     while i < commits.len() {
         let number = numbers[i];
+        if number == 0 {
+            i += 1;
+            continue;
+        }
         let mut j = i + 1;
         while j < commits.len() && numbers[j] == number {
             j += 1;
         }
         if numbers[j..].contains(&number) {
-            return Err(Error::msg(
-                "adopt group numbers interleave along first-parent history (1, 2, 1 is not allowed)",
-            ));
+            return Err(Error::msg(if numbers[j] == 0 {
+                "a group cannot span a skipped commit; split it or skip the commits after it"
+            } else {
+                "adopt group numbers interleave along first-parent history (1, 2, 1 is not allowed)"
+            }));
         }
         let slice = &commits[i..j];
         let title = default_title_for(slice);
@@ -523,6 +758,9 @@ pub fn groups_from_numbers(commits: &[AdoptCommit], numbers: &[u32]) -> Result<V
             message: Some(title),
         });
         i = j;
+    }
+    if groups.is_empty() {
+        return Err(Error::msg("every commit is skipped; nothing to adopt"));
     }
     Ok(groups)
 }
