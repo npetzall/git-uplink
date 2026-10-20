@@ -24,9 +24,11 @@ pub struct AdoptBranchOpts {
     pub write_groups: Option<PathBuf>,
     /// Takes up a paused run instead of starting one.
     pub resume: Option<AdoptResume>,
-    /// Says what to do with a group that fails. `None` asks with buttons in
-    /// a terminal, and fails the run elsewhere.
+    /// Says what to do with a group that fails. `None` asks in a terminal
+    /// window, and fails the run elsewhere.
     pub decide: Option<AdoptDecider>,
+    /// A line per group on stderr: a spinner while it is checked, then ✓ or ✗.
+    pub progress: ProgressMode,
 }
 
 #[derive(Debug, Clone)]
@@ -38,13 +40,14 @@ pub struct AdoptBranchResult {
     pub behind: bool,
     /// The groups as decided, for `--groups` to replay.
     pub groups_file: PathBuf,
-    pub aborted: bool,
+    /// `--abort` (uplink/state reset) or `--abort-keep` ended a paused run.
+    pub aborted: Option<AdoptResume>,
 }
 
 /// Adopts picked commits of another branch into the queue, after the
 /// patches already there. Runs locally only: every ref must already be in
 /// this clone, nothing is fetched or pushed, and company main is untouched.
-/// Writes one uplink/state commit.
+/// Writes one uplink/state commit per adopted patch.
 pub fn adopt_branch(repo: &Path, opts: AdoptBranchOpts) -> Result<AdoptBranchResult> {
     crate::git::with_offline(|| adopt_branch_offline(repo, opts))
 }
@@ -65,9 +68,10 @@ fn adopt_branch_offline(repo: &Path, opts: AdoptBranchOpts) -> Result<AdoptBranc
                 adoption: None,
                 behind: false,
                 groups_file: run.groups_file.clone(),
-                aborted: resume == AdoptResume::Abort,
+                aborted: matches!(resume, AdoptResume::Abort | AdoptResume::AbortKeep)
+                    .then_some(resume),
             };
-            if result.aborted {
+            if result.aborted.is_some() {
                 return Ok(result);
             }
             let analysis = check_refs(repo, &queue, &run.branch, &company_branch)?;
@@ -78,6 +82,7 @@ fn adopt_branch_offline(repo: &Path, opts: AdoptBranchOpts) -> Result<AdoptBranc
                 run,
                 &ScriptVerdict::Run,
                 decide.as_ref(),
+                opts.progress,
             )?);
             Ok(result)
         });
@@ -109,14 +114,27 @@ fn adopt_branch_offline(repo: &Path, opts: AdoptBranchOpts) -> Result<AdoptBranc
         adoption: None,
         behind: analysis.behind,
         groups_file: groups_file.clone(),
-        aborted: false,
+        aborted: None,
     };
     if write_only {
         return Ok(result);
     }
-    let run = BranchRun::new(opts.branch, groups_file, groups, opts.keep_test_branches);
     result.adoption = Some(with_queue_lock(repo, || {
-        adopt::run_branch(repo, &analysis, run, &ScriptVerdict::Run, decide.as_ref())
+        let run = BranchRun::new(
+            repo,
+            opts.branch.clone(),
+            groups_file.clone(),
+            groups.clone(),
+            opts.keep_test_branches,
+        )?;
+        adopt::run_branch(
+            repo,
+            &analysis,
+            run,
+            &ScriptVerdict::Run,
+            decide.as_ref(),
+            opts.progress,
+        )
     })?);
     Ok(result)
 }
@@ -156,7 +174,7 @@ fetch it first: git fetch origin {rev}:{rev}"
     )))
 }
 
-/// Asks with a row of buttons in the terminal.
+/// Asks in a terminal window that shows what failed.
 fn prompt_decider() -> AdoptDecider {
     Arc::new(|failure: &AdoptFailure| {
         let button = |label, key| Choice { label, key };
@@ -169,25 +187,8 @@ fn prompt_decider() -> AdoptDecider {
             options.push((button("Amend", 'a'), AdoptDecision::Amend));
         }
         options.push((button("Skip", 's'), AdoptDecision::Skip));
-        options.push((button("Abort", 'q'), AdoptDecision::Abort));
-        let what = match failure.kind {
-            AdoptFailureKind::Apply => "does not apply onto public upstream",
-            AdoptFailureKind::Preflight => "fails preflight.sh on public upstream",
-        };
-        if let Some(first) = failure.message.lines().next() {
-            eprintln!("{first}");
-        }
-        if !failure.can_amend {
-            eprintln!("(Amend needs a checkout without uncommitted changes.)");
-        }
-        let question = format!(
-            "Group {} (\"{}\") {what}. ←/→ to choose, Enter to confirm, Esc aborts.",
-            failure.group, failure.title
-        );
-        let choices: Vec<Choice> = options.iter().map(|(choice, _)| *choice).collect();
-        Ok(match crate::prompt::choose(&question, &choices)? {
-            Some(i) => options[i].1,
-            None => AdoptDecision::Abort,
-        })
+        options.push((button("Stop", 't'), AdoptDecision::Stop));
+        options.push((button("Abort", 'b'), AdoptDecision::Abort));
+        crate::tui::choose_on_failure(failure, &options)
     })
 }

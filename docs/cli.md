@@ -21,7 +21,7 @@ git uplink add --title <text> [--message <text> | --message-file <path>] [--from
             [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
             [--gate] [--json]
 git uplink adopt [--branch <ref>] [--groups <path>] [--write-groups <path>] [--continue]
-            [--skip] [--abort] [--keep-test-branches] [--json]
+            [--skip] [--abort] [--abort-keep] [--keep-test-branches] [--json]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
@@ -144,11 +144,13 @@ Lists the first-parent commits of `--branch` since it left `uplink/upstream`. Gr
 
 The patches are added after the ones already in the queue. Each upstream-bound patch is applied onto `uplink/upstream`, alone and then with queued patches, and depends only on the patches it needs to apply. It must then pass the export preflight (`preflight.sh`); when the script passes only with more queued patches, it depends on those too.
 
-A group that still fails is put to you with buttons: Ignore the preflight failure (the patch then also depends on the upstream patch queued before it), make it Internal-only, Amend it, Skip it, or Abort. Amend pauses the way `git rebase` stops on a commit: the checkout is left on `uplink/upstream` and the dependencies with the group's change applied, and `--continue`, `--skip` or `--abort` takes it from there. Without a terminal a failing group fails the command.
+Each group gets a line, `<patch-id> - <sha> - <title>`, with a spinner while it is checked. A patch that passes is added to the queue in its own `uplink/state` commit right away (✓). A group whose change is queued already is skipped (−).
 
-Every decision is written to the groups file (`.git/uplink/adopt/<branch>.json` unless `--write-groups` says otherwise): full commit ids, title, intent and message, plus `ignorePreflight` and `amended` (an amended commit, kept by a ref under `refs/uplink/adopt-amended/`). `--groups` on that file adopts the same way without asking.
+A group that still fails (✗) opens a window with the `preflight.sh` output, or why it does not apply, and the choices: Ignore the preflight failure (the patch then also depends on the upstream patch queued before it), make it Internal-only, Amend it, Skip it, Stop (keep what was added), or Abort (reset `uplink/state` to where the run started). The decision is printed as a line of its own and the run goes on. Amend pauses the way `git rebase` stops on a commit: the checkout is left on `uplink/upstream` and the dependencies with the group's change applied, and `--continue`, `--skip`, `--abort-keep` or `--abort` takes it from there. Without a terminal a failing group fails the command and resets `uplink/state`.
 
-Adopt runs locally only: it makes no network calls, so `--branch`, `uplink/upstream`, the company branch and `uplink/hooks` must already be in this clone (fetch them first). It writes one commit on local `uplink/state`, never rebuilds or pushes, and leaves `main` alone.
+Every decision is written to the groups file (`.git/uplink/adopt/<branch>.json` unless `--write-groups` says otherwise): full commit ids, title, intent and message, plus `ignorePreflight` and `amended` (an amended commit, kept by a ref under `refs/uplink/adopt-amended/`). `--groups` on that file adopts the same way without asking, skipping groups added before.
+
+Adopt runs locally only: it makes no network calls, so `--branch`, `uplink/upstream`, the company branch and `uplink/hooks` must already be in this clone (fetch them first). It writes one commit on local `uplink/state` per patch, never rebuilds or pushes, and leaves `main` alone.
 
 - `--branch <ref>`: Local branch to pick commits from.
 - `--groups <path>`: JSON file of commit groups, as for `init --adopt-groups` (`-` reads stdin).
@@ -157,7 +159,8 @@ Adopt runs locally only: it makes no network calls, so `--branch`, `uplink/upstr
 
   What they hold becomes the group's change, checked again like any other. A group amended to no change is skipped.
 - `--skip`: Continue a paused adopt without the group it stopped on.
-- `--abort`: Give up a paused adopt: the checkout is put back and nothing is written.
+- `--abort`: Give up a paused adopt: the checkout is put back and local `uplink/state` is reset to where the run started.
+- `--abort-keep`: Give up a paused adopt: the checkout is put back, and the patches it already added stay on `uplink/state`.
 - `--keep-test-branches`: Leave `uplink/adopt-test/<n>-<id>` at upstream + dependencies + each upstream-bound patch.
 - `--json`: Print the adopted patches as JSON.
 
@@ -546,7 +549,7 @@ Then preview and publish:
     git diff main uplink/preview/verify
     git uplink rebuild --push
 
-Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends on the queued patches it needs to apply onto upstream and to pass preflight. A group that still fails can be adopted with its preflight failure ignored, made internal-only, skipped, or amended inline and finished with `git uplink adopt --continue`. Every decision is written to a groups file that `--groups` replays. Adopt is local only: fetch the branch first. Preview and publish as above.
+Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends on the queued patches it needs to apply onto upstream and to pass preflight. Each patch is committed to local `uplink/state` as soon as it passes. A group that still fails opens a window with the preflight output: adopt it with the failure ignored, make it internal-only, skip it, amend it inline and finish with `git uplink adopt --continue`, stop, or abort and reset `uplink/state`. Every decision is written to a groups file that `--groups` replays. Adopt is local only: fetch the branch first. Preview and publish as above.
 
 ## Gated PRs
 

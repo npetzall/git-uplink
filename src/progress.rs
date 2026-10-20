@@ -127,6 +127,22 @@ impl StepProgress {
         }
     }
 
+    /// Starts the spinner of a line that [`Self::finish`] ends, for a step
+    /// whose outcome comes in parts.
+    pub fn start(&mut self, label: &str) {
+        if self.enabled() {
+            self.start_spinner(label);
+        }
+    }
+
+    /// Ends the spinner [`Self::start`] began with `outcome`, or prints
+    /// another line for `label` when none runs.
+    pub fn finish(&mut self, label: &str, outcome: &StepOutcome) {
+        if self.enabled() {
+            self.finish_line(label, outcome);
+        }
+    }
+
     fn record(&mut self, id: &str, outcome: StepOutcome) {
         self.checks.push(AssessCheck {
             id: id.into(),
