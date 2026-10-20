@@ -182,7 +182,8 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
 - **Requires:**
   - `preflight.sh` on `uplink/hooks`;
   - the Actions token (contents read; pull requests write in the comment job only);
-  - make **Uplink gate** a required check on the gated bases. Before this job had a name its check was called `validate`; update existing rulesets or branch protection to the new name.
+  - make **Uplink gate** a required check on the gated bases. Before this job had a name its check was called `validate`; update existing rulesets or branch protection to the new name;
+  - recommended: import [`uplink-pack-files-ruleset.json`](.github/uplink-pack-files-ruleset.json), a push ruleset that refuses changes to the pack (each `uplink-*` workflow and action by name, `install-git-uplink`, `.github/uplink/`) on every branch, not only through gated PRs. It leaves out the hooks the company owns on `uplink/hooks` (`uplink-toolchain-hook`, `uplink-assessment-hook.yml` and its example), so hooks pull requests need no admin. GitHub enforces path rules only in push rulesets, which cover the whole repository and its forks and exist only for private and internal repositories. Add the internal App to its bypass list (**Always allow**; with a PAT, a team with only the machine user), since rebuilds write the pack on `main`. Keep the admin role, which operators need for `init --upgrade`. Then set it to **Active**.
 
 ## Settings
 

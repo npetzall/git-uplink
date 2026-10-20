@@ -256,17 +256,35 @@ const GATED_RULESET = `{
 
 const PACK_RULESET = `{
   "name": "Uplink: pack files",
-  "target": "branch",
+  "target": "push",
   "enforcement": "disabled",
   "bypass_actors": [
-    { "actor_id": {{internalAppId}}, "actor_type": "Integration", "bypass_mode": "always" }
+    { "actor_id": {{internalAppId}}, "actor_type": "Integration", "bypass_mode": "always" },
+    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }
   ],
-  "conditions": { "ref_name": {
-    "include": ["refs/heads/uplink/conflict/**", "refs/heads/uplink/transfer-to-upstream/**", "refs/heads/uplink/transfer-to-internal/**", "refs/heads/uplink/amend/**"],
-    "exclude": [] } },
   "rules": [
     { "type": "file_path_restriction", "parameters": {
-        "restricted_file_paths": [".github/workflows/uplink-*.yml", ".github/actions/install-git-uplink/**", ".github/actions/uplink-*/**", ".github/uplink/**", ".uplink/**"] } }
+        "restricted_file_paths": [
+          ".github/workflows/uplink-abandon.yml",
+          ".github/workflows/uplink-amend.yml",
+          ".github/workflows/uplink-gate.yml",
+          ".github/workflows/uplink-import.yml",
+          ".github/workflows/uplink-pr.yml",
+          ".github/workflows/uplink-rebase.yml",
+          ".github/workflows/uplink-resolve.yml",
+          ".github/workflows/uplink-submit.yml",
+          ".github/workflows/uplink-sync-daily.yml",
+          ".github/workflows/uplink-sync-hourly.yml",
+          ".github/workflows/uplink-sync-weekly.yml",
+          ".github/workflows/uplink-sync.yml",
+          ".github/workflows/uplink-transfer.yml",
+          ".github/workflows/uplink-verify.yml",
+          ".github/actions/install-git-uplink/**",
+          ".github/actions/uplink-assessment-hook/**",
+          ".github/actions/uplink-dispatch-submit/**",
+          ".github/actions/uplink-preflight-comment/**",
+          ".github/actions/uplink-rebase-comment/**",
+          ".github/uplink/**" ] } }
   ]
 }`;
 
@@ -729,6 +747,8 @@ gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env abandon-contrib`}</Co
               <strong>Settings → Rules → Rulesets → New branch ruleset</strong>{" "}
               with <strong>Enforcement status: Disabled</strong>. You push{" "}
               <code>main</code> yourself in step 10; step 11 turns them on.
+              Create <strong>Uplink: pack files</strong> under{" "}
+              <strong>New push ruleset</strong> instead.
             </p>
             <RulesetList />
             <BypassExplainer />
@@ -935,13 +955,20 @@ function RulesetList() {
         branches.
       </li>
       <li>
-        <strong>Uplink: pack files</strong> (same refs, including{" "}
-        <code>*-work</code>): nobody but the bots may change{" "}
-        <code>.github/workflows/uplink-*.yml</code>,{" "}
-        <code>.github/actions/install-git-uplink/**</code>,{" "}
-        <code>.github/actions/uplink-*/**</code>, <code>.github/uplink/**</code>
-        , or <code>.uplink/**</code> on a gated branch. Product workflows stay
-        editable. Bypass: the internal App. Sample:{" "}
+        <strong>Uplink: pack files</strong> (push ruleset, every branch): nobody
+        but the internal App and admins may change the pack: each{" "}
+        <code>uplink-*</code> workflow and action by name,{" "}
+        <code>install-git-uplink</code>, and <code>.github/uplink/**</code>. The
+        hooks the company owns on <code>uplink/hooks</code> (
+        <code>uplink-toolchain-hook</code>,{" "}
+        <code>uplink-assessment-hook.yml</code> and its example) are left out,
+        so hooks pull requests need no admin. GitHub enforces path rules only in
+        push rulesets, which cover forks too and exist only for private and
+        internal repositories. Product workflows stay editable, and{" "}
+        <code>Uplink gate</code> still refuses <code>.uplink/**</code> on gated
+        pull requests. Bypass: the internal App, which rebuilds{" "}
+        <code>main</code>, and the admin role, for <code>init --upgrade</code>.
+        Sample:{" "}
         <a
           href={`${GITHUB_BLOB}/templates/github/.github/uplink-pack-files-ruleset.json`}
         >
