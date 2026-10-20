@@ -7,9 +7,9 @@ use std::process::ExitCode;
 use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
-    AddOutcome, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, Patch, PatchConflict,
-    PatchIntent, PatchStatus, QueueState, SettingsFlags, SubmitResult, SyncOpts, SyncResult,
-    TransferDirection, TransferResult, UpgradeResume, stdin_is_tty,
+    AddOutcome, AdoptResume, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, Patch,
+    PatchConflict, PatchIntent, PatchStatus, QueueState, SettingsFlags, SubmitResult, SyncOpts,
+    SyncResult, TransferDirection, TransferResult, UpgradeResume, stdin_is_tty,
 };
 use git_uplink::{
     AddPatchOpts, AdoptBranchOpts, AmendMessage, AmendResult, ApprovalReceipt, AssessPackage,
@@ -733,36 +733,66 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
     Ok(())
 }
 
-/// `git uplink adopt --branch`: local only, one uplink/state commit.
-fn cmd_adopt(
-    repo: &Path,
-    branch: String,
+struct AdoptArgs {
+    branch: Option<String>,
     groups: Option<PathBuf>,
+    write_groups: Option<PathBuf>,
+    resume: Option<AdoptResume>,
     keep_test_branches: bool,
     json: bool,
-) -> Result<(), Error> {
+}
+
+/// `git uplink adopt --branch`: local only, one uplink/state commit.
+fn cmd_adopt(repo: &Path, args: AdoptArgs) -> Result<(), Error> {
     refuse_script_here(repo, &ScriptVerdict::Run, None)?;
-    let groups = match groups {
+    let groups = match args.groups {
         Some(path) => Some(load_groups_file(&path)?),
         None => None,
     };
     let result = adopt_branch(
         repo,
         AdoptBranchOpts {
-            branch: branch.clone(),
+            branch: args.branch.unwrap_or_default(),
             groups,
             interactive: None,
-            keep_test_branches,
+            keep_test_branches: args.keep_test_branches,
+            write_groups: args.write_groups,
+            resume: args.resume,
+            decide: None,
         },
     )?;
+    let branch = &result.branch;
+    let groups_file = result.groups_file.display().to_string();
     if result.behind {
         eprintln!(
             "warning: {branch} forked from an older upstream than uplink/upstream; \
 its patches were checked against current upstream."
         );
     }
-    let adopted = &result.adoption.adopted;
-    if json {
+    let Some(adoption) = &result.adoption else {
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "branch": branch,
+                    "behind": result.behind,
+                    "aborted": result.aborted,
+                    "adopted": [],
+                    "groupsFile": groups_file,
+                }))?
+            );
+        } else if result.aborted {
+            println!("adopt aborted; nothing was changed.\nGroups file: {groups_file}");
+        } else {
+            println!(
+                "Groups written to {groups_file}; nothing was adopted.\n\
+Adopt them with: git uplink adopt --branch {branch} --groups {groups_file}"
+            );
+        }
+        return Ok(());
+    };
+    let adopted = &adoption.adopted;
+    if args.json {
         let rows: Vec<_> = adopted
             .iter()
             .map(|p| {
@@ -773,6 +803,8 @@ its patches were checked against current upstream."
                     "dependsOn": p.depends_on,
                     "testBranch": p.test_branch,
                     "preflight": p.preflight,
+                    "preflightIgnored": p.preflight_ignored,
+                    "amended": p.amended,
                 })
             })
             .collect();
@@ -781,7 +813,9 @@ its patches were checked against current upstream."
             serde_json::to_string_pretty(&serde_json::json!({
                 "branch": branch,
                 "behind": result.behind,
+                "aborted": false,
                 "adopted": rows,
+                "groupsFile": groups_file,
             }))?
         );
         return Ok(());
@@ -797,7 +831,14 @@ its patches were checked against current upstream."
         } else {
             format!(", depends on {}", p.depends_on.join(", "))
         };
-        println!("  {} \"{}\" ({}{deps})", p.id, p.title, p.intent);
+        let mut notes = String::new();
+        if p.amended {
+            notes.push_str(", amended");
+        }
+        if p.preflight_ignored {
+            notes.push_str(", preflight failure ignored");
+        }
+        println!("  {} \"{}\" ({}{deps}{notes})", p.id, p.title, p.intent);
     }
     let test_branches: Vec<&str> = adopted
         .iter()
@@ -810,6 +851,7 @@ its patches were checked against current upstream."
             test_branches.join(" ")
         );
     }
+    println!("Groups file: {groups_file}");
     println!("{}", adopted_next_steps());
     Ok(())
 }
@@ -1737,9 +1779,28 @@ fn run() -> Result<(), Error> {
         Commands::Adopt {
             branch,
             groups,
+            write_groups,
+            resume,
+            skip,
+            abort,
             keep_test_branches,
             json,
-        } => cmd_adopt(&repo, branch, groups, keep_test_branches, json),
+        } => cmd_adopt(
+            &repo,
+            AdoptArgs {
+                branch,
+                groups,
+                write_groups,
+                resume: match (resume, skip, abort) {
+                    (true, _, _) => Some(AdoptResume::Continue),
+                    (_, true, _) => Some(AdoptResume::Skip),
+                    (_, _, true) => Some(AdoptResume::Abort),
+                    _ => None,
+                },
+                keep_test_branches,
+                json,
+            },
+        ),
         Commands::Push { push_remote } => cmd_push(&repo, push_remote),
         Commands::Refresh => cmd_refresh(&repo),
         Commands::Reset => cmd_reset(&repo),
