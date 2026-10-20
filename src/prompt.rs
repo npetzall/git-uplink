@@ -85,6 +85,128 @@ fn edit_line(question: &str, default: &str) -> Result<String> {
     answer
 }
 
+/// One button of [`choose`]. `key` picks it directly and is shown underlined
+/// when it is a letter of `label`.
+#[derive(Debug, Clone, Copy)]
+pub struct Choice {
+    pub label: &'static str,
+    pub key: char,
+}
+
+/// What a key does to a row of buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Selection {
+    /// Move the highlight to this button.
+    Move(usize),
+    /// This button is picked.
+    Picked(usize),
+    /// Esc or Ctrl+c: nothing is picked.
+    Cancel,
+    Ignore,
+}
+
+/// What `key` does with `selected` highlighted among `choices`. Arrows and
+/// Tab move and wrap around, Enter picks the highlighted button, a button's
+/// key picks it directly.
+pub fn next_selection(choices: &[Choice], selected: usize, code: KeyCode, ctrl: bool) -> Selection {
+    let n = choices.len();
+    if n == 0 {
+        return Selection::Cancel;
+    }
+    match code {
+        KeyCode::Char('c') if ctrl => Selection::Cancel,
+        KeyCode::Esc => Selection::Cancel,
+        KeyCode::Enter => Selection::Picked(selected.min(n - 1)),
+        KeyCode::Left | KeyCode::BackTab | KeyCode::Up => Selection::Move((selected + n - 1) % n),
+        KeyCode::Right | KeyCode::Tab | KeyCode::Down => Selection::Move((selected + 1) % n),
+        KeyCode::Char(c) => choices
+            .iter()
+            .position(|choice| choice.key.eq_ignore_ascii_case(&c))
+            .map_or(Selection::Ignore, Selection::Picked),
+        _ => Selection::Ignore,
+    }
+}
+
+/// Asks the operator to pick one of `choices`, drawn as a row of buttons on
+/// stderr below `question`. Returns the index picked, or `None` for Esc.
+/// Without a terminal, the button's key is read from a line instead.
+pub fn choose(question: &str, choices: &[Choice]) -> Result<Option<usize>> {
+    if std::io::stdin().is_terminal()
+        && std::io::stderr().is_terminal()
+        && terminal::enable_raw_mode().is_ok()
+    {
+        let _raw = RawMode;
+        return choose_buttons(question, choices);
+    }
+    let keys: Vec<String> = choices
+        .iter()
+        .map(|c| format!("{}={}", c.key, c.label))
+        .collect();
+    let answer = read_line(&format!("{question} ({})", keys.join(", ")), "")?;
+    let mut chars = answer.chars();
+    Ok(match (chars.next(), chars.next()) {
+        (Some(c), None) => choices
+            .iter()
+            .position(|choice| choice.key.eq_ignore_ascii_case(&c)),
+        _ => None,
+    })
+}
+
+fn choose_buttons(question: &str, choices: &[Choice]) -> Result<Option<usize>> {
+    use ratatui::crossterm::style::{Attribute, SetAttribute};
+    let mut err = std::io::stderr();
+    write!(err, "{}\r\n", question.replace('\n', "\r\n"))?;
+    let mut selected = 0;
+    let picked = loop {
+        queue!(err, MoveToColumn(0))?;
+        for (i, choice) in choices.iter().enumerate() {
+            if i > 0 {
+                queue!(err, Print("  "))?;
+            }
+            if i == selected {
+                queue!(err, SetAttribute(Attribute::Reverse))?;
+            }
+            queue!(err, Print("[ "))?;
+            let mut underlined = false;
+            for c in choice.label.chars() {
+                if !underlined && c.eq_ignore_ascii_case(&choice.key) {
+                    underlined = true;
+                    queue!(
+                        err,
+                        SetAttribute(Attribute::Underlined),
+                        Print(c),
+                        SetAttribute(Attribute::NoUnderline)
+                    )?;
+                } else {
+                    queue!(err, Print(c))?;
+                }
+            }
+            queue!(err, Print(" ]"))?;
+            if i == selected {
+                queue!(err, SetAttribute(Attribute::NoReverse))?;
+            }
+        }
+        queue!(err, Clear(ClearType::UntilNewLine))?;
+        err.flush()?;
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match next_selection(choices, selected, key.code, ctrl) {
+            Selection::Move(i) => selected = i,
+            Selection::Picked(i) => break Some(i),
+            Selection::Cancel => break None,
+            Selection::Ignore => {}
+        }
+    };
+    write!(err, "\r\n")?;
+    err.flush()?;
+    Ok(picked)
+}
+
 fn columns() -> usize {
     terminal::size().map_or(80, |(columns, _)| columns as usize)
 }
@@ -105,4 +227,54 @@ fn read_line(question: &str, default: &str) -> Result<String> {
     } else {
         answer.to_string()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CHOICES: [Choice; 3] = [
+        Choice {
+            label: "Ignore",
+            key: 'i',
+        },
+        Choice {
+            label: "Amend",
+            key: 'a',
+        },
+        Choice {
+            label: "Abort",
+            key: 'q',
+        },
+    ];
+
+    #[test]
+    fn arrows_and_tab_move_and_wrap() {
+        let next = |selected, code| next_selection(&CHOICES, selected, code, false);
+        assert_eq!(next(0, KeyCode::Right), Selection::Move(1));
+        assert_eq!(next(2, KeyCode::Tab), Selection::Move(0));
+        assert_eq!(next(0, KeyCode::Left), Selection::Move(2));
+        assert_eq!(next(1, KeyCode::BackTab), Selection::Move(0));
+    }
+
+    #[test]
+    fn enter_and_keys_pick() {
+        let next = |selected, code| next_selection(&CHOICES, selected, code, false);
+        assert_eq!(next(1, KeyCode::Enter), Selection::Picked(1));
+        assert_eq!(next(0, KeyCode::Char('q')), Selection::Picked(2));
+        assert_eq!(next(0, KeyCode::Char('A')), Selection::Picked(1));
+        assert_eq!(next(0, KeyCode::Char('x')), Selection::Ignore);
+    }
+
+    #[test]
+    fn esc_and_ctrl_c_cancel() {
+        assert_eq!(
+            next_selection(&CHOICES, 0, KeyCode::Esc, false),
+            Selection::Cancel
+        );
+        assert_eq!(
+            next_selection(&CHOICES, 0, KeyCode::Char('c'), true),
+            Selection::Cancel
+        );
+    }
 }

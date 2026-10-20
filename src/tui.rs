@@ -45,11 +45,23 @@ struct AdoptUi {
     allow_skip: bool,
 }
 
-pub fn run_adopt(
-    repo: &Path,
-    queue: &QueueState,
-    analysis: &AheadAnalysis,
-) -> Result<Vec<AdoptGroup>> {
+/// How the operator left the adopt UI.
+pub enum TuiOutcome {
+    /// Adopt these groups now.
+    Adopt(Vec<AdoptGroup>),
+    /// Only write the groups file (adopting from a branch).
+    WriteAndExit(Vec<AdoptGroup>),
+}
+
+impl TuiOutcome {
+    pub fn into_groups(self) -> Vec<AdoptGroup> {
+        match self {
+            Self::Adopt(groups) | Self::WriteAndExit(groups) => groups,
+        }
+    }
+}
+
+pub fn run_adopt(repo: &Path, queue: &QueueState, analysis: &AheadAnalysis) -> Result<TuiOutcome> {
     if analysis.commits.is_empty() {
         return Err(Error::msg("no unique first-parent commits to adopt"));
     }
@@ -64,7 +76,7 @@ fn run_loop(
     repo: &Path,
     queue: &QueueState,
     analysis: &AheadAnalysis,
-) -> Result<Vec<AdoptGroup>> {
+) -> Result<TuiOutcome> {
     let allow_skip = analysis.allow_skip;
     let mut next = 0;
     let numbers = analysis
@@ -108,8 +120,8 @@ fn run_loop(
         match ui.phase {
             Phase::Assign => handle_assign(&mut ui, key)?,
             Phase::Details { .. } => {
-                if let Some(groups) = handle_details(&mut ui, repo, queue, analysis, key)? {
-                    return Ok(groups);
+                if let Some(outcome) = handle_details(&mut ui, repo, queue, analysis, key)? {
+                    return Ok(outcome);
                 }
             }
         }
@@ -193,9 +205,7 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
                 ui.groups = groups;
                 ui.field = Field::Title;
                 ui.phase = Phase::Details { index: 0 };
-                ui.status =
-                    "Tab fields, arrows move, i intent, Ctrl+n/p groups, Ctrl+s finish, Esc back, q abort"
-                        .into();
+                ui.status = details_status(ui.allow_skip).into();
             }
             Err(err) => ui.status = err.to_string(),
         },
@@ -204,19 +214,32 @@ fn handle_assign(ui: &mut AdoptUi, key: KeyEvent) -> Result<()> {
     Ok(())
 }
 
+fn details_status(allow_skip: bool) -> &'static str {
+    if allow_skip {
+        "Tab fields, arrows move, i intent, Ctrl+n/p groups, Ctrl+s adopt, Ctrl+w write groups and exit, Esc back, q abort"
+    } else {
+        "Tab fields, arrows move, i intent, Ctrl+n/p groups, Ctrl+s finish, Esc back, q abort"
+    }
+}
+
 fn handle_details(
     ui: &mut AdoptUi,
     repo: &Path,
     queue: &QueueState,
     analysis: &AheadAnalysis,
     key: KeyEvent,
-) -> Result<Option<Vec<AdoptGroup>>> {
+) -> Result<Option<TuiOutcome>> {
     let Phase::Details { index } = ui.phase else {
         return Ok(None);
     };
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
-            KeyCode::Char('s') => return finish(ui, repo, queue, analysis),
+            KeyCode::Char('s') => {
+                return Ok(finish(ui, repo, queue, analysis)?.map(TuiOutcome::Adopt));
+            }
+            KeyCode::Char('w') if ui.allow_skip => {
+                return Ok(finish(ui, repo, queue, analysis)?.map(TuiOutcome::WriteAndExit));
+            }
             KeyCode::Char('n') => {
                 if index + 1 < ui.forms.len() {
                     ui.phase = Phase::Details { index: index + 1 };

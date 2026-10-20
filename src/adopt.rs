@@ -8,7 +8,6 @@ use crate::assess::{assert_assess_ok, assess_from_message, company_commit_messag
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::lock::with_queue_lock;
-use crate::preflight::{ScriptVerdict, detect_depends_on, export_preflight};
 use crate::queue::{
     add_event, cannot_depend_on, get_patch, patch_path, read_queue as read_queue_file,
     write_queue as write_queue_file,
@@ -17,6 +16,14 @@ use crate::repo::{
     commit_queue, has_ref, new_patch_id, rev_parse, stable_patch_id, stamp, write_product_patch,
 };
 use crate::types::{Patch, PatchIntent, PatchSource, PatchStatus, QueueState};
+
+mod branch;
+
+pub use branch::{
+    ADOPT_AMENDED_REF_PREFIX, AdoptDecider, AdoptDecision, AdoptFailure, AdoptFailureKind,
+    AdoptResume, BranchAdopted, BranchAdoption, BranchRun, groups_file_path, refuse_when_paused,
+    resume_branch, run_branch, write_groups_file,
+};
 
 pub const ADOPT_FROM_REF: &str = "uplink/adopt-from";
 const ADOPT_NOTE_PREFIX: &str = "adopted from ";
@@ -33,7 +40,8 @@ pub struct AdoptCommit {
     pub on_main: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AdoptGroup {
     pub commits: Vec<String>,
     pub title: String,
@@ -41,6 +49,14 @@ pub struct AdoptGroup {
     pub intent: PatchIntent,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Adopt the group even when `preflight.sh` fails on it. It then also
+    /// depends on the upstream patch queued before it. `adopt --branch` only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ignore_preflight: bool,
+    /// A commit holding the group's change as amended inline; its diff is
+    /// adopted instead of the commits'. `adopt --branch` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amended: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +76,8 @@ struct ResolvedGroup {
     title: String,
     intent: PatchIntent,
     message: String,
+    ignore_preflight: bool,
+    amended: Option<String>,
 }
 
 pub fn analyze_ahead(repo: &Path) -> Result<AheadAnalysis> {
@@ -239,6 +257,8 @@ pub fn resolve_groups(analysis: &AheadAnalysis, groups: &[AdoptGroup]) -> Result
             title: g.title,
             intent: g.intent,
             message: Some(g.message),
+            ignore_preflight: g.ignore_preflight,
+            amended: g.amended,
         })
         .collect())
 }
@@ -248,69 +268,20 @@ pub fn apply_groups(
     analysis: &AheadAnalysis,
     groups: &[AdoptGroup],
 ) -> Result<QueueState> {
+    if let Some(group) = groups
+        .iter()
+        .find(|g| g.ignore_preflight || g.amended.is_some())
+    {
+        return Err(Error::msg(format!(
+            "adopt group \"{}\" sets ignorePreflight or amended, which only git uplink adopt --branch supports",
+            group.title
+        )));
+    }
     let resolved = resolve_group_runs(analysis, groups)?;
-    with_queue_lock(repo, || {
-        apply_groups_locked(repo, resolved, &ApplyMode::Initial).map(|(queue, _)| queue)
-    })
-}
-
-/// One patch adopted from a branch.
-#[derive(Debug, Clone)]
-pub struct BranchAdopted {
-    pub id: String,
-    pub title: String,
-    pub intent: PatchIntent,
-    pub depends_on: Vec<String>,
-    /// Left at upstream + dependencies + this patch, when asked for.
-    pub test_branch: Option<String>,
-    /// Token of the tree the export preflight ran on; None for internal-only.
-    pub preflight: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BranchAdoption {
-    pub queue: QueueState,
-    pub adopted: Vec<BranchAdopted>,
+    with_queue_lock(repo, || apply_groups_locked(repo, resolved))
 }
 
 pub const ADOPT_TEST_BRANCH_PREFIX: &str = "uplink/adopt-test/";
-
-/// Appends `groups` of `branch` to the queue after what is already there.
-/// Each upstream-bound group depends only on the patches it needs to apply
-/// onto public upstream, found by trying, and must pass the export
-/// preflight. Writes one uplink/state commit; nothing else moves.
-pub fn apply_branch_groups(
-    repo: &Path,
-    analysis: &AheadAnalysis,
-    groups: &[AdoptGroup],
-    branch: &str,
-    verdict: &ScriptVerdict,
-    keep_test_branches: bool,
-) -> Result<BranchAdoption> {
-    let resolved = resolve_group_runs(analysis, groups)?;
-    let mode = ApplyMode::Branch {
-        branch,
-        verdict,
-        keep_test_branches,
-    };
-    with_queue_lock(repo, || {
-        let (queue, adopted) = apply_groups_locked(repo, resolved, &mode)?;
-        Ok(BranchAdoption { queue, adopted })
-    })
-}
-
-enum ApplyMode<'a> {
-    /// init: the queue holds only tooling, every group chains onto the
-    /// previous upstream-bound one.
-    Initial,
-    /// adopt --branch: appended after existing patches, dependencies found
-    /// by applying onto public upstream.
-    Branch {
-        branch: &'a str,
-        verdict: &'a ScriptVerdict,
-        keep_test_branches: bool,
-    },
-}
 
 pub fn adopted_next_steps() -> &'static str {
     "Company main is unchanged.\n\
@@ -466,6 +437,8 @@ fn resolve_group(
         title: title.to_string(),
         intent: group.intent,
         message,
+        ignore_preflight: group.ignore_preflight,
+        amended: group.amended.clone(),
     })
 }
 
@@ -502,134 +475,58 @@ fn check_group_order(analysis: &AheadAnalysis, assigned: &[Option<usize>]) -> Re
     Ok(())
 }
 
-fn apply_groups_locked(
-    repo: &Path,
-    groups: Vec<ResolvedGroup>,
-    mode: &ApplyMode<'_>,
-) -> Result<(QueueState, Vec<BranchAdopted>)> {
+/// init: the queue holds only tooling, and every upstream-bound group
+/// depends on the upstream-bound group before it.
+fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueState> {
     let mut queue = read_queue_file(repo)?;
-    if matches!(mode, ApplyMode::Initial) && queue.tooling.is_none() {
+    if queue.tooling.is_none() {
         return Err(Error::msg(
             "Uplink tooling patch is missing; cannot adopt history until init installs it.",
         ));
     }
-    if matches!(mode, ApplyMode::Initial) && has_product_patches(&queue) {
+    if has_product_patches(&queue) {
         return Err(Error::msg(
             "queue already has product patches; delete uplink/adopt-from or reset uplink/state before adopting again",
         ));
     }
     let mut written = Vec::new();
-    let mut test_branches = Vec::new();
-    let mut adopted = Vec::new();
     let mut last_upstream_id: Option<String> = None;
     let outcome = (|| -> Result<()> {
-        for (index, group) in groups.iter().enumerate() {
+        for group in &groups {
             let internal_only = group.intent.is_internal_only();
-            let chained = match mode {
-                ApplyMode::Initial => last_upstream_id.as_deref(),
-                ApplyMode::Branch { .. } => None,
-            };
-            let source = match mode {
-                ApplyMode::Initial => None,
-                ApplyMode::Branch { branch, .. } => Some(*branch),
-            };
-            let mut patch = adopted_patch(repo, &queue, group, chained, source)?;
+            let mut patch = adopted_patch(repo, &queue, group, last_upstream_id.as_deref(), None)?;
             let id = patch.id.clone();
             let message = company_commit_message(&patch);
             write_product_patch(repo, &id, &group.from_sha, &message, &group.head_sha)?;
             written.push(id.clone());
             let rel = patch_path(&id)?.to_string_lossy().into_owned();
             patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-            let mut done = BranchAdopted {
-                id: id.clone(),
-                title: patch.title.clone(),
-                intent: group.intent,
-                depends_on: Vec::new(),
-                test_branch: None,
-                preflight: None,
-            };
-            if let ApplyMode::Branch {
-                verdict,
-                keep_test_branches,
-                ..
-            } = mode
-            {
-                if let Some(existing) = queue.all_patches().find(|item| {
-                    item.patch_id_stable.is_some() && item.patch_id_stable == patch.patch_id_stable
-                }) {
-                    return Err(Error::msg(format!(
-                        "\"{}\" is already in the queue as {} \"{}\"; skip those commits.",
-                        group.title, existing.id, existing.title
-                    )));
-                }
-                if !internal_only {
-                    let test_branch = keep_test_branches
-                        .then(|| format!("{ADOPT_TEST_BRANCH_PREFIX}{}-{id}", index + 1));
-                    let candidate_abs = repo.join(&rel);
-                    let deps = detect_depends_on(
-                        repo,
-                        &queue,
-                        &candidate_abs,
-                        &patch.title,
-                        test_branch.as_deref(),
-                    )?
-                    .ok_or_else(|| {
-                        Error::msg(format!(
-                            "\"{}\" does not apply onto public upstream, alone or on top of the queued upstream patches. \
-Rebase those commits onto current upstream, or adopt them internal-only.",
-                            group.title
-                        ))
-                    })?;
-                    if let Some(branch) = test_branch {
-                        test_branches.push(branch.clone());
-                        done.test_branch = Some(branch);
-                    }
-                    if !deps.is_empty() {
-                        add_event(
-                            &mut patch,
-                            "depends-on",
-                            format!("Needs {} to apply onto public upstream", deps.join(", ")),
-                        );
-                    }
-                    patch.depends_on = deps.clone();
-                    done.depends_on = deps;
-                    done.preflight =
-                        export_preflight(repo, &queue, &patch, &candidate_abs, None, verdict)?;
-                }
-            }
             if !internal_only {
                 last_upstream_id = Some(id);
             }
             queue.push_patch(patch, internal_only);
-            adopted.push(done);
         }
         write_queue_file(repo, &queue)?;
         let n = written.len();
-        let from = match mode {
-            ApplyMode::Initial => String::new(),
-            ApplyMode::Branch { branch, .. } => format!(" from {branch}"),
-        };
         commit_queue(
             repo,
-            &format!(
-                "uplink: adopt {n} patch{}{from}",
-                if n == 1 { "" } else { "es" }
-            ),
+            &format!("uplink: adopt {n} patch{}", if n == 1 { "" } else { "es" }),
         )?;
         Ok(())
     })();
     if outcome.is_err() {
-        for id in written {
-            if let Ok(rel) = patch_path(&id) {
-                let _ = fs::remove_file(repo.join(rel));
-            }
-        }
-        for branch in test_branches {
-            let _ = git(repo, &["branch", "-D", &branch], GitOpts::allow_fail());
-        }
+        remove_patch_files(repo, &written);
     }
     outcome?;
-    Ok((read_queue_file(repo)?, adopted))
+    read_queue_file(repo)
+}
+
+fn remove_patch_files(repo: &Path, ids: &[String]) {
+    for id in ids {
+        if let Ok(rel) = patch_path(id) {
+            let _ = fs::remove_file(repo.join(rel));
+        }
+    }
 }
 
 /// Builds and assesses the queued patch for one adopt group, depending on
@@ -756,6 +653,7 @@ pub fn groups_from_numbers(
             title: title.clone(),
             intent: PatchIntent::Upstream,
             message: Some(title),
+            ..Default::default()
         });
         i = j;
     }

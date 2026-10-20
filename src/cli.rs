@@ -75,7 +75,7 @@ Then preview and publish:
     git diff main uplink/preview/verify
     git uplink rebuild --push
 
-Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends only on the patches it needs to apply onto upstream and must pass preflight. Adopt is local only: fetch the branch first. Preview and publish as above.",
+Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends on the queued patches it needs to apply onto upstream and to pass preflight. A group that still fails can be adopted with its preflight failure ignored, made internal-only, skipped, or amended inline and finished with `git uplink adopt --continue`. Every decision is written to a groups file that `--groups` replays. Adopt is local only: fetch the branch first. Preview and publish as above.",
     ),
     (
         "Gated PRs",
@@ -402,12 +402,30 @@ pub enum Commands {
     /// `uplink/upstream`. Group them in the terminal UI, or pass `--groups`;
     /// a commit in no group is skipped. Commits already on company `main`
     /// start out skipped. A group is one contiguous run, so it cannot span a
-    /// skipped commit.
+    /// skipped commit. Ctrl+w in the UI writes the groups file and exits
+    /// without adopting.
     ///
     /// The patches are added after the ones already in the queue. Each
     /// upstream-bound patch is applied onto `uplink/upstream`, alone and then
     /// with queued patches, and depends only on the patches it needs to
-    /// apply. It must then pass the export preflight (`preflight.sh`).
+    /// apply. It must then pass the export preflight (`preflight.sh`); when
+    /// the script passes only with more queued patches, it depends on those
+    /// too.
+    ///
+    /// A group that still fails is put to you with buttons: Ignore the
+    /// preflight failure (the patch then also depends on the upstream patch
+    /// queued before it), make it Internal-only, Amend it, Skip it, or Abort.
+    /// Amend pauses the way `git rebase` stops on a commit: the checkout is
+    /// left on `uplink/upstream` and the dependencies with the group's change
+    /// applied, and `--continue`, `--skip` or `--abort` takes it from there.
+    /// Without a terminal a failing group fails the command.
+    ///
+    /// Every decision is written to the groups file
+    /// (`.git/uplink/adopt/<branch>.json` unless `--write-groups` says
+    /// otherwise): full commit ids, title, intent and message, plus
+    /// `ignorePreflight` and `amended` (an amended commit, kept by a ref
+    /// under `refs/uplink/adopt-amended/`). `--groups` on that file adopts
+    /// the same way without asking.
     ///
     /// Adopt runs locally only: it makes no network calls, so `--branch`,
     /// `uplink/upstream`, the company branch and `uplink/hooks` must already
@@ -415,11 +433,30 @@ pub enum Commands {
     /// `uplink/state`, never rebuilds or pushes, and leaves `main` alone.
     Adopt {
         /// Local branch to pick commits from.
-        #[arg(long, value_name = "ref")]
-        branch: String,
+        #[arg(
+            long,
+            value_name = "ref",
+            required_unless_present_any = ["resume", "skip", "abort"]
+        )]
+        branch: Option<String>,
         /// JSON file of commit groups, as for `init --adopt-groups` (`-` reads stdin).
-        #[arg(long, value_name = "path")]
+        #[arg(long, value_name = "path", conflicts_with_all = ["resume", "skip", "abort"])]
         groups: Option<PathBuf>,
+        /// Write the groups file here instead of `.git/uplink/adopt/<branch>.json`.
+        #[arg(long = "write-groups", value_name = "path", conflicts_with_all = ["resume", "skip", "abort"])]
+        write_groups: Option<PathBuf>,
+        /// Continue a paused adopt with the amended files added.
+        ///
+        /// What they hold becomes the group's change, checked again like any
+        /// other. A group amended to no change is skipped.
+        #[arg(long = "continue", conflicts_with_all = ["branch", "skip", "abort"])]
+        resume: bool,
+        /// Continue a paused adopt without the group it stopped on.
+        #[arg(long, conflicts_with_all = ["branch", "abort"])]
+        skip: bool,
+        /// Give up a paused adopt: the checkout is put back and nothing is written.
+        #[arg(long, conflicts_with = "branch")]
+        abort: bool,
         /// Leave `uplink/adopt-test/<n>-<id>` at upstream + dependencies + each upstream-bound patch.
         #[arg(long = "keep-test-branches")]
         keep_test_branches: bool,

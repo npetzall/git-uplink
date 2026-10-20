@@ -111,14 +111,14 @@ fn check_preview_branch(target: &str, push: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn checkout_identity(repo: &Path) -> Result<(String, String)> {
+pub(crate) fn checkout_identity(repo: &Path) -> Result<(String, String)> {
     Ok((
         git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
         git_ok(repo, &["rev-parse", "HEAD"])?,
     ))
 }
 
-pub(super) fn restore_checkout(repo: &Path, name: &str, sha: &str) -> Result<()> {
+pub(crate) fn restore_checkout(repo: &Path, name: &str, sha: &str) -> Result<()> {
     if name != "HEAD" {
         git(
             repo,

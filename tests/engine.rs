@@ -14,12 +14,13 @@ use git_uplink::{
     approve_patch_reviewed, assess_patch_for_packet, doctor, drop_patch, extras_dir,
     format_approval_receipt, format_approver_packet, format_contribution_packet,
     format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
-    git_ok, init, init_repo, load_extra_markdown, mark_merged, newly_ready_to_submit,
-    parse_depends_on, preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan,
-    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
-    reset_from_origin, resolve_conflict, review_token, status_snapshot, store_patch_extras,
-    stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with, summarize_queue,
-    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
+    git_ok, init, init_repo, load_extra_markdown, load_groups_file, mark_merged,
+    newly_ready_to_submit, parse_depends_on, preflight_incoming_change, push_queue,
+    rebase_onto_main, rebase_plan, rebuild, rebuild_with, record_gated_pr, record_pull_request,
+    refresh_from_origin, report_paths, reset_from_origin, resolve_conflict, review_token,
+    status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch,
+    submit_patch_with, summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with,
+    transfer_preflight, write_queue,
 };
 use tempfile::TempDir;
 
@@ -2465,6 +2466,7 @@ fn adopt_group(commits: &[&str], title: &str, intent: PatchIntent) -> AdoptGroup
         title: title.into(),
         intent,
         message: None,
+        ..Default::default()
     }
 }
 
@@ -13166,6 +13168,7 @@ fn adopt_fork(
             groups: Some(groups),
             interactive: Some(false),
             keep_test_branches,
+            ..Default::default()
         },
     )
 }
@@ -13195,13 +13198,13 @@ fn adopt_branch_appends_picked_commits_with_detected_dependencies() {
     )
     .unwrap();
     assert!(!result.behind);
-    let adopted = &result.adoption.adopted;
+    let adopted = &result.adoption.as_ref().unwrap().adopted;
     assert_eq!(adopted.len(), 3);
     assert!(adopted[0].depends_on.is_empty(), "{:?}", adopted[0]);
     assert_eq!(adopted[1].depends_on, vec![adopted[0].id.clone()]);
     assert_eq!(adopted[2].depends_on, vec![fork.queued.id.clone()]);
 
-    let queue = &result.adoption.queue;
+    let queue = &result.adoption.as_ref().unwrap().queue;
     let titles: Vec<&str> = queue.upstream.iter().map(|p| p.title.as_str()).collect();
     assert_eq!(
         titles,
@@ -13358,7 +13361,7 @@ fn adopt_branch_accepts_a_fork_of_an_older_upstream() {
     )
     .unwrap();
     assert!(result.behind);
-    assert_eq!(result.adoption.adopted.len(), 1);
+    assert_eq!(result.adoption.as_ref().unwrap().adopted.len(), 1);
 }
 
 #[test]
@@ -13389,6 +13392,7 @@ fn adopt_branch_is_local_only() {
             groups: Some(Vec::new()),
             interactive: Some(false),
             keep_test_branches: false,
+            ..Default::default()
         },
     )
     .unwrap_err();
@@ -13401,6 +13405,7 @@ fn adopt_branch_is_local_only() {
             groups: None,
             interactive: Some(false),
             keep_test_branches: false,
+            ..Default::default()
         },
     )
     .unwrap_err();
@@ -13456,7 +13461,7 @@ fn adopt_branch_keeps_test_branches_on_request() {
         true,
     )
     .unwrap();
-    let adopted = &result.adoption.adopted;
+    let adopted = &result.adoption.as_ref().unwrap().adopted;
     assert!(adopted[2].test_branch.is_none());
     let branch = adopted[1].test_branch.as_deref().unwrap();
     assert!(
@@ -13469,4 +13474,307 @@ fn adopt_branch_keeps_test_branches_on_request() {
         git_ok(company, &["merge-base", branch, "uplink/upstream"]).unwrap(),
         rev_of(company, "uplink/upstream")
     );
+}
+
+fn adopt_fork_deciding(
+    company: &Path,
+    groups: Vec<AdoptGroup>,
+    decision: git_uplink::AdoptDecision,
+) -> Result<git_uplink::AdoptBranchResult> {
+    git_uplink::adopt_branch(
+        company,
+        git_uplink::AdoptBranchOpts {
+            branch: "main-fork".into(),
+            groups: Some(groups),
+            interactive: Some(false),
+            decide: Some(std::sync::Arc::new(move |_| Ok(decision))),
+            ..Default::default()
+        },
+    )
+}
+
+fn adopt_resume(
+    company: &Path,
+    resume: git_uplink::AdoptResume,
+) -> Result<git_uplink::AdoptBranchResult> {
+    git_uplink::adopt_branch(
+        company,
+        git_uplink::AdoptBranchOpts {
+            interactive: Some(false),
+            resume: Some(resume),
+            ..Default::default()
+        },
+    )
+}
+
+fn fork_groups_file(company: &Path) -> Vec<AdoptGroup> {
+    load_groups_file(&git_uplink::groups_file_path(company, "main-fork").unwrap()).unwrap()
+}
+
+#[test]
+fn adopt_branch_writes_the_groups_file() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let short = &fork.new_file[..7];
+    let result = adopt_fork(
+        company,
+        vec![adopt_group(&[short], "Add limits", PatchIntent::Upstream)],
+        false,
+    )
+    .unwrap();
+    let path = git_uplink::groups_file_path(company, "main-fork").unwrap();
+    assert_eq!(result.groups_file, path);
+    assert!(path.ends_with("uplink/adopt/main-fork.json"), "{path:?}");
+    let groups = fork_groups_file(company);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].commits, vec![fork.new_file.clone()]);
+    assert_eq!(groups[0].message.as_deref(), Some("Add limits"));
+    let raw = fs::read_to_string(&path).unwrap();
+    assert!(!raw.contains("ignorePreflight"), "{raw}");
+}
+
+#[test]
+fn adopt_branch_depends_on_what_preflight_needs() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    // Applies alone, but only passes with the queued SHA-256 patch below it.
+    set_preflight_script(company, "grep -q sha256 src/tokens.js");
+    let result = adopt_fork(
+        company,
+        vec![adopt_group(
+            &[&fork.new_file],
+            "Add limits",
+            PatchIntent::Upstream,
+        )],
+        false,
+    )
+    .unwrap();
+    let adopted = &result.adoption.as_ref().unwrap().adopted;
+    assert_eq!(adopted[0].depends_on, vec![fork.queued.id.clone()]);
+    assert!(adopted[0].preflight.is_some());
+    assert!(!adopted[0].preflight_ignored);
+    let queue = &result.adoption.as_ref().unwrap().queue;
+    let patch = get_queued(queue, &adopted[0].id);
+    assert!(
+        patch
+            .events
+            .iter()
+            .any(|e| e.detail.contains("to pass preflight.sh")),
+        "{:?}",
+        patch.events
+    );
+}
+
+#[test]
+fn adopt_branch_ignores_a_preflight_failure_when_the_group_says_so() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    set_preflight_script(company, "exit 1");
+    let mut group = adopt_group(&[&fork.new_file], "Add limits", PatchIntent::Upstream);
+    group.ignore_preflight = true;
+    let result = adopt_fork(company, vec![group], false).unwrap();
+    let adoption = result.adoption.as_ref().unwrap();
+    let adopted = &adoption.adopted[0];
+    assert!(adopted.preflight_ignored);
+    assert!(adopted.preflight.is_none());
+    // Exported after the upstream patch queued before it.
+    assert_eq!(adopted.depends_on, vec![fork.queued.id.clone()]);
+    let patch = get_queued(&adoption.queue, &adopted.id);
+    assert!(patch.events.iter().any(|e| e.kind == "preflight-ignored"));
+    assert!(fork_groups_file(company)[0].ignore_preflight);
+}
+
+#[test]
+fn adopt_branch_unattended_failure_names_the_groups_file_fields() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    set_preflight_script(company, "exit 1");
+    let err = adopt_fork(
+        company,
+        vec![adopt_group(
+            &[&fork.new_file],
+            "Add limits",
+            PatchIntent::Upstream,
+        )],
+        false,
+    )
+    .unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("\"ignorePreflight\": true"), "{text}");
+    assert!(text.contains("main-fork.json"), "{text}");
+}
+
+#[test]
+fn adopt_branch_decides_ignore_internal_only_or_skip() {
+    for (decision, adopted_titles) in [
+        (git_uplink::AdoptDecision::IgnorePreflight, 2),
+        (git_uplink::AdoptDecision::InternalOnly, 2),
+        (git_uplink::AdoptDecision::Skip, 1),
+    ] {
+        let world = setup_world();
+        let company = &world.company;
+        let fork = adopt_fork_world(company);
+        set_preflight_script(company, "exit 1");
+        let result = adopt_fork_deciding(
+            company,
+            vec![
+                adopt_group(&[&fork.new_file], "Add limits", PatchIntent::Upstream),
+                adopt_group(&[&fork.notes], "Fork notes", PatchIntent::InternalOnly),
+            ],
+            decision,
+        )
+        .unwrap();
+        let adoption = result.adoption.as_ref().unwrap();
+        assert_eq!(adoption.adopted.len(), adopted_titles, "{decision:?}");
+        let groups = fork_groups_file(company);
+        match decision {
+            git_uplink::AdoptDecision::IgnorePreflight => {
+                assert!(adoption.adopted[0].preflight_ignored);
+                assert!(groups[0].ignore_preflight);
+            }
+            git_uplink::AdoptDecision::InternalOnly => {
+                assert!(adoption.queue.is_internal(&adoption.adopted[0].id));
+                assert_eq!(groups[0].intent, PatchIntent::InternalOnly);
+            }
+            _ => {
+                assert_eq!(adoption.adopted[0].title, "Fork notes");
+                assert_eq!(groups.len(), 1);
+            }
+        }
+    }
+}
+
+/// A `main-fork` commit that edits NOTES.md, which only the skipped "Fork
+/// notes" commit creates, so it applies onto upstream with no set of patches.
+fn fork_edit_notes(company: &Path) -> String {
+    git(
+        company,
+        &["checkout", "-q", "main-fork"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "fork notes\nmore notes\n");
+    commit_all(company, "Edit notes");
+    let sha = rev(company);
+    git(
+        company,
+        &["checkout", "-q", "-f", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    sha
+}
+
+#[test]
+fn adopt_branch_pauses_to_amend_and_continues() {
+    let world = setup_world();
+    let company = &world.company;
+    adopt_fork_world(company);
+    let edit = fork_edit_notes(company);
+    let state_before = state_commits(company);
+    let err = adopt_fork_deciding(
+        company,
+        vec![adopt_group(&[&edit], "Edit notes", PatchIntent::Upstream)],
+        git_uplink::AdoptDecision::Amend,
+    )
+    .unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("adopt paused on group 1"), "{text}");
+    assert!(text.contains("git uplink adopt --continue"), "{text}");
+    assert!(company.join(".git/uplink-adopt.json").is_file());
+    // Detached on uplink/upstream + the queued upstream patch.
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "HEAD"
+    );
+    assert_eq!(
+        git_ok(company, &["rev-parse", "HEAD^"]).unwrap(),
+        rev_of(company, "uplink/upstream")
+    );
+    // Starting another adopt is refused while this one is paused.
+    let err = adopt_fork(
+        company,
+        vec![adopt_group(&[&edit], "Edit notes", PatchIntent::Upstream)],
+        false,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("an adopt is paused"), "{err}");
+
+    write(company, "NOTES.md", "more notes\n");
+    git(company, &["add", "NOTES.md"], GitOpts::default()).unwrap();
+    let result = adopt_resume(company, git_uplink::AdoptResume::Continue).unwrap();
+    let adoption = result.adoption.as_ref().unwrap();
+    assert_eq!(adoption.adopted.len(), 1);
+    assert!(adoption.adopted[0].amended);
+    assert!(!company.join(".git/uplink-adopt.json").exists());
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    assert_eq!(state_commits(company), state_before + 1);
+    let amended = fork_groups_file(company)[0].amended.clone().unwrap();
+    let kept = format!("{}{amended}", git_uplink::ADOPT_AMENDED_REF_PREFIX);
+    assert_eq!(rev_of(company, &kept), amended);
+    let patch = git_ok(
+        company,
+        &[
+            "show",
+            &format!(
+                "{STATE_BRANCH}:.uplink/patches/{}.patch",
+                adoption.adopted[0].id
+            ),
+        ],
+    )
+    .unwrap();
+    assert!(patch.contains("+more notes"), "{patch}");
+}
+
+#[test]
+fn adopt_branch_abort_and_skip_a_paused_group() {
+    for resume in [
+        git_uplink::AdoptResume::Abort,
+        git_uplink::AdoptResume::Skip,
+    ] {
+        let world = setup_world();
+        let company = &world.company;
+        let fork = adopt_fork_world(company);
+        let edit = fork_edit_notes(company);
+        let state_before = rev_of(company, STATE_BRANCH);
+        let patches = || {
+            fs::read_dir(company.join(".uplink/patches"))
+                .unwrap()
+                .count()
+        };
+        let patches_before = patches();
+        adopt_fork_deciding(
+            company,
+            vec![
+                adopt_group(&[&fork.new_file], "Add limits", PatchIntent::Upstream),
+                adopt_group(&[&edit], "Edit notes", PatchIntent::Upstream),
+            ],
+            git_uplink::AdoptDecision::Amend,
+        )
+        .unwrap_err();
+        let result = adopt_resume(company, resume).unwrap();
+        assert!(!company.join(".git/uplink-adopt.json").exists());
+        assert_eq!(
+            git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+            "main"
+        );
+        if resume == git_uplink::AdoptResume::Abort {
+            assert!(result.aborted);
+            assert!(result.adoption.is_none());
+            assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+            assert_eq!(patches(), patches_before);
+        } else {
+            let adopted = &result.adoption.as_ref().unwrap().adopted;
+            assert_eq!(adopted.len(), 1);
+            assert_eq!(adopted[0].title, "Add limits");
+            assert_eq!(fork_groups_file(company).len(), 1);
+        }
+    }
 }
