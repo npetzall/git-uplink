@@ -410,7 +410,7 @@ pub enum Commands {
     /// with queued patches, and depends only on the patches it needs to
     /// apply. It must then pass the export preflight (`preflight.sh`); when
     /// the script passes only with more queued patches, it depends on those
-    /// too.
+    /// too (`--no-preflight-deps` skips that search).
     ///
     /// Each group gets a line, `<patch-id> - <sha> - <title>`, with a spinner
     /// while it is checked. A patch that passes is added to the queue in its
@@ -475,6 +475,15 @@ pub enum Commands {
         /// Leave `uplink/adopt-test/<n>-<id>` at upstream + dependencies + each upstream-bound patch.
         #[arg(long = "keep-test-branches")]
         keep_test_branches: bool,
+        /// Do not look for the queued patches a failing preflight needs.
+        ///
+        /// By default a group that fails `preflight.sh` is tried again with
+        /// queued upstream patches below it, running the script once per try,
+        /// and depends on the ones it passes with. With this flag a failure
+        /// goes straight to the choices, and a group depends only on what it
+        /// needs to apply. A paused run keeps the setting it started with.
+        #[arg(long = "no-preflight-deps", conflicts_with_all = ["resume", "skip", "abort", "abort_keep"])]
+        no_preflight_deps: bool,
         /// Print the adopted patches as JSON.
         #[arg(long)]
         json: bool,

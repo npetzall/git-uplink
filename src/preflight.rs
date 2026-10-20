@@ -795,7 +795,8 @@ pub fn assert_export_preflight(
 
 /// Applies `patch` with its dependencies onto public upstream and gets the
 /// verdict of `preflight.sh` on that tree. Returns the token of what was
-/// tested; `None` for a patch that never goes upstream.
+/// tested; `None` for a patch that never goes upstream. When the script
+/// fails, the queued patches it passes with are suggested as dependencies.
 pub fn export_preflight(
     repo: &Path,
     queue: &QueueState,
@@ -803,6 +804,20 @@ pub fn export_preflight(
     candidate_abs: &Path,
     hooks_ref: Option<&str>,
     verdict: &ScriptVerdict,
+) -> Result<Option<String>> {
+    export_preflight_with(repo, queue, patch, candidate_abs, hooks_ref, verdict, true)
+}
+
+/// [`export_preflight`]; without `suggest_deps` a failing script is not run
+/// again with queued patches, so nothing is suggested.
+pub(crate) fn export_preflight_with(
+    repo: &Path,
+    queue: &QueueState,
+    patch: &Patch,
+    candidate_abs: &Path,
+    hooks_ref: Option<&str>,
+    verdict: &ScriptVerdict,
+    suggest_deps: bool,
 ) -> Result<Option<String>> {
     if queue.is_internal(&patch.id) || queue.is_tooling(&patch.id) {
         return Ok(None);
@@ -867,7 +882,11 @@ pub fn export_preflight(
             note_passed(&token);
             return Ok(Some(token));
         }
-        let suggested = suggest_command_deps(repo, queue, candidate_abs, patch, script, dir)?;
+        let suggested = if suggest_deps {
+            suggest_command_deps(repo, queue, candidate_abs, patch, script, dir)?
+        } else {
+            Vec::new()
+        };
         let extra = if patch.depends_on.is_empty() {
             String::new()
         } else {
