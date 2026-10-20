@@ -27,6 +27,10 @@ pub struct AdoptBranchOpts {
     /// Says what to do with a group that fails. `None` asks in a terminal
     /// window, and fails the run elsewhere.
     pub decide: Option<AdoptDecider>,
+    /// Do not run a failing `preflight.sh` again with queued upstream
+    /// patches to find the ones a group needs. Faster; dependencies are then
+    /// only what the group needs to apply.
+    pub no_preflight_deps: bool,
     /// A line per group on stderr: a spinner while it is checked, then ✓ or ✗.
     pub progress: ProgressMode,
 }
@@ -126,6 +130,7 @@ fn adopt_branch_offline(repo: &Path, opts: AdoptBranchOpts) -> Result<AdoptBranc
             groups_file.clone(),
             groups.clone(),
             opts.keep_test_branches,
+            !opts.no_preflight_deps,
         )?;
         adopt::run_branch(
             repo,

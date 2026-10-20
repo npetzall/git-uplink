@@ -21,7 +21,8 @@ use crate::gate::{assert_resolution_clean, commit_resolution};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::ops::{checkout_identity, restore_checkout};
 use crate::preflight::{
-    ScriptVerdict, apply_abs, detect_depends_on, export_preflight, is_script_failure,
+    ScriptVerdict, apply_abs, detect_depends_on, export_preflight, export_preflight_with,
+    is_script_failure,
 };
 use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
@@ -131,6 +132,10 @@ pub struct BranchRun {
     pub groups_file: PathBuf,
     pub groups: Vec<AdoptGroup>,
     pub keep_test_branches: bool,
+    /// When `preflight.sh` fails, run it again with queued upstream patches
+    /// to find the ones the group needs.
+    #[serde(default = "search_on")]
+    pub preflight_deps: bool,
     /// uplink/state when the run started; `--abort` goes back to it.
     start_state: String,
     /// Index in `groups` of the group adopted next.
@@ -146,17 +151,23 @@ impl BranchRun {
         groups_file: PathBuf,
         groups: Vec<AdoptGroup>,
         keep_test_branches: bool,
+        preflight_deps: bool,
     ) -> Result<Self> {
         Ok(Self {
             branch,
             groups_file,
             groups,
             keep_test_branches,
+            preflight_deps,
             start_state: rev_parse(repo, STATE_BRANCH)?,
             next: 0,
             adopted: Vec::new(),
         })
     }
+}
+
+fn search_on() -> bool {
+    true
 }
 
 /// A run paused on a group to amend, in `<git-dir>/uplink-adopt.json`.
@@ -543,7 +554,15 @@ fn check_group(
         );
     }
     patch.depends_on = deps;
-    let failed = match export_preflight(repo, queue, patch, &candidate_abs, None, ctx.verdict) {
+    let failed = match export_preflight_with(
+        repo,
+        queue,
+        patch,
+        &candidate_abs,
+        None,
+        ctx.verdict,
+        run.preflight_deps,
+    ) {
         Ok(token) => {
             done.preflight = token;
             None

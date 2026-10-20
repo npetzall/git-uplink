@@ -739,6 +739,7 @@ struct AdoptArgs {
     write_groups: Option<PathBuf>,
     resume: Option<AdoptResume>,
     keep_test_branches: bool,
+    no_preflight_deps: bool,
     json: bool,
 }
 
@@ -756,6 +757,7 @@ fn cmd_adopt(repo: &Path, args: AdoptArgs) -> Result<(), Error> {
             groups,
             interactive: None,
             keep_test_branches: args.keep_test_branches,
+            no_preflight_deps: args.no_preflight_deps,
             write_groups: args.write_groups,
             resume: args.resume,
             decide: None,
@@ -1790,6 +1792,7 @@ fn run() -> Result<(), Error> {
             abort,
             abort_keep,
             keep_test_branches,
+            no_preflight_deps,
             json,
         } => cmd_adopt(
             &repo,
@@ -1805,6 +1808,7 @@ fn run() -> Result<(), Error> {
                     _ => None,
                 },
                 keep_test_branches,
+                no_preflight_deps,
                 json,
             },
         ),

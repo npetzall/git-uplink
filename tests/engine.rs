@@ -13168,6 +13168,8 @@ fn adopt_fork(
             groups: Some(groups),
             interactive: Some(false),
             keep_test_branches,
+            // The search reruns preflight.sh; only the test of it needs it.
+            no_preflight_deps: true,
             ..Default::default()
         },
     )
@@ -13489,6 +13491,7 @@ fn adopt_fork_deciding(
             groups: Some(groups),
             interactive: Some(false),
             decide: Some(std::sync::Arc::new(move |_| Ok(decision))),
+            no_preflight_deps: true,
             ..Default::default()
         },
     )
@@ -13542,14 +13545,22 @@ fn adopt_branch_depends_on_what_preflight_needs() {
     let fork = adopt_fork_world(company);
     // Applies alone, but only passes with the queued SHA-256 patch below it.
     set_preflight_script(company, "grep -q sha256 src/tokens.js");
-    let result = adopt_fork(
+    let groups = vec![adopt_group(
+        &[&fork.new_file],
+        "Add limits",
+        PatchIntent::Upstream,
+    )];
+    // Opted out, the failure is not looked into.
+    let err = adopt_fork(company, groups.clone(), false).unwrap_err();
+    assert!(matches!(err, Error::Preflight(_)), "{err}");
+    let result = git_uplink::adopt_branch(
         company,
-        vec![adopt_group(
-            &[&fork.new_file],
-            "Add limits",
-            PatchIntent::Upstream,
-        )],
-        false,
+        git_uplink::AdoptBranchOpts {
+            branch: "main-fork".into(),
+            groups: Some(groups),
+            interactive: Some(false),
+            ..Default::default()
+        },
     )
     .unwrap();
     let adopted = &result.adoption.as_ref().unwrap().adopted;

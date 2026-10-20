@@ -21,7 +21,8 @@ git uplink add --title <text> [--message <text> | --message-file <path>] [--from
             [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
             [--gate] [--json]
 git uplink adopt [--branch <ref>] [--groups <path>] [--write-groups <path>] [--continue]
-            [--skip] [--abort] [--abort-keep] [--keep-test-branches] [--json]
+            [--skip] [--abort] [--abort-keep] [--keep-test-branches]
+            [--no-preflight-deps] [--json]
 git uplink push [--push-remote <remote>]
 git uplink refresh
 git uplink reset
@@ -142,7 +143,7 @@ Pick commits from another local branch and queue them as patches.
 
 Lists the first-parent commits of `--branch` since it left `uplink/upstream`. Group them in the terminal UI, or pass `--groups`; a commit in no group is skipped. Commits already on company `main` start out skipped. A group is one contiguous run, so it cannot span a skipped commit. Ctrl+w in the UI writes the groups file and exits without adopting.
 
-The patches are added after the ones already in the queue. Each upstream-bound patch is applied onto `uplink/upstream`, alone and then with queued patches, and depends only on the patches it needs to apply. It must then pass the export preflight (`preflight.sh`); when the script passes only with more queued patches, it depends on those too.
+The patches are added after the ones already in the queue. Each upstream-bound patch is applied onto `uplink/upstream`, alone and then with queued patches, and depends only on the patches it needs to apply. It must then pass the export preflight (`preflight.sh`); when the script passes only with more queued patches, it depends on those too (`--no-preflight-deps` skips that search).
 
 Each group gets a line, `<patch-id> - <sha> - <title>`, with a spinner while it is checked. A patch that passes is added to the queue in its own `uplink/state` commit right away (✓). A group whose change is queued already is skipped (−).
 
@@ -162,6 +163,9 @@ Adopt runs locally only: it makes no network calls, so `--branch`, `uplink/upstr
 - `--abort`: Give up a paused adopt: the checkout is put back and local `uplink/state` is reset to where the run started.
 - `--abort-keep`: Give up a paused adopt: the checkout is put back, and the patches it already added stay on `uplink/state`.
 - `--keep-test-branches`: Leave `uplink/adopt-test/<n>-<id>` at upstream + dependencies + each upstream-bound patch.
+- `--no-preflight-deps`: Do not look for the queued patches a failing preflight needs.
+
+  By default a group that fails `preflight.sh` is tried again with queued upstream patches below it, running the script once per try, and depends on the ones it passes with. With this flag a failure goes straight to the choices, and a group depends only on what it needs to apply. A paused run keeps the setting it started with.
 - `--json`: Print the adopted patches as JSON.
 
 ### `push`
