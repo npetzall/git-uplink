@@ -449,8 +449,9 @@ export function SecurityPage() {
             <strong>All six rulesets active:</strong> company <code>main</code>,
             the gated bases, the pack files, <code>uplink/hooks</code>,{" "}
             <code>uplink/state</code>, and <code>uplink/upstream</code>. Only
-            the internal App bypasses, and nothing bypasses{" "}
-            <code>uplink/hooks</code> or <code>uplink/state</code>.
+            the internal App bypasses (and admins, for the pack files), and
+            nothing bypasses <code>uplink/hooks</code> or{" "}
+            <code>uplink/state</code>.
           </li>
           <li>
             <strong>

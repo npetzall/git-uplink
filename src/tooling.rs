@@ -1281,21 +1281,44 @@ mod embed_tests {
                     "{forge:?} gate must refuse {path}\n{gate}"
                 );
             }
-            let ruleset = files
+            // GitHub enforces path rules only in push rulesets, which take no
+            // ref conditions. `.uplink/` is written on uplink/state, so only
+            // the gate refuses it.
+            let ruleset: serde_json::Value = files
                 .iter()
                 .find(|(p, _)| p.ends_with("uplink-pack-files-ruleset.json"))
-                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .map(|(_, b)| serde_json::from_slice(b).unwrap())
                 .unwrap();
-            for path in [
-                ".github/workflows/uplink-*.yml",
-                ".github/actions/install-git-uplink/**",
-                ".github/actions/uplink-*/**",
-                ".github/uplink/**",
-                ".uplink/**",
-            ] {
+            assert_eq!(ruleset["target"], "push", "{forge:?}\n{ruleset}");
+            assert!(ruleset.get("conditions").is_none(), "{forge:?}\n{ruleset}");
+            let restricted: Vec<&str> = ruleset["rules"][0]["parameters"]["restricted_file_paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p.as_str().unwrap())
+                .collect();
+            let covered = |path: &str| {
+                restricted.iter().any(|r| match r.strip_suffix("**") {
+                    Some(dir) => path.starts_with(dir),
+                    None => path == *r,
+                })
+            };
+            // A push rule covers every branch, so it must leave alone what the
+            // company owns on uplink/hooks.
+            let mut company: Vec<String> = hooks_files(forge).into_iter().map(|(p, _)| p).collect();
+            company.push(".github/workflows/uplink-assessment-hook.yml".into());
+            for path in &company {
+                assert!(!covered(path), "{forge:?} ruleset must not restrict {path}");
+            }
+            for (path, _) in &files {
+                let pack = path.starts_with(".github/workflows/")
+                    || path.starts_with(".github/actions/")
+                    || path.starts_with(".github/uplink/");
+                let hook = path.starts_with(".github/actions/uplink-toolchain-hook/")
+                    || company.contains(path);
                 assert!(
-                    ruleset.contains(&format!("\"{path}\"")),
-                    "{forge:?} ruleset must restrict {path}\n{ruleset}"
+                    !pack || hook || covered(path),
+                    "{forge:?} ruleset must restrict {path}"
                 );
             }
             assert!(

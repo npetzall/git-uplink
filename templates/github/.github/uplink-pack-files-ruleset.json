@@ -1,35 +1,39 @@
 {
-  "name": "Uplink pack files on gated refs",
-  "target": "branch",
-  "enforcement": "active",
+  "name": "Uplink pack files",
+  "target": "push",
+  "enforcement": "disabled",
   "bypass_actors": [
     {
-      "actor_id": 15368,
-      "actor_type": "Integration",
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
       "bypass_mode": "always"
     }
   ],
-  "conditions": {
-    "ref_name": {
-      "include": [
-        "refs/heads/uplink/conflict/**",
-        "refs/heads/uplink/transfer-to-upstream/**",
-        "refs/heads/uplink/transfer-to-internal/**",
-        "refs/heads/uplink/amend/**"
-      ],
-      "exclude": []
-    }
-  },
   "rules": [
     {
       "type": "file_path_restriction",
       "parameters": {
         "restricted_file_paths": [
-          ".github/workflows/uplink-*.yml",
+          ".github/workflows/uplink-abandon.yml",
+          ".github/workflows/uplink-amend.yml",
+          ".github/workflows/uplink-gate.yml",
+          ".github/workflows/uplink-import.yml",
+          ".github/workflows/uplink-pr.yml",
+          ".github/workflows/uplink-rebase.yml",
+          ".github/workflows/uplink-resolve.yml",
+          ".github/workflows/uplink-submit.yml",
+          ".github/workflows/uplink-sync-daily.yml",
+          ".github/workflows/uplink-sync-hourly.yml",
+          ".github/workflows/uplink-sync-weekly.yml",
+          ".github/workflows/uplink-sync.yml",
+          ".github/workflows/uplink-transfer.yml",
+          ".github/workflows/uplink-verify.yml",
           ".github/actions/install-git-uplink/**",
-          ".github/actions/uplink-*/**",
-          ".github/uplink/**",
-          ".uplink/**"
+          ".github/actions/uplink-assessment-hook/**",
+          ".github/actions/uplink-dispatch-submit/**",
+          ".github/actions/uplink-preflight-comment/**",
+          ".github/actions/uplink-rebase-comment/**",
+          ".github/uplink/**"
         ]
       }
     }
