@@ -122,6 +122,22 @@ impl TextEdit {
         }
     }
 
+    /// The cursor is on the first line, where Up has nowhere to go.
+    pub fn on_first_line(&self) -> bool {
+        self.line_start() == 0
+    }
+
+    /// Moves the cursor to column `col` of row `row` of the window the last
+    /// [`Self::view`] showed, as a mouse click there does. A row past the
+    /// last line goes to the last line, a column past its end to its end.
+    pub fn place_cursor(&mut self, col: usize, row: usize) {
+        let lines = self.lines();
+        let line = (self.top + row).min(lines.len().saturating_sub(1));
+        let start: usize = lines[..line].iter().map(|l| l.len() + 1).sum();
+        let at = offset_at(lines[line], self.left + col);
+        self.cursor = start + at;
+    }
+
     fn lines(&self) -> Vec<&str> {
         if self.multiline {
             self.text.split('\n').collect()
@@ -276,7 +292,7 @@ fn offset_at(line: &str, col: usize) -> usize {
 
 /// The part of `line` in columns `left..left + width`. A wide char cut by the
 /// left edge becomes spaces so the columns after it stay in place.
-fn clip(line: &str, left: usize, width: usize) -> String {
+pub(crate) fn clip(line: &str, left: usize, width: usize) -> String {
     let mut out = String::new();
     let mut col = 0;
     for c in line.chars() {
@@ -453,6 +469,33 @@ mod tests {
         assert_eq!(view.lines, ["a", "b"]);
         assert_eq!(view.cursor, (1, 0));
         assert!(edit.view(0, 2).lines.is_empty());
+    }
+
+    #[test]
+    fn on_first_line_is_where_up_has_nowhere_to_go() {
+        let mut edit = TextEdit::multiline("ab\ncd");
+        assert!(!edit.on_first_line());
+        press(&mut edit, KeyCode::Up);
+        assert!(edit.on_first_line());
+        assert!(TextEdit::new("one line").on_first_line());
+    }
+
+    #[test]
+    fn place_cursor_maps_a_click_through_the_scroll() {
+        let mut edit = TextEdit::multiline("first\nsecond\nthird\nfourth");
+        edit.view(10, 2);
+        // The view shows "third" and "fourth"; a click on row 0, col 2 is "ir|d".
+        edit.place_cursor(2, 0);
+        assert_eq!(edit.cursor_line_col(), (2, 2));
+        edit.place_cursor(40, 1);
+        assert_eq!(edit.cursor_line_col(), (3, 6));
+        edit.place_cursor(0, 9);
+        assert_eq!(edit.cursor_line_col(), (3, 0));
+
+        let mut edit = TextEdit::new("0123456789");
+        edit.view(5, 1);
+        edit.place_cursor(1, 0);
+        assert_eq!(edit.cursor_line_col(), (0, 7));
     }
 
     #[test]

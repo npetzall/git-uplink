@@ -33,6 +33,8 @@ pub struct AdoptCommit {
     pub sha: String,
     pub short: String,
     pub subject: String,
+    /// The message after the subject, trimmed.
+    pub body: String,
     pub is_merge: bool,
     pub parent_count: usize,
     pub first_parent: String,
@@ -298,12 +300,15 @@ fn describe_commit(repo: &Path, sha: &str) -> Result<Option<AdoptCommit>> {
     if parent_list.is_empty() {
         return Ok(None);
     }
-    let subject = git_ok(repo, &["log", "-1", "--format=%s", sha])?;
+    let message = git_ok(repo, &["log", "-1", "--format=%s%x00%b", sha])?;
+    let (subject, body) = message.split_once('\0').unwrap_or((message.as_str(), ""));
+    let (subject, body) = (subject.to_string(), body.trim().to_string());
     let parent_count = parent_list.len();
     Ok(Some(AdoptCommit {
         sha: full.clone(),
         short: full.chars().take(7).collect(),
         subject,
+        body,
         is_merge: parent_count >= 2,
         parent_count,
         first_parent: parent_list[0].clone(),
@@ -605,60 +610,4 @@ fn adopted_patch(
     }
     patch.assess = Some(report);
     Ok(patch)
-}
-
-pub fn default_title_for(commits: &[AdoptCommit]) -> String {
-    commits
-        .last()
-        .map(|c| c.subject.clone())
-        .unwrap_or_else(|| "Adopted change".into())
-}
-
-/// Groups from one number per commit. With `allow_skip`, `0` leaves the
-/// commit out; a skipped commit ends the run of the group before it.
-pub fn groups_from_numbers(
-    commits: &[AdoptCommit],
-    numbers: &[u32],
-    allow_skip: bool,
-) -> Result<Vec<AdoptGroup>> {
-    if commits.len() != numbers.len() {
-        return Err(Error::msg("group assignment does not match commit list"));
-    }
-    if !allow_skip && numbers.contains(&0) {
-        return Err(Error::msg("every commit must be assigned a group number"));
-    }
-    let mut groups = Vec::new();
-    let mut i = 0;
-    while i < commits.len() {
-        let number = numbers[i];
-        if number == 0 {
-            i += 1;
-            continue;
-        }
-        let mut j = i + 1;
-        while j < commits.len() && numbers[j] == number {
-            j += 1;
-        }
-        if numbers[j..].contains(&number) {
-            return Err(Error::msg(if numbers[j] == 0 {
-                "a group cannot span a skipped commit; split it or skip the commits after it"
-            } else {
-                "adopt group numbers interleave along first-parent history (1, 2, 1 is not allowed)"
-            }));
-        }
-        let slice = &commits[i..j];
-        let title = default_title_for(slice);
-        groups.push(AdoptGroup {
-            commits: slice.iter().map(|c| c.sha.clone()).collect(),
-            title: title.clone(),
-            intent: PatchIntent::Upstream,
-            message: Some(title),
-            ..Default::default()
-        });
-        i = j;
-    }
-    if groups.is_empty() {
-        return Err(Error::msg("every commit is skipped; nothing to adopt"));
-    }
-    Ok(groups)
 }

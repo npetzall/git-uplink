@@ -93,12 +93,20 @@ fn adopt_branch_offline(repo: &Path, opts: AdoptBranchOpts) -> Result<AdoptBranc
     }
     adopt::refuse_when_paused(repo)?;
     let analysis = check_refs(repo, &queue, &opts.branch, &company_branch)?;
+    // Absolute, so a paused run finds it from any directory.
+    let groups_file = match opts.write_groups {
+        Some(path) if path.is_relative() => std::env::current_dir()?.join(path),
+        Some(path) => path,
+        None => adopt::groups_file_path(repo, &opts.branch)?,
+    };
     let (groups, write_only) = match opts.groups {
         Some(groups) => (groups, false),
-        None if interactive => match crate::tui::run_adopt(repo, &queue, &analysis)? {
-            TuiOutcome::Adopt(groups) => (groups, false),
-            TuiOutcome::WriteAndExit(groups) => (groups, true),
-        },
+        None if interactive => {
+            match crate::tui::run_adopt(repo, &queue, &analysis, Some(&groups_file))? {
+                TuiOutcome::Adopt(groups) => (groups, false),
+                TuiOutcome::WriteAndExit(groups) => (groups, true),
+            }
+        }
         None => {
             return Err(Error::msg(
                 "pass --groups <file> or re-run git uplink adopt in a terminal to pick commits",
@@ -106,12 +114,6 @@ fn adopt_branch_offline(repo: &Path, opts: AdoptBranchOpts) -> Result<AdoptBranc
         }
     };
     let groups = adopt::resolve_groups(&analysis, &groups)?;
-    // Absolute, so a paused run finds it from any directory.
-    let groups_file = match opts.write_groups {
-        Some(path) if path.is_relative() => std::env::current_dir()?.join(path),
-        Some(path) => path,
-        None => adopt::groups_file_path(repo, &opts.branch)?,
-    };
     adopt::write_groups_file(&groups_file, &groups)?;
     let mut result = AdoptBranchResult {
         branch: opts.branch.clone(),

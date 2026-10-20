@@ -1093,7 +1093,7 @@ pub(super) fn groups_for_adopt(
     }
     let interactive = opts.interactive.unwrap_or_else(adopt::stdin_is_tty);
     if interactive {
-        return crate::tui::run_adopt(repo, queue, analysis)
+        return crate::tui::run_adopt(repo, queue, analysis, None)
             .map(crate::tui::TuiOutcome::into_groups);
     }
     Err(Error::msg(
