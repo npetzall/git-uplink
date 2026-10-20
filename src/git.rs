@@ -500,7 +500,46 @@ fn transport_for(cwd: &Path, args: &[&str], opts: &GitOpts<'_>) -> Result<Transp
     transport_from_role(&url, role, opts)
 }
 
+thread_local! {
+    static OFFLINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Clears the offline flag on drop, including when the closure panics.
+struct OfflineGuard(bool);
+
+impl Drop for OfflineGuard {
+    fn drop(&mut self) {
+        OFFLINE.with(|flag| flag.set(self.0));
+    }
+}
+
+/// Runs `f` with every git call on this thread kept local: network commands
+/// are refused before they start, and every call gets `protocol.allow=never`
+/// so nothing (a promisor or submodule fetch) reaches a remote.
+pub fn with_offline<T>(f: impl FnOnce() -> T) -> T {
+    let _guard = OfflineGuard(OFFLINE.with(|flag| flag.replace(true)));
+    f()
+}
+
+fn is_offline() -> bool {
+    OFFLINE.with(std::cell::Cell::get)
+}
+
+fn needs_network(args: &[&str]) -> bool {
+    match args {
+        [cmd, ..] if NETWORK_COMMANDS.contains(cmd) => true,
+        ["remote", "update", ..] => true,
+        _ => false,
+    }
+}
+
 pub fn git(cwd: &Path, args: &[&str], opts: GitOpts<'_>) -> Result<GitResult> {
+    if is_offline() && needs_network(args) {
+        return Err(Error::msg(format!(
+            "git {} needs the network, and this command runs locally only",
+            args.join(" ")
+        )));
+    }
     git_inner(cwd, args, opts, true)
 }
 
@@ -544,6 +583,9 @@ fn build_command(cwd: &Path, args: &[&str], opts: &GitOpts<'_>, transport: &Tran
     let mut cmd = Command::new("git");
     for (key, value) in FIXED_CONFIG {
         cmd.arg("-c").arg(format!("{key}={value}"));
+    }
+    if is_offline() {
+        cmd.arg("-c").arg("protocol.allow=never");
     }
     // diff.external / GIT_EXTERNAL_DIFF would replace the diff uplink parses.
     if child_args.first().is_some_and(|cmd| cmd == "diff") {
@@ -647,6 +689,37 @@ mod tests {
         http_origin, is_local_transport, named_auth_role, network_remote_index, ssh_to_https,
         transport_from_role, urls_match,
     };
+
+    #[test]
+    fn offline_refuses_network_commands_and_restores_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("origin.git");
+        let repo = dir.path().join("work");
+        std::fs::create_dir_all(&repo).unwrap();
+        super::git_ok(
+            dir.path(),
+            &["init", "-q", "--bare", bare.to_str().unwrap()],
+        )
+        .unwrap();
+        super::git_ok(&repo, &["init", "-q"]).unwrap();
+        super::git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+        super::git_ok(&repo, &["remote", "add", "origin", bare.to_str().unwrap()]).unwrap();
+        super::with_offline(|| {
+            for args in [
+                &["fetch", "origin"][..],
+                &["push", "origin", "HEAD:refs/heads/main"],
+                &["ls-remote", "origin"],
+                &["remote", "update"],
+            ] {
+                let err = super::git(&repo, args, GitOpts::allow_fail()).unwrap_err();
+                assert!(err.to_string().contains("needs the network"), "{err}");
+            }
+            super::git_ok(&repo, &["rev-parse", "HEAD"]).unwrap();
+        });
+        assert!(!super::is_offline());
+        let pushed = super::git_ok(&bare, &["for-each-ref", "refs/heads"]).unwrap();
+        assert!(pushed.is_empty(), "{pushed}");
+    }
 
     #[test]
     fn git_succeeds_reports_exit_status() {

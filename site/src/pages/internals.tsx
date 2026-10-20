@@ -575,6 +575,13 @@ export function InternalsPage() {
             <code>uplink/upstream</code> is the last accepted public{" "}
             <code>main</code>. It only moves through sync.
           </li>
+          <li>
+            Commits on another branch are adopted later with{" "}
+            <code>git uplink adopt --branch &lt;ref&gt;</code>. Picked groups
+            are appended to the queue, each upstream-bound one depending only on
+            the patches it needs to apply onto upstream. It runs locally only
+            and writes one <code>uplink/state</code> commit.
+          </li>
         </ul>
       </Section>
 

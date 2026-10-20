@@ -58,6 +58,7 @@ use crate::types::{
 };
 
 mod add;
+mod adopt_branch;
 mod amend;
 mod changes;
 mod init;
@@ -71,6 +72,7 @@ mod sync;
 mod transfer;
 
 pub use add::*;
+pub use adopt_branch::*;
 pub use amend::*;
 pub use changes::*;
 pub use init::*;

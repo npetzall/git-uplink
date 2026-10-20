@@ -12,11 +12,11 @@ use git_uplink::{
     TransferDirection, TransferResult, UpgradeResume, stdin_is_tty,
 };
 use git_uplink::{
-    AddPatchOpts, AmendMessage, AmendResult, ApprovalReceipt, AssessPackage, Error,
-    FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia, PACKAGE_CHANGE,
+    AddPatchOpts, AdoptBranchOpts, AmendMessage, AmendResult, ApprovalReceipt, AssessPackage,
+    Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia, PACKAGE_CHANGE,
     PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode, PushOpts,
     RebuildOpts, STATE_BRANCH, ScriptEcho, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT,
-    accept_upstream_preflight, accept_upstream_with, add_patch, add_patch_or_gate,
+    accept_upstream_preflight, accept_upstream_with, add_patch, add_patch_or_gate, adopt_branch,
     adopted_next_steps, amend_patch_with, amend_preflight, approve_patch_reviewed,
     assess_from_message, assess_patch_file, assess_patch_for_packet, change_between,
     command_preflight, command_tested, commit_queue, count_files, depends_on_from_message, doctor,
@@ -730,6 +730,87 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
     if !result.report.ok {
         return Err(Error::msg(format_init_summary(&result.report)));
     }
+    Ok(())
+}
+
+/// `git uplink adopt --branch`: local only, one uplink/state commit.
+fn cmd_adopt(
+    repo: &Path,
+    branch: String,
+    groups: Option<PathBuf>,
+    keep_test_branches: bool,
+    json: bool,
+) -> Result<(), Error> {
+    refuse_script_here(repo, &ScriptVerdict::Run, None)?;
+    let groups = match groups {
+        Some(path) => Some(load_groups_file(&path)?),
+        None => None,
+    };
+    let result = adopt_branch(
+        repo,
+        AdoptBranchOpts {
+            branch: branch.clone(),
+            groups,
+            interactive: None,
+            keep_test_branches,
+        },
+    )?;
+    if result.behind {
+        eprintln!(
+            "warning: {branch} forked from an older upstream than uplink/upstream; \
+its patches were checked against current upstream."
+        );
+    }
+    let adopted = &result.adoption.adopted;
+    if json {
+        let rows: Vec<_> = adopted
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "title": p.title,
+                    "intent": p.intent.to_string(),
+                    "dependsOn": p.depends_on,
+                    "testBranch": p.test_branch,
+                    "preflight": p.preflight,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "branch": branch,
+                "behind": result.behind,
+                "adopted": rows,
+            }))?
+        );
+        return Ok(());
+    }
+    let n = adopted.len();
+    println!(
+        "Adopted {n} patch{} from {branch} (local only; nothing pushed, main unchanged).",
+        if n == 1 { "" } else { "es" }
+    );
+    for p in adopted {
+        let deps = if p.depends_on.is_empty() {
+            String::new()
+        } else {
+            format!(", depends on {}", p.depends_on.join(", "))
+        };
+        println!("  {} \"{}\" ({}{deps})", p.id, p.title, p.intent);
+    }
+    let test_branches: Vec<&str> = adopted
+        .iter()
+        .filter_map(|p| p.test_branch.as_deref())
+        .collect();
+    if !test_branches.is_empty() {
+        println!(
+            "Test branches: {}\nRemove with:  git branch -D {}",
+            test_branches.join(", "),
+            test_branches.join(" ")
+        );
+    }
+    println!("{}", adopted_next_steps());
     Ok(())
 }
 
@@ -1653,6 +1734,12 @@ fn run() -> Result<(), Error> {
                 gate,
             )
         }
+        Commands::Adopt {
+            branch,
+            groups,
+            keep_test_branches,
+            json,
+        } => cmd_adopt(&repo, branch, groups, keep_test_branches, json),
         Commands::Push { push_remote } => cmd_push(&repo, push_remote),
         Commands::Refresh => cmd_refresh(&repo),
         Commands::Reset => cmd_reset(&repo),

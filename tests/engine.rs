@@ -13071,3 +13071,402 @@ fn transfer_whose_rebuild_fails_preflight_is_recorded_with_the_conflict() {
         "main"
     );
 }
+
+struct Fork {
+    /// Queued before the adopt: tokens use SHA-256 (not on main).
+    queued: Patch,
+    /// The queued change again, cherry-picked onto the fork.
+    dup: String,
+    new_file: String,
+    extend: String,
+    notes: String,
+    sha512: String,
+}
+
+/// Company world with one queued upstream patch and a `main-fork` branch:
+/// dup (same change as the queued patch), new_file, extend (needs
+/// new_file), notes, sha512 (needs the queued patch).
+fn adopt_fork_world(company: &Path) -> Fork {
+    git(
+        company,
+        &["checkout", "-q", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash = rev(company);
+    let queued = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some(rev_of(company, "main")),
+            head_ref: Some(hash.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "-q", "-b", "main-fork", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(company, &["cherry-pick", &hash], GitOpts::default()).unwrap();
+    let dup = rev(company);
+    write(company, "src/limits.js", "export const max = 10;\n");
+    commit_all(company, "Add limits");
+    let new_file = rev(company);
+    write(
+        company,
+        "src/limits.js",
+        "export const max = 10;\nexport const min = 1;\n",
+    );
+    commit_all(company, "Add min limit");
+    let extend = rev(company);
+    write(company, "NOTES.md", "fork notes\n");
+    commit_all(company, "Fork notes");
+    let notes = rev(company);
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha512(value);"),
+    );
+    commit_all(company, "Use SHA-512");
+    let sha512 = rev(company);
+    git(
+        company,
+        &["checkout", "-q", "-f", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    Fork {
+        queued,
+        dup,
+        new_file,
+        extend,
+        notes,
+        sha512,
+    }
+}
+
+fn adopt_fork(
+    company: &Path,
+    groups: Vec<AdoptGroup>,
+    keep_test_branches: bool,
+) -> Result<git_uplink::AdoptBranchResult> {
+    git_uplink::adopt_branch(
+        company,
+        git_uplink::AdoptBranchOpts {
+            branch: "main-fork".into(),
+            groups: Some(groups),
+            interactive: Some(false),
+            keep_test_branches,
+        },
+    )
+}
+
+fn state_commits(repo: &Path) -> usize {
+    git_ok(repo, &["rev-list", "--count", STATE_BRANCH])
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn adopt_branch_appends_picked_commits_with_detected_dependencies() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let main_before = rev_of(company, "main");
+    let state_before = state_commits(company);
+    let result = adopt_fork(
+        company,
+        vec![
+            adopt_group(&[&fork.new_file], "Add limits", PatchIntent::Upstream),
+            adopt_group(&[&fork.extend], "Add min limit", PatchIntent::Upstream),
+            adopt_group(&[&fork.sha512], "Use SHA-512", PatchIntent::Upstream),
+        ],
+        false,
+    )
+    .unwrap();
+    assert!(!result.behind);
+    let adopted = &result.adoption.adopted;
+    assert_eq!(adopted.len(), 3);
+    assert!(adopted[0].depends_on.is_empty(), "{:?}", adopted[0]);
+    assert_eq!(adopted[1].depends_on, vec![adopted[0].id.clone()]);
+    assert_eq!(adopted[2].depends_on, vec![fork.queued.id.clone()]);
+
+    let queue = &result.adoption.queue;
+    let titles: Vec<&str> = queue.upstream.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        [
+            "Use SHA-256 for tokens",
+            "Add limits",
+            "Add min limit",
+            "Use SHA-512"
+        ]
+    );
+    assert_eq!(
+        get_queued(queue, &adopted[1].id).depends_on,
+        vec![adopted[0].id.clone()]
+    );
+    assert!(
+        get_queued(queue, &adopted[0].id)
+            .source
+            .note
+            .as_deref()
+            .unwrap()
+            .starts_with("adopted from main-fork ")
+    );
+    assert_eq!(rev_of(company, "main"), main_before);
+    assert_eq!(state_commits(company), state_before + 1);
+
+    rebuild_with(
+        company,
+        RebuildOpts {
+            branch: Some("uplink/preview/verify".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(state_commits(company), state_before + 1);
+    let show = |path: &str| git_ok(company, &["show", &format!("uplink/preview/verify:{path}")]);
+    assert!(show("src/limits.js").unwrap().contains("min = 1"));
+    assert!(show("src/tokens.js").unwrap().contains("sha512"));
+    assert!(show("NOTES.md").is_err());
+}
+
+fn get_queued<'a>(queue: &'a QueueState, id: &str) -> &'a Patch {
+    queue.all_patches().find(|p| p.id == id).unwrap()
+}
+
+#[test]
+fn adopt_branch_rejects_duplicates_and_groups_across_skipped_commits() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let state_before = rev_of(company, STATE_BRANCH);
+    let patches = || {
+        fs::read_dir(company.join(".uplink/patches"))
+            .unwrap()
+            .count()
+    };
+    let patches_before = patches();
+
+    let err = adopt_fork(
+        company,
+        vec![adopt_group(&[&fork.dup], "Again", PatchIntent::Upstream)],
+        false,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains(&fork.queued.id), "{err}");
+
+    let err = adopt_fork(
+        company,
+        vec![adopt_group(
+            &[&fork.new_file, &fork.notes],
+            "Spans a skip",
+            PatchIntent::Upstream,
+        )],
+        false,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("skipped commit"), "{err}");
+
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    assert_eq!(patches(), patches_before);
+}
+
+#[test]
+fn adopt_branch_marks_commits_already_on_main() {
+    let world = setup_world();
+    let company = &world.company;
+    write(company, "CHANGELOG.md", "landed\n");
+    commit_all(company, "Changelog");
+    let landed = rev(company);
+    git(
+        company,
+        &["checkout", "-q", "-b", "main-fork", "uplink/upstream"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(company, &["cherry-pick", &landed], GitOpts::default()).unwrap();
+    write(company, "src/limits.js", "export const max = 10;\n");
+    commit_all(company, "Add limits");
+    git(
+        company,
+        &["checkout", "-q", "-f", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let analysis = git_uplink::analyze_branch(company, "main-fork", "main").unwrap();
+    let on_main: Vec<bool> = analysis.commits.iter().map(|c| c.on_main).collect();
+    assert_eq!(on_main, [true, false]);
+    assert!(analysis.allow_skip);
+}
+
+#[test]
+fn adopt_branch_accepts_a_fork_of_an_older_upstream() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-q", "-b", "main-fork", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "src/limits.js", "export const max = 10;\n");
+    commit_all(company, "Add limits");
+    let limits = rev(company);
+    git(
+        company,
+        &["checkout", "-q", "-f", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    write(&world.upstream, "CONTRIBUTING.md", "be nice\n");
+    commit_all(&world.upstream, "contributing");
+    git(
+        company,
+        &[
+            "fetch",
+            "-q",
+            "upstream",
+            "+refs/heads/main:refs/remotes/upstream/main",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["branch", "-f", "uplink/upstream", "upstream/main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let result = adopt_fork(
+        company,
+        vec![adopt_group(&[&limits], "Add limits", PatchIntent::Upstream)],
+        false,
+    )
+    .unwrap();
+    assert!(result.behind);
+    assert_eq!(result.adoption.adopted.len(), 1);
+}
+
+#[test]
+fn adopt_branch_is_local_only() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let nowhere = keep_dir().join("missing.git");
+    for remote in ["upstream", "contrib"] {
+        git(
+            company,
+            &["remote", "set-url", remote, nowhere.to_str().unwrap()],
+            GitOpts::default(),
+        )
+        .unwrap();
+    }
+    git(
+        company,
+        &["remote", "add", "origin", nowhere.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let err = git_uplink::adopt_branch(
+        company,
+        git_uplink::AdoptBranchOpts {
+            branch: "only-on-origin".into(),
+            groups: Some(Vec::new()),
+            interactive: Some(false),
+            keep_test_branches: false,
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("fetch it first"), "{err}");
+
+    let err = git_uplink::adopt_branch(
+        company,
+        git_uplink::AdoptBranchOpts {
+            branch: "main-fork".into(),
+            groups: None,
+            interactive: Some(false),
+            keep_test_branches: false,
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("--groups"), "{err}");
+
+    adopt_fork(
+        company,
+        vec![adopt_group(
+            &[&fork.new_file],
+            "Add limits",
+            PatchIntent::Upstream,
+        )],
+        false,
+    )
+    .unwrap();
+}
+
+#[test]
+fn adopt_branch_rolls_back_when_preflight_fails() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    set_preflight_script(company, "exit 1");
+    let state_before = rev_of(company, STATE_BRANCH);
+    let err = adopt_fork(
+        company,
+        vec![adopt_group(
+            &[&fork.new_file],
+            "Add limits",
+            PatchIntent::Upstream,
+        )],
+        true,
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::Preflight(_)), "{err}");
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    let left = git_ok(company, &["branch", "--list", "uplink/adopt-test/*"]).unwrap();
+    assert!(left.is_empty(), "{left}");
+}
+
+#[test]
+fn adopt_branch_keeps_test_branches_on_request() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let result = adopt_fork(
+        company,
+        vec![
+            adopt_group(&[&fork.new_file], "Add limits", PatchIntent::Upstream),
+            adopt_group(&[&fork.extend], "Add min limit", PatchIntent::Upstream),
+            adopt_group(&[&fork.notes], "Fork notes", PatchIntent::InternalOnly),
+        ],
+        true,
+    )
+    .unwrap();
+    let adopted = &result.adoption.adopted;
+    assert!(adopted[2].test_branch.is_none());
+    let branch = adopted[1].test_branch.as_deref().unwrap();
+    assert!(
+        branch.starts_with(git_uplink::ADOPT_TEST_BRANCH_PREFIX),
+        "{branch}"
+    );
+    let limits = git_ok(company, &["show", &format!("{branch}:src/limits.js")]).unwrap();
+    assert!(limits.contains("min = 1"));
+    assert_eq!(
+        git_ok(company, &["merge-base", branch, "uplink/upstream"]).unwrap(),
+        rev_of(company, "uplink/upstream")
+    );
+}
