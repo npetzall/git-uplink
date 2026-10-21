@@ -14,7 +14,8 @@ use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::hooks::{PREFLIGHT_SCRIPT_PATH, hooks_source};
 use crate::queue::{
-    active_upstream, apply_order_upstream_layer, get_patch, patch_path, read_queue,
+    active_upstream, apply_order_active, apply_order_upstream_layer, get_patch, patch_path,
+    read_queue,
 };
 use crate::repo::{
     TempWorktree, ensure_revs, ensure_upstream_ref, has_ref, path_exists_at, rev_parse,
@@ -665,11 +666,52 @@ pub(crate) fn detect_depends_on(
         .into_iter()
         .map(|p| p.id.clone())
         .collect();
+    detect_depends_on_in(
+        repo,
+        queue,
+        &[],
+        &candidates,
+        candidate_abs,
+        title,
+        keep_branch,
+    )
+}
+
+/// The active patches an internal-only `candidate_abs` needs to apply on
+/// public upstream with the tooling patch: upstream and internal ones, in
+/// the order company main applies them. As [`detect_depends_on`] otherwise.
+pub(crate) fn detect_internal_depends_on(
+    repo: &Path,
+    queue: &QueueState,
+    candidate_abs: &Path,
+    title: &str,
+) -> Result<Option<Vec<String>>> {
+    let order = apply_order_active(queue)?;
+    let tooling = queue.tooling.as_ref().map(|p| p.id.as_str());
+    let (base, candidates): (Vec<String>, Vec<String>) = order
+        .into_iter()
+        .map(|p| p.id)
+        .partition(|id| Some(id.as_str()) == tooling);
+    detect_depends_on_in(repo, queue, &base, &candidates, candidate_abs, title, None)
+}
+
+/// The smallest subset of `candidates` (kept in their order) that makes
+/// `candidate_abs` apply on public upstream with `base` applied first.
+fn detect_depends_on_in(
+    repo: &Path,
+    queue: &QueueState,
+    base: &[String],
+    candidates: &[String],
+    candidate_abs: &Path,
+    title: &str,
+    keep_branch: Option<&str>,
+) -> Result<Option<Vec<String>>> {
     with_upstream_worktree(repo, |dir| {
         let applies_with = |deps: &[String]| -> Result<bool> {
             reset_export(dir, repo)?;
             Ok(
-                apply_deps(dir, repo, queue, deps)? != ApplyOutcome::Conflict
+                apply_deps(dir, repo, queue, base)? != ApplyOutcome::Conflict
+                    && apply_deps(dir, repo, queue, deps)? != ApplyOutcome::Conflict
                     && apply_abs(dir, candidate_abs, title)? != ApplyOutcome::Conflict,
             )
         };
@@ -677,7 +719,7 @@ pub(crate) fn detect_depends_on(
         if applies_with(&[])? {
             found = Some(Vec::new());
         }
-        for id in &candidates {
+        for id in candidates {
             if found.is_some() {
                 break;
             }
@@ -686,7 +728,7 @@ pub(crate) fn detect_depends_on(
             }
         }
         let mut prefix = Vec::new();
-        for id in &candidates {
+        for id in candidates {
             if found.is_some() {
                 break;
             }
@@ -1146,6 +1188,31 @@ pub(crate) fn stale_first_bad(token: &str) -> Error {
         )
         .with_token(token),
     )
+}
+
+/// Points `branch` at company main as `queue` builds it: public upstream,
+/// then every active patch in apply order. Built in a worktree of its own,
+/// so the checkout is not touched.
+pub(crate) fn build_company_stack(repo: &Path, queue: &QueueState, branch: &str) -> Result<()> {
+    with_upstream_worktree(repo, |dir| {
+        for patch in apply_order_active(queue)? {
+            if patch.status == PatchStatus::Conflict {
+                return Err(Error::msg(format!(
+                    "Queue is blocked on conflict in {}; cannot build company main.",
+                    patch.id
+                )));
+            }
+            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
+            if result == ApplyOutcome::Conflict {
+                return Err(Error::msg(format!(
+                    "Queued patch {} (\"{}\") does not apply on company main; fix the queue (git uplink rebuild -i) first.",
+                    patch.id, patch.title
+                )));
+            }
+        }
+        git(dir, &["branch", "-f", branch, "HEAD"], GitOpts::default())?;
+        Ok(())
+    })
 }
 
 pub fn assert_upstream_layer_applies(repo: &Path, queue: &QueueState) -> Result<()> {

@@ -232,7 +232,9 @@ fn draw_failure(
     let what = match failure.kind {
         AdoptFailureKind::Apply => "Does not apply",
         AdoptFailureKind::Preflight => "Preflight failed",
+        AdoptFailureKind::Stack if failure.internal_only => "Does not apply on company main",
         AdoptFailureKind::Stack => "Does not apply on origin's queue",
+        AdoptFailureKind::CompanyPreflight => "Preflight failed on company main",
     };
     frame.render_widget(
         Paragraph::new(format!(
@@ -251,7 +253,9 @@ fn draw_failure(
         .borders(Borders::ALL)
         .title(match failure.kind {
             AdoptFailureKind::Apply | AdoptFailureKind::Stack => "Why",
-            AdoptFailureKind::Preflight => "preflight.sh output",
+            AdoptFailureKind::Preflight | AdoptFailureKind::CompanyPreflight => {
+                "preflight.sh output"
+            }
         });
     let inner = block.inner(chunks[1]);
     let height = inner.height as usize;

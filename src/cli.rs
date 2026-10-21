@@ -74,7 +74,7 @@ When the groups are adopted, `uplink/preview/verify` is built: company `main` as
     git diff main uplink/preview/verify
     git uplink rebuild --push
 
-Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends on the queued patches it needs to apply onto upstream and to pass preflight. Each patch is committed to local `uplink/state` as soon as it passes. A group that still fails opens a window with the preflight output: adopt it with the failure ignored, make it internal-only, skip it, amend it inline and finish with `git uplink adopt --continue`, stop, or abort and reset `uplink/state`. Every decision is written to a groups file that `--groups` replays. Adopt is local only: fetch the branch first. The preview is built and published as above.
+Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends on the queued patches it needs to apply onto upstream and to pass preflight. Internal-only groups are added last, each applied and preflighted on company main as the queue builds it, so one can depend on the internal patches before it. Each patch is committed to local `uplink/state` as soon as it passes. A group that still fails opens a window with the preflight output: adopt it with the failure ignored, make it internal-only, skip it, amend it inline and finish with `git uplink adopt --continue`, stop, or abort and reset `uplink/state`. Every decision is written to a groups file that `--groups` replays. Adopt is local only: fetch the branch first. The preview is built and published as above.
 
 While an adoption runs, and while it is paused, `uplink/state` is locked: every other command that changes it refuses, naming how to end the run. If origin's `uplink/state` moved in the meantime, `git uplink refresh` then `git uplink restack` adds the local patches again on top of it, checking each, before `git uplink push`.",
     ),
@@ -434,6 +434,14 @@ pub enum Commands {
     /// the script passes only with more queued patches, it depends on those
     /// too (`--no-preflight-deps` skips that search).
     ///
+    /// Internal-only groups are added last, after every upstream-bound
+    /// group and after the internal patches already queued, in history
+    /// order. Company main is built from the queue on the branch
+    /// `uplink/adopt-main`, and each internal-only patch is applied there,
+    /// depends on the queued patches (upstream or internal) it needs to
+    /// apply, and must pass `preflight.sh` on company main with it. A
+    /// group made Internal-only during the run moves to the end with them.
+    ///
     /// Each group gets a line, `<patch-id> - <sha> - <title>`, with a spinner
     /// while it is checked. A patch that passes is added to the queue in its
     /// own `uplink/state` commit right away (✓). A group whose change is
@@ -446,7 +454,8 @@ pub enum Commands {
     /// was added), or Abort (reset `uplink/state` to where the run started).
     /// The decision is printed as a line of its own and the run goes on.
     /// Amend pauses the way `git rebase` stops on a commit: the checkout is
-    /// left on `uplink/upstream` and the dependencies, with the group's
+    /// left on `uplink/upstream` and the dependencies (company main on
+    /// `uplink/adopt-main`, for an internal-only group), with the group's
     /// commits cherry-picked one by one up to the first that conflicts. The
     /// instructions list every commit of the group as applied, already
     /// applied, in conflict, or still to pick (with its `git cherry-pick`
@@ -562,8 +571,9 @@ pub enum Commands {
     /// Each patch is checked the way `adopt` checks a group: it must apply
     /// on `uplink/restack` (and is then applied there); an upstream-bound
     /// one must also apply onto `uplink/upstream` with the queued patches it
-    /// depends on, which are found again, and pass `preflight.sh`
-    /// (`--no-preflight` skips the script). A patch whose change origin's
+    /// depends on, which are found again, and pass `preflight.sh`; an
+    /// internal-only one must pass `preflight.sh` on `uplink/restack` with
+    /// it (`--no-preflight` skips the script). A patch whose change origin's
     /// queue already holds is left out. A patch that passes is added in its
     /// own `uplink/state` commit.
     ///
@@ -595,7 +605,7 @@ pub enum Commands {
         /// again so far. The rest stay in `refs/uplink/restack-from/<sha>`.
         #[arg(long = "abort-keep")]
         abort_keep: bool,
-        /// Do not run `preflight.sh` on upstream-bound patches.
+        /// Do not run `preflight.sh` on the patches added again.
         #[arg(long = "no-preflight", conflicts_with_all = ["resume", "skip", "abort", "abort_keep"])]
         no_preflight: bool,
         /// Do not look for the queued patches a failing preflight needs.
