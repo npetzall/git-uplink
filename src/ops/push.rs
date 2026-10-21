@@ -159,6 +159,54 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
     })
 }
 
+/// The local patches origin's queue lacks, by layer, in queue order: not
+/// on origin by id, nor by the internal PR that added them. A tooling
+/// patch is carried only when origin has none.
+pub(super) struct LocalOnly {
+    pub tooling: Option<Patch>,
+    pub upstream: Vec<Patch>,
+    pub internal: Vec<Patch>,
+}
+
+impl LocalOnly {
+    pub fn of(local_queue: &QueueState, remote_queue: &QueueState) -> Self {
+        let remote_ids: HashSet<&str> = remote_queue.all_patches().map(|p| p.id.as_str()).collect();
+        let remote_prs: HashSet<u64> = remote_queue
+            .all_patches()
+            .filter_map(|p| p.source.internal_pr_number)
+            .collect();
+        let should_carry = |patch: &Patch| {
+            if remote_ids.contains(patch.id.as_str()) {
+                return false;
+            }
+            if let Some(pr) = patch.source.internal_pr_number
+                && remote_prs.contains(&pr)
+            {
+                return false;
+            }
+            true
+        };
+        Self {
+            tooling: local_queue
+                .tooling
+                .clone()
+                .filter(|p| remote_queue.tooling.is_none() && should_carry(p)),
+            upstream: local_queue
+                .upstream
+                .iter()
+                .filter(|p| should_carry(p))
+                .cloned()
+                .collect(),
+            internal: local_queue
+                .internal
+                .iter()
+                .filter(|p| should_carry(p))
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
 pub(super) fn restack_local_patches(
     repo: &Path,
     branch: &str,
@@ -167,38 +215,11 @@ pub(super) fn restack_local_patches(
 ) -> Result<String> {
     let local_queue = queue_at(repo, local_sha)?;
     let remote_queue = queue_at(repo, remote_sha)?;
-    let remote_ids: HashSet<&str> = remote_queue.all_patches().map(|p| p.id.as_str()).collect();
-    let remote_prs: HashSet<u64> = remote_queue
-        .all_patches()
-        .filter_map(|p| p.source.internal_pr_number)
-        .collect();
-    let should_carry = |patch: &Patch| {
-        if remote_ids.contains(patch.id.as_str()) {
-            return false;
-        }
-        if let Some(pr) = patch.source.internal_pr_number
-            && remote_prs.contains(&pr)
-        {
-            return false;
-        }
-        true
-    };
-    let carry_tooling = local_queue
-        .tooling
-        .clone()
-        .filter(|p| remote_queue.tooling.is_none() && should_carry(p));
-    let carry_upstream: Vec<Patch> = local_queue
-        .upstream
-        .iter()
-        .filter(|p| should_carry(p))
-        .cloned()
-        .collect();
-    let carry_internal: Vec<Patch> = local_queue
-        .internal
-        .iter()
-        .filter(|p| should_carry(p))
-        .cloned()
-        .collect();
+    let LocalOnly {
+        tooling: carry_tooling,
+        upstream: carry_upstream,
+        internal: carry_internal,
+    } = LocalOnly::of(&local_queue, &remote_queue);
     let carry: Vec<Patch> = carry_tooling
         .iter()
         .cloned()
@@ -254,7 +275,7 @@ pub(super) fn restack_local_patches(
 /// Patches on both sides that local changed since the merge base (a drop,
 /// approve, merged, transfer or refreshed patch file). Refuses when origin
 /// changed the same patch too, rather than picking one side.
-fn locally_changed_shared_patches(
+pub(super) fn locally_changed_shared_patches(
     repo: &Path,
     local: &QueueState,
     local_sha: &str,
@@ -318,7 +339,7 @@ fn patch_side_changed(
 }
 
 /// Patch file and report files for `id` as they exist at `sha`.
-fn patch_state_paths(repo: &Path, sha: &str, id: &str) -> Result<Vec<String>> {
+pub(super) fn patch_state_paths(repo: &Path, sha: &str, id: &str) -> Result<Vec<String>> {
     let file = patch_path(id)?.to_string_lossy().into_owned();
     let (reports, _, _) = report_paths(id)?;
     let listed = git_ok(
@@ -334,7 +355,7 @@ fn patch_state_paths(repo: &Path, sha: &str, id: &str) -> Result<Vec<String>> {
 
 /// Puts `patch` in `layer`, in place when it is already there, otherwise
 /// removed from its old layer and appended.
-fn replace_patch(queue: &mut QueueState, patch: Patch, layer: PatchLayer) {
+pub(super) fn replace_patch(queue: &mut QueueState, patch: Patch, layer: PatchLayer) {
     if queue.layer_of(&patch.id) == Some(layer) {
         if let Some(slot) = queue.all_patches_mut().find(|p| p.id == patch.id) {
             *slot = patch;

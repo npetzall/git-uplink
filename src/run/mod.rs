@@ -316,7 +316,6 @@ impl BranchRun {
         })
     }
 
-    #[allow(dead_code)] // TODO(restack)
     /// A restack run: `items` are added onto the uplink/state checked out
     /// now; `--abort` goes back to `start_state`.
     pub fn restack(
@@ -359,11 +358,6 @@ impl BranchRun {
             .collect()
     }
 
-    #[allow(dead_code)] // TODO(restack)
-    pub fn start_state(&self) -> &str {
-        &self.start_state
-    }
-
     fn write_groups(&self) -> Result<()> {
         match &self.groups_file {
             Some(path) => write_groups_file(path, &self.groups()),
@@ -389,6 +383,14 @@ impl BranchRun {
         self.kind.command()
     }
 
+    /// `an adopt`, or `a restack`.
+    fn a_noun(&self) -> &'static str {
+        match self.kind {
+            RunKind::Init | RunKind::Branch => "an adopt",
+            RunKind::Restack => "a restack",
+        }
+    }
+
     /// The commands that end the run, one per line.
     fn ways_out(&self) -> String {
         let cmd = self.kind.command();
@@ -411,8 +413,8 @@ impl BranchRun {
     fn blocking_message(&self, repo: &Path) -> String {
         if let Some(paused) = &self.paused {
             return format!(
-                "an {} is paused; finish it first.\n{}",
-                self.noun(),
+                "{} is paused; finish it first.\n{}",
+                self.a_noun(),
                 paused.instructions(self)
             );
         }
@@ -423,9 +425,9 @@ impl BranchRun {
             String::new()
         };
         format!(
-            "an {} run is in progress ({} of {} item(s) done), so uplink/state is locked.\n\
+            "{} run is in progress ({} of {} item(s) done), so uplink/state is locked.\n\
 If no git uplink {cmd} is running (it was interrupted), take it up again:  git uplink {cmd} --continue{skip}\n{}\nRun file: {}",
-            self.noun(),
+            self.a_noun(),
             self.next.min(self.items.len()),
             self.items.len(),
             self.ways_out(),

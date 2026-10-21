@@ -24,6 +24,8 @@ git uplink adopt [--branch <ref>] [--groups <path>] [--write-groups <path>] [--c
             [--skip] [--abort] [--abort-keep] [--keep-test-branches]
             [--no-preflight-deps] [--no-preview] [--json]
 git uplink push [--push-remote <remote>]
+git uplink restack [--continue] [--skip] [--abort] [--abort-keep] [--no-preflight]
+            [--no-preflight-deps] [--no-preview] [--keep-branch] [--json]
 git uplink refresh
 git uplink reset
 git uplink rebase [--plan] [--head <rev>] [--json] [--no-fetch]
@@ -187,6 +189,32 @@ Publish local uplink/state, restacking unique patches if origin moved.
 If origin moved, it appends local-only patches onto the remote tip and carries those patch files. Then it publishes a local `uplink/hooks` that is new or ahead of origin, never with force. A refused hooks push (for example by the hooks ruleset, or a token without workflows scope) is a warning; open a pull request against `uplink/hooks` instead.
 
 - `--push-remote <remote>`: Remote to push to, origin by default.
+
+### `restack`
+
+Add local queue items again on top of origin's uplink/state, checking each.
+
+For when origin's `uplink/state` moved while patches were added locally (by `add`, `adopt`, or `init`). Restack runs locally only: it works against `origin/uplink/state` as last fetched (`git uplink refresh` fetches it) and pushes nothing. Publish the result with `git uplink push`, which is then a fast-forward.
+
+When local `uplink/state` is behind origin's it is moved there; when it is only ahead there is nothing to do. When the two diverged, local `uplink/state` is kept as `refs/uplink/restack-from/<sha>` and moved to origin's. Local changes to patches both sides have (and a tooling patch origin lacks) are carried over as `push` carries them. Origin's queue is rebuilt onto `uplink/upstream` on the branch `uplink/restack`, and each local patch origin lacks is added again, in queue order, with its id, events and reports.
+
+Each patch is checked the way `adopt` checks a group: it must apply on `uplink/restack` (and is then applied there); an upstream-bound one must also apply onto `uplink/upstream` with the queued patches it depends on, which are found again, and pass `preflight.sh` (`--no-preflight` skips the script). A patch whose change origin's queue already holds is left out. A patch that passes is added in its own `uplink/state` commit.
+
+A patch that fails opens the same window as `adopt`: Ignore the preflight failure, make it Internal-only, Amend it, Skip it, Stop (keep what was added), or Abort (put local `uplink/state` back where it was). Amend pauses with the checkout on `uplink/restack` (or on `uplink/upstream` and the dependencies) and the patch applied with a 3-way merge; resolve, `git add`, and `--continue` makes what the checkout holds the patch. Without a terminal a failing patch fails the command and puts `uplink/state` back.
+
+Like `adopt`, the run locks `uplink/state` until it ends, and builds `uplink/preview/verify` when it has added patches.
+
+- `--continue`: Continue a paused or interrupted restack.
+- `--skip`: Continue a paused restack without the patch it stopped on.
+
+  The patch stays in `refs/uplink/restack-from/<sha>`.
+- `--abort`: Give up the restack: the checkout is put back and local `uplink/state` is back where it was before the restack.
+- `--abort-keep`: Give up the restack, keeping origin's queue and the patches added again so far. The rest stay in `refs/uplink/restack-from/<sha>`.
+- `--no-preflight`: Do not run `preflight.sh` on upstream-bound patches.
+- `--no-preflight-deps`: Do not look for the queued patches a failing preflight needs.
+- `--no-preview`: Do not build `uplink/preview/verify` when the run ends.
+- `--keep-branch`: Leave the `uplink/restack` branch when the run ends.
+- `--json`: Print the result as JSON.
 
 ### `refresh`
 
@@ -566,7 +594,7 @@ When the groups are adopted, `uplink/preview/verify` is built: company `main` as
 
 Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends on the queued patches it needs to apply onto upstream and to pass preflight. Each patch is committed to local `uplink/state` as soon as it passes. A group that still fails opens a window with the preflight output: adopt it with the failure ignored, make it internal-only, skip it, amend it inline and finish with `git uplink adopt --continue`, stop, or abort and reset `uplink/state`. Every decision is written to a groups file that `--groups` replays. Adopt is local only: fetch the branch first. The preview is built and published as above.
 
-While an adoption runs, and while it is paused, `uplink/state` is locked: every other command that changes it refuses, naming how to end the run.
+While an adoption runs, and while it is paused, `uplink/state` is locked: every other command that changes it refuses, naming how to end the run. If origin's `uplink/state` moved in the meantime, `git uplink refresh` then `git uplink restack` adds the local patches again on top of it, checking each, before `git uplink push`.
 
 ## Gated PRs
 

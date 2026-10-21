@@ -14146,3 +14146,206 @@ fn adopt_branch_builds_the_preview_unless_asked_not_to() {
         }
     }
 }
+
+fn restack_with(
+    repo: &Path,
+    decide: Option<git_uplink::AdoptDecision>,
+) -> Result<git_uplink::RestackResult> {
+    git_uplink::restack(
+        repo,
+        git_uplink::RestackOpts {
+            interactive: Some(false),
+            decide: decide.map(|decision| -> git_uplink::AdoptDecider {
+                std::sync::Arc::new(move |_| Ok(decision))
+            }),
+            ..Default::default()
+        },
+    )
+}
+
+fn restack_resume(
+    repo: &Path,
+    resume: git_uplink::AdoptResume,
+) -> Result<git_uplink::RestackResult> {
+    git_uplink::restack(
+        repo,
+        git_uplink::RestackOpts {
+            interactive: Some(false),
+            resume: Some(resume),
+            ..Default::default()
+        },
+    )
+}
+
+/// Asha and Ben clone the company; each queues a change to `path`, Ben
+/// pushes first, and Asha fetches origin without publishing hers.
+fn diverged_clones(path: &str) -> (World, PathBuf, Vec<TempDir>, PathBuf, Patch, Patch) {
+    let world = setup_world();
+    let origin = publish_origin(&world.company);
+    let (asha_keep, asha) = clone_company_from(&origin, &world.upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &world.upstream);
+    let queue = |repo: &Path, who: &str, pr| {
+        git(
+            repo,
+            &["checkout", "-b", &format!("feat/{who}")],
+            GitOpts::default(),
+        )
+        .unwrap();
+        write(repo, path, &format!("from-{who}\n"));
+        commit_all(repo, &format!("{path} from {who}"));
+        add_landed_patch(
+            repo,
+            AddPatchOpts {
+                title: format!("{path} from {who}"),
+                from_ref: Some("main".into()),
+                internal_pr_number: Some(pr),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let bens = queue(&ben, "ben", 402);
+    push_origin(&ben).unwrap();
+    let ashas = queue(&asha, "asha", 401);
+    refresh_from_origin(&asha).unwrap();
+    (world, origin, vec![asha_keep, ben_keep], asha, ashas, bens)
+}
+
+#[test]
+fn restack_adds_local_patches_again_on_top_of_origin_and_push_fast_forwards() {
+    let world = setup_world();
+    let origin = publish_origin(&world.company);
+    let (asha_keep, asha) = clone_company_from(&origin, &world.upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &world.upstream);
+    add_notes_patch(&ben);
+    push_origin(&ben).unwrap();
+    git(
+        &asha,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&asha, "README.md", "from-asha\n");
+    commit_all(&asha, "readme from asha");
+    let mine = add_landed_patch(
+        &asha,
+        AddPatchOpts {
+            title: "Readme from Asha".into(),
+            from_ref: Some("main".into()),
+            internal_pr_number: Some(201),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Origin as last fetched: Ben's push is not in this clone yet.
+    let result = restack_with(&asha, None).unwrap();
+    assert_eq!(result.action, git_uplink::RestackAction::Ahead);
+
+    refresh_from_origin(&asha).unwrap();
+    let before = rev_of(&asha, STATE_BRANCH);
+    let result = restack_with(&asha, None).unwrap();
+    assert_eq!(result.action, git_uplink::RestackAction::Restacked);
+    let run = result.run.unwrap();
+    let adoption = run.adoption.unwrap();
+    assert_eq!(adoption.adopted.len(), 1);
+    assert_eq!(adoption.adopted[0].id, mine.id);
+    let titles: Vec<_> = adoption
+        .queue
+        .all_patches()
+        .filter(|p| p.kind.is_none())
+        .map(|p| p.title.clone())
+        .collect();
+    assert_eq!(titles, ["Notes from Ben", "Readme from Asha"]);
+    let backup = result.backup.unwrap();
+    assert_eq!(rev_of(&asha, &backup), before);
+    assert!(is_ancestor_of(
+        &asha,
+        &format!("origin/{STATE_BRANCH}"),
+        STATE_BRANCH
+    ));
+    assert!(!has_git_ref(&asha, "uplink/restack"));
+    assert!(!asha.join(".git/uplink-run.json").exists());
+    assert!(run.preview.unwrap().error.is_none());
+
+    assert_eq!(push_origin(&asha).unwrap().action, "pushed");
+    drop((asha_keep, ben_keep));
+}
+
+fn is_ancestor_of(repo: &Path, ancestor: &str, descendant: &str) -> bool {
+    git(
+        repo,
+        &["merge-base", "--is-ancestor", ancestor, descendant],
+        GitOpts::allow_fail(),
+    )
+    .unwrap()
+    .code
+        == 0
+}
+
+#[test]
+fn restack_pauses_on_a_patch_that_conflicts_with_origin_and_continues() {
+    let (_world, _origin, _keep, asha, ashas, bens) = diverged_clones("README.md");
+    let err = restack_with(&asha, Some(git_uplink::AdoptDecision::Amend))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(&format!("restack paused on patch {}", ashas.id)),
+        "{err}"
+    );
+    assert!(err.contains("git uplink restack --continue"), "{err}");
+    assert!(err.contains("in conflict: README.md"), "{err}");
+    let locked = drop_patch(&asha, &ashas.id, "no").unwrap_err().to_string();
+    assert!(locked.contains("a restack is paused"), "{locked}");
+
+    write(&asha, "README.md", "from-ben\nfrom-asha\n");
+    git(&asha, &["add", "README.md"], GitOpts::default()).unwrap();
+    let result = restack_resume(&asha, git_uplink::AdoptResume::Continue).unwrap();
+    let adoption = result.run.unwrap().adoption.unwrap();
+    assert_eq!(adoption.adopted.len(), 1);
+    assert_eq!(adoption.adopted[0].id, ashas.id);
+    assert!(adoption.adopted[0].amended);
+    assert_eq!(adoption.adopted[0].depends_on, vec![bens.id.clone()]);
+    let patch = git_ok(
+        &asha,
+        &[
+            "show",
+            &format!("{STATE_BRANCH}:.uplink/patches/{}.patch", ashas.id),
+        ],
+    )
+    .unwrap();
+    assert!(patch.contains("+from-asha"), "{patch}");
+    let events = &adoption
+        .queue
+        .all_patches()
+        .find(|p| p.id == ashas.id)
+        .unwrap()
+        .events;
+    assert!(events.iter().any(|e| e.kind == "restacked"), "{events:?}");
+    assert_eq!(push_origin(&asha).unwrap().action, "pushed");
+}
+
+#[test]
+fn restack_abort_puts_local_state_back() {
+    let (_world, _origin, _keep, asha, _ashas, _bens) = diverged_clones("README.md");
+    let before = rev_of(&asha, STATE_BRANCH);
+    let checked_out = git_ok(&asha, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
+    restack_with(&asha, Some(git_uplink::AdoptDecision::Amend)).unwrap_err();
+    let result = restack_resume(&asha, git_uplink::AdoptResume::Abort).unwrap();
+    assert_eq!(
+        result.run.unwrap().aborted,
+        Some(git_uplink::AdoptResume::Abort)
+    );
+    assert_eq!(rev_of(&asha, STATE_BRANCH), before);
+    assert!(!has_git_ref(&asha, "uplink/restack"));
+    assert!(!asha.join(".git/uplink-run.json").exists());
+    assert_eq!(
+        git_ok(&asha, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        checked_out
+    );
+
+    // Unattended, the conflict fails the restack and puts it back too.
+    let err = restack_with(&asha, None).unwrap_err().to_string();
+    assert!(err.contains("restack in a terminal"), "{err}");
+    assert_eq!(rev_of(&asha, STATE_BRANCH), before);
+}
