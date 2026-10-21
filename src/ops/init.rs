@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct InitOpts {
     pub upstream_url: Option<String>,
     pub contrib_url: Option<String>,
@@ -15,6 +15,11 @@ pub struct InitOpts {
     pub adopt_groups: Option<Vec<AdoptGroup>>,
     /// `None` detects a TTY. Tests set `Some(false)` so adopt never opens the TUI.
     pub interactive: Option<bool>,
+    /// Says what to do with an adopt group that fails; `None` asks in a
+    /// terminal window, and fails init elsewhere.
+    pub decide: Option<AdoptDecider>,
+    /// Do not build the preview branch after adopting.
+    pub no_preview: bool,
     pub progress: ProgressMode,
     /// Answers for `uplink.toml`, and the command to seed `preflight.sh` with.
     pub settings: SettingsFlags,
@@ -178,6 +183,8 @@ pub struct InitResult {
     pub amended: Vec<(String, String)>,
     /// Patches that change pack files on top of the new pack.
     pub overrides: Vec<ToolingOverride>,
+    /// The preview built after adopting company main's history.
+    pub preview: Option<RunPreview>,
 }
 
 impl std::ops::Deref for InitResult {
@@ -197,6 +204,7 @@ pub(super) fn settled(queue: QueueState, progress: &StepProgress) -> InitResult 
         dropped: Vec::new(),
         amended: Vec::new(),
         overrides: Vec::new(),
+        preview: None,
     }
 }
 
@@ -243,6 +251,9 @@ pub(super) fn config_from_opts(opts: &InitOpts) -> QueueConfig {
 /// `--forge` is required when creating a queue. `--upgrade` amends the stored
 /// forge pack in place.
 pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
+    if crate::repo::state_exists(repo).unwrap_or(false) || has_ref(repo, adopt::ADOPT_FROM_REF)? {
+        crate::lock::refuse_while_running(repo)?;
+    }
     let mut progress = StepProgress::from_mode(opts.progress);
     if opts.upgrade {
         return init_upgrade(repo, &opts, &mut progress);
@@ -258,9 +269,11 @@ pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
         ))
     })?;
     if state_exists(repo)? {
-        let queue = init_existing(repo, &opts, &mut progress)?;
+        let (queue, preview) = init_existing(repo, &opts, &mut progress)?;
         append_init_health_checks(repo, &queue, &mut progress);
-        return Ok(settled(queue, &progress));
+        let mut result = settled(queue, &progress);
+        result.preview = preview;
+        return Ok(result);
     }
     let forge = opts.forge.ok_or_else(missing_forge_error)?;
     let mut config = config_from_opts(&opts);
@@ -268,9 +281,11 @@ pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
     let created = init_repo_with_progress(repo, config, &mut progress)?;
     // Before adoption: assessing adopted patches reads uplink.toml.
     ensure_hooks_step(repo, &created, HooksMode::Create, &opts, &mut progress)?;
-    let queue = finish_first_init(repo, &opts, &mut progress)?;
+    let (queue, preview) = finish_first_init(repo, &opts, &mut progress)?;
     append_init_health_checks(repo, &queue, &mut progress);
-    Ok(settled(queue, &progress))
+    let mut result = settled(queue, &progress);
+    result.preview = preview;
+    Ok(result)
 }
 
 pub(super) fn hydrate_from_origin(repo: &Path) -> Result<QueueState> {
@@ -453,17 +468,19 @@ pub(super) fn init_needs_tooling(queue: &QueueState) -> bool {
     queue.config.forge.is_some() && queue.tooling.is_none()
 }
 
+/// Finishes an `init` that stopped before it was done. Returns the
+/// preview built when it adopted company main's history.
 pub(super) fn resume_incomplete_init(
     repo: &Path,
     opts: &InitOpts,
     progress: &mut StepProgress,
-) -> Result<Option<QueueState>> {
+) -> Result<Option<RunPreview>> {
     if adopt::has_adopt_from(repo)? {
-        progress.run_step("resume-adopt", "Resume adoption", || {
-            let queue = finish_adopt(repo, opts)?;
-            Ok((queue, StepOutcome::pass("adoption resumed")))
+        let (_, preview) = progress.run_step("resume-adopt", "Resume adoption", || {
+            let adopted = finish_adopt(repo, opts)?;
+            Ok((adopted, StepOutcome::pass("adoption resumed")))
         })?;
-        return Ok(None);
+        return Ok(preview);
     }
 
     let needs_upstream = init_needs_upstream_seed(repo)?;
@@ -497,8 +514,7 @@ pub(super) fn resume_incomplete_init(
 
     let queue = read_queue_file(repo)?;
     if init_needs_tooling(&queue) {
-        finish_first_init(repo, opts, progress)?;
-        return Ok(None);
+        return Ok(finish_first_init(repo, opts, progress)?.1);
     }
 
     Ok(None)
@@ -508,7 +524,7 @@ pub(super) fn init_existing(
     repo: &Path,
     opts: &InitOpts,
     progress: &mut StepProgress,
-) -> Result<QueueState> {
+) -> Result<(QueueState, Option<RunPreview>)> {
     ensure_state_worktree(repo)?;
     let mut queue = read_queue_file(repo)?;
     let mut mismatches = Vec::new();
@@ -593,8 +609,8 @@ pub(super) fn init_existing(
     };
     // Before resuming adoption: assessing adopted patches reads uplink.toml.
     ensure_hooks_step(repo, &queue, mode, opts, progress)?;
-    resume_incomplete_init(repo, opts, progress)?;
-    read_queue_file(repo)
+    let preview = resume_incomplete_init(repo, opts, progress)?;
+    Ok((read_queue_file(repo)?, preview))
 }
 
 pub(super) fn init_upgrade(
@@ -1027,7 +1043,7 @@ pub(super) fn finish_first_init(
     repo: &Path,
     opts: &InitOpts,
     progress: &mut StepProgress,
-) -> Result<QueueState> {
+) -> Result<(QueueState, Option<RunPreview>)> {
     let analysis = progress.run_step(
         "adopt-analysis",
         "Analyze internal vs uplink/upstream",
@@ -1045,10 +1061,11 @@ pub(super) fn finish_first_init(
         },
     )?;
     if analysis.commits.is_empty() {
-        return progress.run_step("forge-tooling", "Install forge tooling", || {
+        let queue = progress.run_step("forge-tooling", "Install forge tooling", || {
             let queue = ensure_tooling_patch(repo)?;
             Ok((queue, StepOutcome::pass("forge tooling installed")))
-        });
+        })?;
+        return Ok((queue, None));
     }
     adopt::save_adopt_from(repo)?;
     write_tooling_patch(repo, false)?;
@@ -1060,14 +1077,22 @@ pub(super) fn finish_first_init(
     finish_adopt(repo, opts)
 }
 
-pub(super) fn finish_adopt(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
+/// Adopts the commits `uplink/adopt-from` (company main when init started)
+/// has on top of uplink/upstream, through the same run as `adopt --branch`:
+/// one uplink/state commit per group, dependencies found by applying onto
+/// upstream, and `preflight.sh` run on each upstream-bound group. Every
+/// commit must be in a group. Builds the preview when done.
+pub(super) fn finish_adopt(
+    repo: &Path,
+    opts: &InitOpts,
+) -> Result<(QueueState, Option<RunPreview>)> {
     let analysis = adopt::analyze_ahead(repo)?;
     if analysis.behind {
         return Err(adopt::behind_error(&analysis));
     }
     if analysis.commits.is_empty() {
         adopt::clear_adopt_from(repo)?;
-        return read_queue_file(repo);
+        return Ok((read_queue_file(repo)?, None));
     }
     let queue = read_queue_file(repo)?;
     if adopt::has_product_patches(&queue) {
@@ -1076,10 +1101,41 @@ pub(super) fn finish_adopt(repo: &Path, opts: &InitOpts) -> Result<QueueState> {
 delete uplink/adopt-from or reset uplink/state before adopting again",
         ));
     }
+    if queue.tooling.is_none() {
+        return Err(Error::msg(
+            "Uplink tooling patch is missing; cannot adopt history until init installs it.",
+        ));
+    }
     let groups = groups_for_adopt(repo, opts, &queue, &analysis)?;
-    let queue = adopt::apply_groups(repo, &analysis, &groups)?;
-    adopt::clear_adopt_from(repo)?;
-    Ok(queue)
+    let groups = adopt::resolve_groups(&analysis, &groups)?;
+    let groups_file = adopt::groups_file_path(repo, adopt::ADOPT_FROM_REF)?;
+    adopt::write_groups_file(&groups_file, &groups)?;
+    let run = adopt::BranchRun::new(
+        repo,
+        RunKind::Init,
+        queue.config.internal_branch.clone(),
+        groups_file,
+        groups,
+        false,
+        true,
+    )?;
+    let interactive = opts.interactive.unwrap_or_else(adopt::stdin_is_tty);
+    let decide = opts
+        .decide
+        .clone()
+        .or_else(|| interactive.then(prompt_decider));
+    let adoption = crate::lock::with_run_lock(repo, || {
+        adopt::run_branch(
+            repo,
+            Some(&analysis),
+            run,
+            &ScriptVerdict::Run,
+            decide.as_ref(),
+            opts.progress,
+        )
+    })?;
+    let preview = preview_after(repo, &adoption, opts.no_preview);
+    Ok((adoption.queue, preview))
 }
 
 pub(super) fn groups_for_adopt(

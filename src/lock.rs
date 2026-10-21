@@ -10,6 +10,37 @@ use crate::error::{Error, Result};
 
 thread_local! {
     static LOCK_OWNER: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    /// Set while a queue run (adopt, restack) works: the run file locks
+    /// uplink/state against everyone but the run itself.
+    static RUN_OWNER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Clears [`RUN_OWNER`] on drop, including when the run panics.
+struct RunGuard {
+    was: bool,
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        RUN_OWNER.with(|owner| owner.set(self.was));
+    }
+}
+
+/// [`with_queue_lock`] for a queue run: it may change uplink/state while
+/// its own run file exists.
+pub fn with_run_lock<T>(repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _guard = RunGuard {
+        was: RUN_OWNER.with(|owner| owner.replace(true)),
+    };
+    with_queue_lock(repo, f)
+}
+
+/// Refuses while a queue run holds uplink/state, unless this is that run.
+pub fn refuse_while_running(repo: &Path) -> Result<()> {
+    if RUN_OWNER.with(|owner| owner.get()) {
+        return Ok(());
+    }
+    crate::run::refuse_while_running(repo)
 }
 
 /// Releases the queue lock on drop, including when the locked closure panics.
@@ -77,6 +108,7 @@ pub fn with_queue_lock<T>(repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<
     if LOCK_OWNER.with(|owner| owner.borrow().as_ref() == Some(&key)) {
         return f();
     }
+    refuse_while_running(repo)?;
 
     fs::create_dir_all(repo.join(".git"))?;
     let lock_path = repo.join(".git/uplink.lock");

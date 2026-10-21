@@ -232,6 +232,7 @@ fn draw_failure(
     let what = match failure.kind {
         AdoptFailureKind::Apply => "Does not apply",
         AdoptFailureKind::Preflight => "Preflight failed",
+        AdoptFailureKind::Stack => "Does not apply on origin's queue",
     };
     frame.render_widget(
         Paragraph::new(format!(
@@ -241,7 +242,7 @@ fn draw_failure(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("{what}: group {}", failure.group))
+                .title(format!("{what}: {}", failure.item))
                 .border_style(Style::default().fg(Color::Red)),
         ),
         chunks[0],
@@ -249,7 +250,7 @@ fn draw_failure(
     let block = Block::default()
         .borders(Borders::ALL)
         .title(match failure.kind {
-            AdoptFailureKind::Apply => "Why",
+            AdoptFailureKind::Apply | AdoptFailureKind::Stack => "Why",
             AdoptFailureKind::Preflight => "preflight.sh output",
         });
     let inner = block.inner(chunks[1]);

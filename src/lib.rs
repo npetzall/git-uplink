@@ -30,8 +30,8 @@ mod types;
 pub mod webui;
 
 pub use adopt::{
-    ADOPT_AMENDED_REF_PREFIX, ADOPT_TEST_BRANCH_PREFIX, AdoptGroup, adopted_next_steps,
-    analyze_branch, groups_file_path, load_groups_file, stdin_is_tty,
+    ADOPT_AMENDED_REF_PREFIX, ADOPT_TEST_BRANCH_PREFIX, AdoptGroup, analyze_branch,
+    groups_file_path, load_groups_file, stdin_is_tty,
 };
 pub use assess::{
     ApprovalReceipt, AssessPackage, FROM_UPSTREAM_ENVIRONMENT, IncomingCommitRow, IncomingMergeRow,
@@ -56,20 +56,21 @@ pub use ops::{
     AddOutcome, AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AdoptDecider, AdoptDecision,
     AdoptFailure, AdoptFailureKind, AdoptResume, AmendMessage, AmendResult, BranchAdopted,
     BranchAdoption, ChangeBase, ImportFallback, IncomingClaim, InitOpts, InitResult, MainChanges,
-    PushOpts, PushResult, QueueCounts, RebasePlan, RebaseResult, RebaseState, RebuildOpts,
-    RebuildResult, RefreshResult, ResetResult, StateStatus, StatusReport, StatusSnapshot,
-    SubmitResult, SyncOpts, SyncResult, ToolingOverride, TransferResult, UpgradeResume,
-    accept_upstream, accept_upstream_at, accept_upstream_preflight, accept_upstream_with,
-    add_patch, add_patch_or_gate, adopt_branch, amend_patch, amend_patch_with, amend_preflight,
-    approval_stale, approve_patch, approve_patch_at, approve_patch_reviewed,
-    assess_patch_for_packet, count_files, drop_patch, fetch_pending_upstream,
-    format_product_changes, format_status_table, init, init_repo, init_repo_with_progress,
-    mark_merged, newly_ready_to_submit, push_queue, read_queue, rebase_onto_main, rebase_plan,
-    rebuild, rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request,
-    refresh_from_origin, reset_from_origin, resolve_conflict, resolve_conflict_with,
-    resolve_preflight, stale_approvals, state_status_at, status_report, status_snapshot,
-    store_assess_result, store_patch_extras, submit_patch, submit_patch_with, summarize_queue,
-    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
+    PREVIEW_BRANCH, PushOpts, PushResult, QueueCounts, RebasePlan, RebaseResult, RebaseState,
+    RebuildOpts, RebuildResult, RefreshResult, ResetResult, RunKind, RunPreview, StateStatus,
+    StatusReport, StatusSnapshot, SubmitResult, SyncOpts, SyncResult, ToolingOverride,
+    TransferResult, UpgradeResume, accept_upstream, accept_upstream_at, accept_upstream_preflight,
+    accept_upstream_with, add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps,
+    amend_patch, amend_patch_with, amend_preflight, approval_stale, approve_patch,
+    approve_patch_at, approve_patch_reviewed, assess_patch_for_packet, count_files, drop_patch,
+    fetch_pending_upstream, format_product_changes, format_status_table, init, init_repo,
+    init_repo_with_progress, mark_merged, newly_ready_to_submit, push_queue, read_queue,
+    rebase_onto_main, rebase_plan, rebuild, rebuild_preflight, rebuild_with, record_gated_pr,
+    record_pull_request, refresh_from_origin, reset_from_origin, resolve_conflict,
+    resolve_conflict_with, resolve_preflight, stale_approvals, state_status_at, status_report,
+    status_snapshot, store_assess_result, store_patch_extras, submit_patch, submit_patch_with,
+    summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight,
+    write_queue,
 };
 pub use preflight::{
     FirstBad, IncomingPreflight, PreflightReport, RebuildReport, ScriptEcho, ScriptVerdict,

@@ -61,7 +61,7 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
         "Adopting an existing main",
         "\
 If company `main` already matches public upstream, init rebuilds `main` with the tooling patch.
-If `main` is fast-forward ahead, init leaves `main` alone and records the unique first-parent commits as patches after tooling.
+If `main` is fast-forward ahead, init leaves `main` alone and records the unique first-parent commits as patches after tooling. It adopts them the way `git uplink adopt --branch` does: one group at a time, each upstream-bound group depending on the queued patches it needs to apply onto upstream and to pass `preflight.sh`, each in its own `uplink/state` commit. Every commit must be in a group, so a failing group can be amended, made internal-only, or have its preflight failure ignored, but not skipped. A paused or interrupted adoption is taken up with `git uplink adopt --continue` (or ended with `--abort`).
 
 Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON. The UI shows the commits as a tree of groups beside the selected commit's change or group's form (title, an Upstream box, and the message, ending with the internal cutoff line). Enter or a double-click on a commit offers New group, Move/Add to previous or next group, and Skip; commits keep their order. Ctrl+s adopts after a confirmation. The mouse selects, places the cursor and ticks the box. The JSON:
 
@@ -69,13 +69,14 @@ Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON. Th
 
 Adopt-group `intent` is `upstream` (the default) or `internal-only`; it is not stored on the patch. Merge commits are one row each (the merge SHA, not the hidden PR branch).
 
-Then preview and publish:
+When the groups are adopted, `uplink/preview/verify` is built: company `main` as the queue rebuilds it, with `main` left alone (`--no-preview` skips it). Inspect and publish:
 
-    git uplink rebuild --branch uplink/preview/verify
     git diff main uplink/preview/verify
     git uplink rebuild --push
 
-Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends on the queued patches it needs to apply onto upstream and to pass preflight. Each patch is committed to local `uplink/state` as soon as it passes. A group that still fails opens a window with the preflight output: adopt it with the failure ignored, make it internal-only, skip it, amend it inline and finish with `git uplink adopt --continue`, stop, or abort and reset `uplink/state`. Every decision is written to a groups file that `--groups` replays. Adopt is local only: fetch the branch first. Preview and publish as above.",
+Commits on another branch (say `main-fork`) are adopted after init with `git uplink adopt --branch main-fork`. Pick and group them in the terminal UI or pass `--groups` with the same JSON; commits in no group are skipped. The patches are appended to the queue; each upstream-bound one depends on the queued patches it needs to apply onto upstream and to pass preflight. Each patch is committed to local `uplink/state` as soon as it passes. A group that still fails opens a window with the preflight output: adopt it with the failure ignored, make it internal-only, skip it, amend it inline and finish with `git uplink adopt --continue`, stop, or abort and reset `uplink/state`. Every decision is written to a groups file that `--groups` replays. Adopt is local only: fetch the branch first. The preview is built and published as above.
+
+While an adoption runs, and while it is paused, `uplink/state` is locked: every other command that changes it refuses, naming how to end the run.",
     ),
     (
         "Gated PRs",
@@ -300,8 +301,17 @@ pub enum Commands {
         #[arg(long, requires = "upgrade")]
         abort: bool,
         /// JSON file of commit groups when internal is ahead of upstream.
+        ///
+        /// The groups are adopted the way `adopt --branch` adopts them,
+        /// except that every commit must be in a group: a group that fails
+        /// can be amended, made internal-only or have its preflight failure
+        /// ignored, but not skipped. A paused or interrupted adoption is
+        /// taken up with `git uplink adopt --continue` or `--abort`.
         #[arg(long = "adopt-groups", value_name = "path")]
         adopt_groups: Option<PathBuf>,
+        /// Do not build `uplink/preview/verify` after adopting company main's history.
+        #[arg(long = "no-preview")]
+        no_preview: bool,
         /// Print the stored queue config as JSON.
         #[arg(long)]
         json: bool,
@@ -434,10 +444,23 @@ pub enum Commands {
     /// was added), or Abort (reset `uplink/state` to where the run started).
     /// The decision is printed as a line of its own and the run goes on.
     /// Amend pauses the way `git rebase` stops on a commit: the checkout is
-    /// left on `uplink/upstream` and the dependencies with the group's change
-    /// applied, and `--continue`, `--skip`, `--abort-keep` or `--abort` takes
-    /// it from there. Without a terminal a failing group fails the command
-    /// and resets `uplink/state`.
+    /// left on `uplink/upstream` and the dependencies, with the group's
+    /// commits cherry-picked one by one up to the first that conflicts. The
+    /// instructions list every commit of the group as applied, already
+    /// applied, in conflict, or still to pick (with its `git cherry-pick`
+    /// command). Resolve and `git add`; `--continue` finishes the
+    /// cherry-pick, picks the rest (stopping again on the next conflict) and
+    /// adopts what the checkout then holds as the group's change. `--skip`,
+    /// `--abort-keep` or `--abort` takes it from there instead. Without a
+    /// terminal a failing group fails the command and resets `uplink/state`.
+    ///
+    /// The run holds a lock on `uplink/state` from its start to its end,
+    /// including while it is paused: every other command that changes it
+    /// refuses. An interrupted run is taken up with `--continue` too.
+    ///
+    /// When the run ends having added patches, `uplink/preview/verify` is
+    /// built: company `main` as the queue now rebuilds it (`--no-preview`
+    /// skips it). A preview that fails is reported; the patches stay queued.
     ///
     /// Every decision is written to the groups file
     /// (`.git/uplink/adopt/<branch>.json` unless `--write-groups` says
@@ -449,8 +472,10 @@ pub enum Commands {
     /// Adopt runs locally only: it makes no network calls, so `--branch`,
     /// `uplink/upstream`, the company branch and `uplink/hooks` must already
     /// be in this clone (fetch them first). It writes one commit on local
-    /// `uplink/state` per patch, never rebuilds or pushes, and leaves `main`
-    /// alone.
+    /// `uplink/state` per patch, never pushes, and leaves `main` alone.
+    ///
+    /// `--continue`, `--skip`, `--abort` and `--abort-keep` take up any run
+    /// in progress, also one `init` or `restack` started.
     Adopt {
         /// Local branch to pick commits from.
         #[arg(
@@ -465,10 +490,12 @@ pub enum Commands {
         /// Write the groups file here instead of `.git/uplink/adopt/<branch>.json`.
         #[arg(long = "write-groups", value_name = "path", conflicts_with_all = ["resume", "skip", "abort", "abort_keep"])]
         write_groups: Option<PathBuf>,
-        /// Continue a paused adopt with the amended files added.
+        /// Continue a paused or interrupted adopt.
         ///
-        /// What they hold becomes the group's change, checked again like any
-        /// other. A group amended to no change is skipped.
+        /// A resolved cherry-pick is finished and the group's remaining
+        /// commits are picked. What the checkout then holds becomes the
+        /// group's change, checked again like any other. A group amended to
+        /// no change is skipped.
         #[arg(long = "continue", conflicts_with_all = ["branch", "skip", "abort", "abort_keep"])]
         resume: bool,
         /// Continue a paused adopt without the group it stopped on.
@@ -494,6 +521,9 @@ pub enum Commands {
         /// needs to apply. A paused run keeps the setting it started with.
         #[arg(long = "no-preflight-deps", conflicts_with_all = ["resume", "skip", "abort", "abort_keep"])]
         no_preflight_deps: bool,
+        /// Do not build `uplink/preview/verify` when the run ends.
+        #[arg(long = "no-preview", conflicts_with_all = ["abort", "abort_keep"])]
+        no_preview: bool,
         /// Print the adopted patches as JSON.
         #[arg(long)]
         json: bool,

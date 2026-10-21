@@ -4,22 +4,16 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::assess::{assert_assess_ok, assess_from_message, company_commit_message};
+use crate::assess::{assert_assess_ok, assess_from_message};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
-use crate::lock::with_queue_lock;
-use crate::queue::{
-    add_event, cannot_depend_on, get_patch, patch_path, read_queue as read_queue_file,
-    write_queue as write_queue_file,
-};
-use crate::repo::{
-    commit_queue, has_ref, new_patch_id, rev_parse, stable_patch_id, stamp, write_product_patch,
-};
+use crate::queue::{add_event, cannot_depend_on, get_patch, patch_path};
+use crate::repo::{has_ref, new_patch_id, rev_parse, stamp};
 use crate::types::{Patch, PatchIntent, PatchSource, PatchStatus, QueueState};
 
 pub use crate::run::{
     ADOPT_AMENDED_REF_PREFIX, AdoptDecider, AdoptDecision, AdoptFailure, AdoptFailureKind,
-    AdoptResume, BranchAdopted, BranchAdoption, BranchRun, groups_file_path, refuse_when_paused,
+    AdoptResume, BranchAdopted, BranchAdoption, BranchRun, RunKind, groups_file_path,
     resume_branch, run_branch, write_groups_file,
 };
 
@@ -263,32 +257,7 @@ pub fn resolve_groups(analysis: &AheadAnalysis, groups: &[AdoptGroup]) -> Result
         .collect())
 }
 
-pub fn apply_groups(
-    repo: &Path,
-    analysis: &AheadAnalysis,
-    groups: &[AdoptGroup],
-) -> Result<QueueState> {
-    if let Some(group) = groups
-        .iter()
-        .find(|g| g.ignore_preflight || g.amended.is_some())
-    {
-        return Err(Error::msg(format!(
-            "adopt group \"{}\" sets ignorePreflight or amended, which only git uplink adopt --branch supports",
-            group.title
-        )));
-    }
-    let resolved = resolve_group_runs(analysis, groups)?;
-    with_queue_lock(repo, || apply_groups_locked(repo, resolved))
-}
-
 pub const ADOPT_TEST_BRANCH_PREFIX: &str = "uplink/adopt-test/";
-
-pub fn adopted_next_steps() -> &'static str {
-    "Company main is unchanged.\n\
-Preview with: git uplink rebuild --branch uplink/preview/verify\n\
-Inspect with:  git diff main uplink/preview/verify\n\
-After verification: git uplink rebuild --push"
-}
 
 fn describe_commit(repo: &Path, sha: &str) -> Result<Option<AdoptCommit>> {
     let parents = git_ok(repo, &["rev-list", "--parents", "-n1", sha])?;
@@ -476,52 +445,6 @@ fn check_group_order(analysis: &AheadAnalysis, assigned: &[Option<usize>]) -> Re
         seen.push(group_idx);
     }
     Ok(())
-}
-
-/// init: the queue holds only tooling, and every upstream-bound group
-/// depends on the upstream-bound group before it.
-fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueState> {
-    let mut queue = read_queue_file(repo)?;
-    if queue.tooling.is_none() {
-        return Err(Error::msg(
-            "Uplink tooling patch is missing; cannot adopt history until init installs it.",
-        ));
-    }
-    if has_product_patches(&queue) {
-        return Err(Error::msg(
-            "queue already has product patches; delete uplink/adopt-from or reset uplink/state before adopting again",
-        ));
-    }
-    let mut written = Vec::new();
-    let mut last_upstream_id: Option<String> = None;
-    let outcome = (|| -> Result<()> {
-        for group in &groups {
-            let internal_only = group.intent.is_internal_only();
-            let mut patch = adopted_patch(repo, &queue, group, last_upstream_id.as_deref(), None)?;
-            let id = patch.id.clone();
-            let message = company_commit_message(&patch);
-            write_product_patch(repo, &id, &group.from_sha, &message, &group.head_sha)?;
-            written.push(id.clone());
-            let rel = patch_path(&id)?.to_string_lossy().into_owned();
-            patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-            if !internal_only {
-                last_upstream_id = Some(id);
-            }
-            queue.push_patch(patch, internal_only);
-        }
-        write_queue_file(repo, &queue)?;
-        let n = written.len();
-        commit_queue(
-            repo,
-            &format!("uplink: adopt {n} patch{}", if n == 1 { "" } else { "es" }),
-        )?;
-        Ok(())
-    })();
-    if outcome.is_err() {
-        remove_patch_files(repo, &written);
-    }
-    outcome?;
-    read_queue_file(repo)
 }
 
 pub(crate) fn remove_patch_files(repo: &Path, ids: &[String]) {
