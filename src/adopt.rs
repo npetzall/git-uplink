@@ -17,9 +17,7 @@ use crate::repo::{
 };
 use crate::types::{Patch, PatchIntent, PatchSource, PatchStatus, QueueState};
 
-mod branch;
-
-pub use branch::{
+pub use crate::run::{
     ADOPT_AMENDED_REF_PREFIX, AdoptDecider, AdoptDecision, AdoptFailure, AdoptFailureKind,
     AdoptResume, BranchAdopted, BranchAdoption, BranchRun, groups_file_path, refuse_when_paused,
     resume_branch, run_branch, write_groups_file,
@@ -71,15 +69,15 @@ pub struct AheadAnalysis {
     pub allow_skip: bool,
 }
 
-struct ResolvedGroup {
-    from_sha: String,
-    head_sha: String,
-    shas: Vec<String>,
-    title: String,
-    intent: PatchIntent,
-    message: String,
-    ignore_preflight: bool,
-    amended: Option<String>,
+pub(crate) struct ResolvedGroup {
+    pub(crate) from_sha: String,
+    pub(crate) head_sha: String,
+    pub(crate) shas: Vec<String>,
+    pub(crate) title: String,
+    pub(crate) intent: PatchIntent,
+    pub(crate) message: String,
+    pub(crate) ignore_preflight: bool,
+    pub(crate) amended: Option<String>,
 }
 
 pub fn analyze_ahead(repo: &Path) -> Result<AheadAnalysis> {
@@ -377,7 +375,7 @@ fn resolve_group_runs(
 }
 
 /// Resolves one group to a contiguous first-parent run, recording its commits in `assigned`.
-fn resolve_group(
+pub(crate) fn resolve_group(
     analysis: &AheadAnalysis,
     group: &AdoptGroup,
     group_idx: usize,
@@ -526,7 +524,7 @@ fn apply_groups_locked(repo: &Path, groups: Vec<ResolvedGroup>) -> Result<QueueS
     read_queue_file(repo)
 }
 
-fn remove_patch_files(repo: &Path, ids: &[String]) {
+pub(crate) fn remove_patch_files(repo: &Path, ids: &[String]) {
     for id in ids {
         if let Ok(rel) = patch_path(id) {
             let _ = fs::remove_file(repo.join(rel));
@@ -536,7 +534,7 @@ fn remove_patch_files(repo: &Path, ids: &[String]) {
 
 /// Builds and assesses the queued patch for one adopt group, depending on
 /// `chained` (the previous upstream-bound group in init) when upstream-bound.
-fn adopted_patch(
+pub(crate) fn adopted_patch(
     repo: &Path,
     queue: &QueueState,
     group: &ResolvedGroup,
