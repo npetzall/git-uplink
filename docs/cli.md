@@ -50,6 +50,7 @@ git uplink merged <id> [--via <how>] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
             [--preflight-result <path>] [--preflight-only] [--verify] [--json]
+            [--interactive] [--continue] [--abort]
 git uplink resolve <id> [--preflight-result <path>] [--preflight-only]
 git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
             [--preflight-result <path>] [--preflight-only]
@@ -471,6 +472,10 @@ When every patch applies and the result is not the tree `main` already has, `pre
 
 `accept-upstream`, `resolve`, `amend --complete`, `transfer`, `drop` and `merged` do this too. Two rebuilds are not tested, since they only reorder what was tested already: the one of `add`, whose change a reviewed pull request merged into `main`, and the one of a `sync` that needs no approval, where upstream moved only by our own patches. `rebuild --verify` tests `main` after those.
 
+Locally, a gated patch is fixed on its branches without a PR: `git switch uplink/conflict/<id>-work` (the conflict markers are committed there), fix the files, `git add` them, `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. Each resolve rebuilds again and may gate the next patch.
+
+`-i` fixes them inline instead, the way `git rebase` stops on a commit. A patch that does not apply is left in the checkout as its failed 3-way apply, on the patches before it. A patch `preflight.sh` is blamed on is left applied, for the fix to go on top. Resolve, `git add`, and `--continue` takes what the checkout holds as the patch, re-assesses it as `resolve` does, and replays again, stopping on the next patch to fix. Nothing is gated and nothing is written to `uplink/state` until the rebuild is published; until then every other command that changes it refuses. `--abort` puts the checkout back, changing nothing. To leave a patch out, abort and `drop` it. A patch gated already is fixed on its branches.
+
 - `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
 - `--push`: Push uplink/state and the rebuilt branch after rebuild.
 - `--push-remote <remote>`: Remote for --push, origin by default.
@@ -484,6 +489,11 @@ When every patch applies and the result is not the tree `main` already has, `pre
 
   For a `main` that turned out broken without a rebuild noticing, for example after an import, whose rebuild is not tested. The first patch the script fails on goes to the conflict gate.
 - `--json`: Print the result as JSON; a patch that goes to the conflict gate prints `gh.prCreate` and exits 0.
+- `--interactive`: Stop on a patch to fix inline instead of gating it; see above.
+- `--continue`: Take what the checkout holds as the patch the rebuild paused on, and go on.
+
+  `--push` and `--verify` are kept from `rebuild -i`.
+- `--abort`: Put the checkout back and end the paused rebuild, changing nothing.
 
 ### `gated`
 
@@ -503,6 +513,8 @@ Resolve re-runs the upstream assessment on the resolution and refuses an upstrea
 A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `amended` until IP approves the delta. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0. That includes a patch `preflight.sh` fails on in the rebuild, which can be the resolved patch again; see `rebuild`.
 
 `readyToSubmit` in the output lists the resolved patch when it is `queued` again, and the queued patches whose last unmerged upstream dependency the rebuild marked merged.
+
+Locally: `git switch uplink/conflict/<id>-work`, fix the files and `git add` them, run `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. `git uplink rebuild -i` fixes them inline instead.
 
 - `<id>`: Patch whose conflict was resolved.
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.

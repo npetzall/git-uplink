@@ -462,9 +462,14 @@ fn remove_run(repo: &Path) -> Result<()> {
     }
 }
 
-/// Why uplink/state is locked by a run, or None. Never fails: a directory
-/// that is not a repository has no run.
+/// Why uplink/state is locked by a run or a paused `rebuild -i`, or None.
+/// Never fails: a directory that is not a repository has no run.
 pub fn blocking_run(repo: &Path) -> Option<String> {
+    blocking_queue_run(repo).or_else(|| crate::ops::paused_rebuild_message(repo))
+}
+
+/// Why uplink/state is locked by a queue run (adopt, restack), or None.
+pub fn blocking_queue_run(repo: &Path) -> Option<String> {
     let path = run_path(repo).ok()?;
     if !path.is_file() {
         return None;

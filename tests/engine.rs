@@ -14349,3 +14349,480 @@ fn restack_abort_puts_local_state_back() {
     assert!(err.contains("restack in a terminal"), "{err}");
     assert_eq!(rev_of(&asha, STATE_BRANCH), before);
 }
+
+/// Moves `uplink/upstream` to public main as it is now, without a sync, so
+/// that only a rebuild meets what changed there.
+fn move_upstream_to_public(company: &Path) {
+    git(
+        company,
+        &["fetch", "--quiet", "upstream", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["branch", "-f", "uplink/upstream", "FETCH_HEAD"],
+        GitOpts::default(),
+    )
+    .unwrap();
+}
+
+fn rebuild_paused_file(company: &Path) -> PathBuf {
+    company.join(".git/uplink-rebuild.json")
+}
+
+/// Two internal patches whose lines upstream changes too: README.md and
+/// the ttl in src/tokens.js. Leaves the checkout on main.
+fn world_where_upstream_conflicts_with_two_patches() -> (World, Patch, Patch) {
+    let world = setup_world();
+    let company = &world.company;
+    let readme = add_internal_change(company, "feat/readme", "README.md", "tokenkit, ours\n");
+    let ttl = add_internal_change(
+        company,
+        "feat/ttl",
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    write(&world.upstream, "README.md", "tokenkit, theirs\n");
+    write(
+        &world.upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(&world.upstream, "change readme and ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    move_upstream_to_public(company);
+    (world, readme, ttl)
+}
+
+#[test]
+fn rebuild_inline_pauses_on_a_conflict_and_continue_amends_and_publishes() {
+    let (world, readme, ttl) = world_where_upstream_conflicts_with_two_patches();
+    let company = &world.company;
+    let state_before = rev_of(company, STATE_BRANCH);
+    let main_before = rev_of(company, "main");
+
+    let err = git_uplink::rebuild_inline(company, Default::default()).unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains(&format!("rebuild paused on {}", readme.id)),
+        "{text}"
+    );
+    assert!(text.contains("README.md"), "{text}");
+    assert!(text.contains("git uplink rebuild --continue"), "{text}");
+    // Nothing gated, nothing recorded, main untouched; a real 3-way state.
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    assert_eq!(rev_of(company, "main"), main_before);
+    assert_eq!(patch_status(company, &readme.id), PatchStatus::Queued);
+    assert!(!has_git_ref(
+        company,
+        &format!("uplink/conflict/{}", readme.id)
+    ));
+    assert_eq!(
+        git_ok(company, &["diff", "--name-only", "--diff-filter=U"]).unwrap(),
+        "README.md"
+    );
+    assert!(rebuild_paused_file(company).is_file());
+
+    // Every other command that changes uplink/state refuses.
+    let err = drop_patch(company, &ttl.id, "test")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("a rebuild is paused"), "{err}");
+    let err = git_uplink::rebuild_inline(company, Default::default())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("a rebuild is paused"), "{err}");
+
+    // Markers left in: refused, still paused.
+    git(company, &["add", "README.md"], GitOpts::default()).unwrap();
+    let err = git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Conflict markers"), "{err}");
+    assert!(rebuild_paused_file(company).is_file());
+
+    write(company, "README.md", "tokenkit, theirs and ours\n");
+    git(company, &["add", "README.md"], GitOpts::default()).unwrap();
+    let err = git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap_err()
+        .to_string();
+    // The next patch to fix; the first resolution is kept.
+    assert!(
+        err.contains(&format!("rebuild paused on {}", ttl.id)),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!("Resolved so far: {}", readme.id)),
+        "{err}"
+    );
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    assert_eq!(
+        fs::read_to_string(company.join("README.md")).unwrap(),
+        "tokenkit, theirs and ours\n"
+    );
+
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 5400;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    let done = git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.amended, vec![readme.id.clone(), ttl.id.clone()]);
+    assert!(!rebuild_paused_file(company).exists());
+    assert!(!has_git_ref(company, "refs/uplink/rebuild/onto"));
+    assert_eq!(
+        git_ok(company, &["show", "main:README.md"]).unwrap(),
+        "tokenkit, theirs and ours"
+    );
+    assert!(
+        git_ok(company, &["show", "main:src/tokens.js"])
+            .unwrap()
+            .contains("return 5400;")
+    );
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+    // One amend commit for both, then the rebuild status.
+    let log = git_ok(
+        company,
+        &[
+            "log",
+            "--format=%s",
+            &format!("{state_before}..{STATE_BRANCH}"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        log,
+        format!(
+            "uplink: record rebuild status\nuplink: amend {}, {} in rebuild",
+            readme.id, ttl.id
+        )
+    );
+    let amended = patch_of(company, &ttl.id);
+    assert_eq!(amended.status, PatchStatus::Queued);
+    assert!(
+        amended
+            .events
+            .iter()
+            .any(|e| e.kind == "amended" && e.detail.contains("interactive rebuild"))
+    );
+    let stored = git_ok(
+        company,
+        &[
+            "show",
+            &format!("{STATE_BRANCH}:.uplink/patches/{}.patch", ttl.id),
+        ],
+    )
+    .unwrap();
+    assert!(stored.contains("+  return 5400;"), "{stored}");
+}
+
+#[test]
+fn rebuild_inline_abort_changes_nothing() {
+    let (world, readme, _) = world_where_upstream_conflicts_with_two_patches();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "--quiet", "-b", "topic", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let state_before = rev_of(company, STATE_BRANCH);
+    let topic_before = rev_of(company, "topic");
+
+    git_uplink::rebuild_inline(company, Default::default()).unwrap_err();
+    write(company, "README.md", "half done\n");
+    let aborted = git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Abort).unwrap();
+    assert!(aborted.is_none());
+    assert!(!rebuild_paused_file(company).exists());
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    assert_eq!(patch_status(company, &readme.id), PatchStatus::Queued);
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "topic"
+    );
+    assert_eq!(rev_of(company, "HEAD"), topic_before);
+    assert_eq!(git_ok(company, &["status", "--porcelain"]).unwrap(), "");
+    // Unlocked again: the drop gets past the lock (its rebuild then gates
+    // the other conflict, as a plain rebuild does).
+    let unlocked = drop_patch(company, &readme.id, "test");
+    assert!(
+        !matches!(&unlocked, Err(err) if err.to_string().contains("rebuild is paused")),
+        "{unlocked:?}"
+    );
+
+    let err = git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no rebuild is paused"), "{err}");
+}
+
+#[test]
+fn rebuild_inline_refuses_a_resolution_to_nothing() {
+    let (world, readme, _) = world_where_upstream_conflicts_with_two_patches();
+    let company = &world.company;
+    git_uplink::rebuild_inline(company, Default::default()).unwrap_err();
+    // Take upstream's side: the patch is left with no change.
+    git(
+        company,
+        &["checkout", "--ours", "README.md"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(company, &["add", "README.md"], GitOpts::default()).unwrap();
+    let err = git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("resolved to no change"), "{err}");
+    assert!(
+        err.contains(&format!("git uplink drop {}", readme.id)),
+        "{err}"
+    );
+    assert!(rebuild_paused_file(company).is_file());
+    git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Abort).unwrap();
+}
+
+#[test]
+fn rebuild_inline_pauses_on_the_patch_preflight_blames_with_it_applied() {
+    let (world, [_, second, third], _) = world_where_upstream_breaks_the_second_patch();
+    let company = &world.company;
+    move_upstream_to_public(company);
+    let state_before = rev_of(company, STATE_BRANCH);
+
+    let err = git_uplink::rebuild_inline(company, Default::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(&format!("rebuild paused on {}", second.id)),
+        "{err}"
+    );
+    assert!(err.contains("preflight.sh fails"), "{err}");
+    assert!(err.contains("limits clash"), "{err}");
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    // The patch applied, the ones after it not.
+    assert_eq!(
+        fs::read_to_string(company.join("SECOND.md")).unwrap(),
+        "old\n"
+    );
+    assert!(company.join("LIMITS.md").is_file());
+    assert!(!company.join("THIRD.md").exists());
+
+    write(company, "SECOND.md", "new\n");
+    git(company, &["add", "SECOND.md"], GitOpts::default()).unwrap();
+    let done = git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.amended, vec![second.id.clone()]);
+    assert_eq!(git_ok(company, &["show", "main:SECOND.md"]).unwrap(), "new");
+    assert_eq!(
+        git_ok(company, &["show", "main:THIRD.md"]).unwrap(),
+        "third"
+    );
+    assert_eq!(patch_status(company, &third.id), PatchStatus::Queued);
+    assert!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .all_patches()
+            .all(|p| p.status != PatchStatus::Conflict)
+    );
+}
+
+#[test]
+fn rebuild_inline_of_a_submitted_patch_that_changes_its_lines_needs_delta_approval() {
+    let world = setup_world();
+    let company = &world.company;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    commit_contribution_packet(company, &ttl);
+    approve_patch(company, &ttl.id).unwrap();
+    let submitted = submit_patch(company, &ttl.id, true).unwrap();
+    record_pull_request(
+        company,
+        &ttl.id,
+        99,
+        "https://github.com/upstream/tokenkit/pull/99",
+        &submitted.branch,
+        None,
+    )
+    .unwrap();
+    write(
+        &world.upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(&world.upstream, "shorten default ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    move_upstream_to_public(company);
+
+    git_uplink::rebuild_inline(company, Default::default()).unwrap_err();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 5400;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap()
+        .unwrap();
+    assert_eq!(patch_status(company, &ttl.id), PatchStatus::Amended);
+}
+
+#[test]
+fn rebuild_inline_from_the_command_line_pauses_and_continues() {
+    let (world, readme, ttl) = world_where_upstream_conflicts_with_two_patches();
+    let company = &world.company;
+    let bin = env!("CARGO_BIN_EXE_git-uplink");
+    let run = |args: &[&str]| {
+        Command::new(bin)
+            .args(args)
+            .current_dir(company)
+            .output()
+            .unwrap()
+    };
+
+    let out = run(&["rebuild", "-i"]);
+    assert_ne!(out.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("rebuild paused on {}", readme.id)),
+        "{stderr}"
+    );
+
+    let out = run(&["rebuild", "--continue", "--push"]);
+    assert_eq!(out.status.code(), Some(2), "--push is kept from -i");
+
+    write(company, "README.md", "tokenkit, both\n");
+    git(company, &["add", "README.md"], GitOpts::default()).unwrap();
+    let out = run(&["rebuild", "--continue"]);
+    assert_ne!(out.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("rebuild paused on {}", ttl.id)),
+        "{stderr}"
+    );
+
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 5400;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    let out = run(&["rebuild", "--continue"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("rebuild complete"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("amended {} (queued)", readme.id)),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("amended {} (queued)", ttl.id)),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn rebuild_inline_keeps_an_upstream_bound_resolution_that_fails_the_assessment_paused() {
+    let world = setup_world();
+    let company = &world.company;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
+    write(
+        &world.upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(&world.upstream, "shorten default ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    move_upstream_to_public(company);
+    let state_before = rev_of(company, STATE_BRANCH);
+
+    git_uplink::rebuild_inline(company, Default::default()).unwrap_err();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200; // AcmeCorp SLA"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    let before = rev_of(company, "HEAD");
+    let err = git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Upstream assessment failed"), "{err}");
+    // Still paused, the resolution staged as it was.
+    assert!(rebuild_paused_file(company).is_file());
+    assert_eq!(rev_of(company, "HEAD"), before);
+    assert_eq!(
+        git_ok(company, &["diff", "--cached", "--name-only"]).unwrap(),
+        "src/tokens.js"
+    );
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
+    git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
+        .unwrap()
+        .unwrap();
+    let resolved = patch_of(company, &ttl.id);
+    assert_eq!(resolved.status, PatchStatus::Queued);
+    assert!(resolved.assess.as_ref().unwrap().ok);
+}
