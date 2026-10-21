@@ -15,23 +15,23 @@ use git_uplink::{
     AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendMessage, AmendResult, ApprovalReceipt,
     AssessPackage, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia,
     PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode,
-    PushOpts, RebuildOpts, RunKind, STATE_BRANCH, ScriptEcho, ScriptVerdict,
-    TO_UPSTREAM_ENVIRONMENT, accept_upstream_preflight, accept_upstream_with, add_patch,
-    add_patch_or_gate, adopt_branch, adopted_next_steps, amend_patch_with, amend_preflight,
-    approve_patch_reviewed, assess_from_message, assess_patch_file, assess_patch_for_packet,
-    change_between, command_preflight, command_tested, commit_queue, count_files,
-    depends_on_from_message, doctor, drop_patch, existing_patch_preflight, export_tested,
-    fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
+    PushOpts, RebuildOpts, RestackAction, RestackOpts, RunKind, STATE_BRANCH, ScriptEcho,
+    ScriptVerdict, TO_UPSTREAM_ENVIRONMENT, accept_upstream_preflight, accept_upstream_with,
+    add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps, amend_patch_with,
+    amend_preflight, approve_patch_reviewed, assess_from_message, assess_patch_file,
+    assess_patch_for_packet, change_between, command_preflight, command_tested, commit_queue,
+    count_files, depends_on_from_message, doctor, drop_patch, existing_patch_preflight,
+    export_tested, fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
     format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
     newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
     read_queue, rebase_onto_main, rebase_plan, rebuild_preflight, rebuild_with, record_gated_pr,
     record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
-    reset_from_origin, resolve_conflict_with, resolve_preflight, review_token, review_token_path,
-    set_script_echo, status_report, status_snapshot, store_assess_result, store_patch_extras,
-    stored_commit_message, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
-    write_man_pages,
+    reset_from_origin, resolve_conflict_with, resolve_preflight, restack, review_token,
+    review_token_path, set_script_echo, status_report, status_snapshot, store_assess_result,
+    store_patch_extras, stored_commit_message, submit_patch_with, sync_with, transfer_patch_with,
+    transfer_preflight, write_man_pages,
 };
 
 const VERSION: &str = concat!(
@@ -909,6 +909,39 @@ Adopt them with: git uplink adopt --branch {branch} --groups {file}"
     Ok(())
 }
 
+/// `git uplink restack`: local only, one uplink/state commit per patch.
+fn cmd_restack(repo: &Path, opts: RestackOpts, json: bool) -> Result<(), Error> {
+    if !opts.no_preflight {
+        refuse_script_here(repo, &ScriptVerdict::Run, None)?;
+    }
+    let result = restack(repo, opts)?;
+    if let Some(run) = &result.run {
+        if let Some(backup) = result.backup.as_deref().filter(|_| !json) {
+            println!("Local uplink/state before the restack is kept as {backup}.");
+        }
+        return print_run_result(repo, run, json);
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "action": result.action }))?
+        );
+        return Ok(());
+    }
+    println!(
+        "{}",
+        match result.action {
+            RestackAction::UpToDate => "uplink/state matches origin's; nothing to restack.",
+            RestackAction::Ahead =>
+                "uplink/state is ahead of origin's; nothing to restack. Publish with: git uplink push",
+            RestackAction::FastForwarded =>
+                "uplink/state was behind origin's and now matches it; nothing to restack.",
+            RestackAction::Restacked => "Restacked.",
+        }
+    );
+    Ok(())
+}
+
 fn cmd_doctor(repo: &Path, json: bool) -> Result<(), Error> {
     let report = doctor(repo, ProgressMode::Auto)?;
     if json {
@@ -1749,7 +1782,7 @@ fn run() -> Result<(), Error> {
     set_script_echo(match &cli.command {
         Commands::Preflight { json: false, .. } => ScriptEcho::Stdout,
         // Adopt shows a spinner per patch, and the output only on a failure.
-        Commands::Adopt { .. } => ScriptEcho::Off,
+        Commands::Adopt { .. } | Commands::Restack { .. } => ScriptEcho::Off,
         _ => ScriptEcho::Stderr,
     });
     match cli.command {
@@ -1865,6 +1898,35 @@ fn run() -> Result<(), Error> {
             },
         ),
         Commands::Push { push_remote } => cmd_push(&repo, push_remote),
+        Commands::Restack {
+            resume,
+            skip,
+            abort,
+            abort_keep,
+            no_preflight,
+            no_preflight_deps,
+            no_preview,
+            keep_branch,
+            json,
+        } => cmd_restack(
+            &repo,
+            RestackOpts {
+                resume: match (resume, skip, abort, abort_keep) {
+                    (true, ..) => Some(AdoptResume::Continue),
+                    (_, true, ..) => Some(AdoptResume::Skip),
+                    (_, _, true, _) => Some(AdoptResume::Abort),
+                    (.., true) => Some(AdoptResume::AbortKeep),
+                    _ => None,
+                },
+                no_preflight,
+                no_preflight_deps,
+                no_preview,
+                keep_branch,
+                progress: ProgressMode::Auto,
+                ..Default::default()
+            },
+            json,
+        ),
         Commands::Refresh => cmd_refresh(&repo),
         Commands::Reset => cmd_reset(&repo),
         Commands::Rebase {

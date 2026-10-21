@@ -13,7 +13,7 @@ use crate::types::{Patch, PatchIntent, PatchSource, PatchStatus, QueueState};
 
 pub use crate::run::{
     ADOPT_AMENDED_REF_PREFIX, AdoptDecider, AdoptDecision, AdoptFailure, AdoptFailureKind,
-    AdoptResume, BranchAdopted, BranchAdoption, BranchRun, RunKind, groups_file_path,
+    AdoptResume, BranchAdopted, BranchAdoption, BranchRun, QueuedItem, RunKind, groups_file_path,
     resume_branch, run_branch, write_groups_file,
 };
 

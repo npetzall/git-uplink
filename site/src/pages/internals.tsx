@@ -602,7 +602,11 @@ export function InternalsPage() {
             A run keeps <code>.git/uplink-run.json</code> from its start to its
             end, and while it is there every other command that changes{" "}
             <code>uplink/state</code> refuses. When the run has added patches,
-            it builds <code>uplink/preview/verify</code>.
+            it builds <code>uplink/preview/verify</code>. When{" "}
+            <code>uplink/state</code> on origin moved meanwhile,{" "}
+            <code>git uplink restack</code> rebuilds origin&apos;s queue on{" "}
+            <code>uplink/restack</code> and adds the local patches again on top,
+            each checked the same way, before <code>git uplink push</code>.
           </li>
         </ul>
       </Section>
