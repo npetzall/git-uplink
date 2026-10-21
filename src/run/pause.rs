@@ -7,7 +7,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ADOPT_AMENDED_REF_PREFIX, AdoptFailure, AdoptFailureKind, BranchRun, RunItem};
+use super::{
+    ADOPT_AMENDED_REF_PREFIX, AdoptFailure, AdoptFailureKind, BranchRun, RunItem, RunKind,
+};
 use crate::error::{Error, Result};
 use crate::gate::{assert_resolution_clean, commit_resolution};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
@@ -201,9 +203,7 @@ pub(super) fn pause(
             }
             PauseAt::Stack(stack) => {
                 checkout_detached(repo, stack)?;
-                format!(
-                    "{stack} (origin's queue on public upstream, with the patches added again so far)"
-                )
+                format!("{stack} ({})", run.stack_words())
             }
         };
         let onto = rev_parse(repo, "HEAD")?;
@@ -233,7 +233,11 @@ pub(super) fn pause(
         reason: match info.kind {
             AdoptFailureKind::Apply => "it does not apply onto public upstream".into(),
             AdoptFailureKind::Preflight => "preflight.sh fails on it".into(),
-            AdoptFailureKind::Stack => "it does not apply on top of origin's queue".into(),
+            AdoptFailureKind::Stack if run.kind == RunKind::Restack => {
+                "it does not apply on top of origin's queue".into()
+            }
+            AdoptFailureKind::Stack => "it does not apply on company main".into(),
+            AdoptFailureKind::CompanyPreflight => "preflight.sh fails on it on company main".into(),
         },
         commits,
     })

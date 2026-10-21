@@ -30,8 +30,8 @@ use crate::assess::{company_commit_message, report_paths};
 use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::preflight::{
-    ScriptVerdict, apply_abs, detect_depends_on, export_preflight, export_preflight_with,
-    is_script_failure,
+    ScriptVerdict, apply_abs, build_company_stack, detect_depends_on, detect_internal_depends_on,
+    export_preflight, export_preflight_with, is_script_failure, rev_preflight,
 };
 use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
@@ -52,6 +52,10 @@ use pause::{PauseAt, Paused};
 pub const ADOPT_AMENDED_REF_PREFIX: &str = "refs/uplink/adopt-amended/";
 
 const RUN_FILE: &str = "uplink-run.json";
+
+/// The branch an adopt builds company main on for its internal-only groups,
+/// with each one added so far applied on top.
+pub const ADOPT_MAIN_BRANCH: &str = "uplink/adopt-main";
 
 /// What a run adds to the queue, and from where.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,8 +120,18 @@ pub enum AdoptFailureKind {
     Apply,
     /// `preflight.sh` fails on the item, with every set of queued patches tried.
     Preflight,
-    /// The item does not apply on top of origin's queue (restack).
+    /// The item does not apply on the stack: origin's queue (restack), or
+    /// company main (an internal-only group).
     Stack,
+    /// `preflight.sh` fails on an internal-only item applied on the stack.
+    CompanyPreflight,
+}
+
+impl AdoptFailureKind {
+    /// A `preflight.sh` failure, which can be ignored.
+    pub fn is_preflight(self) -> bool {
+        matches!(self, Self::Preflight | Self::CompanyPreflight)
+    }
 }
 
 /// An item that cannot be added as it is.
@@ -141,6 +155,8 @@ pub struct AdoptFailure {
     pub can_amend: bool,
     /// Skip and Stop are offered.
     pub can_leave_out: bool,
+    /// The item is internal-only already, so Internal-only is not offered.
+    pub internal_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,8 +280,10 @@ pub struct BranchRun {
     /// Run `preflight.sh` on upstream-bound items.
     #[serde(default = "on")]
     pub preflight: bool,
-    /// Restack: the branch holding origin's queue rebuilt onto upstream, with
-    /// each item added so far applied on top.
+    /// The branch internal-only items are applied and preflighted on, with
+    /// each item added so far on top. Restack: origin's queue rebuilt onto
+    /// upstream, from the start. Adopt: company main, built when the first
+    /// internal-only group comes up ([`ADOPT_MAIN_BRANCH`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
     /// Leave `stack` when the run ends.
@@ -288,7 +306,9 @@ fn on() -> bool {
 }
 
 impl BranchRun {
-    /// A run adopting groups of commits (`init` or `adopt --branch`).
+    /// A run adopting groups of commits (`init` or `adopt --branch`). The
+    /// upstream-bound groups go first; the internal-only ones follow, in
+    /// history order, so they are added after them on company main.
     pub fn new(
         repo: &Path,
         kind: RunKind,
@@ -298,11 +318,18 @@ impl BranchRun {
         keep_test_branches: bool,
         preflight_deps: bool,
     ) -> Result<Self> {
+        let (upstream, internal): (Vec<_>, Vec<_>) = groups
+            .into_iter()
+            .partition(|group| !group.intent.is_internal_only());
         Ok(Self {
             kind,
             branch,
             groups_file: Some(groups_file),
-            items: groups.into_iter().map(RunItem::Group).collect(),
+            items: upstream
+                .into_iter()
+                .chain(internal)
+                .map(RunItem::Group)
+                .collect(),
             keep_test_branches,
             preflight_deps,
             preflight: true,
@@ -375,6 +402,18 @@ impl BranchRun {
         match &self.items[index] {
             RunItem::Group(_) => format!("group {}", index + 1),
             RunItem::Queued(item) => format!("patch {}", item.patch.id),
+        }
+    }
+
+    /// What `stack` holds, in words.
+    fn stack_words(&self) -> &'static str {
+        match self.kind {
+            RunKind::Restack => {
+                "origin's queue on public upstream, with the patches added again so far"
+            }
+            RunKind::Init | RunKind::Branch => {
+                "company main as the queue builds it, with the internal-only groups added so far"
+            }
         }
     }
 
@@ -581,6 +620,8 @@ pub fn run_branch(
     run.paused = None;
     let outcome = (|| -> Result<Ended> {
         run.save(repo)?;
+        // In the order they are added: internal-only groups last.
+        run.write_groups()?;
         while run.next < run.items.len() {
             match adopt_next(&mut ctx, &mut run)? {
                 Step::Added | Step::AlreadyQueued => run.next += 1,
@@ -954,25 +995,39 @@ fn check_item(
         output,
         can_amend: false,
         can_leave_out,
+        internal_only: item.internal_only(),
     };
 
+    if item.internal_only() && run.stack.is_none() {
+        // The first internal-only group: every upstream-bound one is in the
+        // queue now, so company main is built once and grows from here.
+        build_company_stack(repo, queue, ADOPT_MAIN_BRANCH)?;
+        run.stack = Some(ADOPT_MAIN_BRANCH.to_string());
+        run.save(repo)?;
+    }
+    let (on_queue, already_in) = match run.kind {
+        RunKind::Restack => ("origin's queue", "its change is in origin's queue already"),
+        RunKind::Init | RunKind::Branch => {
+            ("company main", "its change is on company main already")
+        }
+    };
     let mut stack_tip = None;
     if let Some(stack) = run.stack.clone() {
         match apply_on_stack(repo, &stack, candidate_abs, &patch.title)? {
             OnStack::Applied(tip) => stack_tip = Some(tip),
             OnStack::Empty => {
-                ctx.lines
-                    .line(StepOutcome::skip("its change is in origin's queue already"));
+                ctx.lines.line(StepOutcome::skip(already_in));
                 run.already_queued.push(patch.id.clone());
                 return Ok(Checked::Instead(Step::AlreadyQueued));
             }
             OnStack::Conflict => {
                 let info = failure(
                     AdoptFailureKind::Stack,
-                    "does not apply on top of origin's queue".into(),
+                    format!("does not apply on top of {on_queue}"),
                     format!(
-                        "\"{}\" does not apply on {stack}: origin's queue on public upstream, with the patches added again so far.",
-                        patch.title
+                        "\"{}\" does not apply on {stack}: {}.",
+                        patch.title,
+                        run.stack_words()
                     ),
                 );
                 let at = PauseAt::Stack(stack);
@@ -982,6 +1037,49 @@ fn check_item(
         }
     }
     if item.internal_only() {
+        let (Some(stack), Some(tip)) = (run.stack.clone(), stack_tip.clone()) else {
+            return Ok(Checked::Add { stack_tip });
+        };
+        if matches!(item, RunItem::Group(_))
+            && let Some(found) =
+                detect_internal_depends_on(repo, queue, candidate_abs, &patch.title)?
+            && !found.is_empty()
+        {
+            add_event(
+                patch,
+                "depends-on",
+                format!("Needs {} to apply on company main", found.join(", ")),
+            );
+            patch.depends_on = found;
+        }
+        done.depends_on = patch.depends_on.clone();
+        if run.preflight {
+            match rev_preflight(repo, queue, &tip, ctx.verdict) {
+                Ok(token) => done.preflight = Some(token),
+                Err(Error::Preflight(err)) if is_script_failure(&err) => {
+                    if !item.ignore_preflight() {
+                        let info = failure(
+                            AdoptFailureKind::CompanyPreflight,
+                            format!("preflight.sh failed on {on_queue}"),
+                            err.to_string(),
+                        );
+                        let at = PauseAt::Stack(stack);
+                        if let Some(step) =
+                            on_failure(ctx, queue, run, info, Some(err), candidate_abs, &at)?
+                        {
+                            return Ok(Checked::Instead(step));
+                        }
+                    }
+                    add_event(
+                        patch,
+                        "preflight-ignored",
+                        format!("Added although preflight.sh failed on {on_queue}"),
+                    );
+                    done.preflight_ignored = true;
+                }
+                Err(err) => return Err(err),
+            }
+        }
         return Ok(Checked::Add { stack_tip });
     }
 
@@ -1153,17 +1251,21 @@ fn on_failure(
     let decision = decide(&info)?;
     let leave_out = run.kind.can_leave_out();
     let step = match decision {
-        AdoptDecision::IgnorePreflight if info.kind == AdoptFailureKind::Preflight => {
+        AdoptDecision::IgnorePreflight if info.kind.is_preflight() => {
             run.items[index].set_ignore_preflight();
             run.write_groups()?;
             ctx.lines
                 .line(StepOutcome::warn("ignoring the preflight failure"));
             return Ok(None);
         }
-        AdoptDecision::InternalOnly => {
-            run.items[index].make_internal_only();
-            ctx.lines
-                .line(StepOutcome::warn("made internal-only; adding it again"));
+        AdoptDecision::InternalOnly if !info.internal_only => {
+            // Internal-only items are added last, on company main.
+            let mut item = run.items.remove(index);
+            item.make_internal_only();
+            run.items.push(item);
+            ctx.lines.line(StepOutcome::warn(
+                "made internal-only; adding it after the upstream-bound items",
+            ));
             Step::Again
         }
         AdoptDecision::Amend if info.can_amend => {
@@ -1221,6 +1323,14 @@ fn unattended(run: &BranchRun, info: &AdoptFailure, error: Option<PreflightError
                 format!("re-run with --groups {file}")
             };
             match info.kind {
+                AdoptFailureKind::CompanyPreflight => format!(
+                    "To adopt it anyway, set \"ignorePreflight\": true on group {n} in {file} \
+and {rerun}, or run git uplink {cmd} in a terminal to amend it."
+                ),
+                AdoptFailureKind::Stack if info.internal_only => format!(
+                    "Rebase those commits onto company main and {rerun}, \
+or run git uplink {cmd} in a terminal to amend it."
+                ),
                 AdoptFailureKind::Preflight => format!(
                     "To adopt it anyway, set \"ignorePreflight\": true (or \"intent\": \"internal-only\") on group {n} in {file} \
 and {rerun}, or run git uplink {cmd} in a terminal to amend it."

@@ -296,10 +296,12 @@ pub(super) fn prompt_decider() -> AdoptDecider {
     Arc::new(|failure: &AdoptFailure| {
         let button = |label, key| Choice { label, key };
         let mut options = Vec::new();
-        if failure.kind == AdoptFailureKind::Preflight {
+        if failure.kind.is_preflight() {
             options.push((button("Ignore", 'i'), AdoptDecision::IgnorePreflight));
         }
-        options.push((button("Internal-only", 'n'), AdoptDecision::InternalOnly));
+        if !failure.internal_only {
+            options.push((button("Internal-only", 'n'), AdoptDecision::InternalOnly));
+        }
         if failure.can_amend {
             options.push((button("Amend", 'a'), AdoptDecision::Amend));
         }

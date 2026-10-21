@@ -13629,7 +13629,8 @@ fn adopt_branch_decides_ignore_internal_only_or_skip() {
         let world = setup_world();
         let company = &world.company;
         let fork = adopt_fork_world(company);
-        set_preflight_script(company, "exit 1");
+        // Fails on public upstream; passes on company main with the fork notes.
+        set_preflight_script(company, "test -f NOTES.md");
         let result = adopt_fork_deciding(
             company,
             vec![
@@ -13648,8 +13649,12 @@ fn adopt_branch_decides_ignore_internal_only_or_skip() {
                 assert!(groups[0].ignore_preflight);
             }
             git_uplink::AdoptDecision::InternalOnly => {
-                assert!(adoption.queue.is_internal(&adoption.adopted[0].id));
-                assert_eq!(groups[0].intent, PatchIntent::InternalOnly);
+                // Made internal-only, it is added after the other internal group.
+                let titles: Vec<&str> = adoption.adopted.iter().map(|a| a.title.as_str()).collect();
+                assert_eq!(titles, ["Fork notes", "Add limits"]);
+                assert!(adoption.queue.is_internal(&adoption.adopted[1].id));
+                assert_eq!(groups[1].title, "Add limits");
+                assert_eq!(groups[1].intent, PatchIntent::InternalOnly);
             }
             _ => {
                 assert_eq!(adoption.adopted[0].title, "Fork notes");
@@ -13819,17 +13824,18 @@ fn adopt_branch_stop_keeps_what_was_added_and_a_rerun_skips_it() {
     let world = setup_world();
     let company = &world.company;
     let fork = adopt_fork_world(company);
-    set_preflight_script(company, "exit 1");
+    // Passes on public upstream; fails on company main with the fork notes.
+    set_preflight_script(company, "test ! -f NOTES.md");
     let state_before = state_commits(company);
     let groups = vec![
-        adopt_group(&[&fork.notes], "Fork notes", PatchIntent::InternalOnly),
         adopt_group(&[&fork.new_file], "Add limits", PatchIntent::Upstream),
+        adopt_group(&[&fork.notes], "Fork notes", PatchIntent::InternalOnly),
     ];
     let result = adopt_fork_deciding(company, groups, git_uplink::AdoptDecision::Stop).unwrap();
     let adoption = result.adoption.as_ref().unwrap();
     assert!(adoption.stopped);
     assert_eq!(adoption.adopted.len(), 1);
-    assert_eq!(adoption.adopted[0].title, "Fork notes");
+    assert_eq!(adoption.adopted[0].title, "Add limits");
     assert_eq!(state_commits(company), state_before + 1);
 
     // The groups file still has both groups; the first is queued already.
@@ -13839,7 +13845,7 @@ fn adopt_branch_stop_keeps_what_was_added_and_a_rerun_skips_it() {
         adopt_fork_deciding(company, groups, git_uplink::AdoptDecision::IgnorePreflight).unwrap();
     let adoption = result.adoption.as_ref().unwrap();
     assert_eq!(adoption.adopted.len(), 1);
-    assert_eq!(adoption.adopted[0].title, "Add limits");
+    assert_eq!(adoption.adopted[0].title, "Fork notes");
     assert!(adoption.adopted[0].preflight_ignored);
     assert_eq!(state_commits(company), state_before + 2);
 }
@@ -14825,4 +14831,238 @@ fn rebuild_inline_keeps_an_upstream_bound_resolution_that_fails_the_assessment_p
     let resolved = patch_of(company, &ttl.id);
     assert_eq!(resolved.status, PatchStatus::Queued);
     assert!(resolved.assess.as_ref().unwrap().ok);
+}
+
+/// History U1 (metrics), I1 (adds dash.js), U2 (adds api.js), I2 (edits dash.js).
+fn interleaved_ahead(company: &Path) -> [String; 4] {
+    write(company, "src/metrics.js", "export const n = 1;\n");
+    commit_all(company, "Add metrics collector");
+    let u1 = rev(company);
+    write(company, "src/dash.js", "export const dash = true;\n");
+    commit_all(company, "Vendor dashboards");
+    let i1 = rev(company);
+    write(company, "src/api.js", "export const api = 1;\n");
+    commit_all(company, "Add api");
+    let u2 = rev(company);
+    write(
+        company,
+        "src/dash.js",
+        "export const dash = true;\nexport const panels = 3;\n",
+    );
+    commit_all(company, "Add dashboard panels");
+    let i2 = rev(company);
+    [u1, i1, u2, i2]
+}
+
+#[test]
+fn init_adds_internal_groups_last_on_company_main_with_their_dependencies() {
+    let world = setup_uninitialized();
+    let [u1, i1, u2, i2] = interleaved_ahead(&world.company);
+    let queue = init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&u1], "Metrics", PatchIntent::Upstream),
+            adopt_group(&[&i1], "Dashboards", PatchIntent::InternalOnly),
+            adopt_group(&[&u2], "Api", PatchIntent::Upstream),
+            adopt_group(&[&i2], "Panels", PatchIntent::InternalOnly),
+        ],
+    );
+    let log = git_ok(
+        &world.company,
+        &["log", "--reverse", "--format=%s", STATE_BRANCH],
+    )
+    .unwrap();
+    let title_of = |id: &str| {
+        queue
+            .all_patches()
+            .find(|p| p.id == id)
+            .unwrap()
+            .title
+            .clone()
+    };
+    let adopted: Vec<String> = log
+        .lines()
+        .filter_map(|line| line.strip_prefix("uplink: adopt "))
+        .map(|rest| title_of(rest.split_whitespace().next().unwrap()))
+        .collect();
+    assert_eq!(adopted, ["Metrics", "Api", "Dashboards", "Panels"]);
+    let internal: Vec<&str> = queue.internal.iter().map(|p| p.title.as_str()).collect();
+    assert_eq!(internal, ["Dashboards", "Panels"]);
+    let (dash, panels) = (&queue.internal[0], &queue.internal[1]);
+    assert!(dash.depends_on.is_empty(), "{:?}", dash.depends_on);
+    assert_eq!(panels.depends_on, vec![dash.id.clone()]);
+    assert!(!has_git_ref(&world.company, "uplink/adopt-main"));
+    assert!(!world.company.join(".git/uplink-run.json").exists());
+}
+
+#[test]
+fn adopt_preflights_an_internal_group_on_company_main_and_amends_it_there() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    // Fails on company main while NOTES.md lacks "ok".
+    set_preflight_script(company, "test ! -f NOTES.md || grep -q ok NOTES.md");
+    let state_before = state_commits(company);
+    let kinds = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = kinds.clone();
+    let err = git_uplink::adopt_branch(
+        company,
+        git_uplink::AdoptBranchOpts {
+            branch: "main-fork".into(),
+            groups: Some(vec![adopt_group(
+                &[&fork.notes],
+                "Fork notes",
+                PatchIntent::InternalOnly,
+            )]),
+            interactive: Some(false),
+            decide: Some(std::sync::Arc::new(move |failure| {
+                seen.lock()
+                    .unwrap()
+                    .push((failure.kind, failure.internal_only));
+                Ok(git_uplink::AdoptDecision::Amend)
+            })),
+            no_preflight_deps: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        *kinds.lock().unwrap(),
+        [(git_uplink::AdoptFailureKind::CompanyPreflight, true)]
+    );
+    assert!(
+        err.contains("preflight.sh fails on it on company main"),
+        "{err}"
+    );
+    assert!(err.contains("uplink/adopt-main (company main"), "{err}");
+    // Detached on company main as the queue builds it, the notes picked on top.
+    assert_eq!(
+        git_ok(company, &["rev-parse", "HEAD^"]).unwrap(),
+        rev_of(company, "uplink/adopt-main")
+    );
+    let limits_queued = git_ok(company, &["show", "HEAD:src/tokens.js"]).unwrap();
+    assert!(limits_queued.contains("sha256"), "{limits_queued}");
+
+    write(company, "NOTES.md", "ok notes\n");
+    git(company, &["add", "NOTES.md"], GitOpts::default()).unwrap();
+    let result = adopt_resume(company, git_uplink::AdoptResume::Continue).unwrap();
+    let adoption = result.adoption.as_ref().unwrap();
+    assert_eq!(adoption.adopted.len(), 1);
+    assert!(adoption.adopted[0].amended);
+    assert!(adoption.adopted[0].preflight.is_some());
+    assert!(adoption.queue.is_internal(&adoption.adopted[0].id));
+    assert_eq!(state_commits(company), state_before + 1);
+    assert!(!has_git_ref(company, "uplink/adopt-main"));
+    let patch = git_ok(
+        company,
+        &[
+            "show",
+            &format!(
+                "{STATE_BRANCH}:.uplink/patches/{}.patch",
+                adoption.adopted[0].id
+            ),
+        ],
+    )
+    .unwrap();
+    assert!(patch.contains("+ok notes"), "{patch}");
+}
+
+#[test]
+fn adopt_abort_on_an_internal_group_that_conflicts_on_company_main_resets_state() {
+    let world = setup_world();
+    let company = &world.company;
+    adopt_fork_world(company);
+    // Edits NOTES.md, which company main does not have.
+    let edit = fork_edit_notes(company);
+    let state_before = rev_of(company, STATE_BRANCH);
+    let err = adopt_fork_deciding(
+        company,
+        vec![adopt_group(
+            &[&edit],
+            "Edit notes",
+            PatchIntent::InternalOnly,
+        )],
+        git_uplink::AdoptDecision::Amend,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("it does not apply on company main"), "{err}");
+    assert!(err.contains("Edit notes  (in conflict: NOTES.md)"), "{err}");
+    assert!(has_git_ref(company, "uplink/adopt-main"));
+
+    let result = adopt_resume(company, git_uplink::AdoptResume::Abort).unwrap();
+    assert_eq!(result.aborted, Some(git_uplink::AdoptResume::Abort));
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+    assert!(!has_git_ref(company, "uplink/adopt-main"));
+    assert!(!company.join(".git/uplink-run.json").exists());
+}
+
+#[test]
+fn restack_preflights_internal_patches_on_its_stack_unless_told_not_to() {
+    let world = setup_world();
+    let origin = publish_origin(&world.company);
+    let (asha_keep, asha) = clone_company_from(&origin, &world.upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &world.upstream);
+    add_notes_patch(&ben);
+    push_origin(&ben).unwrap();
+    git(
+        &asha,
+        &["checkout", "-b", "feat/internal"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&asha, "INTERNAL.md", "asha only\n");
+    commit_all(&asha, "internal from asha");
+    add_landed_patch(
+        &asha,
+        AddPatchOpts {
+            title: "Internal from Asha".into(),
+            from_ref: Some("main".into()),
+            internal_only: true,
+            internal_pr_number: Some(201),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    set_preflight_script(&asha, "test ! -f INTERNAL.md");
+    refresh_from_origin(&asha).unwrap();
+    let before = rev_of(&asha, STATE_BRANCH);
+
+    let kinds = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = kinds.clone();
+    let err = git_uplink::restack(
+        &asha,
+        git_uplink::RestackOpts {
+            interactive: Some(false),
+            decide: Some(std::sync::Arc::new(move |failure| {
+                seen.lock().unwrap().push(failure.kind);
+                Ok(git_uplink::AdoptDecision::Abort)
+            })),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(
+        *kinds.lock().unwrap(),
+        [git_uplink::AdoptFailureKind::CompanyPreflight]
+    );
+    assert!(err.contains("restack aborted"), "{err}");
+    assert_eq!(rev_of(&asha, STATE_BRANCH), before);
+
+    let result = git_uplink::restack(
+        &asha,
+        git_uplink::RestackOpts {
+            interactive: Some(false),
+            no_preflight: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.action, git_uplink::RestackAction::Restacked);
+    let adoption = result.run.unwrap().adoption.unwrap();
+    assert_eq!(adoption.adopted.len(), 1);
+    assert!(adoption.queue.is_internal(&adoption.adopted[0].id));
+    drop((asha_keep, ben_keep));
 }
