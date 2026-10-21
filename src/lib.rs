@@ -22,6 +22,7 @@ mod progress;
 mod prompt;
 mod queue;
 mod repo;
+mod run;
 mod settings;
 mod tooling;
 mod tui;
