@@ -598,7 +598,10 @@ fn uplink_worktree_tree(repo: &Path, branch: &str) -> Result<String> {
     outcome
 }
 
+/// Commits `.uplink/` to uplink/state. Refused while a queue run (adopt,
+/// restack) holds uplink/state, unless this is that run.
 pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
+    crate::lock::refuse_while_running(repo)?;
     let branch = STATE_BRANCH;
     let tree = uplink_worktree_tree(repo, branch)?;
     if has_ref(repo, branch)? {
@@ -688,6 +691,9 @@ pub fn point_branch_at(repo: &Path, branch: &str, sha: &str) -> Result<()> {
 }
 
 pub fn apply_state_sha(repo: &Path, branch: &str, sha: &str) -> Result<()> {
+    if branch == STATE_BRANCH {
+        crate::lock::refuse_while_running(repo)?;
+    }
     point_branch_at(repo, branch, sha)?;
     let dir = repo.join(".uplink");
     if dir.exists() {
@@ -744,6 +750,9 @@ pub fn queue_at(repo: &Path, sha: &str) -> Result<QueueState> {
 }
 
 pub fn set_state_branch(repo: &Path, branch: &str, sha: &str) -> Result<()> {
+    if branch == STATE_BRANCH {
+        crate::lock::refuse_while_running(repo)?;
+    }
     git(
         repo,
         &["update-ref", &format!("refs/heads/{branch}"), sha],

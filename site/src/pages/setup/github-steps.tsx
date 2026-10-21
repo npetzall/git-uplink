@@ -1101,11 +1101,12 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
         <div className="mt-3 space-y-3">
           <p>
             <code>init</code> leaves <code>main</code> alone and turns each
-            first-parent commit (or group you choose) into a queued patch after
-            the tooling. Preview the rebuilt tree, compare, then publish:
+            group of first-parent commits you choose into a queued patch after
+            the tooling, checking each one as{" "}
+            <code>git uplink adopt --branch</code> does. It then builds the
+            preview <code>uplink/preview/verify</code>. Compare, then publish:
           </p>
           <Command>{`git uplink init --upstream {{upstreamUrl}} --contrib {{contribUrl}} --forge github
-git uplink rebuild --branch uplink/preview/verify
 git diff main uplink/preview/verify
 git uplink rebuild --push
 git push origin uplink/upstream`}</Command>

@@ -12,25 +12,26 @@ use git_uplink::{
     SyncResult, TransferDirection, TransferResult, UpgradeResume, stdin_is_tty,
 };
 use git_uplink::{
-    AddPatchOpts, AdoptBranchOpts, AmendMessage, AmendResult, ApprovalReceipt, AssessPackage,
-    Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia, PACKAGE_CHANGE,
-    PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode, PushOpts,
-    RebuildOpts, STATE_BRANCH, ScriptEcho, ScriptVerdict, TO_UPSTREAM_ENVIRONMENT,
-    accept_upstream_preflight, accept_upstream_with, add_patch, add_patch_or_gate, adopt_branch,
-    adopted_next_steps, amend_patch_with, amend_preflight, approve_patch_reviewed,
-    assess_from_message, assess_patch_file, assess_patch_for_packet, change_between,
-    command_preflight, command_tested, commit_queue, count_files, depends_on_from_message, doctor,
-    drop_patch, existing_patch_preflight, export_tested, fetch_pending_upstream,
-    format_approval_receipt, format_assess_markdown, format_contribution_packet_with_extras,
-    format_doctor_summary, format_init_summary, format_product_changes, format_status_table,
-    from_upstream_report_paths, git_ok, hooks_publish_hint, incoming_change_preflight, init,
-    load_groups_file, mark_merged, newly_ready_to_submit, parse_github_repo,
-    parse_pull_request_url, patch_text, push_queue, read_queue, rebase_onto_main, rebase_plan,
-    rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
-    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
-    resolve_preflight, review_token, review_token_path, set_script_echo, status_report,
-    status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
-    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
+    AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendMessage, AmendResult, ApprovalReceipt,
+    AssessPackage, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia,
+    PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode,
+    PushOpts, RebuildOpts, RunKind, STATE_BRANCH, ScriptEcho, ScriptVerdict,
+    TO_UPSTREAM_ENVIRONMENT, accept_upstream_preflight, accept_upstream_with, add_patch,
+    add_patch_or_gate, adopt_branch, adopted_next_steps, amend_patch_with, amend_preflight,
+    approve_patch_reviewed, assess_from_message, assess_patch_file, assess_patch_for_packet,
+    change_between, command_preflight, command_tested, commit_queue, count_files,
+    depends_on_from_message, doctor, drop_patch, existing_patch_preflight, export_tested,
+    fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
+    format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
+    format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
+    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
+    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
+    read_queue, rebase_onto_main, rebase_plan, rebuild_preflight, rebuild_with, record_gated_pr,
+    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
+    reset_from_origin, resolve_conflict_with, resolve_preflight, review_token, review_token_path,
+    set_script_echo, status_report, status_snapshot, store_assess_result, store_patch_extras,
+    stored_commit_message, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
+    write_man_pages,
 };
 
 const VERSION: &str = concat!(
@@ -662,6 +663,7 @@ struct InitArgs {
     upgrade: bool,
     resume: Option<UpgradeResume>,
     adopt_groups: Option<PathBuf>,
+    no_preview: bool,
     json: bool,
     settings: SettingsFlags,
 }
@@ -692,6 +694,8 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
         resume: args.resume,
         adopt_groups,
         interactive: None,
+        decide: None,
+        no_preview: args.no_preview,
         settings: args.settings,
         ask_settings: stdin_is_tty(),
         progress: if hydrate {
@@ -708,7 +712,10 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
             .as_deref()
             .is_some_and(|n| n.starts_with("adopted from "))
     }) {
-        eprintln!("{}", adopted_next_steps());
+        eprintln!(
+            "{}",
+            adopted_next_steps(result.preview.as_ref(), &queue.config.internal_branch)
+        );
     }
     if args.json {
         println!("{}", serde_json::to_string_pretty(&queue.config)?);
@@ -740,6 +747,7 @@ struct AdoptArgs {
     resume: Option<AdoptResume>,
     keep_test_branches: bool,
     no_preflight_deps: bool,
+    no_preview: bool,
     json: bool,
 }
 
@@ -761,11 +769,25 @@ fn cmd_adopt(repo: &Path, args: AdoptArgs) -> Result<(), Error> {
             write_groups: args.write_groups,
             resume: args.resume,
             decide: None,
+            no_preview: args.no_preview,
             progress: ProgressMode::Auto,
         },
     )?;
+    print_run_result(repo, &result, args.json)
+}
+
+/// What `adopt`, `restack` and their `--continue` print: the patches a
+/// run added, how it ended, and the preview it built.
+fn print_run_result(repo: &Path, result: &AdoptBranchResult, json: bool) -> Result<(), Error> {
+    let restack = result.kind == RunKind::Restack;
+    let verb = if restack { "restack" } else { "adopt" };
     let branch = &result.branch;
-    let groups_file = result.groups_file.display().to_string();
+    let groups_file = (!result.groups_file.as_os_str().is_empty())
+        .then(|| result.groups_file.display().to_string());
+    let groups_line = groups_file
+        .as_deref()
+        .map(|file| format!("\nGroups file: {file}"))
+        .unwrap_or_default();
     if result.behind {
         eprintln!(
             "warning: {branch} forked from an older upstream than uplink/upstream; \
@@ -778,10 +800,11 @@ its patches were checked against current upstream."
         None => None,
     };
     let Some(adoption) = &result.adoption else {
-        if args.json {
+        if json {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
+                    "kind": result.kind,
                     "branch": branch,
                     "behind": result.behind,
                     "aborted": aborted,
@@ -791,22 +814,22 @@ its patches were checked against current upstream."
             );
         } else if aborted == Some("reset") {
             println!(
-                "adopt aborted; local uplink/state is back where the run started.\nGroups file: {groups_file}"
+                "{verb} aborted; local uplink/state is back where the run started.{groups_line}"
             );
         } else if aborted.is_some() {
             println!(
-                "adopt aborted; the patches it added stay on local uplink/state.\nGroups file: {groups_file}"
+                "{verb} aborted; the patches it added stay on local uplink/state.{groups_line}"
             );
-        } else {
+        } else if let Some(file) = &groups_file {
             println!(
-                "Groups written to {groups_file}; nothing was adopted.\n\
-Adopt them with: git uplink adopt --branch {branch} --groups {groups_file}"
+                "Groups written to {file}; nothing was adopted.\n\
+Adopt them with: git uplink adopt --branch {branch} --groups {file}"
             );
         }
         return Ok(());
     };
     let adopted = &adoption.adopted;
-    if args.json {
+    if json {
         let rows: Vec<_> = adopted
             .iter()
             .map(|p| {
@@ -825,26 +848,41 @@ Adopt them with: git uplink adopt --branch {branch} --groups {groups_file}"
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
+                "kind": result.kind,
                 "branch": branch,
                 "behind": result.behind,
                 "aborted": null,
                 "stopped": adoption.stopped,
                 "adopted": rows,
+                "alreadyQueued": adoption.already_queued,
                 "groupsFile": groups_file,
+                "preview": result.preview,
             }))?
         );
         return Ok(());
     }
     let n = adopted.len();
+    let patches = if n == 1 { "patch" } else { "patches" };
     let stopped = if adoption.stopped {
         "; stopped before the end"
     } else {
         ""
     };
-    println!(
-        "Adopted {n} patch{} from {branch}{stopped} (local only; nothing pushed, main unchanged).",
-        if n == 1 { "" } else { "es" }
-    );
+    if restack {
+        println!(
+            "Restacked {n} local {patches} onto {branch}'s uplink/state{stopped} (local only; nothing pushed)."
+        );
+        if !adoption.already_queued.is_empty() {
+            println!(
+                "Already in {branch}'s queue, so left out: {}",
+                adoption.already_queued.join(", ")
+            );
+        }
+    } else {
+        println!(
+            "Adopted {n} {patches} from {branch}{stopped} (local only; nothing pushed, main unchanged)."
+        );
+    }
     let test_branches: Vec<&str> = adopted
         .iter()
         .filter_map(|p| p.test_branch.as_deref())
@@ -856,8 +894,18 @@ Adopt them with: git uplink adopt --branch {branch} --groups {groups_file}"
             test_branches.join(" ")
         );
     }
-    println!("Groups file: {groups_file}");
-    println!("{}", adopted_next_steps());
+    if let Some(file) = &groups_file {
+        println!("Groups file: {file}");
+    }
+    let company_branch = read_queue(repo)
+        .map(|queue| queue.config.internal_branch)
+        .unwrap_or_else(|_| "main".into());
+    if n > 0 || result.preview.is_some() {
+        println!(
+            "{}",
+            adopted_next_steps(result.preview.as_ref(), &company_branch)
+        );
+    }
     Ok(())
 }
 
@@ -1718,6 +1766,7 @@ fn run() -> Result<(), Error> {
             drop,
             abort,
             adopt_groups,
+            no_preview,
             json,
             preflight,
             banned_word,
@@ -1739,6 +1788,7 @@ fn run() -> Result<(), Error> {
                     _ => None,
                 },
                 adopt_groups,
+                no_preview,
                 json,
                 settings: SettingsFlags {
                     preflight,
@@ -1793,6 +1843,7 @@ fn run() -> Result<(), Error> {
             abort_keep,
             keep_test_branches,
             no_preflight_deps,
+            no_preview,
             json,
         } => cmd_adopt(
             &repo,
@@ -1809,6 +1860,7 @@ fn run() -> Result<(), Error> {
                 },
                 keep_test_branches,
                 no_preflight_deps,
+                no_preview,
                 json,
             },
         ),

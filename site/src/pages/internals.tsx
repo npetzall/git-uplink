@@ -140,8 +140,8 @@ flowchart TD
   seed --> compare{"company main<br/>vs upstream"}
   compare -->|"same"| tooling["Record the forge pack<br/>as the tooling patch"]
   tooling --> rebuild["Rebuild main =<br/>upstream + tooling"]
-  compare -->|"ahead"| adopt["Record tooling, then turn each<br/>first-parent commit (or group)<br/>into a queued patch"]
-  adopt --> preview["You preview with rebuild --branch,<br/>then publish with rebuild --push"]
+  compare -->|"ahead"| adopt["Record tooling, then adopt each<br/>group of first-parent commits<br/>as adopt --branch does"]
+  adopt --> preview["Build uplink/preview/verify;<br/>you compare, then publish<br/>with push and rebuild --push"]
   compare -->|"diverged"| refuse["Refuse: bring main<br/>up to date first"]
 `;
 
@@ -585,11 +585,24 @@ export function InternalsPage() {
             still fails opens a window with the preflight output: adopt it with
             the failure ignored, make it internal-only, skip it, stop, abort
             (resetting <code>uplink/state</code> to the start), or amend it
-            inline, which pauses in <code>.git/uplink-adopt.json</code> until{" "}
-            <code>--continue</code>. Every decision goes to{" "}
+            inline. Amending cherry-picks the group&apos;s commits one by one
+            and stops on the first that conflicts, listing each commit as
+            applied, in conflict or still to pick, until <code>--continue</code>
+            . Every decision goes to{" "}
             <code>.git/uplink/adopt/&lt;branch&gt;.json</code>, which{" "}
             <code>--groups</code> replays, skipping groups already queued. It
             runs locally only.
+          </li>
+          <li>
+            <code>init</code> adopts a company <code>main</code> that is ahead
+            of upstream through the same run, except that every commit must be
+            in a group, so a failing group cannot be skipped.
+          </li>
+          <li>
+            A run keeps <code>.git/uplink-run.json</code> from its start to its
+            end, and while it is there every other command that changes{" "}
+            <code>uplink/state</code> refuses. When the run has added patches,
+            it builds <code>uplink/preview/verify</code>.
           </li>
         </ul>
       </Section>

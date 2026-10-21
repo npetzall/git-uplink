@@ -2775,10 +2775,9 @@ fn init_adopts_each_merge_commit_as_a_patch() {
     assert_eq!(queue.all_patches().count(), 3);
     assert_eq!(queue.patch_refs()[1].title, "One");
     assert_eq!(queue.patch_refs()[2].title, "Two");
-    assert_eq!(
-        queue.patch_refs()[2].depends_on,
-        vec![queue.patch_refs()[1].id.clone()]
-    );
+    // Dependencies are found the way adopt --branch finds them: Two applies
+    // onto upstream without One.
+    assert!(queue.patch_refs()[2].depends_on.is_empty());
 }
 
 #[test]
@@ -13697,7 +13696,15 @@ fn adopt_branch_pauses_to_amend_and_continues() {
     let text = err.to_string();
     assert!(text.contains("adopt paused on group 1"), "{text}");
     assert!(text.contains("git uplink adopt --continue"), "{text}");
-    assert!(company.join(".git/uplink-adopt.json").is_file());
+    // The commit is cherry-picked and listed with what it left in conflict.
+    assert!(
+        text.contains(&format!(
+            "{} Edit notes  (in conflict: NOTES.md)",
+            &edit[..7]
+        )),
+        "{text}"
+    );
+    assert!(company.join(".git/uplink-run.json").is_file());
     // Detached on uplink/upstream + the queued upstream patch.
     assert_eq!(
         git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
@@ -13722,7 +13729,7 @@ fn adopt_branch_pauses_to_amend_and_continues() {
     let adoption = result.adoption.as_ref().unwrap();
     assert_eq!(adoption.adopted.len(), 1);
     assert!(adoption.adopted[0].amended);
-    assert!(!company.join(".git/uplink-adopt.json").exists());
+    assert!(!company.join(".git/uplink-run.json").exists());
     assert_eq!(
         git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
         "main"
@@ -13776,7 +13783,7 @@ fn adopt_branch_abort_abort_keep_and_skip_a_paused_group() {
         // The first group was committed before the run paused on the second.
         assert_ne!(rev_of(company, STATE_BRANCH), state_before);
         let result = adopt_resume(company, resume).unwrap();
-        assert!(!company.join(".git/uplink-adopt.json").exists());
+        assert!(!company.join(".git/uplink-run.json").exists());
         assert_eq!(
             git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
             "main"
@@ -13863,4 +13870,279 @@ fn adopt_branch_failure_mid_run_resets_uplink_state() {
     assert_eq!(patches(), patches_before);
     let queue = git_uplink::read_queue(company).unwrap();
     assert!(!queue.all_patches().any(|p| p.title == "Fork notes"));
+}
+
+fn init_adopt_opts(world: &World, groups: Vec<AdoptGroup>) -> InitOpts {
+    InitOpts {
+        upstream_url: Some(world.upstream.to_str().unwrap().into()),
+        contrib_url: Some(remote_get_url(&world.company, "contrib")),
+        forge: Some(Forge::Github),
+        adopt_groups: Some(groups),
+        interactive: Some(false),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn init_adopts_through_the_run_one_state_commit_per_group_and_builds_a_preview() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    let queue = init_adopt(
+        &world,
+        vec![
+            adopt_group(&[&a, &b], "Metrics", PatchIntent::Upstream),
+            adopt_group(&[&c], "Dashboards", PatchIntent::InternalOnly),
+        ],
+    );
+    let log = git_ok(&world.company, &["log", "--format=%s", STATE_BRANCH]).unwrap();
+    for patch in &queue.patch_refs()[1..] {
+        assert!(
+            log.contains(&format!("uplink: adopt {} from main", patch.id)),
+            "{log}"
+        );
+    }
+    assert!(!world.company.join(".git/uplink-run.json").exists());
+    assert!(has_git_ref(&world.company, "uplink/preview/verify"));
+    let dash = git_ok(
+        &world.company,
+        &["show", "uplink/preview/verify:src/dash.js"],
+    )
+    .unwrap();
+    assert!(dash.contains("dash = true"), "{dash}");
+}
+
+#[test]
+fn init_cannot_skip_a_failing_group() {
+    let world = setup_uninitialized();
+    let [a, b, c] = three_linear_ahead(&world.company);
+    let groups = vec![
+        adopt_group(&[&a, &b], "Metrics", PatchIntent::Upstream),
+        adopt_group(&[&c], "Dashboards", PatchIntent::InternalOnly),
+    ];
+    let offered = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let seen = offered.clone();
+    let mut opts = init_adopt_opts(&world, groups.clone());
+    opts.settings.preflight = Some("exit 1".into());
+    opts.decide = Some(std::sync::Arc::new(move |failure| {
+        *seen.lock().unwrap() = Some(failure.can_leave_out);
+        Ok(git_uplink::AdoptDecision::Skip)
+    }));
+    let err = init(&world.company, opts).unwrap_err().to_string();
+    // Skip is not offered, and asking for it anyway aborts.
+    assert_eq!(*offered.lock().unwrap(), Some(false));
+    assert!(err.contains("adopt aborted on group 1"), "{err}");
+    let queue = git_uplink::read_queue(&world.company).unwrap();
+    assert_eq!(queue.all_patches().count(), 1, "only tooling is left");
+    assert!(has_git_ref(&world.company, "uplink/adopt-from"));
+
+    // Paused to amend, init takes neither --skip nor --abort-keep.
+    let mut opts = init_adopt_opts(&world, groups);
+    opts.decide = Some(std::sync::Arc::new(|_| {
+        Ok(git_uplink::AdoptDecision::Amend)
+    }));
+    let err = init(&world.company, opts).unwrap_err().to_string();
+    assert!(err.contains("adopt paused on group 1"), "{err}");
+    assert!(!err.contains("--skip"), "{err}");
+    assert!(!err.contains("--abort-keep"), "{err}");
+    for resume in [
+        git_uplink::AdoptResume::Skip,
+        git_uplink::AdoptResume::AbortKeep,
+    ] {
+        let err = adopt_resume(&world.company, resume)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot leave one out"), "{err}");
+    }
+    let err = init(&world.company, InitOpts::default())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("an adopt is paused"), "{err}");
+    let result = adopt_resume(&world.company, git_uplink::AdoptResume::Abort).unwrap();
+    assert_eq!(result.kind, git_uplink::RunKind::Init);
+    assert!(!world.company.join(".git/uplink-run.json").exists());
+}
+
+#[test]
+fn a_paused_adopt_locks_uplink_state_until_it_ends() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let edit = fork_edit_notes(company);
+    adopt_fork_deciding(
+        company,
+        vec![adopt_group(&[&edit], "Edit notes", PatchIntent::Upstream)],
+        git_uplink::AdoptDecision::Amend,
+    )
+    .unwrap_err();
+    let state = rev_of(company, STATE_BRANCH);
+    let refused = |err: Error| {
+        let text = err.to_string();
+        assert!(text.contains("an adopt is paused"), "{text}");
+    };
+    refused(drop_patch(company, &fork.queued.id, "no").unwrap_err());
+    refused(rebuild(company).unwrap_err());
+    refused(push_queue(company, PushOpts::default()).unwrap_err());
+    refused(reset_from_origin(company).unwrap_err());
+    refused(git_uplink::commit_queue(company, "sneak in").unwrap_err());
+    assert_eq!(rev_of(company, STATE_BRANCH), state);
+
+    adopt_resume(company, git_uplink::AdoptResume::AbortKeep).unwrap();
+    drop_patch(company, &fork.queued.id, "no").unwrap();
+}
+
+#[test]
+fn an_interrupted_adopt_stays_locked_and_continues() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    // A run file left by a run that was killed before its first group.
+    let run = serde_json::json!({
+        "kind": "branch",
+        "branch": "main-fork",
+        "groupsFile": git_uplink::groups_file_path(company, "main-fork").unwrap(),
+        "items": [{
+            "type": "group",
+            "commits": [fork.new_file],
+            "title": "Add limits",
+            "intent": "upstream",
+        }],
+        "keepTestBranches": false,
+        "preflightDeps": false,
+        "startState": rev_of(company, STATE_BRANCH),
+        "next": 0,
+        "adopted": [],
+    });
+    fs::write(
+        company.join(".git/uplink-run.json"),
+        serde_json::to_string(&run).unwrap(),
+    )
+    .unwrap();
+    let err = rebuild(company).unwrap_err().to_string();
+    assert!(err.contains("run is in progress"), "{err}");
+    assert!(err.contains("git uplink adopt --continue"), "{err}");
+    let result = adopt_resume(company, git_uplink::AdoptResume::Continue).unwrap();
+    let adopted = &result.adoption.as_ref().unwrap().adopted;
+    assert_eq!(adopted.len(), 1);
+    assert!(!company.join(".git/uplink-run.json").exists());
+}
+
+#[test]
+fn an_adopt_conflict_lists_each_commit_and_continue_picks_the_rest() {
+    let world = setup_world();
+    let company = &world.company;
+    adopt_fork_world(company);
+    git(
+        company,
+        &["checkout", "-q", "main-fork"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "src/x.js", "export const x = 1;\n");
+    commit_all(company, "Add x");
+    let x = rev(company);
+    write(company, "NOTES.md", "fork notes\nmore notes\n");
+    commit_all(company, "Edit notes");
+    let notes = rev(company);
+    write(company, "src/y.js", "export const y = 1;\n");
+    commit_all(company, "Add y");
+    let y = rev(company);
+    git(
+        company,
+        &["checkout", "-q", "-f", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let err = adopt_fork_deciding(
+        company,
+        vec![adopt_group(
+            &[&x, &notes, &y],
+            "X and Y",
+            PatchIntent::Upstream,
+        )],
+        git_uplink::AdoptDecision::Amend,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains(&format!("✓ {} Add x  (applied)", &x[..7])),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!(
+            "✗ {} Edit notes  (in conflict: NOTES.md)",
+            &notes[..7]
+        )),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!(
+            "· {} Add y  (to pick: git cherry-pick {})",
+            &y[..7],
+            &y[..7]
+        )),
+        "{err}"
+    );
+    assert!(company.join("src/x.js").is_file());
+    assert!(!company.join("src/y.js").exists());
+
+    write(company, "NOTES.md", "more notes\n");
+    git(company, &["add", "NOTES.md"], GitOpts::default()).unwrap();
+    let result = adopt_resume(company, git_uplink::AdoptResume::Continue).unwrap();
+    let adopted = &result.adoption.as_ref().unwrap().adopted;
+    assert_eq!(adopted.len(), 1);
+    assert!(adopted[0].amended);
+    let patch = git_ok(
+        company,
+        &[
+            "show",
+            &format!("{STATE_BRANCH}:.uplink/patches/{}.patch", adopted[0].id),
+        ],
+    )
+    .unwrap();
+    for change in [
+        "+export const x = 1;",
+        "+more notes",
+        "+export const y = 1;",
+    ] {
+        assert!(patch.contains(change), "{patch}");
+    }
+    assert_eq!(
+        git_ok(company, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+        "main"
+    );
+}
+
+#[test]
+fn adopt_branch_builds_the_preview_unless_asked_not_to() {
+    for no_preview in [false, true] {
+        let world = setup_world();
+        let company = &world.company;
+        let fork = adopt_fork_world(company);
+        let result = git_uplink::adopt_branch(
+            company,
+            git_uplink::AdoptBranchOpts {
+                branch: "main-fork".into(),
+                groups: Some(vec![adopt_group(
+                    &[&fork.new_file],
+                    "Add limits",
+                    PatchIntent::Upstream,
+                )]),
+                interactive: Some(false),
+                no_preflight_deps: true,
+                no_preview,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if no_preview {
+            assert!(result.preview.is_none());
+            assert!(!has_git_ref(company, "uplink/preview/verify"));
+        } else {
+            let preview = result.preview.unwrap();
+            assert!(preview.error.is_none(), "{:?}", preview.error);
+            let limits = git_ok(company, &["show", "uplink/preview/verify:src/limits.js"]).unwrap();
+            assert!(limits.contains("max = 10"), "{limits}");
+        }
+    }
 }

@@ -37,6 +37,7 @@ pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
 /// is kept. Leaves HEAD on the configured internal branch with `.uplink/`
 /// restored from origin.
 pub fn reset_from_origin(repo: &Path) -> Result<ResetResult> {
+    crate::lock::refuse_while_running(repo)?;
     let fetched = refresh_from_origin(repo)?;
     refresh_company_branch(repo, COMPANY_REMOTE, &fetched.internal_branch)?;
     apply_state_sha(repo, STATE_BRANCH, &fetched.state_sha)?;
