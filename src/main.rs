@@ -13,25 +13,26 @@ use git_uplink::{
 };
 use git_uplink::{
     AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendMessage, AmendResult, ApprovalReceipt,
-    AssessPackage, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, MergeVia,
-    PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN, PreflightError, PreflightReport, ProgressMode,
-    PushOpts, RebuildOpts, RestackAction, RestackOpts, RunKind, STATE_BRANCH, ScriptEcho,
-    ScriptVerdict, TO_UPSTREAM_ENVIRONMENT, accept_upstream_preflight, accept_upstream_with,
-    add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps, amend_patch_with,
-    amend_preflight, approve_patch_reviewed, assess_from_message, assess_patch_file,
-    assess_patch_for_packet, change_between, command_preflight, command_tested, commit_queue,
-    count_files, depends_on_from_message, doctor, drop_patch, existing_patch_preflight,
-    export_tested, fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
+    AssessPackage, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts,
+    InlineRebuild, InlineRebuildOpts, MergeVia, PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN,
+    PreflightError, PreflightReport, ProgressMode, PushOpts, RebuildOpts, RebuildResume,
+    RestackAction, RestackOpts, RunKind, STATE_BRANCH, ScriptEcho, ScriptVerdict,
+    TO_UPSTREAM_ENVIRONMENT, accept_upstream_preflight, accept_upstream_with, add_patch,
+    add_patch_or_gate, adopt_branch, adopted_next_steps, amend_patch_with, amend_preflight,
+    approve_patch_reviewed, assess_from_message, assess_patch_file, assess_patch_for_packet,
+    change_between, command_preflight, command_tested, commit_queue, count_files,
+    depends_on_from_message, doctor, drop_patch, existing_patch_preflight, export_tested,
+    fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
     format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
     newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
-    read_queue, rebase_onto_main, rebase_plan, rebuild_preflight, rebuild_with, record_gated_pr,
-    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
-    reset_from_origin, resolve_conflict_with, resolve_preflight, restack, review_token,
-    review_token_path, set_script_echo, status_report, status_snapshot, store_assess_result,
-    store_patch_extras, stored_commit_message, submit_patch_with, sync_with, transfer_patch_with,
-    transfer_preflight, write_man_pages,
+    read_queue, rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, refuse_script_with_credentials,
+    report_paths, reset_from_origin, resolve_conflict_with, resolve_preflight, restack,
+    resume_rebuild, review_token, review_token_path, set_script_echo, status_report,
+    status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
+    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
 };
 
 const VERSION: &str = concat!(
@@ -1681,6 +1682,38 @@ fn cmd_rebuild(
     Ok(())
 }
 
+fn print_inline_rebuild(done: &InlineRebuild) -> Result<(), Error> {
+    let result = &done.result;
+    if result.tree_changed {
+        println!("rebuild complete");
+    } else {
+        println!("rebuild complete; {} unchanged", result.branch);
+    }
+    for id in &done.amended {
+        let status = result
+            .queue
+            .all_patches()
+            .find(|p| p.id == *id)
+            .map(|p| p.status.as_str())
+            .unwrap_or("");
+        println!("amended {id} ({status})");
+    }
+    let ready = newly_ready_to_submit(&done.before, &result.queue);
+    if !ready.is_empty() {
+        println!("ready to submit: {}", ready.join(", "));
+    }
+    if let Some(changes) = result.changes.as_ref().filter(|_| result.tree_changed) {
+        if !changes.tooling.is_empty() {
+            println!("Tooling: {} changed", count_files(changes.tooling.len()));
+        }
+        println!("{}", format_product_changes(changes, &result.branch, false));
+    }
+    if let Some(remote) = &done.pushed {
+        println!("pushed {} to {remote}", result.branch);
+    }
+    Ok(())
+}
+
 fn cmd_resolve(repo: &Path, id: &str, verdict: &ScriptVerdict) -> Result<(), Error> {
     let before = read_queue(repo)?;
     match resolve_conflict_with(repo, id, verdict) {
@@ -2089,9 +2122,37 @@ fn run() -> Result<(), Error> {
             preflight_only,
             verify,
             json,
+            interactive,
+            resume,
+            abort,
         } => {
             if preflight_only {
                 return finish_preflight_report(rebuild_preflight(&repo, verify)?, None);
+            }
+            if resume || abort {
+                let resume = if abort {
+                    RebuildResume::Abort
+                } else {
+                    RebuildResume::Continue
+                };
+                return match resume_rebuild(&repo, resume)? {
+                    Some(done) => print_inline_rebuild(&done),
+                    None => {
+                        println!("rebuild aborted; uplink/state unchanged");
+                        Ok(())
+                    }
+                };
+            }
+            if interactive {
+                let done = rebuild_inline(
+                    &repo,
+                    InlineRebuildOpts {
+                        push,
+                        push_remote,
+                        verify,
+                    },
+                )?;
+                return print_inline_rebuild(&done);
             }
             cmd_rebuild(
                 &repo,

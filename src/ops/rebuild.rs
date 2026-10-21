@@ -530,6 +530,45 @@ pub(super) fn rebuild_once(
     check: Option<&ScriptVerdict>,
     force: bool,
 ) -> Result<QueueState> {
+    match rebuild_replay(repo, check, force, None)? {
+        Rebuilt::Published(queue) => Ok(*queue),
+        Rebuilt::Stopped(stop) => {
+            unreachable!("only an inline rebuild stops: {}", stop.patch.id)
+        }
+    }
+}
+
+/// What an inline rebuild (`rebuild -i`) does in place of the conflict gate.
+pub(super) struct Inline<'a> {
+    /// Patch files (id, contents) replayed in place of the stored ones.
+    pub replace: &'a [(String, String)],
+    /// Runs on the queue before the rebuild is published, once `.uplink`
+    /// holds the patch files as replayed.
+    pub before_publish: &'a mut dyn FnMut(&mut QueueState) -> Result<()>,
+}
+
+/// The patch an inline rebuild stopped on, with the checkout left on it.
+pub(super) struct RebuildStop {
+    pub patch: Box<Patch>,
+    /// The queue before the patch: what the fix is squashed onto.
+    pub onto: String,
+    pub cause: Stopped,
+}
+
+pub(super) enum Rebuilt {
+    Published(Box<QueueState>),
+    Stopped(RebuildStop),
+}
+
+/// [`rebuild_once`]. With `inline`, a patch that does not apply, or that
+/// `preflight.sh` blames, is not gated: the rebuild stops on it and leaves
+/// the checkout there, with nothing written to uplink/state.
+pub(super) fn rebuild_replay(
+    repo: &Path,
+    check: Option<&ScriptVerdict>,
+    force: bool,
+    mut inline: Option<Inline<'_>>,
+) -> Result<Rebuilt> {
     let mut queue = read_queue_file(repo)?;
     let company_branch = queue.config.internal_branch.clone();
     ensure_upstream_ref(repo)?;
@@ -541,7 +580,12 @@ pub(super) fn rebuild_once(
     ensure_clean_worktree(repo, "a rebuild")?;
     let previous = replaced_main(repo, &company_branch, upstream_ref)?;
     let snapshot = snapshot_uplink(repo)?;
-    let outcome = (|| -> Result<QueueState> {
+    let outcome = (|| -> Result<Rebuilt> {
+        if let Some(inline) = &inline {
+            for (id, contents) in inline.replace {
+                fs::write(snapshot.join(patch_path(id)?), contents)?;
+            }
+        }
         git(
             repo,
             &["checkout", "-f", "--quiet", "--detach", upstream_ref],
@@ -556,6 +600,13 @@ pub(super) fn rebuild_once(
                     patch.id,
                     patch.conflict.map(|c| c.files).unwrap_or_default(),
                 )));
+            }
+            Replayed::Conflict(patch, files) if inline.is_some() => {
+                return Ok(Rebuilt::Stopped(RebuildStop {
+                    patch: Box::new(patch),
+                    onto: rev_parse(repo, "HEAD")?,
+                    cause: Stopped::Apply { files },
+                }));
             }
             Replayed::Conflict(patch, files) => {
                 return Err(Error::Conflict(persist_conflict(
@@ -585,6 +636,22 @@ pub(super) fn rebuild_once(
             })?;
             if let Some(failed) = failed {
                 let patch = get_patch(&queue, &failed.id)?.clone();
+                if inline.is_some() {
+                    // The patch as it applied: the fix goes on top.
+                    git(
+                        repo,
+                        &["checkout", "-f", "--quiet", "--detach", &failed.sha],
+                        GitOpts::default(),
+                    )?;
+                    return Ok(Rebuilt::Stopped(RebuildStop {
+                        patch: Box::new(patch),
+                        onto: rev_parse(repo, &format!("{}^", failed.sha))?,
+                        cause: Stopped::Preflight {
+                            sha: failed.sha,
+                            output: failed.output,
+                        },
+                    }));
+                }
                 return Err(Error::Conflict(persist_conflict(
                     repo,
                     &mut queue,
@@ -600,6 +667,11 @@ pub(super) fn rebuild_once(
             }
         }
 
+        if let Some(inline) = inline.as_mut() {
+            fs::create_dir_all(repo.join(".uplink/patches"))?;
+            copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
+            (inline.before_publish)(&mut queue)?;
+        }
         publish_rebuilt_company(
             repo,
             &mut queue,
@@ -608,7 +680,7 @@ pub(super) fn rebuild_once(
             upstream_ref,
             previous.as_ref(),
         )?;
-        Ok(queue)
+        Ok(Rebuilt::Published(Box::new(queue)))
     })();
     let _ = fs::remove_dir_all(&snapshot);
     outcome

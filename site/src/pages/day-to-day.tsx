@@ -322,6 +322,20 @@ git push`}</Code>
           your line over an upstream change of the same line. A fix that only
           follows upstream changes next to your lines needs no new approval.
         </p>
+        <p>
+          An operator who rebuilds locally can fix a conflict without the PR. On
+          the gated branches: switch to{" "}
+          <code>uplink/conflict/&lt;id&gt;-work</code>, fix and{" "}
+          <code>git add</code> the files, run{" "}
+          <code>git uplink resolve &lt;id&gt;</code>, then push. Or inline, the
+          way <code>git rebase</code> stops: <code>rebuild -i</code> leaves the
+          failed apply (or the patch preflight blames) in the checkout and
+          writes nothing to <code>uplink/state</code> until every stop is fixed.
+        </p>
+        <Code>{`git uplink rebuild -i --push
+# fix the files, then
+git add <files>
+git uplink rebuild --continue   # pushes when done; --abort changes nothing`}</Code>
         <Lab scenario="upstream-conflict">Upstream conflict</Lab>
       </Section>
 

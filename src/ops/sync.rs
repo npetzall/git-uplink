@@ -417,7 +417,7 @@ pub(super) enum Stopped {
 /// The end of what the script printed is where a build reports its error.
 const CONFLICT_OUTPUT_LIMIT: usize = 8 * 1024;
 
-fn output_tail(output: &str) -> String {
+pub(super) fn output_tail(output: &str) -> String {
     let mut start = output.len().saturating_sub(CONFLICT_OUTPUT_LIMIT);
     while !output.is_char_boundary(start) {
         start += 1;

@@ -1033,6 +1033,24 @@ pub enum Commands {
     /// a reviewed pull request merged into `main`, and the one of a `sync`
     /// that needs no approval, where upstream moved only by our own
     /// patches. `rebuild --verify` tests `main` after those.
+    ///
+    /// Locally, a gated patch is fixed on its branches without a PR: `git
+    /// switch uplink/conflict/<id>-work` (the conflict markers are committed
+    /// there), fix the files, `git add` them, `git uplink resolve <id>`, then
+    /// `git uplink push` and `git uplink rebuild --push`. Each resolve
+    /// rebuilds again and may gate the next patch.
+    ///
+    /// `-i` fixes them inline instead, the way `git rebase` stops on a
+    /// commit. A patch that does not apply is left in the checkout as its
+    /// failed 3-way apply, on the patches before it. A patch `preflight.sh`
+    /// is blamed on is left applied, for the fix to go on top. Resolve, `git
+    /// add`, and `--continue` takes what the checkout holds as the patch,
+    /// re-assesses it as `resolve` does, and replays again, stopping on the
+    /// next patch to fix. Nothing is gated and nothing is written to
+    /// `uplink/state` until the rebuild is published; until then every other
+    /// command that changes it refuses. `--abort` puts the checkout back,
+    /// changing nothing. To leave a patch out, abort and `drop` it. A patch
+    /// gated already is fixed on its branches.
     Rebuild {
         /// Rebuild onto uplink/preview/<name> instead of company main (preview; does not mutate the queue or push).
         #[arg(long, value_name = "name")]
@@ -1072,6 +1090,27 @@ pub enum Commands {
         /// Print the result as JSON; a patch that goes to the conflict gate prints `gh.prCreate` and exits 0.
         #[arg(long, conflicts_with_all = ["branch", "preflight_only"])]
         json: bool,
+        /// Stop on a patch to fix inline instead of gating it; see above.
+        #[arg(
+            short = 'i',
+            long,
+            conflicts_with_all = ["branch", "json", "preflight_only", "preflight_result"]
+        )]
+        interactive: bool,
+        /// Take what the checkout holds as the patch the rebuild paused on, and go on.
+        ///
+        /// `--push` and `--verify` are kept from `rebuild -i`.
+        #[arg(
+            long = "continue",
+            conflicts_with_all = ["branch", "json", "preflight_only", "preflight_result", "interactive", "push", "push_remote", "verify", "abort"]
+        )]
+        resume: bool,
+        /// Put the checkout back and end the paused rebuild, changing nothing.
+        #[arg(
+            long,
+            conflicts_with_all = ["branch", "json", "preflight_only", "preflight_result", "interactive", "push", "push_remote", "verify"]
+        )]
+        abort: bool,
     },
     /// Finish a conflict resolution and put the patch back in the queue.
     ///
@@ -1099,6 +1138,11 @@ pub enum Commands {
     /// `readyToSubmit` in the output lists the resolved patch when it is
     /// `queued` again, and the queued patches whose last unmerged upstream
     /// dependency the rebuild marked merged.
+    ///
+    /// Locally: `git switch uplink/conflict/<id>-work`, fix the files and
+    /// `git add` them, run `git uplink resolve <id>`, then `git uplink push`
+    /// and `git uplink rebuild --push`. `git uplink rebuild -i` fixes them
+    /// inline instead.
     Resolve {
         /// Patch whose conflict was resolved.
         #[arg(value_name = "id")]
