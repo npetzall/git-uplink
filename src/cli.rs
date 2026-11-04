@@ -766,7 +766,8 @@ pub enum Commands {
         /// the `dependencies` check, which fails while an upstream-bound
         /// `Uplink-Depends-On` patch is not merged upstream, and its package
         /// says in `storedExtras` whether the assessment-hook result stored
-        /// with the patch is still for its content. With them, the change
+        /// with the patch is still for its content, and in `coveredBy` the
+        /// approval that already covers it, if any. With them, the change
         /// between the two revisions is assessed as that patch. `--title` or
         /// `--message[-file]` override the stored ones, for example for a
         /// conflict resolution or amend. The gate uses it on
@@ -871,7 +872,8 @@ pub enum Commands {
         /// replaces; the unchanged lines around them are not part of it.
         /// When the patch no longer has this token, nothing is
         /// approved. Without it, the patch is approved as it is now. A
-        /// patch its last approval already covers gets no second one.
+        /// patch its last approval already covers gets no second one, and
+        /// its receipt is left as it is.
         #[arg(long, value_name = "token")]
         reviewed: Option<String>,
     },

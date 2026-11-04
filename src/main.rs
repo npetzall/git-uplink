@@ -18,11 +18,11 @@ use git_uplink::{
     PreflightError, PreflightReport, ProgressMode, PushOpts, RebuildOpts, RebuildResume,
     RestackAction, RestackOpts, RunKind, STATE_BRANCH, ScriptEcho, ScriptVerdict,
     TO_UPSTREAM_ENVIRONMENT, accept_upstream_preflight, accept_upstream_with, add_patch,
-    add_patch_or_gate, adopt_branch, adopted_next_steps, amend_patch_with, amend_preflight,
-    approve_patch_reviewed, assess_from_message, assess_patch_file, assess_patch_for_packet,
-    change_between, command_preflight, command_tested, commit_queue, count_files,
-    depends_on_from_message, doctor, drop_patch, existing_patch_preflight, export_tested,
-    fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
+    add_patch_or_gate, adopt_branch, adopted_next_steps, already_approved, amend_patch_with,
+    amend_preflight, approve_patch_reviewed, assess_from_message, assess_patch_file,
+    assess_patch_for_packet, change_between, command_preflight, command_tested, commit_queue,
+    count_files, depends_on_from_message, doctor, drop_patch, existing_patch_preflight,
+    export_tested, fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
     format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
@@ -1482,6 +1482,15 @@ fn cmd_approve(
         return Err(Error::msg(format!(
             "{id} changed since the packet was reviewed; write a new packet and approve that (dispatch Uplink submit again)."
         )));
+    }
+    // The receipt on uplink/state stays the one of the approval that covers it.
+    if let Some(approval) = already_approved(repo, patch) {
+        let run = approval.run_url.as_deref().unwrap_or("no run recorded");
+        println!(
+            "{id} is already approved: approval {} ({}, {run}) covers it as it is now. No new approval is recorded.",
+            approval.version, approval.at
+        );
+        return Ok(());
     }
     let receipt = build_receipt(
         repo,

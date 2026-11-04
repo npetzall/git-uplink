@@ -4445,6 +4445,61 @@ fn report_writes_the_token_that_approve_takes_back() {
         patch.last_approval().unwrap().reviewed.as_deref(),
         Some(token.as_str())
     );
+
+    // A re-run for the same content records nothing and keeps the receipt.
+    let receipt_path = company.join(format!(".uplink/reports/{id}/approval.md"));
+    let first_receipt = fs::read_to_string(&receipt_path).unwrap();
+    let state = rev_of(company, STATE_BRANCH);
+    let again = cli(&["approve", id, "--reviewed", &token]);
+    assert!(again.status.success(), "{again:?}");
+    assert!(
+        String::from_utf8_lossy(&again.stdout).contains("is already approved"),
+        "{again:?}"
+    );
+    assert_eq!(fs::read_to_string(&receipt_path).unwrap(), first_receipt);
+    assert_eq!(rev_of(company, STATE_BRANCH), state);
+    assert_eq!(stored_patch(company, id).approvals.len(), 1);
+}
+
+#[test]
+fn an_approval_that_covers_the_patch_shortens_the_packet() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let id = hash_patch.id.as_str();
+    let covered_by = || {
+        let dir = temp_dir();
+        assess_patch_package(company, id, dir.path())["coveredBy"].clone()
+    };
+    let packet = || format_contribution_packet(company, &stored_patch(company, id)).unwrap();
+
+    assert!(covered_by().is_null());
+    let full = packet();
+    assert!(full.contains("## Upstream commit message"), "{full}");
+    assert!(!full.contains("Already approved"), "{full}");
+
+    let run = "https://github.example/acme/product/actions/runs/9";
+    approve_patch_reviewed(company, id, None, Some(run), None).unwrap();
+    let covered = covered_by();
+    assert_eq!(covered["version"], 1);
+    assert_eq!(covered["runUrl"], run);
+    let short = packet();
+    assert!(short.contains("Already approved"), "{short}");
+    assert!(short.contains(run), "{short}");
+    assert!(short.contains("[approval.md](approval.md)"), "{short}");
+    assert!(short.contains("| Review token |"), "{short}");
+    assert!(!short.contains("## Upstream commit message"), "{short}");
+
+    // Assessment findings: the full packet, whatever covers it.
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    let entry = queue.all_patches_mut().find(|p| p.id == id).unwrap();
+    entry.assess.as_mut().unwrap().ok = false;
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: findings").unwrap();
+    assert!(packet().contains("## Upstream commit message"));
+
+    // Other public content: nothing covers it any more.
+    retitle(company, id, "Use SHA-256 everywhere");
+    assert!(covered_by().is_null());
 }
 
 #[test]

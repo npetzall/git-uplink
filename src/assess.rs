@@ -510,7 +510,7 @@ fn packet_assessment(patch: &Patch) -> String {
 }
 
 pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
-    approver_packet(patch, None, None)
+    approver_packet(patch, None)
 }
 
 /// `| Review token | … |`, or nothing when the patch has none yet.
@@ -520,19 +520,43 @@ fn review_token_row(token: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-/// Leads the packet of a patch its last approval still covers.
-fn reexport_note(approval: Option<&PatchApproval>) -> String {
-    approval
-        .map(|approval| {
-            format!(
-                "> **Nothing new leaves the company.** Approval {} ({}) covers this patch as it is now: it adds and removes the same lines under the same title and commit message. Approving the Environment only exports it again onto the current upstream.\n\n",
-                approval.version, approval.at
-            )
-        })
-        .unwrap_or_default()
+/// The approval that covers `patch` as it is now, when the patch is approved
+/// or submitted. A run for such a patch records no new approval.
+pub fn already_approved<'a>(repo: &Path, patch: &'a Patch) -> Option<&'a PatchApproval> {
+    if !matches!(patch.status, PatchStatus::Approved | PatchStatus::Submitted) {
+        return None;
+    }
+    covering_approval(repo, patch)
 }
 
-fn approver_packet(patch: &Patch, token: Option<&str>, covered: Option<&PatchApproval>) -> String {
+/// The packet of a patch an approval already covers: nothing to review, so
+/// only what covers it and what the Environment click still does.
+fn covered_packet(patch: &Patch, token: Option<&str>, approval: &PatchApproval) -> String {
+    let run = approval
+        .run_url
+        .as_deref()
+        .map(|url| format!(" [Approval run]({url}) ·"))
+        .unwrap_or_default();
+    format!(
+        "# Contribution packet — {id}\n\n\
+> **Already approved. Nothing new leaves the company.** Approval {version} ({at}) covers this patch as it is now: it adds and removes the same lines under the same title and commit message.{run} [approval.md](approval.md)\n\n\
+| Field | Value |\n\
+| --- | --- |\n\
+| Patch | `{id}` |\n\
+| Title | {title} |\n\
+{token}\n\
+## What happens when you approve the {env} environment\n\n\
+No new approval is recorded. The click only releases the credentials that export the patch again onto the current upstream. If the patch changed since this packet, approve stops and nothing is exported.\n",
+        id = patch.id,
+        version = approval.version,
+        at = approval.at,
+        title = plain_cell(&patch.title),
+        token = review_token_row(token),
+        env = TO_UPSTREAM_ENVIRONMENT,
+    )
+}
+
+fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
     let assessment = packet_assessment(patch);
     let pr = patch
         .source
@@ -552,7 +576,6 @@ fn approver_packet(patch: &Patch, token: Option<&str>, covered: Option<&PatchApp
     };
     format!(
         "# Contribution packet — {id}\n\n\
-{reexport}\
 | Field | Value |\n\
 | --- | --- |\n\
 | Patch | `{id}` |\n\
@@ -569,7 +592,6 @@ fn approver_packet(patch: &Patch, token: Option<&str>, covered: Option<&PatchApp
 3. `git uplink approve` then `git uplink submit` run with App credentials that exist **only** on the {env} environment. The approval is for the review token above: if the patch changed since this packet, approve stops and nothing is exported.\n\
 4. The workflow opens the public pull request with `POST /repos/{{parent}}/pulls` (`head` is the branch, `head_repo` is `<contrib_owner>/<contrib_repo>`, `maintainer_can_modify` false) and runs `git uplink submitted`. No public PR is opened unless export preflight still passes.\n",
         token = review_token_row(token),
-        reexport = reexport_note(covered),
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = plain_cell(&patch.title),
@@ -586,14 +608,15 @@ pub fn format_contribution_packet_with_extras(
     patch: &Patch,
     extra_dir: Option<&Path>,
 ) -> Result<String> {
+    let token = review_token(repo, patch).ok();
+    let assessed_ok = patch.assess.as_ref().is_some_and(|assess| assess.ok);
+    if assessed_ok && let Some(approval) = already_approved(repo, patch) {
+        return Ok(covered_packet(patch, token.as_deref(), approval));
+    }
     let packet = if patch.status == PatchStatus::Amended {
         format_delta_approver_packet(repo, patch)?
     } else {
-        approver_packet(
-            patch,
-            review_token(repo, patch).ok().as_deref(),
-            covering_approval(repo, patch),
-        )
+        approver_packet(patch, token.as_deref())
     };
     if extra_dir.is_none() && stored_extras_fresh(patch) {
         let stored = repo.join(extras_dir(&patch.id)?);
@@ -1438,6 +1461,10 @@ pub struct AssessPackage {
     /// The patch as it is in `queue.json`, for kind `patch`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_entry: Option<Patch>,
+    /// The approval that already covers the patch as it is now, for kind
+    /// `patch`. Submit then skips the hook and shows a short packet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_by: Option<PatchApproval>,
 }
 
 impl AssessPackage {
@@ -1489,6 +1516,7 @@ impl AssessPackage {
                     .and_then(|extras| extras.source.clone()),
             }),
             queue_entry: patch.cloned(),
+            covered_by: patch.and_then(|patch| already_approved(repo, patch).cloned()),
         })
     }
 

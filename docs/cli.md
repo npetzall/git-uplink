@@ -290,7 +290,7 @@ The PR title and body are the single commit message. Assess adds a co-author tra
 - `--internal-only`: Assess as an internal-only change: never exported, leak scan skipped.
 - `--patch <id>`: Assess a queued patch in its layer, with its stored title and message.
 
-  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. That assessment also has the `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream, and its package says in `storedExtras` whether the assessment-hook result stored with the patch is still for its content. With them, the change between the two revisions is assessed as that patch. `--title` or `--message[-file]` override the stored ones, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
+  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. That assessment also has the `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream, and its package says in `storedExtras` whether the assessment-hook result stored with the patch is still for its content, and in `coveredBy` the approval that already covers it, if any. With them, the change between the two revisions is assessed as that patch. `--title` or `--message[-file]` override the stored ones, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
 - `--package <dir>`: Write the assessment package (assessment.json, assessment.md, change.patch) to this directory.
 - `--json`: Print assessment.json instead of the report.
 
@@ -341,7 +341,7 @@ Record the to-upstream approval of a patch and write its receipt.
 - `--out <path>`: Write the receipt here instead of .uplink/reports/\<id>/approval.md.
 - `--reviewed <token>`: Review token of the packet that was reviewed.
 
-  `report` writes it to `.uplink/reports/<id>/review-token`. It names what the patch changes, the public title and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one.
+  `report` writes it to `.uplink/reports/<id>/review-token`. It names what the patch changes, the public title and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one, and its receipt is left as it is.
 
 ### `submit`
 

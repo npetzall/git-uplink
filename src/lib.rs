@@ -36,14 +36,15 @@ pub use adopt::{
 pub use assess::{
     ApprovalReceipt, AssessPackage, FROM_UPSTREAM_ENVIRONMENT, IncomingCommitRow, IncomingMergeRow,
     IncomingPacket, PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN, PackageKind,
-    TO_UPSTREAM_ENVIRONMENT, assert_assess_ok, assess_from_message, assess_patch_file,
-    change_between, changed_lines, company_commit_message, depends_on_from_message,
-    export_commit_message, extras_dir, format_approval_receipt, format_approver_packet,
-    format_assess_checks_markdown, format_assess_markdown, format_contribution_packet,
-    format_contribution_packet_with_extras, format_delta_approver_packet, format_incoming_packet,
-    from_upstream_report_paths, load_extra_markdown, parse_depends_on, patch_text,
-    prepend_report_extras, report_paths, review_token, review_token_path, split_internal_message,
-    store_extras, stored_commit_message, stored_extras_fresh, strip_html_comments,
+    TO_UPSTREAM_ENVIRONMENT, already_approved, assert_assess_ok, assess_from_message,
+    assess_patch_file, change_between, changed_lines, company_commit_message,
+    depends_on_from_message, export_commit_message, extras_dir, format_approval_receipt,
+    format_approver_packet, format_assess_checks_markdown, format_assess_markdown,
+    format_contribution_packet, format_contribution_packet_with_extras,
+    format_delta_approver_packet, format_incoming_packet, from_upstream_report_paths,
+    load_extra_markdown, parse_depends_on, patch_text, prepend_report_extras, report_paths,
+    review_token, review_token_path, split_internal_message, store_extras, stored_commit_message,
+    stored_extras_fresh, strip_html_comments,
 };
 pub use doctor::{DoctorReport, doctor, format_doctor_summary};
 pub use error::{AssessError, ConflictError, Error, PreflightError, Result};
