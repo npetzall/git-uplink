@@ -11668,21 +11668,94 @@ fn submit_takes_the_preflight_result_of_the_queued_patch() {
 
     let (ok, report) = probe(company, &["preflight", &patch.id, "--json"]);
     assert!(ok && report.ok, "{report:?}");
+    assert!(report.review_token.is_some(), "{report:?}");
     assert_eq!(runs_of(&marker), 1);
 
-    // The script changed after the probe: the result no longer applies.
-    set_counting_preflight_script(company, "true # v2");
-    let err =
-        submit_patch_with(company, &patch.id, false, &ScriptVerdict::Reported(report)).unwrap_err();
-    assert!(
-        matches!(err, Error::Preflight(ref e) if e.stage == "stale"),
-        "{err}"
-    );
-
-    let (_, fresh) = probe(company, &["preflight", &patch.id, "--json"]);
     let exported =
-        submit_patch_with(company, &patch.id, false, &ScriptVerdict::Reported(fresh)).unwrap();
+        submit_patch_with(company, &patch.id, false, &ScriptVerdict::Reported(report)).unwrap();
     assert_eq!(exported.branch, format!("uplink/{}", patch.id));
+    assert_eq!(runs_of(&marker), 1, "submit must not run preflight.sh");
+}
+
+/// An approved patch with a passing preflight result, as the submit
+/// workflow has them while it waits for approval.
+fn approved_with_preflight(world: &World) -> (Patch, PreflightReport) {
+    let company = &world.company;
+    sha256_change(company);
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    approve_patch(company, &patch.id).unwrap();
+    set_counting_preflight_script(company, "true");
+    let (ok, report) = probe(company, &["preflight", &patch.id, "--json"]);
+    assert!(ok && report.ok, "{report:?}");
+    (patch, report)
+}
+
+#[test]
+fn submit_accepts_a_passing_result_after_the_hooks_moved() {
+    let world = setup_world();
+    let company = &world.company;
+    let (patch, report) = approved_with_preflight(&world);
+
+    set_counting_preflight_script(company, "true # v2");
+    let exported =
+        submit_patch_with(company, &patch.id, false, &ScriptVerdict::Reported(report)).unwrap();
+    assert_eq!(exported.branch, format!("uplink/{}", patch.id));
+}
+
+#[test]
+fn submit_exports_onto_the_current_upstream_after_it_moved() {
+    let world = setup_world();
+    let company = &world.company;
+    let (patch, report) = approved_with_preflight(&world);
+
+    write(&world.upstream, "UNRELATED.md", "moved\n");
+    commit_all(&world.upstream, "unrelated upstream change");
+    sync_apply(company);
+    let moved = rev_of(company, "uplink/upstream");
+    let (_, fresh) = probe(company, &["preflight", &patch.id, "--json"]);
+    assert_ne!(fresh.token, report.token, "the tested tree must differ");
+    assert_eq!(fresh.review_token, report.review_token);
+
+    let exported =
+        submit_patch_with(company, &patch.id, false, &ScriptVerdict::Reported(report)).unwrap();
+    assert_eq!(exported.base, moved);
+    assert_eq!(
+        git_ok(company, &["rev-parse", &format!("{}^", exported.sha)]).unwrap(),
+        moved
+    );
+}
+
+#[test]
+fn submit_refuses_a_moved_tree_result_unless_it_passed_for_this_content() {
+    let world = setup_world();
+    let company = &world.company;
+    let (patch, report) = approved_with_preflight(&world);
+    set_counting_preflight_script(company, "true # v2");
+
+    let mut other_content = report.clone();
+    other_content.review_token = Some("0".repeat(40));
+    let mut no_content = report.clone();
+    no_content.review_token = None;
+    let mut failed = report.clone();
+    failed.ok = false;
+    failed.stage = Some("command".into());
+
+    for stale in [other_content, no_content, failed] {
+        let err = submit_patch_with(company, &patch.id, false, &ScriptVerdict::Reported(stale))
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::Preflight(ref e) if e.stage == "stale"),
+            "{err}"
+        );
+    }
 }
 
 #[test]

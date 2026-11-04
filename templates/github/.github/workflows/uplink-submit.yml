@@ -360,8 +360,10 @@ jobs:
           # Approves only the content the packet of this run showed.
           receipt=$(git uplink approve "$PATCH_ID" --reviewed "$REVIEW_TOKEN")
           printf '%s\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
-          # The result is for one tree. If uplink/upstream or uplink/hooks moved
-          # while this job waited for approval, submit stops; dispatch again.
+          # If uplink/upstream or uplink/hooks moved while this job waited for
+          # approval, submit still uses a passing result for the unchanged
+          # patch content and exports onto the current uplink/upstream. It
+          # stops when the patch content changed or preflight did not pass.
           submit_json=$(git uplink submit "$PATCH_ID" --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
           # GitHub creates the contrib commit (Git Database API) and signs it.
           # It shows as Verified only when UPLINK_CONTRIB_* is a GitHub App token.
