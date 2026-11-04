@@ -664,7 +664,16 @@ export function InternalsPage() {
             the result with <code>--preflight-result</code>. The result names
             the tree and the hooks it was tested with. If{" "}
             <code>uplink/upstream</code> or <code>uplink/hooks</code> moved
-            while submit waited for approval, submit stops; dispatch it again.
+            while submit waited for approval, submit still takes a passing
+            result for the same patch content and builds on the current{" "}
+            <code>uplink/upstream</code>.
+          </p>
+          <p>
+            The approval is pushed to <code>uplink/state</code> before the
+            export, so a run that fails after it keeps the record. A later run
+            for the same content gets a short packet that links that approval,
+            skips the assessment hook, and records no second approval. The
+            Environment click then only releases the credentials.
           </p>
         </Step>
         <Step n={4} title="Upstream merges" workflow="maintainers">

@@ -640,10 +640,19 @@ mod embed_tests {
             );
             assert!(
                 text.contains(
-                    "if: steps.assess.outputs.ok == 'true' && steps.assess.outputs.fresh != 'true'\n        uses: $/.github/actions/uplink-assessment-hook"
+                    "if: steps.assess.outputs.ok == 'true' && steps.assess.outputs.fresh != 'true' && steps.assess.outputs.covered != 'true'\n        uses: $/.github/actions/uplink-assessment-hook"
                 ),
-                "{forge:?} no hook run for findings or a current stored result\n{text}"
+                "{forge:?} no hook run for findings, a current stored result or covered content\n{text}"
             );
+            assert!(
+                text.contains("jq -r '.coveredBy != null'"),
+                "{forge:?}\n{text}"
+            );
+            // The approval is on origin before anything can fail after it.
+            let approve = text.find("git uplink approve \"$PATCH_ID\"").unwrap();
+            let push = text.find("git uplink push\n").unwrap();
+            let submit = text.find("git uplink submit \"$PATCH_ID\"").unwrap();
+            assert!(approve < push && push < submit, "{forge:?}\n{text}");
             let action = files
                 .iter()
                 .find(|(p, _)| p == ".github/actions/uplink-assessment-hook/action.yml")
