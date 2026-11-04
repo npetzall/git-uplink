@@ -78,21 +78,44 @@ fn check_ready_to_submit(
     }
     ensure_assessed_ok(patch)?;
     // The approval is for specific content, not for the patch id.
-    review_token(repo, patch)?;
+    let token = review_token(repo, patch)?;
     if covering_approval(repo, patch).is_none() {
         return Err(Error::msg(format!(
             "{id} changed since it was approved; approve the current content before submit (dispatch Uplink submit again)."
         )));
     }
-    export_preflight(
+    match export_preflight(
         repo,
         queue,
         patch,
         &repo.join(patch_path(id)?),
         None,
         preflight,
-    )
-    .map(|_| ())
+    ) {
+        Ok(_) => Ok(()),
+        Err(Error::Preflight(err))
+            if err.stage == STAGE_STALE && passed_for_content(preflight, &token) =>
+        {
+            let tested = match preflight {
+                ScriptVerdict::Reported(report) => report.tested.first().cloned(),
+                ScriptVerdict::Run => None,
+            };
+            eprintln!(
+                "Preflight passed on {}; uplink/upstream or uplink/hooks moved since. The patch content is unchanged, so {id} is exported onto the current uplink/upstream.",
+                tested.as_deref().unwrap_or("an earlier tree")
+            );
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// True when `preflight` is a passing result for the patch content `token`
+/// names. Upstream and hooks may have moved since; the export still has to
+/// apply onto the current upstream.
+fn passed_for_content(preflight: &ScriptVerdict, token: &str) -> bool {
+    matches!(preflight, ScriptVerdict::Reported(report)
+        if report.ok && report.review_token.as_deref() == Some(token))
 }
 
 /// Applies the patch on `start`, points `branch` at the result, and returns

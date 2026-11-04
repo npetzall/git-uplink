@@ -1329,6 +1329,7 @@ fn tested_heading(result: &Result<Option<String>, Error>) -> &'static str {
 fn print_preflight_report(
     result: Result<Option<String>, Error>,
     tested: Vec<String>,
+    review_token: Option<String>,
     passed: &str,
 ) -> Result<(), Error> {
     let section = tested_section(tested_heading(&result), &tested);
@@ -1339,6 +1340,7 @@ fn print_preflight_report(
     };
     let mut report = PreflightReport::of(result);
     report.tested = tested;
+    report.review_token = review_token;
     finish_preflight_report(report, comment.map(|text| format!("{}\n", text.trim_end())))
 }
 
@@ -1368,15 +1370,19 @@ fn cmd_preflight(
         refuse_script_here(repo, &ScriptVerdict::Run, incoming.hooks_ref.as_deref())?;
     }
     let queue = read_queue(repo)?;
+    let mut patch_token = None;
     let (result, depends_on, subject) = if let Some(id) = id {
         let result = existing_patch_preflight(repo, &queue, &id, incoming.hooks_ref.as_deref());
         // An internal or tooling patch has no export tree.
         match queue.upstream.iter().find(|patch| patch.id == id) {
-            Some(patch) => (
-                result,
-                patch.depends_on.clone(),
-                Some(format!("`{id}` {}", patch.title)),
-            ),
+            Some(patch) => {
+                patch_token = review_token(repo, patch).ok();
+                (
+                    result,
+                    patch.depends_on.clone(),
+                    Some(format!("`{id}` {}", patch.title)),
+                )
+            }
             _ => (result, Vec::new(), None),
         }
     } else if incoming.internal_only {
@@ -1403,7 +1409,12 @@ fn cmd_preflight(
         None => Vec::new(),
     };
     if json {
-        return print_preflight_report(result, tested, "Uplink export preflight passed.");
+        return print_preflight_report(
+            result,
+            tested,
+            patch_token,
+            "Uplink export preflight passed.",
+        );
     }
     print!("{}", tested_section(tested_heading(&result), &tested));
     match result {
@@ -1426,7 +1437,7 @@ fn cmd_preflight_command(repo: &Path, hooks_ref: Option<&str>, json: bool) -> Re
     let result = command_preflight(&queue, repo, hooks_ref, &ScriptVerdict::Run);
     let tested = command_tested(repo);
     if json {
-        return print_preflight_report(result, tested, "Uplink preflight passed.");
+        return print_preflight_report(result, tested, None, "Uplink preflight passed.");
     }
     print!("{}", tested_section(tested_heading(&result), &tested));
     match result {

@@ -51,7 +51,7 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
 - Output: what the script prints is shown as it runs, stdout and stderr together. `git uplink preflight` shows it on stdout. With `--json`, and in every other command that runs the script, it goes to stderr, because stdout is the result.
 - Other files on the branch are checked out beside the script for the run; reach them with `\"$(dirname \"$0\")\"`.
 - Environment: the caller's, without `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `UPLINK_*_TOKEN` and `UPLINK_*_KEY`.
-- Credentials: the script builds and runs product code, so it must not run where credentials are. An emptied environment does not hide them from a process on the same runner. In CI (`CI` or `GITHUB_ACTIONS` set) with a forge recorded, a command that holds a credential refuses to run the script. Run `git uplink preflight --json` (or `transfer` / `amend --complete` with `--preflight-only`) in a job without credentials, and give the output to `add`, `submit`, `transfer` or `amend --complete` with `--preflight-result <file>`. The result carries a token for the tree and the hooks it was tested with; a command accepts it only for the same tree.
+- Credentials: the script builds and runs product code, so it must not run where credentials are. An emptied environment does not hide them from a process on the same runner. In CI (`CI` or `GITHUB_ACTIONS` set) with a forge recorded, a command that holds a credential refuses to run the script. Run `git uplink preflight --json` (or `transfer` / `amend --complete` with `--preflight-only`) in a job without credentials, and give the output to `add`, `submit`, `transfer` or `amend --complete` with `--preflight-result <file>`. The result carries a token for the tree and the hooks it was tested with; a command accepts it only for the same tree. The one exception is `submit`: it also accepts a passing result for the same patch content after `uplink/upstream` or `uplink/hooks` moved.
 - Known limitations: the job that runs the script still holds a read-only token and a clone of the company repository, so code the script runs can read company source. The verdict is the script's exit code, which code it runs could force to 0. Preflight checks that a change builds and passes its tests; it is not a defence against hostile code in the tree.
 - Created by `init`, with the answer to its preflight question (or `--preflight <cmd>`) as the script's command. `init --upgrade` adds the script when the branch lacks it, offering the command an older `queue.json` held. An existing script is never rewritten; edit it on `uplink/hooks`.
 - No script means preflight runs no command. With a forge recorded, a missing `uplink/hooks` fails preflight.
@@ -891,8 +891,11 @@ pub enum Commands {
         /// Take the verdict of preflight.sh from this file instead of running it.
         ///
         /// The file is the output of `git uplink preflight --json`
-        /// from a job without credentials. It is used only when it is for
-        /// the tree this command builds; otherwise the command fails and
+        /// from a job without credentials. It is used when it is for the
+        /// tree this command builds. A passing result is also used when only
+        /// `uplink/upstream` or `uplink/hooks` moved since and the patch
+        /// content (its review token) is unchanged; the export is then built
+        /// on the current `uplink/upstream`. Otherwise the command fails and
         /// preflight has to run again.
         #[arg(long = "preflight-result", value_name = "path")]
         preflight_result: Option<PathBuf>,

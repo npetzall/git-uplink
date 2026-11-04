@@ -123,6 +123,10 @@ pub struct PreflightReport {
     /// What the script ran on, one line each: the base, then what was
     /// applied onto it. See [`export_tested`] and [`command_tested`].
     pub tested: Vec<String>,
+    /// Review token of the queued patch the result is for. `submit` accepts
+    /// a passing result for unchanged content after upstream or hooks moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_token: Option<String>,
     /// What the script said about the rebuild the command ends with.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rebuild: Option<Box<RebuildReport>>,
