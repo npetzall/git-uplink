@@ -193,7 +193,10 @@ git switch -c fix/token-hash origin/main`}</Code>
           <li>
             <code>affiliation-leak</code>: the banned words in{" "}
             <code>uplink.toml</code> (company and product names, internal
-            domains) anywhere in the message and the diff.
+            domains) anywhere in the public message, the paths of the files the
+            change keeps, and the lines it adds. Lines it removes and the
+            unchanged lines around them are not scanned: they are already
+            upstream&apos;s.
           </li>
           <li>
             <code>binary-files</code>: binary files the scan cannot read.

@@ -523,7 +523,8 @@ pub fn format_ip_review(report: &AssessReport) -> String {
         let detail = plain_cell(&check.detail);
         match (check.id.as_str(), check.status) {
             ("affiliation-leak", CheckStatus::Pass) => items.push(
-                "- ✅ **Banned words:** none in the title, message or additions.".to_string(),
+                "- ✅ **Banned words:** none in the title, message, file paths or added lines."
+                    .to_string(),
             ),
             ("affiliation-leak", status) => items.push(format!(
                 "- {} **Banned words:** {detail}",
@@ -700,6 +701,26 @@ fn parse_additions(diff: &str) -> Vec<AddedFile> {
     // A `diff --git` line quoted in a commit message has nothing under it.
     files.retain(|f| !f.blocks.is_empty() || f.binary || f.removes || f.note.is_some());
     files
+}
+
+/// What of `diff` leaves the company as new text: the path of each file the
+/// export keeps, and the lines it adds. Removed and context lines are
+/// upstream's (or company main's) text and are not part of the export.
+fn export_surface_lines(diff: &str) -> String {
+    let mut out = String::new();
+    for file in parse_additions(diff) {
+        if file.note.as_deref() != Some("deleted") {
+            out.push_str(&file.path);
+            out.push('\n');
+        }
+        for (_, lines) in &file.blocks {
+            for line in lines {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
 }
 
 /// A fenced block of `lang` the content cannot close.
@@ -2002,7 +2023,7 @@ fn assess_export(
                 .unwrap_or_default();
             // The title is the public PR title; it can differ from the subject.
             let title = title.unwrap_or_default();
-            let diff = &export.diff;
+            let diff = export_surface_lines(&export.diff);
             let export_surface = format!("{trailer}{title}\n{subject}\n{body}\n{diff}");
             checks.push(affiliation_check(queue, &export_surface));
             checks.extend(binary_files_check(&export.binaries));
@@ -2127,10 +2148,10 @@ fn affiliation_check(queue: &QueueState, export_surface: &str) -> AssessCheck {
             CheckStatus::Fail
         },
         detail: if hits.is_empty() {
-            "No banned words in the export surface.".into()
+            "No banned words in the title, message, file paths or added lines.".into()
         } else {
             format!(
-                "Export diff or public message contains banned words: {}. Remove company names, internal hostnames, and staff emails from the contribution (including tests).",
+                "The title, message, a file path or an added line contains banned words: {}. Remove company names, internal hostnames, and staff emails from the contribution (including tests).",
                 hits.join(", ")
             )
         },
@@ -2611,7 +2632,9 @@ binary 3333333333333333333333333333333333333333\n"
         let review = format_ip_review(&passed);
         assert!(review.starts_with("## IP review: ✅\n"), "{review}");
         assert!(
-            review.contains("- ✅ **Banned words:** none in the title, message or additions."),
+            review.contains(
+                "- ✅ **Banned words:** none in the title, message, file paths or added lines."
+            ),
             "{review}"
         );
         for hidden in [
@@ -2785,5 +2808,42 @@ diff --git a/src/a.js b/src/a.js
             !inside.contains("\n\n"),
             "no blank line inside the table\n{table}"
         );
+    }
+
+    #[test]
+    fn the_scan_reads_added_lines_and_kept_paths_only() {
+        let diff = "\
+diff --git a/src/a.js b/src/a.js
+--- a/src/a.js
++++ b/src/a.js
+@@ -1,3 +1,3 @@
+ // context mentions acme-context
+-// removed mentions acme-removed
++// added mentions acme-added
+ end
+diff --git a/old.txt b/acme-renamed.txt
+similarity index 100%
+rename from old.txt
+rename to acme-renamed.txt
+diff --git a/acme-deleted.txt b/acme-deleted.txt
+deleted file mode 100644
+--- a/acme-deleted.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-acme-gone
+";
+        let surface = export_surface_lines(diff);
+        assert!(surface.contains("acme-added"), "{surface}");
+        assert!(surface.contains("acme-renamed.txt"), "{surface}");
+        assert!(surface.contains("src/a.js"), "{surface}");
+        for kept_out in [
+            "acme-context",
+            "acme-removed",
+            "acme-deleted",
+            "acme-gone",
+            "old.txt",
+        ] {
+            assert!(!surface.contains(kept_out), "{kept_out}\n{surface}");
+        }
     }
 }
