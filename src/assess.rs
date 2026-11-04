@@ -500,17 +500,347 @@ fn packet_assessment(patch: &Patch) -> String {
     patch
         .assess
         .as_ref()
-        .map(format_assess_checks_markdown)
+        .map(format_ip_review)
         .unwrap_or_else(|| {
             format!(
                 "{}\n\nNo assess report stored. Run `git uplink assess` on the internal PR first.\n",
-                assessment_heading(false)
+                ip_review_heading(false)
             )
         })
 }
 
+fn ip_review_heading(ok: bool) -> String {
+    format!("## IP review: {}", if ok { "✅" } else { "❌" })
+}
+
+/// The assessment as an IP reviewer needs it: whether the export names the
+/// company, what the scan could not read, and who is credited. Checks about
+/// how the message was written show only when they block the export, or
+/// when the public message names tickets.
+pub fn format_ip_review(report: &AssessReport) -> String {
+    let mut items = Vec::new();
+    for check in &report.checks {
+        let detail = plain_cell(&check.detail);
+        match (check.id.as_str(), check.status) {
+            ("affiliation-leak", CheckStatus::Pass) => items.push(
+                "- ✅ **Banned words:** none in the title, message or additions.".to_string(),
+            ),
+            ("affiliation-leak", status) => items.push(format!(
+                "- {} **Banned words:** {detail}",
+                check_emoji(status)
+            )),
+            ("binary-files", _) => items.push(format!("- ⚠️ **Binary files:** {detail}")),
+            ("cutoff-used", CheckStatus::Warn) => {
+                items.push(format!("- ⚠️ **Tickets in the public message:** {detail}"))
+            }
+            (id, CheckStatus::Fail) => items.push(format!("- ❌ **Blocking, `{id}`:** {detail}")),
+            _ => {}
+        }
+    }
+    if let Some(co_author) = report.co_author.as_deref().filter(|c| !c.trim().is_empty()) {
+        items.push(format!("- **Co-author:** {}", plain_cell(co_author)));
+    }
+    format!(
+        "{heading}\n\n\
+[What this checks and how to fix a failure]({ASSESS_DOCS_URL})\n\n\
+{items}\n",
+        heading = ip_review_heading(report.ok),
+        items = items.join("\n"),
+    )
+}
+
+/// `text` safe inside HTML: no tags, no entities of its own.
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// The internal and the upstream commit message side by side. Each cell is
+/// one line (`<br>` for line breaks), so a blank line in a message cannot end
+/// the HTML block.
+fn format_message_table(patch: &Patch) -> String {
+    let cell = |message: &str| html_escape(message.trim_end()).replace('\n', "<br>");
+    format!(
+        "## Commit message\n\n\
+<table>\n\
+<tr><th>Internal</th><th>Upstream</th></tr>\n\
+<tr valign=\"top\"><td><pre>{internal}</pre></td><td><pre>{upstream}</pre></td></tr>\n\
+</table>\n",
+        internal = cell(&stored_commit_message(patch)),
+        upstream = cell(&export_commit_message(patch)),
+    )
+}
+
+/// The patch id, linked to the patch file at the `uplink/state` commit it
+/// was last written in, when the run knows its GitHub repository.
+fn patch_link(repo: &Path, id: &str) -> String {
+    patch_link_with(
+        repo,
+        id,
+        env::var("GITHUB_SERVER_URL").ok().as_deref(),
+        env::var("GITHUB_REPOSITORY").ok().as_deref(),
+    )
+}
+
+fn patch_link_with(
+    repo: &Path,
+    id: &str,
+    server: Option<&str>,
+    repository: Option<&str>,
+) -> String {
+    let plain = format!("`{id}`");
+    let (Some(server), Some(repository)) = (
+        server.filter(|s| !s.is_empty()),
+        repository.filter(|r| !r.is_empty()),
+    ) else {
+        return plain;
+    };
+    let path = format!("{PATCH_DIR}/{id}.patch");
+    let sha = git_ok(
+        repo,
+        &["log", "-1", "--format=%H", STATE_BRANCH, "--", &path],
+    )
+    .unwrap_or_default();
+    if sha.is_empty() {
+        return plain;
+    }
+    format!(
+        "[`{id}`]({}/{repository}/blob/{sha}/{path})",
+        server.trim_end_matches('/')
+    )
+}
+
+/// Added lines past this many are left out of the packet, which also goes
+/// to the run summary.
+const ADDITIONS_LIMIT: usize = 2000;
+
+/// One file of a diff, as far as what it adds.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AddedFile {
+    path: String,
+    note: Option<String>,
+    binary: bool,
+    removes: bool,
+    /// Runs of added lines: the new line number of the first, and the lines.
+    blocks: Vec<(usize, Vec<String>)>,
+}
+
+/// What `diff` (git diff or format-patch text) adds, file by file, with the
+/// new line numbers. Removed and context lines are only counted.
+fn parse_additions(diff: &str) -> Vec<AddedFile> {
+    let mut files: Vec<AddedFile> = Vec::new();
+    // Old and new lines left in the current hunk.
+    let mut left = (0usize, 0usize);
+    let mut line_no = 0usize;
+    let mut last_added: Option<usize> = None;
+    for line in diff.lines() {
+        if left != (0, 0)
+            && let Some(file) = files.last_mut()
+        {
+            match line.as_bytes().first() {
+                Some(b'+') if left.1 > 0 => {
+                    let text = line[1..].to_string();
+                    let follows = last_added.is_some_and(|n| n + 1 == line_no);
+                    match file.blocks.last_mut() {
+                        Some((_, lines)) if follows => lines.push(text),
+                        _ => file.blocks.push((line_no, vec![text])),
+                    }
+                    last_added = Some(line_no);
+                    line_no += 1;
+                    left.1 -= 1;
+                    continue;
+                }
+                Some(b'-') if left.0 > 0 => {
+                    file.removes = true;
+                    left.0 -= 1;
+                    continue;
+                }
+                Some(b' ') | None if left.0 > 0 && left.1 > 0 => {
+                    line_no += 1;
+                    left = (left.0 - 1, left.1 - 1);
+                    continue;
+                }
+                Some(b'\\') => continue,
+                // Not hunk content: the hunk is over; read it as a header.
+                _ => left = (0, 0),
+            }
+        }
+        if let Some(header) = line.strip_prefix("diff --git ") {
+            files.push(AddedFile {
+                path: delta_path(&format!("diff --git {header}")),
+                ..AddedFile::default()
+            });
+            continue;
+        }
+        let Some(file) = files.last_mut() else {
+            continue;
+        };
+        if let Some(counts) = line.strip_prefix("@@ ").and_then(|_| hunk_counts(line)) {
+            let start = line
+                .split(" +")
+                .nth(1)
+                .and_then(|range| range.split([',', ' ']).next())
+                .and_then(|start| start.parse::<usize>().ok())
+                .unwrap_or(1);
+            left = counts;
+            line_no = start;
+            last_added = None;
+        } else if line.starts_with("new file mode") {
+            file.note = Some("new file".into());
+        } else if line.starts_with("deleted file mode") {
+            file.removes = true;
+            file.note = Some("deleted".into());
+        } else if let Some(from) = line.strip_prefix("rename from ") {
+            file.note = Some(format!("renamed from `{}`", plain_cell(from)));
+        } else if line == "GIT binary patch" || line.starts_with("Binary files ") {
+            file.binary = true;
+        }
+    }
+    // A `diff --git` line quoted in a commit message has nothing under it.
+    files.retain(|f| !f.blocks.is_empty() || f.binary || f.removes || f.note.is_some());
+    files
+}
+
+/// A fenced block of `lang` the content cannot close.
+fn fenced_as(lang: &str, text: &str) -> String {
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    format!("{fence}{lang}\n{}\n{fence}", text.trim_end_matches('\n'))
+}
+
+fn format_additions(files: &[AddedFile], note: &str) -> String {
+    let mut out = format!("## Upstream additions\n\n{note}\n\n");
+    let mut shown = 0usize;
+    let mut hidden = 0usize;
+    let mut removes_only = Vec::new();
+    for file in files {
+        if file.blocks.is_empty() && !file.binary {
+            removes_only.push(format!("`{}`", plain_cell(&file.path)));
+            continue;
+        }
+        out.push_str(&format!("### `{}`\n\n", plain_cell(&file.path)));
+        if let Some(note) = &file.note {
+            out.push_str(&format!("_{note}_\n\n"));
+        }
+        if file.binary {
+            out.push_str(
+                "⚠️ Binary file: the banned-word scan cannot read it. Check it by hand.\n\n",
+            );
+        }
+        for (start, lines) in &file.blocks {
+            if shown >= ADDITIONS_LIMIT {
+                hidden += lines.len();
+                continue;
+            }
+            let end = start + lines.len() - 1;
+            let range = if end == *start {
+                format!("Line {start}")
+            } else {
+                format!("Lines {start}–{end}")
+            };
+            let body = lines
+                .iter()
+                .map(|line| format!("+{line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            out.push_str(&format!("{range}\n\n{}\n\n", fenced_as("diff", &body)));
+            shown += lines.len();
+        }
+    }
+    if shown == 0 && !files.iter().any(|f| f.binary) {
+        out.push_str("_Nothing added._\n\n");
+    }
+    if hidden > 0 {
+        out.push_str(&format!(
+            "_{hidden} more added lines are not shown. Open the patch file above for all of them._\n\n"
+        ));
+    }
+    if !removes_only.is_empty() {
+        out.push_str(&format!(
+            "Only removes lines (not shown): {}.\n\n",
+            removes_only.join(", ")
+        ));
+    }
+    out
+}
+
+/// What the export adds, with upstream's line numbers: the patch applied
+/// onto `uplink/upstream` in a throwaway index. When it does not apply there,
+/// the patch file as stored, with its own line numbers.
+fn upstream_additions(repo: &Path, patch: &Patch) -> String {
+    let text = match patch_text(repo, &patch.id) {
+        Ok(text) => text,
+        Err(_) => {
+            return format!(
+                "## Upstream additions\n\nCould not read `.uplink/patches/{}.patch`.\n\n",
+                patch.id
+            );
+        }
+    };
+    match diff_on_upstream(repo, &text) {
+        Some(diff) => format_additions(
+            &parse_additions(&diff),
+            "What the export adds onto `uplink/upstream`, by file, with upstream's line numbers. Removed lines are not shown.",
+        ),
+        None => format_additions(
+            &parse_additions(&text),
+            "> The patch does not apply onto `uplink/upstream` here, so this is the patch file as stored. Line numbers are from company `main`. Removed lines are not shown.",
+        ),
+    }
+}
+
+/// `git diff -U0` of `patch_text` applied onto `uplink/upstream`, without a
+/// checkout. None when there is no `uplink/upstream` or it does not apply.
+fn diff_on_upstream(repo: &Path, patch_text: &str) -> Option<String> {
+    // A fresh clone has it only as origin/uplink/upstream.
+    let _ = crate::repo::ensure_upstream_ref(repo);
+    if !has_ref(repo, "uplink/upstream").unwrap_or(false) {
+        return None;
+    }
+    let id = uuid::Uuid::new_v4();
+    let git_dir = git_ok(repo, &["rev-parse", "--absolute-git-dir"]).ok()?;
+    let index = PathBuf::from(&git_dir).join(format!("uplink-packet-index-{id}"));
+    let file = PathBuf::from(&git_dir).join(format!("uplink-packet-{id}.patch"));
+    let env = vec![(
+        "GIT_INDEX_FILE".to_string(),
+        index.to_string_lossy().into_owned(),
+    )];
+    let opts = || GitOpts {
+        extra_env: env.clone(),
+        allow_fail: true,
+        ..GitOpts::default()
+    };
+    let diff = (|| {
+        fs::write(&file, patch_text).ok()?;
+        let read = git(repo, &["read-tree", "uplink/upstream"], opts()).ok()?;
+        if read.code != 0 {
+            return None;
+        }
+        let applied = git(
+            repo,
+            &["apply", "--cached", "--3way", file.to_str()?],
+            opts(),
+        )
+        .ok()?;
+        if applied.code != 0 {
+            return None;
+        }
+        let diff = git(
+            repo,
+            &["diff", "--cached", "-U0", "--no-color", "uplink/upstream"],
+            opts(),
+        )
+        .ok()?;
+        (diff.code == 0).then_some(diff.stdout)
+    })();
+    let _ = fs::remove_file(&index);
+    let _ = fs::remove_file(&file);
+    diff
+}
+
 pub fn format_approver_packet(patch: &crate::types::Patch) -> String {
-    approver_packet(patch, None)
+    approver_packet(patch, None, &format!("`{}`", patch.id), "")
 }
 
 /// `| Review token | … |`, or nothing when the patch has none yet.
@@ -531,7 +861,12 @@ pub fn already_approved<'a>(repo: &Path, patch: &'a Patch) -> Option<&'a PatchAp
 
 /// The packet of a patch an approval already covers: nothing to review, so
 /// only what covers it and what the Environment click still does.
-fn covered_packet(patch: &Patch, token: Option<&str>, approval: &PatchApproval) -> String {
+fn covered_packet(
+    patch: &Patch,
+    token: Option<&str>,
+    approval: &PatchApproval,
+    link: &str,
+) -> String {
     let run = approval
         .run_url
         .as_deref()
@@ -542,7 +877,7 @@ fn covered_packet(patch: &Patch, token: Option<&str>, approval: &PatchApproval) 
 > **Already approved. Nothing new leaves the company.** Approval {version} ({at}) covers this patch as it is now: it adds and removes the same lines under the same title and commit message.{run} [approval.md](approval.md)\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
-| Patch | `{id}` |\n\
+| Patch | {link} |\n\
 | Title | {title} |\n\
 {token}\n\
 ## What happens when you approve the {env} environment\n\n\
@@ -556,7 +891,9 @@ No new approval is recorded. The click only releases the credentials that export
     )
 }
 
-fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
+/// The full packet. `link` is the Patch cell, `additions` the
+/// "Upstream additions" section (empty without a repository to apply in).
+fn approver_packet(patch: &Patch, token: Option<&str>, link: &str, additions: &str) -> String {
     let assessment = packet_assessment(patch);
     let pr = patch
         .source
@@ -578,13 +915,13 @@ fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
         "# Contribution packet — {id}\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
-| Patch | `{id}` |\n\
+| Patch | {link} |\n\
 | Title | {title} |\n\
 | Depends on | {depends} |\n\
 | Internal PR | {pr} |\n\
 {token}\n\
-## Upstream commit message\n\n\
-{contrib}\n\n\
+{messages}\n\
+{additions}\
 {assessment}\n\
 ## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
@@ -595,7 +932,7 @@ fn approver_packet(patch: &Patch, token: Option<&str>) -> String {
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = plain_cell(&patch.title),
-        contrib = format_fenced(&export_commit_message(patch)),
+        messages = format_message_table(patch),
     )
 }
 
@@ -611,12 +948,18 @@ pub fn format_contribution_packet_with_extras(
     let token = review_token(repo, patch).ok();
     let assessed_ok = patch.assess.as_ref().is_some_and(|assess| assess.ok);
     if assessed_ok && let Some(approval) = already_approved(repo, patch) {
-        return Ok(covered_packet(patch, token.as_deref(), approval));
+        let link = patch_link(repo, &patch.id);
+        return Ok(covered_packet(patch, token.as_deref(), approval, &link));
     }
     let packet = if patch.status == PatchStatus::Amended {
         format_delta_approver_packet(repo, patch)?
     } else {
-        approver_packet(patch, token.as_deref())
+        approver_packet(
+            patch,
+            token.as_deref(),
+            &patch_link(repo, &patch.id),
+            &upstream_additions(repo, patch),
+        )
     };
     if extra_dir.is_none() && stored_extras_fresh(patch) {
         let stored = repo.join(extras_dir(&patch.id)?);
@@ -755,7 +1098,7 @@ pub fn format_delta_approver_packet(repo: &Path, patch: &Patch) -> Result<String
 This contribution was **already IP-approved** and submitted. Review **only the delta** since the last approval. Historical packets below were already approved; do not re-litigate them unless the delta depends on that context.\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
-| Patch | `{id}` |\n\
+| Patch | {link} |\n\
 | Title | {title} |\n\
 | Amendment | {amendment} |\n\
 | Public PR | {pr} |\n\
@@ -765,8 +1108,7 @@ This contribution was **already IP-approved** and submitted. Review **only the d
 {token}\n\
 ## Delta since last approval\n\n\
 {delta}\n\n\
-## Upstream commit message\n\n\
-{contrib}\n\n\
+{messages}\n\
 {assessment}\n\
 ## What happens when you approve the {env} environment\n\n\
 1. GitHub records the environment reviewer (audit log + Deployments).\n\
@@ -778,7 +1120,8 @@ This contribution was **already IP-approved** and submitted. Review **only the d
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
         title = plain_cell(&patch.title),
-        contrib = format_fenced(&export_commit_message(patch)),
+        link = patch_link(repo, &patch.id),
+        messages = format_message_table(patch),
         assessment = packet_assessment(patch),
     ))
 }
@@ -2251,5 +2594,196 @@ binary 3333333333333333333333333333333333333333\n"
         ] {
             std::sync::LazyLock::force(re);
         }
+    }
+
+    #[test]
+    fn ip_review_shows_what_leaves_and_hides_how_the_message_was_written() {
+        let passed = report(
+            true,
+            vec![
+                check("dependencies", CheckStatus::Skip, "None."),
+                check("message-scrubbed", CheckStatus::Pass, "Scrubbed."),
+                check("cutoff-used", CheckStatus::Pass, "Cutoff found."),
+                check("co-author", CheckStatus::Skip, "No Uplink-Export-Author."),
+                check("affiliation-leak", CheckStatus::Pass, "No banned words."),
+            ],
+        );
+        let review = format_ip_review(&passed);
+        assert!(review.starts_with("## IP review: ✅\n"), "{review}");
+        assert!(
+            review.contains("- ✅ **Banned words:** none in the title, message or additions."),
+            "{review}"
+        );
+        for hidden in [
+            "dependencies",
+            "Scrubbed",
+            "Cutoff",
+            "Co-author",
+            "Uplink-Export-Author",
+        ] {
+            assert!(!review.contains(hidden), "{hidden}\n{review}");
+        }
+
+        let mut flagged = report(
+            false,
+            vec![
+                check("dependencies", CheckStatus::Fail, "upl_1 (queued)"),
+                check(
+                    "cutoff-used",
+                    CheckStatus::Warn,
+                    "public message contains PROJ-1",
+                ),
+                check("affiliation-leak", CheckStatus::Fail, "banned words: acme"),
+                check("binary-files", CheckStatus::Warn, "logo.png"),
+            ],
+        );
+        flagged.co_author = Some("Jane Doe <jane@example.com>".into());
+        let review = format_ip_review(&flagged);
+        assert!(review.starts_with("## IP review: ❌\n"), "{review}");
+        assert!(
+            review.contains("- ❌ **Banned words:** banned words: acme"),
+            "{review}"
+        );
+        assert!(
+            review.contains("- ⚠️ **Binary files:** logo.png"),
+            "{review}"
+        );
+        assert!(
+            review
+                .contains("- ⚠️ **Tickets in the public message:** public message contains PROJ-1"),
+            "{review}"
+        );
+        assert!(
+            review.contains("- ❌ **Blocking, `dependencies`:** upl_1 (queued)"),
+            "{review}"
+        );
+        assert!(
+            review.contains("- **Co-author:** Jane Doe &lt;jane@example.com>"),
+            "{review}"
+        );
+    }
+
+    #[test]
+    fn additions_keep_new_line_numbers_and_drop_removals() {
+        let diff = "\
+diff --git a/src/a.js b/src/a.js
+index 1111111..2222222 100644
+--- a/src/a.js
++++ b/src/a.js
+@@ -2 +2 @@ fn
+-  old();
++  new();
+@@ -9,0 +10,2 @@
++one
++```
+@@ -20,2 +21,0 @@
+-gone
+-gone too
+diff --git a/src/b.js b/src/b.js
+deleted file mode 100644
+index 3333333..0000000
+--- a/src/b.js
++++ /dev/null
+@@ -1 +0,0 @@
+-bye
+diff --git a/new.txt b/new.txt
+new file mode 100644
+index 0000000..4444444
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1 @@
++hello
+diff --git a/logo.png b/logo.png
+index 5555555..6666666 100644
+Binary files a/logo.png and b/logo.png differ
+";
+        let files = parse_additions(diff);
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["src/a.js", "src/b.js", "new.txt", "logo.png"]);
+        assert_eq!(
+            files[0].blocks,
+            [
+                (2, vec!["  new();".to_string()]),
+                (10, vec!["one".to_string(), "```".to_string()]),
+            ]
+        );
+        assert!(files[1].blocks.is_empty() && files[1].removes);
+        assert_eq!(files[2].note.as_deref(), Some("new file"));
+        assert!(files[3].binary);
+
+        let section = format_additions(&files, "Note.");
+        assert!(
+            section.contains("Line 2\n\n```diff\n+  new();\n```"),
+            "{section}"
+        );
+        assert!(
+            section.contains("Lines 10–11\n\n````diff\n+one\n+```\n````"),
+            "{section}"
+        );
+        assert!(
+            !section.contains("old();") && !section.contains("gone"),
+            "{section}"
+        );
+        assert!(
+            section.contains("Only removes lines (not shown): `src/b.js`."),
+            "{section}"
+        );
+        assert!(section.contains("_new file_"), "{section}");
+        assert!(section.contains("Binary file"), "{section}");
+    }
+
+    #[test]
+    fn additions_of_a_patch_file_count_context_lines() {
+        let patch = "\
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Quote diff --git a/x b/x in the message
+
+diff --git a/x b/x
+---
+ src/a.js | 2 +-
+diff --git a/src/a.js b/src/a.js
+--- a/src/a.js
++++ b/src/a.js
+@@ -4,3 +4,4 @@
+ keep
+-old
++new
++more
+ keep
+--
+2.45.0
+";
+        let files = parse_additions(patch);
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(
+            files[0].blocks,
+            [(5, vec!["new".to_string(), "more".to_string()])]
+        );
+    }
+
+    #[test]
+    fn message_table_escapes_html_and_keeps_one_line_per_cell() {
+        let patch: Patch = serde_json::from_value(serde_json::json!({
+            "id": "upl_0000000001",
+            "title": "Fix <b> & co",
+            "status": "queued",
+            "dependsOn": [],
+            "createdAt": "",
+            "updatedAt": "",
+            "source": {},
+            "events": [],
+            "commitMessage": "Fix <b> & co\n\n</pre></td> body",
+        }))
+        .unwrap();
+        let table = format_message_table(&patch);
+        assert!(
+            table.contains("<pre>Fix &lt;b&gt; &amp; co<br><br>&lt;/pre&gt;&lt;/td&gt; body</pre>"),
+            "{table}"
+        );
+        let inside = table.split("<table>").nth(1).unwrap();
+        assert!(
+            !inside.contains("\n\n"),
+            "no blank line inside the table\n{table}"
+        );
     }
 }

@@ -4462,6 +4462,81 @@ fn report_writes_the_token_that_approve_takes_back() {
 }
 
 #[test]
+fn the_packet_shows_upstream_additions_and_links_the_patch_file() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let id = hash_patch.id.as_str();
+    let report = |github: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_git-uplink"));
+        cmd.args(["report", id]).current_dir(company);
+        cmd.env_remove("GITHUB_SERVER_URL")
+            .env_remove("GITHUB_REPOSITORY");
+        if github {
+            cmd.env("GITHUB_SERVER_URL", "https://github.example")
+                .env("GITHUB_REPOSITORY", "acme/product");
+        }
+        let output = cmd.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let packet = report(false);
+    assert!(packet.contains(&format!("| Patch | `{id}` |")), "{packet}");
+    let additions = packet
+        .split("## Upstream additions")
+        .nth(1)
+        .and_then(|rest| rest.split("## IP review").next())
+        .expect("additions before the IP review");
+    assert!(additions.contains("### `src/tokens.js`"), "{packet}");
+    assert!(
+        additions.contains("Line 2\n\n```diff\n+  return sha256(value);\n```"),
+        "{packet}"
+    );
+    assert!(
+        !additions.contains("sha1"),
+        "removed lines are not shown\n{packet}"
+    );
+
+    let path = format!(".uplink/patches/{id}.patch");
+    let sha = git_ok(
+        company,
+        &["log", "-1", "--format=%H", STATE_BRANCH, "--", &path],
+    )
+    .unwrap();
+    let packet = report(true);
+    assert!(
+        packet.contains(&format!(
+            "| Patch | [`{id}`](https://github.example/acme/product/blob/{sha}/{path}) |"
+        )),
+        "{packet}"
+    );
+
+    // Where the patch does not apply onto uplink/upstream, the patch file.
+    let empty = git_ok(
+        company,
+        &[
+            "commit-tree",
+            "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            "-m",
+            "empty",
+        ],
+    )
+    .unwrap();
+    git(
+        company,
+        &["update-ref", "refs/heads/uplink/upstream", &empty],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let packet = report(false);
+    assert!(
+        packet.contains("Line numbers are from company `main`"),
+        "{packet}"
+    );
+    assert!(packet.contains("+  return sha256(value);"), "{packet}");
+}
+
+#[test]
 fn an_approval_that_covers_the_patch_shortens_the_packet() {
     let (world, hash_patch) = world_with_hash_patch();
     let company = &world.company;
@@ -4474,7 +4549,7 @@ fn an_approval_that_covers_the_patch_shortens_the_packet() {
 
     assert!(covered_by().is_null());
     let full = packet();
-    assert!(full.contains("## Upstream commit message"), "{full}");
+    assert!(full.contains("## Commit message"), "{full}");
     assert!(!full.contains("Already approved"), "{full}");
 
     let run = "https://github.example/acme/product/actions/runs/9";
@@ -4487,7 +4562,7 @@ fn an_approval_that_covers_the_patch_shortens_the_packet() {
     assert!(short.contains(run), "{short}");
     assert!(short.contains("[approval.md](approval.md)"), "{short}");
     assert!(short.contains("| Review token |"), "{short}");
-    assert!(!short.contains("## Upstream commit message"), "{short}");
+    assert!(!short.contains("## Commit message"), "{short}");
 
     // Assessment findings: the full packet, whatever covers it.
     let mut queue = git_uplink::read_queue(company).unwrap();
@@ -4495,7 +4570,7 @@ fn an_approval_that_covers_the_patch_shortens_the_packet() {
     entry.assess.as_mut().unwrap().ok = false;
     write_queue(company, &queue).unwrap();
     git_uplink::commit_queue(company, "uplink: findings").unwrap();
-    assert!(packet().contains("## Upstream commit message"));
+    assert!(packet().contains("## Commit message"));
 
     // Other public content: nothing covers it any more.
     retitle(company, id, "Use SHA-256 everywhere");
@@ -5405,10 +5480,10 @@ fn submitted_conflict_resolve_that_changes_the_patch_requires_delta_approval_and
     assert!(changed.contains("--  return 3600;"), "{packet}");
     assert!(changed.contains("+-  return 1800;"), "{packet}");
     assert!(packet.contains("Already approved (initial)"));
-    assert!(packet.contains("## Upstream commit message"));
+    assert!(packet.contains("## Commit message"));
     assert!(!packet.contains("### Company main"));
     assert!(!packet.contains("Queue status"));
-    assert!(packet.contains("## Upstream Assessment: ✅"), "{packet}");
+    assert!(packet.contains("## IP review: ✅"), "{packet}");
     assert!(packet.contains(&amended.approvals[0].sha));
     assert!(packet.contains("Uplink-Patch-Id"));
 
@@ -5701,7 +5776,7 @@ fn report_assesses_the_patch_file_with_the_settings_of_today() {
     assert!(!output.status.success(), "{output:?}");
     let packet = String::from_utf8_lossy(&output.stdout);
     assert!(packet.contains("# Contribution packet"), "{packet}");
-    assert!(packet.contains("## Upstream Assessment: ❌"), "{packet}");
+    assert!(packet.contains("## IP review: ❌"), "{packet}");
 }
 
 /// Runs `git uplink` in `repo` and returns the output.
@@ -5964,7 +6039,7 @@ fn a_package_with_findings_is_written_before_assess_fails() {
     );
     assert!(!report.status.success(), "{report:?}");
     let packet = String::from_utf8_lossy(&report.stdout);
-    assert!(packet.contains("## Upstream Assessment: ❌"), "{packet}");
+    assert!(packet.contains("## IP review: ❌"), "{packet}");
     assert!(!stored_patch(company, &hash_patch.id).assess.unwrap().ok);
 }
 
@@ -8659,19 +8734,26 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
     assert!(packet.contains("#44"));
     assert!(!packet.contains("Review this packet"), "{packet}");
     assert!(!packet.contains("| Queue"), "{packet}");
-    assert!(packet.contains("## Upstream commit message"));
-    assert!(packet.contains("SHA-1 is weak."));
-    assert!(packet.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
+    assert!(packet.contains("## Commit message"));
+    // Internal message on the left, what leaves on the right.
+    let (internal, upstream) = packet
+        .split_once("</pre></td><td><pre>")
+        .expect("message table");
+    assert!(internal.contains("PROJ-9"), "{packet}");
+    assert!(upstream.contains("SHA-1 is weak."), "{packet}");
     assert!(
-        !packet.contains("PROJ-9"),
-        "the company commit message must not be in the packet\n{packet}"
-    );
-    assert!(packet.contains("## Upstream Assessment: ✅"), "{packet}");
-    assert!(!packet.contains("### Public title"), "{packet}");
-    assert!(
-        packet.contains("| Check | Description | Result |"),
+        upstream.contains(&format!("Uplink-Patch-Id: {}", patch.id)),
         "{packet}"
     );
+    let upstream = upstream.split("</pre>").next().unwrap();
+    assert!(
+        !upstream.contains("PROJ-9"),
+        "the internal section must not be in the upstream message\n{packet}"
+    );
+    assert!(packet.contains("## IP review: ✅"), "{packet}");
+    assert!(!packet.contains("### Public title"), "{packet}");
+    assert!(!packet.contains("| Check |"), "{packet}");
+    assert!(!packet.contains("message-scrubbed"), "{packet}");
 
     let (_, prepare_path, approval_path) = report_paths(&patch.id).unwrap();
     write(company, &prepare_path, &packet);

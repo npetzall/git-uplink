@@ -657,6 +657,14 @@ export function InternalsPage() {
             exist only in the job after the Environment approval.
           </p>
           <p>
+            The packet is laid out for IP review. It links the patch file, puts
+            the internal and the upstream commit message side by side, and lists
+            what the export adds onto <code>uplink/upstream</code>, by file,
+            with upstream&apos;s line numbers. It ends with the banned-word
+            scan, binary files to check by hand, and the co-author when one is
+            set.
+          </p>
+          <p>
             <code>preflight.sh</code> builds and runs product code, so it never
             runs in a job that can write. Import, submit, amend, transfer,
             resolve, verify and the apply of an approved upstream each run it in
