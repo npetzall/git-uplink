@@ -197,13 +197,14 @@ pub enum ForgeArg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum MergeViaArg {
-    /// The GitHub PR recorded on the queue was merged.
+    /// The GitHub PR recorded on the queue was merged; needs a recorded PR.
     Pr,
-    /// An upstream commit carries the `Uplink-Patch-Id` trailer.
+    /// An upstream commit carries the `Uplink-Patch-Id` trailer and its
+    /// `git patch-id --stable` matches; needs `--sha`.
     Trailer,
-    /// `git patch-id --stable` matches an upstream commit.
-    PatchId,
-    /// The patch applies empty on upstream.
+    /// `git patch-id --stable` of an upstream commit matches; needs `--sha`.
+    StablePatchId,
+    /// The patch is already contained in upstream (`--sha`, else uplink/upstream).
     EmptyRebase,
     /// Recorded by an operator.
     Manual,

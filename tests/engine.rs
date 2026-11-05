@@ -4924,7 +4924,7 @@ fn sync_detects_several_patches_merged_by_patch_id() {
         assert_eq!(patch.status, PatchStatus::Merged, "{id}");
         assert_eq!(
             patch.merged.as_ref().unwrap().via,
-            MergeVia::PatchId,
+            MergeVia::StablePatchId,
             "{id}"
         );
     }
@@ -5971,11 +5971,12 @@ fn assess_of_a_patch_fails_while_an_upstream_dependency_is_not_merged() {
         "{detail}"
     );
 
+    // Merged: it is no longer a dependency, so nothing is left to wait for.
     mark_merged(company, &hash_patch.id, MergeVia::Manual, None).unwrap();
     let dir = temp_dir();
     let package = assess_patch_package(company, &notes.id, dir.path());
     assert_eq!(package["ok"], true);
-    assert_eq!(dependencies(&package)["status"], "pass");
+    assert_eq!(dependencies(&package)["status"], "skip");
 }
 
 #[test]
@@ -15476,4 +15477,129 @@ fn waiting_refuses_internal_only_patches() {
     let counts = summarize_queue(&git_uplink::read_queue(company).unwrap());
     assert_eq!(counts.internal, 1);
     assert_eq!(counts.active, 1, "{counts:?}");
+}
+
+/// The hash patch, and a notes patch that depends on it.
+fn world_with_dependent_notes() -> (World, Patch, Patch) {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "notes\n");
+    commit_all(company, "notes");
+    let notes = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Add notes".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![hash_patch.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    (world, hash_patch, notes)
+}
+
+fn assert_dependency_dropped(queue: &QueueState, notes: &Patch, merged_id: &str) {
+    let notes = queue.all_patches().find(|p| p.id == notes.id).unwrap();
+    assert!(notes.depends_on.is_empty(), "{:?}", notes.depends_on);
+    assert!(
+        notes.events.iter().any(|e| e.kind == "dependency"
+            && e.detail == format!("Dropped dependency {merged_id}: merged")),
+        "{:?}",
+        notes.events
+    );
+}
+
+#[test]
+fn sync_by_stable_patch_id_drops_the_merged_patch_from_dependents() {
+    let (world, hash_patch, notes) = world_with_dependent_notes();
+    let upstream = &world.upstream;
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(upstream, "Use SHA-256 (squashed)");
+
+    let queue = sync_apply(&world.company);
+    let hash = queue.all_patches().find(|p| p.id == hash_patch.id).unwrap();
+    assert_eq!(hash.status, PatchStatus::Merged);
+    assert_eq!(hash.merged.as_ref().unwrap().via, MergeVia::StablePatchId);
+    let detail = &hash.events.last().unwrap().detail;
+    assert!(
+        detail.starts_with("Stable patch-id matches upstream "),
+        "{detail}"
+    );
+    assert_dependency_dropped(&queue, &notes, &hash_patch.id);
+}
+
+#[test]
+fn empty_rebase_without_evidence_is_superseded_by_upstream() {
+    let (world, hash_patch, notes) = world_with_dependent_notes();
+    let upstream = &world.upstream;
+    // The same change folded into a larger commit: no patch-id match.
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS
+            .replace("return sha1(value);", "return sha256(value);")
+            .replace("return 3600;", "return 7200;"),
+    );
+    commit_all(upstream, "Hash and ttl rework");
+
+    let queue = sync_apply(&world.company);
+    let hash = queue.all_patches().find(|p| p.id == hash_patch.id).unwrap();
+    assert_eq!(hash.status, PatchStatus::Merged);
+    assert_eq!(hash.merged.as_ref().unwrap().via, MergeVia::EmptyRebase);
+    assert_eq!(
+        hash.events.last().unwrap().detail,
+        "Empty rebase, superseded by upstream"
+    );
+    assert_dependency_dropped(&queue, &notes, &hash_patch.id);
+}
+
+#[test]
+fn mark_merged_verifies_the_claimed_evidence() {
+    let (world, hash_patch) = world_with_hash_patch();
+    let company = &world.company;
+    let id = &hash_patch.id;
+    let refused = |via: MergeVia, sha: Option<&str>| {
+        mark_merged(company, id, via, sha).unwrap_err().to_string()
+    };
+
+    assert!(refused(MergeVia::StablePatchId, None).contains("needs --sha"));
+    assert!(refused(MergeVia::Pr, None).contains("no recorded public PR"));
+    assert!(refused(MergeVia::EmptyRebase, None).contains("not contained in"));
+    let unrelated = rev_of(company, "uplink/upstream");
+    assert!(refused(MergeVia::StablePatchId, Some(&unrelated)).contains("does not match"));
+
+    let upstream = &world.upstream;
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(upstream, "Use SHA-256 (squashed)");
+    git(
+        company,
+        &["fetch", "--quiet", upstream.to_str().unwrap(), "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let landed = rev_of(company, "FETCH_HEAD");
+    assert!(refused(MergeVia::Trailer, Some(&landed)).contains("trailer"));
+
+    let merged = mark_merged(company, id, MergeVia::StablePatchId, Some(&landed)).unwrap();
+    assert_eq!(merged.merged.unwrap().via, MergeVia::StablePatchId);
 }

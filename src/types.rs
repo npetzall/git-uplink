@@ -187,8 +187,8 @@ pub enum ForgeFamily {
 pub enum MergeVia {
     Pr,
     Trailer,
-    #[serde(rename = "patch-id")]
-    PatchId,
+    #[serde(rename = "stable-patch-id", alias = "patch-id")]
+    StablePatchId,
     #[serde(rename = "empty-rebase")]
     EmptyRebase,
     Manual,
@@ -199,7 +199,7 @@ impl MergeVia {
         match self {
             Self::Pr => "pr",
             Self::Trailer => "trailer",
-            Self::PatchId => "patch-id",
+            Self::StablePatchId => "stable-patch-id",
             Self::EmptyRebase => "empty-rebase",
             Self::Manual => "manual",
         }
@@ -211,7 +211,7 @@ impl From<MergeViaArg> for MergeVia {
         match arg {
             MergeViaArg::Pr => Self::Pr,
             MergeViaArg::Trailer => Self::Trailer,
-            MergeViaArg::PatchId => Self::PatchId,
+            MergeViaArg::StablePatchId => Self::StablePatchId,
             MergeViaArg::EmptyRebase => Self::EmptyRebase,
             MergeViaArg::Manual => Self::Manual,
         }

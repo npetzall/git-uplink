@@ -733,19 +733,17 @@ fn mark_merged_by_empty_rebase(
     id: &str,
     upstream_ref: &str,
 ) -> Result<()> {
-    let current = get_patch_mut(queue, id)?;
-    current.status = PatchStatus::Merged;
-    current.merged = Some(PatchMerged {
+    let merged = PatchMerged {
         via: MergeVia::EmptyRebase,
         at: stamp(),
         upstream_sha: Some(rev_parse(repo, upstream_ref)?),
-    });
-    add_event(
-        current,
-        "merged",
-        "Became empty on rebuild; treating as already present upstream",
-    );
-    Ok(())
+    };
+    set_merged(
+        queue,
+        id,
+        merged,
+        merged_detail(MergeVia::EmptyRebase, None),
+    )
 }
 
 /// Refreshes the stable patch id of a patch that applied. A patch in
