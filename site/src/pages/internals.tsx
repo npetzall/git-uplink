@@ -199,13 +199,18 @@ sequenceDiagram
   Op->>Pre: same dispatch
   Pre->>Pre: git uplink preflight id --json (preflight.sh, read-only token)
   Pre->>Submit: result
+  Submit->>Submit: all checks passed, status waiting
   Submit->>Env: wait for IP reviewer
+  alt rejected or cancelled
+    Env-->>Submit: rejected (status rejected, re-dispatch by hand)
+  else approved
   Env-->>Submit: approved
   Submit->>Submit: git uplink approve
   Submit->>Submit: git uplink submit --preflight-result (export commit on uplink/upstream)
   Submit->>Fork: contrib_commit.py (Git Database API, signed by GitHub)
   Submit->>Up: open public PR
   Submit->>Submit: git uplink submitted (record PR on the queue)
+  end
 `;
 
 const SYNC_CHART = `
@@ -248,7 +253,7 @@ sequenceDiagram
   Base->>Resolve: pull_request closed (merged)
   Resolve->>Resolve: git uplink resolve id (same id, rebuild)
   opt already submitted
-    Resolve->>Resolve: dispatch submit (amended and a delta only if added or removed lines changed)
+    Resolve->>Resolve: dispatch submit (queued again, delta review only if added or removed lines changed)
   end
 `;
 

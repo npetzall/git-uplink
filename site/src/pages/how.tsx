@@ -32,8 +32,8 @@ const PHASES = [
   ["Product gate", "Review and merge.", "Queued: in the company build"],
   [
     "IP gate",
-    "IP reviews the packet and approves the to-upstream Environment.",
-    "Approved",
+    "Once assess, upstream dependencies and preflight pass, IP reviews the packet in the to-upstream Environment.",
+    "Waiting, then approved (or rejected: fix and dispatch submit again by hand)",
   ],
   [
     "Submit",

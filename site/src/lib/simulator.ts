@@ -1,9 +1,10 @@
 export type QueueLayer = "upstream" | "internal";
 export type Status =
   | "queued"
+  | "waiting"
   | "approved"
   | "submitted"
-  | "amended"
+  | "rejected"
   | "merged"
   | "dropped"
   | "conflict";

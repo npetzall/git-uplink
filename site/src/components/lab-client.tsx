@@ -14,6 +14,12 @@ import {
   type SimFileMap,
   type SimPatch,
 } from "../lib/simulator";
+import {
+  describe,
+  LABEL_ORDER,
+  STATUS_ORDER,
+  shownStatus,
+} from "../lib/status";
 import { cn } from "../lib/utils";
 import { StatusBadge } from "./status-badge";
 import { Button } from "./ui/button";
@@ -62,6 +68,49 @@ function patchLink(patch: SimPatch, blockedBy?: string) {
   if (patch.dependsOn.length) return `depends ${patch.dependsOn.join(", ")}`;
   if (patch.queue === "internal") return "internal queue";
   return "queued";
+}
+
+function LegendGroup({ title, values }: { title: string; values: string[] }) {
+  return (
+    <div>
+      <h3 className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        {title}
+      </h3>
+      <dl className="grid gap-2">
+        {values.map((value) => {
+          const info = describe(value);
+          return (
+            <div
+              key={value}
+              className="grid gap-1 sm:grid-cols-[8rem_1fr] sm:gap-3"
+            >
+              <dt>
+                <StatusBadge value={value} />
+              </dt>
+              <dd className="text-xs text-muted-foreground">
+                {info?.meaning}{" "}
+                <span className="text-foreground/80">Next: {info?.next}</span>
+              </dd>
+            </div>
+          );
+        })}
+      </dl>
+    </div>
+  );
+}
+
+function StatusLegend() {
+  return (
+    <details data-testid="lab-legend" className="mt-4 text-sm">
+      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+        What the statuses and labels mean
+      </summary>
+      <div className="mt-3 grid gap-4">
+        <LegendGroup title="Statuses" values={STATUS_ORDER} />
+        <LegendGroup title="Labels" values={LABEL_ORDER} />
+      </div>
+    </details>
+  );
 }
 
 function OperationsView({
@@ -425,7 +474,9 @@ export function LabClient() {
                           </td>
                           <td className="py-2 pr-3">
                             <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge value={patch.status} />
+                              <StatusBadge
+                                value={shownStatus(patch.status, patch.queue)}
+                              />
                               {waiting ? (
                                 <span className="text-xs text-rose-200/80">
                                   · blocked
@@ -442,6 +493,7 @@ export function LabClient() {
                   </tbody>
                 </table>
               )}
+              <StatusLegend />
               {state.conflict ? (
                 <div
                   data-testid="lab-conflict"
