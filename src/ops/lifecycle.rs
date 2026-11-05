@@ -1,4 +1,5 @@
 use super::*;
+use crate::assess::TO_UPSTREAM_ENVIRONMENT;
 
 pub fn approve_patch(repo: &Path, id: &str) -> Result<Patch> {
     approve_patch_at(repo, id, None, None)
@@ -32,10 +33,11 @@ pub fn approval_stale(repo: &Path, queue: &QueueState, patch: &Patch) -> bool {
     covering_approval(repo, patch).is_none()
 }
 
-/// The status of an approved patch after a conflict resolution or an amend
-/// rewrote it. A rewrite that adds and removes the same lines (see
-/// `changed_lines`) is still covered by the last approval and needs no
-/// other one.
+/// The status of a patch after a conflict resolution or an amend rewrote it.
+/// A rewrite that adds and removes the same lines (see `changed_lines`) is
+/// still covered by the last approval and needs no other one. Any other
+/// rewrite makes the patch `queued` again, whatever review it was in; one
+/// with a public PR then gets a delta review ([`Patch::reviews_delta`]).
 pub(super) fn status_after_rewrite(repo: &Path, patch: &Patch) -> PatchStatus {
     match (
         covering_approval(repo, patch).is_some(),
@@ -43,8 +45,7 @@ pub(super) fn status_after_rewrite(repo: &Path, patch: &Patch) -> PatchStatus {
     ) {
         (true, true) => PatchStatus::Submitted,
         (true, false) => PatchStatus::Approved,
-        (false, true) => PatchStatus::Amended,
-        (false, false) => PatchStatus::Queued,
+        (false, _) => PatchStatus::Queued,
     }
 }
 
@@ -93,8 +94,13 @@ pub fn approve_patch_reviewed(
             let patch = get_patch_mut(&mut queue, id)?;
             super::submit::ensure_assessed_ok(patch)?;
             let kind = match patch.status {
-                PatchStatus::Queued => "initial",
-                PatchStatus::Amended => "delta",
+                PatchStatus::Queued | PatchStatus::Waiting | PatchStatus::Rejected => {
+                    if patch.reviews_delta() {
+                        "delta"
+                    } else {
+                        "initial"
+                    }
+                }
                 PatchStatus::Approved | PatchStatus::Submitted => {
                     if patch
                         .last_approval()
@@ -225,8 +231,7 @@ pub(super) const STATE_PATCH_PUSH_ATTEMPTS: u32 = 8;
 
 pub(super) fn origin_amended_after_local(local: &Patch, origin: &Patch) -> bool {
     let local_had_amend = local.events.iter().any(|e| e.kind == "amended");
-    let origin_amended =
-        origin.status == PatchStatus::Amended || origin.events.iter().any(|e| e.kind == "amended");
+    let origin_amended = origin.events.iter().any(|e| e.kind == "amended");
     origin_amended && !local_had_amend
 }
 
@@ -472,7 +477,8 @@ fn assessed_for_packet(queue: &QueueState, patch: &Patch) -> bool {
         && matches!(
             patch.status,
             PatchStatus::Queued
-                | PatchStatus::Amended
+                | PatchStatus::Waiting
+                | PatchStatus::Rejected
                 | PatchStatus::Approved
                 | PatchStatus::Submitted
         )
@@ -569,4 +575,155 @@ mod tests {
         merge_events(&mut dest, vec![first.clone(), second.clone()]);
         assert_eq!(dest, vec![first, second]);
     }
+}
+
+/// The `waiting` event detail for the submit run `run_url`.
+fn waiting_detail(run_url: Option<&str>) -> String {
+    match run_url {
+        Some(url) => format!("Waiting on the {TO_UPSTREAM_ENVIRONMENT} review in {url}"),
+        None => format!("Waiting on the {TO_UPSTREAM_ENVIRONMENT} review"),
+    }
+}
+
+fn run_url_or_env(run_url: Option<&str>) -> Option<String> {
+    run_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(github_run_url_opt)
+}
+
+/// What [`mark_waiting`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitingOutcome {
+    /// The patch is now `waiting`.
+    Waiting,
+    /// An approval already covers the patch; its status is left as it is.
+    Covered,
+}
+
+/// Records that a submit run passed every check and now waits on the
+/// to-upstream review: the patch is upstream-bound, its upstream
+/// dependencies are merged, its assessment passed, and `preflight` is a
+/// passing result for the patch as it is now. Refused, with the status left
+/// as it was, when any of that does not hold.
+pub fn mark_waiting(
+    repo: &Path,
+    id: &str,
+    preflight: &ScriptVerdict,
+    run_url: Option<&str>,
+) -> Result<(Patch, WaitingOutcome)> {
+    with_queue_lock(repo, || {
+        let mut queue = read_queue_file(repo)?;
+        if !queue.is_upstream(id) {
+            get_patch(&queue, id)?;
+            return Err(Error::msg(format!(
+                "{id} is not upstream-bound; only upstream patches wait on the {TO_UPSTREAM_ENVIRONMENT} review."
+            )));
+        }
+        let patch = get_patch(&queue, id)?;
+        match patch.status {
+            PatchStatus::Queued | PatchStatus::Rejected | PatchStatus::Waiting => {}
+            PatchStatus::Approved | PatchStatus::Submitted => {
+                if !approval_stale(repo, &queue, patch) {
+                    return Ok((patch.clone(), WaitingOutcome::Covered));
+                }
+            }
+            status => {
+                return Err(Error::msg(format!(
+                    "{id} is {status} and cannot wait on the {TO_UPSTREAM_ENVIRONMENT} review."
+                )));
+            }
+        }
+        super::submit::ensure_upstream_deps_merged(&queue, patch, "Waiting")?;
+        super::submit::ensure_assessed_ok(patch)?;
+        let token = review_token(repo, patch)?;
+        if !super::submit::passed_for_content(preflight, &token) {
+            return Err(Error::msg(format!(
+                "{id} has no passing preflight result for the patch as it is now; not waiting on the {TO_UPSTREAM_ENVIRONMENT} review."
+            )));
+        }
+        let run_url = run_url_or_env(run_url);
+        {
+            let patch = get_patch_mut(&mut queue, id)?;
+            patch.status = PatchStatus::Waiting;
+            add_event(patch, "waiting", waiting_detail(run_url.as_deref()));
+        }
+        write_queue_file(repo, &queue)?;
+        commit_queue(
+            repo,
+            &format!("uplink: {id} waiting on {TO_UPSTREAM_ENVIRONMENT}"),
+        )?;
+        Ok((get_patch(&queue, id)?.clone(), WaitingOutcome::Waiting))
+    })
+}
+
+/// How the review of a waiting patch ended without approval.
+#[derive(Debug, Clone, Default)]
+pub struct Rejection {
+    /// The submit run that set `waiting`. Without it, any waiting run matches.
+    pub run_url: Option<String>,
+    /// The run was cancelled instead of rejected.
+    pub cancelled: bool,
+    /// Who rejected it.
+    pub by: Option<String>,
+    /// The reviewer's comment.
+    pub comment: Option<String>,
+}
+
+/// Records that the submit run that set `waiting` was rejected or
+/// cancelled. Returns `None`, and changes nothing, when the patch is no
+/// longer waiting for that run: an amend, a resolve or a newer run took
+/// over.
+pub fn mark_rejected(repo: &Path, id: &str, rejection: &Rejection) -> Result<Option<Patch>> {
+    with_queue_lock(repo, || {
+        let mut queue = read_queue_file(repo)?;
+        let patch = get_patch(&queue, id)?;
+        if patch.status != PatchStatus::Waiting {
+            return Ok(None);
+        }
+        let run_url = rejection
+            .run_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(url) = run_url {
+            let latest = patch.events.iter().rev().find(|e| e.kind == "waiting");
+            if latest.is_none_or(|event| event.detail != waiting_detail(Some(url))) {
+                return Ok(None);
+            }
+        }
+        let mut detail = if rejection.cancelled {
+            "The submit run was cancelled while waiting on the review".to_string()
+        } else {
+            match rejection
+                .by
+                .as_deref()
+                .map(str::trim)
+                .filter(|by| !by.is_empty())
+            {
+                Some(by) => format!("{by} rejected the {TO_UPSTREAM_ENVIRONMENT} review"),
+                None => format!("The {TO_UPSTREAM_ENVIRONMENT} review was rejected"),
+            }
+        };
+        if let Some(comment) = rejection
+            .comment
+            .as_deref()
+            .map(str::trim)
+            .filter(|comment| !comment.is_empty())
+        {
+            detail.push_str(&format!(": {comment}"));
+        }
+        if let Some(url) = run_url {
+            detail.push_str(&format!(" ({url})"));
+        }
+        {
+            let patch = get_patch_mut(&mut queue, id)?;
+            patch.status = PatchStatus::Rejected;
+            add_event(patch, "rejected", detail);
+        }
+        write_queue_file(repo, &queue)?;
+        commit_queue(repo, &format!("uplink: {id} rejected"))?;
+        Ok(Some(get_patch(&queue, id)?.clone()))
+    })
 }

@@ -116,7 +116,7 @@ fn check_ready_to_submit(
 /// True when `preflight` is a passing result for the patch content `token`
 /// names. Upstream and hooks may have moved since; the export still has to
 /// apply onto the current upstream.
-fn passed_for_content(preflight: &ScriptVerdict, token: &str) -> bool {
+pub(super) fn passed_for_content(preflight: &ScriptVerdict, token: &str) -> bool {
     matches!(preflight, ScriptVerdict::Reported(report)
         if report.ok && report.review_token.as_deref() == Some(token))
 }
@@ -243,9 +243,12 @@ fn blocks_submit(queue: &QueueState, dep: &Patch) -> bool {
 
 /// Upstream-bound, queued, and no dependency blocks it. A conflict in
 /// another patch does not: submit only needs the patch on `uplink/upstream`.
+/// A queued patch with a public PR is not listed: the amend or resolve that
+/// made it queued dispatches submit for it.
 fn ready_to_submit(queue: &QueueState, patch: &Patch) -> bool {
     queue.is_upstream(&patch.id)
         && patch.status == PatchStatus::Queued
+        && patch.upstream.is_none()
         && patch
             .depends_on
             .iter()

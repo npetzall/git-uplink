@@ -42,6 +42,9 @@ git uplink doctor [--json]
 git uplink approve <id> [--out <path>] [--reviewed <token>]
 git uplink submit <id> [--push] [--preflight-result <path>]
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
+git uplink waiting <id> --preflight-result <path> [--run-url <url>]
+git uplink rejected <id> [--run-url <url>] [--cancelled] [--by <login>]
+            [--comment <text>]
 git uplink sync [--merged-pr <id=sha>]...
 git uplink accept-upstream [--sha <sha>] [--fetch-only] [--preflight-result <path>]
             [--preflight-only]
@@ -302,7 +305,7 @@ Writes `.uplink/reports/<id>/assessment.md` on `uplink/state` and prints the pac
 
 The packet of an upstream-bound patch shows an assessment of the patch file as it is in the queue, made with today's `uplink.toml`. The pull request check and import assess the change before it is a patch. Uplink submit runs `assess --patch <id> --package` and passes the result with `--assess-result`; without it, report assesses the patch file itself. Either way the result is stored with the patch. Nothing is applied: whether the patch still applies on upstream is what `preflight` checks. When the assessment has findings, the packet is still written and printed, and report exits non-zero.
 
-Stored extras lead the packet while the patch content is unchanged (same stable patch id, not `amended`). Submit runs the hook from branch `uplink/hooks` on the assessment package when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
+Stored extras lead the packet while the patch content is unchanged (same stable patch id, not a delta review). Submit runs the hook from branch `uplink/hooks` on the assessment package when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
 
 - `<id>`: Patch to report on.
 - `--out <path>`: Write the packet here instead of .uplink/reports/\<id>/assessment.md.
@@ -342,6 +345,28 @@ Record the to-upstream approval of a patch and write its receipt.
 - `--reviewed <token>`: Review token of the packet that was reviewed.
 
   `report` writes it to `.uplink/reports/<id>/review-token`. It names what the patch changes, the public title and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one, and its receipt is left as it is.
+
+### `waiting`
+
+Record that a submit run waits on the to-upstream review.
+
+Uplink submit runs it once every check passed, right before the job that waits on the to-upstream Environment. The patch must be upstream-bound, its upstream dependencies merged, its assessment passed, and `--preflight-result` a passing result for the patch as it is now; otherwise the command fails and the status is left as it was. A `queued` or `rejected` patch becomes `waiting`. An approved or submitted patch that an approval still covers is left as it is.
+
+- `<id>`: Patch the run asks IP to approve.
+- `--preflight-result <path>`: Output of `git uplink preflight <id> --json` from the same run.
+- `--run-url <url>`: The submit run; defaults to the GitHub Actions run of this job.
+
+### `rejected`
+
+Record that the to-upstream review of a waiting patch was rejected.
+
+Uplink submit runs it when the to-upstream Environment was rejected, or the run was cancelled while waiting on it (`--cancelled`). The patch becomes `rejected` and is never dispatched again on its own: dispatch Uplink submit by hand, usually after an amend. Nothing is recorded, and the command exits 0, when the patch is no longer `waiting` for the run `--run-url` names: an amend, a resolve or a newer run took over.
+
+- `<id>`: Patch whose review was rejected.
+- `--run-url <url>`: The submit run that set `waiting`. Without it, any waiting run matches.
+- `--cancelled`: The run was cancelled instead of rejected.
+- `--by <login>`: Login of the reviewer who rejected it.
+- `--comment <text>`: The reviewer's comment.
 
 ### `submit`
 
@@ -443,7 +468,7 @@ Amends an internal-only patch, an upstream patch not yet submitted, or a submitt
 
 Without `--complete` it replays the queue on `uplink/upstream` up to and including the patch, cuts protected `uplink/amend/<id>` there, and cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can open at once. The queue is not touched. It prints `base`, `work`, and `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the stored message after an HTML-comment instruction block).
 
-`--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. A submitted patch becomes `amended` (IP approves the delta, then submit force-pushes the contrib branch) and a patch that was not submitted becomes `queued`, unless the amend adds and removes the same lines as before and leaves the public title and message as they were: then the last approval still covers the patch and it stays `submitted` or `approved`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was.
+`--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. The patch becomes `queued` again, whatever review it was in (`waiting`, `approved`, `rejected`, `submitted`). A submitted one keeps its public PR: IP approves the delta, then submit force-pushes the contrib branch. That holds unless the amend adds and removes the same lines as before and leaves the public title and message as they were: then the last approval still covers the patch and it stays `submitted` or `approved`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was. The JSON output has `public` (the patch has a public PR, so submit must run again) and `readyToSubmit` (patches the amend made ready to submit).
 
 - `<id>`: Patch to amend.
 - `--complete`: Fold the merged amend PR into the patch.
@@ -512,9 +537,9 @@ Finish a conflict resolution and put the patch back in the queue.
 
 Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`).
 
-A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `amended` until IP approves the delta. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0. That includes a patch `preflight.sh` fails on in the rebuild, which can be the resolved patch again; see `rebuild`.
+A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `queued` again, and the next submit asks IP to approve the delta; the public PR keeps the approved lines until then. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0. That includes a patch `preflight.sh` fails on in the rebuild, which can be the resolved patch again; see `rebuild`.
 
-`readyToSubmit` in the output lists the resolved patch when it is `queued` again, and the queued patches whose last unmerged upstream dependency the rebuild marked merged.
+`readyToSubmit` in the output lists the resolved patch when it is `queued` again and has no public PR, and the queued patches whose last unmerged upstream dependency the rebuild marked merged. `public` is true when the resolved patch has a public PR: submit must then run again.
 
 Locally: `git switch uplink/conflict/<id>-work`, fix the files and `git add` them, run `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. `git uplink rebuild -i` fixes them inline instead.
 

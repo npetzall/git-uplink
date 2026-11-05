@@ -8,19 +8,19 @@ use git_uplink::{
     DEFAULT_CUTOFF, Error, Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
     PREVIOUS_MAIN_PATH, Patch, PatchIntent, PatchStatus, PendingMerge, PreflightReport,
     PreviousMain, ProgressMode, PushOpts, QueueConfig, QueueState, RebaseState, RebuildOpts,
-    Result, STATE_BRANCH, ScriptVerdict, Settings, SettingsFlags, StepOutcome, SubmitResult,
-    SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, accept_upstream,
-    accept_upstream_at, add_patch, amend_patch, amend_patch_with, amend_preflight, approve_patch,
-    approve_patch_reviewed, assess_patch_for_packet, doctor, drop_patch, extras_dir,
-    format_approval_receipt, format_approver_packet, format_contribution_packet,
-    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
-    git_ok, init, init_repo, load_extra_markdown, load_groups_file, mark_merged,
-    newly_ready_to_submit, parse_depends_on, preflight_incoming_change, push_queue,
-    rebase_onto_main, rebase_plan, rebuild, rebuild_with, record_gated_pr, record_pull_request,
-    refresh_from_origin, report_paths, reset_from_origin, resolve_conflict, review_token,
-    status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch,
-    submit_patch_with, summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with,
-    transfer_preflight, write_queue,
+    Rejection, Result, STATE_BRANCH, ScriptVerdict, Settings, SettingsFlags, StepOutcome,
+    SubmitResult, SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
+    WaitingOutcome, accept_upstream, accept_upstream_at, add_patch, amend_patch, amend_patch_with,
+    amend_preflight, approve_patch, approve_patch_reviewed, assess_patch_for_packet, doctor,
+    drop_patch, extras_dir, format_approval_receipt, format_approver_packet,
+    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
+    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown,
+    load_groups_file, mark_merged, mark_rejected, mark_waiting, newly_ready_to_submit,
+    parse_depends_on, preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan,
+    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
+    reset_from_origin, resolve_conflict, review_token, status_snapshot, store_patch_extras,
+    stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with, summarize_queue,
+    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
 };
 use tempfile::TempDir;
 
@@ -5451,8 +5451,9 @@ fn submitted_conflict_resolve_that_changes_the_patch_requires_delta_approval_and
         .all_patches()
         .find(|p| p.id == ttl_patch.id)
         .unwrap();
-    assert_eq!(amended.status, PatchStatus::Amended);
-    assert_eq!(summarize_queue(&after_resolve.queue).amended, 1);
+    assert_eq!(amended.status, PatchStatus::Queued);
+    assert!(amended.reviews_delta());
+    assert_eq!(summarize_queue(&after_resolve.queue).queued, 1);
     let fork_after_resolve =
         git_ok(company, &["rev-parse", &format!("uplink/{}", ttl_patch.id)]).unwrap();
     assert_eq!(fork_after_resolve, submitted.sha);
@@ -5466,8 +5467,8 @@ fn submitted_conflict_resolve_that_changes_the_patch_requires_delta_approval_and
         None,
     )
     .unwrap_err();
-    assert!(err.to_string().contains("is amended"), "{err}");
-    assert_eq!(patch_status(company, &ttl_patch.id), PatchStatus::Amended);
+    assert!(err.to_string().contains("is queued"), "{err}");
+    assert_eq!(patch_status(company, &ttl_patch.id), PatchStatus::Queued);
     let err = submit_patch(company, &ttl_patch.id, true).unwrap_err();
     assert!(err.to_string().contains("must be approved"), "{}", err);
 
@@ -5564,7 +5565,7 @@ fn submitted_conflict_resolve_that_changes_the_patch_requires_delta_approval_and
         .all_patches()
         .find(|p| p.id == ttl_patch.id)
         .unwrap();
-    assert_eq!(amended.status, PatchStatus::Amended);
+    assert_eq!(amended.status, PatchStatus::Queued);
     let packet = format_contribution_packet(company, amended).unwrap();
     assert!(packet.contains("Already approved (initial)"));
     assert!(packet.contains("Already approved (delta)"));
@@ -5643,7 +5644,7 @@ fn keeping_the_patch_line_over_an_upstream_change_of_it_needs_delta_approval() {
     resolve_conflict(company, &ttl_patch.id).unwrap();
 
     let resolved = stored_patch(company, &ttl_patch.id);
-    assert_eq!(resolved.status, PatchStatus::Amended);
+    assert_eq!(resolved.status, PatchStatus::Queued);
     let packet = format_contribution_packet(company, &resolved).unwrap();
     assert!(packet.contains("Delta packet"), "{packet}");
     assert!(packet.contains("--  return 3600;"), "{packet}");
@@ -8942,7 +8943,13 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
     assert!(packet.starts_with("# Contribution packet"), "{packet}");
 
     let mut amended = patch.clone();
-    amended.status = PatchStatus::Amended;
+    amended.status = PatchStatus::Queued;
+    amended.upstream = Some(git_uplink::PatchUpstream {
+        contrib_branch: "uplink/x".into(),
+        pr_number: Some(1),
+        pr_url: None,
+        submitted_at: None,
+    });
     assert!(!stored_extras_fresh(&amended));
 
     let rerun = temp_dir();
@@ -11348,7 +11355,7 @@ fn amend_complete_of_a_submitted_patch_takes_the_pr_message_and_is_amended() {
     .unwrap();
     assert!(done.changed);
     let after = patch_of(company, &patch.id);
-    assert_eq!(after.status, PatchStatus::Amended);
+    assert_eq!(after.status, PatchStatus::Queued);
     assert_eq!(after.title, "Extend TTL to 90 minutes");
     assert!(after.commit_message.contains("Per review."), "{after:?}");
     assert!(!after.commit_message.contains("instructions"));
@@ -14930,7 +14937,7 @@ fn rebuild_inline_of_a_submitted_patch_that_changes_its_lines_needs_delta_approv
     git_uplink::resume_rebuild(company, git_uplink::RebuildResume::Continue)
         .unwrap()
         .unwrap();
-    assert_eq!(patch_status(company, &ttl.id), PatchStatus::Amended);
+    assert_eq!(patch_status(company, &ttl.id), PatchStatus::Queued);
 }
 
 #[test]
@@ -15295,4 +15302,178 @@ fn restack_preflights_internal_patches_on_its_stack_unless_told_not_to() {
     assert_eq!(adoption.adopted.len(), 1);
     assert!(adoption.queue.is_internal(&adoption.adopted[0].id));
     drop((asha_keep, ben_keep));
+}
+
+/// A queued upstream patch and a passing preflight result for it, as the
+/// submit workflow has them once every check passed.
+fn queued_with_preflight(world: &World) -> (Patch, PreflightReport) {
+    let company = &world.company;
+    sha256_change(company);
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    set_counting_preflight_script(company, "true");
+    let (ok, report) = probe(company, &["preflight", &patch.id, "--json"]);
+    assert!(ok && report.ok, "{report:?}");
+    (patch, report)
+}
+
+const RUN: &str = "https://github.com/acme/product/actions/runs/1";
+
+#[test]
+fn waiting_then_approve_then_submitted() {
+    let world = setup_world();
+    let company = &world.company;
+    let (patch, report) = queued_with_preflight(&world);
+
+    let (waiting, outcome) = mark_waiting(
+        company,
+        &patch.id,
+        &ScriptVerdict::Reported(report.clone()),
+        Some(RUN),
+    )
+    .unwrap();
+    assert_eq!(outcome, WaitingOutcome::Waiting);
+    assert_eq!(waiting.status, PatchStatus::Waiting);
+    assert_eq!(waiting.events.last().unwrap().kind, "waiting");
+    let counts = summarize_queue(&git_uplink::read_queue(company).unwrap());
+    assert_eq!((counts.queued, counts.waiting), (0, 1));
+
+    let approved = approve_patch(company, &patch.id).unwrap();
+    assert_eq!(approved.status, PatchStatus::Approved);
+    assert_eq!(approved.approvals.last().unwrap().kind, "initial");
+
+    // The run that waited no longer records a rejection.
+    let none = mark_rejected(
+        company,
+        &patch.id,
+        &Rejection {
+            run_url: Some(RUN.into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(none.is_none());
+    assert_eq!(patch_status(company, &patch.id), PatchStatus::Approved);
+
+    // An approval covers it: waiting leaves the status alone.
+    let (_, outcome) =
+        mark_waiting(company, &patch.id, &ScriptVerdict::Reported(report), None).unwrap();
+    assert_eq!(outcome, WaitingOutcome::Covered);
+    assert_eq!(patch_status(company, &patch.id), PatchStatus::Approved);
+}
+
+#[test]
+fn waiting_needs_a_passing_preflight_for_the_patch() {
+    let world = setup_world();
+    let company = &world.company;
+    let (patch, report) = queued_with_preflight(&world);
+    let failed = PreflightReport {
+        ok: false,
+        ..report.clone()
+    };
+    let err = mark_waiting(company, &patch.id, &ScriptVerdict::Reported(failed), None).unwrap_err();
+    assert!(err.to_string().contains("preflight"), "{err}");
+    let stale = PreflightReport {
+        review_token: Some("0000".into()),
+        ..report
+    };
+    mark_waiting(company, &patch.id, &ScriptVerdict::Reported(stale), None).unwrap_err();
+    assert_eq!(patch_status(company, &patch.id), PatchStatus::Queued);
+}
+
+#[test]
+fn rejected_only_for_the_run_that_waits() {
+    let world = setup_world();
+    let company = &world.company;
+    let (patch, report) = queued_with_preflight(&world);
+    let verdict = ScriptVerdict::Reported(report);
+
+    // Not waiting: nothing recorded.
+    assert!(
+        mark_rejected(company, &patch.id, &Rejection::default())
+            .unwrap()
+            .is_none()
+    );
+    mark_waiting(company, &patch.id, &verdict, Some(RUN)).unwrap();
+    // Another run: nothing recorded.
+    let other = Rejection {
+        run_url: Some("https://github.com/acme/product/actions/runs/2".into()),
+        ..Default::default()
+    };
+    assert!(mark_rejected(company, &patch.id, &other).unwrap().is_none());
+    assert_eq!(patch_status(company, &patch.id), PatchStatus::Waiting);
+
+    let rejected = mark_rejected(
+        company,
+        &patch.id,
+        &Rejection {
+            run_url: Some(RUN.into()),
+            by: Some("ip-reviewer".into()),
+            comment: Some("Not ours to give".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(rejected.status, PatchStatus::Rejected);
+    let event = rejected.events.last().unwrap();
+    assert_eq!(event.kind, "rejected");
+    assert!(
+        event.detail.contains("ip-reviewer") && event.detail.contains("Not ours to give"),
+        "{event:?}"
+    );
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert_eq!(summarize_queue(&queue).rejected, 1);
+
+    // A rejected patch is dispatched again by hand only.
+    assert!(newly_ready_to_submit(&queue, &queue).is_empty());
+
+    // Dispatched again, it waits again; a cancelled run is rejected too.
+    let second = "https://github.com/acme/product/actions/runs/3";
+    mark_waiting(company, &patch.id, &verdict, Some(second)).unwrap();
+    let cancelled = mark_rejected(
+        company,
+        &patch.id,
+        &Rejection {
+            run_url: Some(second.into()),
+            cancelled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(cancelled.status, PatchStatus::Rejected);
+    assert!(
+        cancelled
+            .events
+            .last()
+            .unwrap()
+            .detail
+            .contains("cancelled")
+    );
+}
+
+#[test]
+fn waiting_refuses_internal_only_patches() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    let err = mark_waiting(
+        company,
+        &patch.id,
+        &ScriptVerdict::Reported(PreflightReport::default()),
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("not upstream-bound"), "{err}");
+    let counts = summarize_queue(&git_uplink::read_queue(company).unwrap());
+    assert_eq!(counts.internal, 1);
+    assert_eq!(counts.active, 1, "{counts:?}");
 }

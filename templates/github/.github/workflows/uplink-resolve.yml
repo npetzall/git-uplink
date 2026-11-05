@@ -8,14 +8,15 @@
 # deletes the protected base plus -work branch. If the patch was already
 # submitted, this job dispatches Uplink submit to export it onto the new
 # upstream. A resolution that adds or removes other lines than the last
-# approval covered makes the patch amended, and that run asks for a delta
-# approval. One that leaves those lines as approved leaves it submitted: the
-# run only exports it again.
+# approval covered makes the patch queued again, and that run asks for a
+# delta approval. One that leaves those lines as approved leaves it
+# submitted: the run only exports it again.
 # If rebuild stops on a later patch, it publishes that conflict the same
 # way sync does. That includes a patch preflight.sh fails on in the rebuilt
 # tree, found with git bisect, which can be the resolved patch again.
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, it dispatches
-# Uplink submit for the resolved patch when it is queued again, and for a
+# Uplink submit for the resolved patch when it is queued again and has no
+# public PR, and for a
 # queued patch whose last unmerged upstream dependency the rebuild marked
 # merged.
 name: Uplink resolve
@@ -213,14 +214,15 @@ jobs:
             git push origin main --force
           fi
 
-          status=$(jq -r '.status // empty' <<<"$resolve_json")
-          if [ -z "$status" ]; then
+          public=$(jq -r '.public // empty' <<<"$resolve_json")
+          if [ -z "$public" ]; then
             queue_json=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json)
-            status=$(printf '%s\n' "$queue_json" | jq -r --arg id "$id" '(.tooling, .upstream[], .internal[]) | select(. != null and .id==$id) | .status')
+            public=$(printf '%s\n' "$queue_json" | jq -r --arg id "$id" '(.tooling, .upstream[], .internal[]) | select(. != null and .id==$id) | (.upstream != null)')
           fi
-          # amended: IP approves the delta. submitted: the last approval still
-          # covers the patch, and the public PR needs the new export.
-          if [ "$status" = "amended" ] || [ "$status" = "submitted" ]; then
+          # A public PR exists. queued: IP approves the delta. submitted: the
+          # last approval still covers the patch, and the public PR needs the
+          # new export.
+          if [ "$public" = "true" ]; then
             runs=$(gh run list --workflow="Uplink submit" --limit 20 --json databaseId,displayTitle,status 2>/dev/null || echo '[]')
             echo "$runs" | jq -r --arg title "Uplink submit $id" \
               '.[] | select((.displayTitle // "") == $title and (.status == "waiting" or .status == "in_progress")) | .databaseId' \

@@ -14,15 +14,22 @@
 # once on uplink/state (holding uplink-mutate only for that), and stores a
 # successful hook result. It refuses a package that is not for the patch as it
 # is now, and fails after writing the packet when the assessment has findings.
-# Submit job then waits on Environment `to-upstream`.
+# Packet job waits for the preflight job too. When the assessment passed,
+# upstream dependencies are merged and preflight passed for the patch as it
+# is now, it runs `git uplink waiting` (status `waiting`) and the submit job
+# then waits on Environment `to-upstream`. A failing preflight stops the run
+# there: nobody is asked to approve. Job Record rejection runs when the
+# Environment was rejected or the run was cancelled while waiting, and runs
+# `git uplink rejected` (status `rejected`). A rejected patch is dispatched
+# again only by hand.
 # The packet job hands the packet's review token and uplink/state commit to
 # the submit job. The Environment links that commit's assessment.md, and
 # `approve --reviewed` stops when the patch is no longer what was reviewed
 # (amended, resolved or replayed while the run waited). The approval is
 # pushed to uplink/state before the export, so a run that fails after it
 # keeps the record, and the next run for the same content records no other.
-# Resolve of an already-submitted patch dispatches this workflow so IP can
-# approve the delta.
+# Resolve or amend of a patch with a public PR dispatches this workflow so IP
+# can approve the delta (the patch is `queued` again until then).
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, import, sync,
 # transfer and resolve dispatch it for a queued patch as soon as none of its upstream
 # dependencies is unmerged. Such a run waits on `to-upstream` like any other.
@@ -146,7 +153,7 @@ jobs:
   # Holds uplink-mutate only to write the packet on uplink/state.
   packet:
     name: Write contribution packet
-    needs: assess
+    needs: [assess, preflight]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -157,6 +164,7 @@ jobs:
     outputs:
       review_token: ${{ steps.packet.outputs.review_token }}
       state_sha: ${{ steps.packet.outputs.state_sha }}
+      waiting: ${{ steps.packet.outputs.waiting }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -192,6 +200,9 @@ jobs:
           HOOK_RUN_URL: ${{ needs.assess.outputs.hook_run_url }}
           ASSESSMENT: ${{ runner.temp }}/uplink-assessment/assessment.json
           EXTRA_DIR: ${{ runner.temp }}/uplink-packet-extras
+          COVERED: ${{ needs.assess.outputs.covered }}
+          PREFLIGHT_REPORT: ${{ needs.preflight.outputs.report }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           git uplink init
@@ -217,8 +228,24 @@ jobs:
               packet=$(git uplink report "$PATCH_ID" --assess-result "$ASSESSMENT") || code=$?
               ;;
           esac
-          # With assessment findings report still writes the packet, then fails: publish it, then stop here so
-          # the Environment is not offered.
+          # With assessment findings report still writes the packet, then
+          # fails. Preflight must also pass for the patch as it is now. Either
+          # way the packet is published, and the run stops here so the
+          # Environment is not offered.
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
+          if [ "$code" -eq 0 ] && ! jq -e '.ok == true' "$RUNNER_TEMP/uplink-preflight.json" >/dev/null; then
+            echo "preflight.sh did not pass for ${PATCH_ID}; nobody is asked to approve." | tee -a "$GITHUB_STEP_SUMMARY"
+            code=1
+          fi
+          # Every check passed: the patch now waits on the review. A patch an
+          # approval already covers keeps its status.
+          if [ "$code" -eq 0 ] && [ "$COVERED" != "true" ]; then
+            if git uplink waiting "$PATCH_ID" --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --run-url "$RUN_URL"; then
+              echo "waiting=true" >> "$GITHUB_OUTPUT"
+            else
+              code=1
+            fi
+          fi
           git push origin uplink/state
           printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
           if [ "$code" -ne 0 ]; then
@@ -430,3 +457,56 @@ jobs:
               --jq .html_url)
           fi
           git uplink submitted "$PATCH_ID" --pr-url "$url"
+
+  # Runs when the run that set `waiting` ended without approval: the
+  # Environment was rejected (the submit job fails) or the run was
+  # cancelled. A submit job that failed after approval leaves the patch
+  # `approved`, which this job checks with the run's review history.
+  rejected:
+    name: Record rejection
+    needs: [packet, submit]
+    if: always() && github.ref == 'refs/heads/main' && needs.packet.outputs.waiting == 'true' && (needs.submit.result == 'failure' || needs.submit.result == 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: uplink-mutate
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Record the rejection
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PATCH_ID: ${{ inputs.patch_id }}
+          SUBMIT_RESULT: ${{ needs.submit.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git uplink init
+          if [ "$SUBMIT_RESULT" = "cancelled" ]; then
+            git uplink rejected "$PATCH_ID" --run-url "$RUN_URL" --cancelled | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            review=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
+              --jq '[.[] | select(.state == "rejected" and any(.environments[]; .name == "to-upstream"))] | last // empty')
+            if [ -z "$review" ]; then
+              echo "The to-upstream review was not rejected; submit failed after approval. Nothing to record."
+              exit 0
+            fi
+            git uplink rejected "$PATCH_ID" --run-url "$RUN_URL" \
+              --by "$(jq -r '.user.login // empty' <<<"$review")" \
+              --comment "$(jq -r '.comment // empty' <<<"$review")" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          git push origin uplink/state
