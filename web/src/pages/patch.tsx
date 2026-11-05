@@ -20,7 +20,7 @@ import {
   parseSource,
 } from "../lib/api";
 import type { FileDelta } from "../lib/patch";
-import { NEEDS_APPROVAL } from "../lib/status";
+import { NEEDS_APPROVAL, shownStatus } from "../lib/status";
 
 function shortSha(sha: string): string {
   return sha === "worktree" ? "worktree" : sha.slice(0, 12);
@@ -184,7 +184,7 @@ export function PatchPage() {
         </div>
         {patch ? (
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge value={patch.status} />
+            <StatusBadge value={shownStatus(patch.status, data?.layer)} />
             {data?.approvalStale ? (
               <StatusBadge value={NEEDS_APPROVAL} />
             ) : null}

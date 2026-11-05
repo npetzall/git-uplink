@@ -76,6 +76,17 @@ export type StateStatus = {
   uncommitted: string[];
 };
 
+/** Queued, waiting, submitted, merged and rejected count the upstream layer; internal counts queued internal patches; active counts queued patches in every layer. */
+export type StatusCounts = {
+  queued: number;
+  waiting: number;
+  submitted: number;
+  merged: number;
+  rejected: number;
+  internal: number;
+  active: number;
+};
+
 export type StatusResponse = {
   present: boolean;
   cwd: string;
@@ -83,7 +94,7 @@ export type StatusResponse = {
   error?: string;
   companyHead?: string;
   upstreamHead?: string;
-  counts?: Record<string, number>;
+  counts?: StatusCounts;
   tooling?: Patch | null;
   upstream?: Patch[];
   internal?: Patch[];

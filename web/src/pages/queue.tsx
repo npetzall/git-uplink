@@ -16,10 +16,51 @@ import {
   parseSource,
   type QueueSource,
   refreshRemote,
+  type StatusCounts,
   type StatusResponse,
 } from "../lib/api";
-import { NEEDS_APPROVAL, STATUS_INFO, STATUS_ORDER } from "../lib/status";
+import {
+  LABEL_ORDER,
+  NEEDS_APPROVAL,
+  STATUS_INFO,
+  STATUS_ORDER,
+  shownStatus,
+} from "../lib/status";
 import { cn } from "../lib/utils";
+
+const COUNTERS: { key: keyof StatusCounts; label: string }[] = [
+  { key: "queued", label: "Queued" },
+  { key: "waiting", label: "Waiting" },
+  { key: "submitted", label: "Submitted" },
+  { key: "merged", label: "Merged" },
+  { key: "rejected", label: "Rejected" },
+  { key: "internal", label: "Internal" },
+  { key: "active", label: "Active patches" },
+];
+
+function LegendList({ values }: { values: string[] }) {
+  return (
+    <dl className="mt-3 space-y-3">
+      {values.map((value) => (
+        <div
+          key={value}
+          className="grid gap-1 sm:grid-cols-[7rem_1fr] sm:gap-3"
+        >
+          <dt>
+            <StatusBadge value={value} />
+          </dt>
+          <dd className="space-y-1 text-muted-foreground">
+            <p>{STATUS_INFO[value].meaning}</p>
+            <p>
+              <span className="text-foreground">Next:</span>{" "}
+              {STATUS_INFO[value].next}
+            </p>
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 function StatusLegend() {
   return (
@@ -27,25 +68,9 @@ function StatusLegend() {
       <summary className="cursor-pointer font-medium">
         What do the statuses mean?
       </summary>
-      <dl className="mt-3 space-y-3">
-        {STATUS_ORDER.map((status) => (
-          <div
-            key={status}
-            className="grid gap-1 sm:grid-cols-[7rem_1fr] sm:gap-3"
-          >
-            <dt>
-              <StatusBadge value={status} />
-            </dt>
-            <dd className="space-y-1 text-muted-foreground">
-              <p>{STATUS_INFO[status].meaning}</p>
-              <p>
-                <span className="text-foreground">Next:</span>{" "}
-                {STATUS_INFO[status].next}
-              </p>
-            </dd>
-          </div>
-        ))}
-      </dl>
+      <LegendList values={STATUS_ORDER} />
+      <h3 className="mt-5 font-medium">Labels</h3>
+      <LegendList values={LABEL_ORDER} />
     </details>
   );
 }
@@ -54,11 +79,13 @@ function PatchTable({
   patches,
   empty,
   source,
+  layer,
   stale = [],
 }: {
   patches: Patch[];
   empty: string;
   source: QueueSource;
+  layer: "tooling" | "upstream" | "internal";
   /** Ids whose approval no longer covers their content. */
   stale?: string[];
 }) {
@@ -102,7 +129,7 @@ function PatchTable({
               </Link>
             </td>
             <td className="space-x-1 py-2 pr-3">
-              <StatusBadge value={patch.status} />
+              <StatusBadge value={shownStatus(patch.status, layer)} />
               {stale.includes(patch.id) ? (
                 <StatusBadge value={NEEDS_APPROVAL} />
               ) : null}
@@ -311,12 +338,12 @@ export function QueuePage() {
                 <CardTitle className="text-base">Counts</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2 text-sm">
-                {Object.entries(data.counts ?? {}).map(([key, value]) => (
+                {COUNTERS.map(({ key, label }) => (
                   <span
                     key={key}
                     className="rounded-md border border-border px-2 py-1 font-mono text-xs"
                   >
-                    {key} {value}
+                    {label} {data.counts?.[key] ?? 0}
                   </span>
                 ))}
               </CardContent>
@@ -342,6 +369,7 @@ export function QueuePage() {
                 <CardContent className="overflow-x-auto">
                   <PatchTable
                     source={source}
+                    layer="tooling"
                     patches={data.tooling ? [data.tooling] : []}
                     empty="No tooling patch. Run git uplink init --forge …"
                   />
@@ -354,6 +382,7 @@ export function QueuePage() {
                 <CardContent className="overflow-x-auto">
                   <PatchTable
                     source={source}
+                    layer="upstream"
                     patches={data.upstream ?? []}
                     stale={data.staleApprovals}
                     empty="No upstream-bound patches."
@@ -367,6 +396,7 @@ export function QueuePage() {
                 <CardContent className="overflow-x-auto">
                   <PatchTable
                     source={source}
+                    layer="internal"
                     patches={data.internal ?? []}
                     empty="No internal patches."
                   />
