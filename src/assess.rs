@@ -987,7 +987,7 @@ pub fn format_contribution_packet_with_extras(
         let link = patch_link(repo, &patch.id);
         return Ok(covered_packet(patch, token.as_deref(), approval, &link));
     }
-    let packet = if patch.status == PatchStatus::Amended {
+    let packet = if patch.reviews_delta() {
         format_delta_approver_packet(repo, patch)?
     } else {
         approver_packet(
@@ -1011,10 +1011,10 @@ pub fn extras_dir(id: &str) -> Result<String> {
     Ok(format!("{}/extras", report_paths(id)?.0))
 }
 
-/// Stored extras are reused while the patch content is unchanged. An amended
-/// patch always gets a fresh assessment.
+/// Stored extras are reused while the patch content is unchanged. A delta
+/// review (see [`Patch::reviews_delta`]) always gets a fresh assessment.
 pub fn stored_extras_fresh(patch: &Patch) -> bool {
-    patch.status != PatchStatus::Amended
+    !patch.reviews_delta()
         && patch
             .extras
             .as_ref()

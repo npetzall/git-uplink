@@ -15,25 +15,25 @@ use git_uplink::{
     AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendMessage, AmendResult, ApprovalReceipt,
     AssessPackage, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts,
     InlineRebuild, InlineRebuildOpts, MergeVia, PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN,
-    PreflightError, PreflightReport, ProgressMode, PushOpts, RebuildOpts, RebuildResume,
+    PreflightError, PreflightReport, ProgressMode, PushOpts, RebuildOpts, RebuildResume, Rejection,
     RestackAction, RestackOpts, RunKind, STATE_BRANCH, ScriptEcho, ScriptVerdict,
-    TO_UPSTREAM_ENVIRONMENT, accept_upstream_preflight, accept_upstream_with, add_patch,
-    add_patch_or_gate, adopt_branch, adopted_next_steps, already_approved, amend_patch_with,
-    amend_preflight, approve_patch_reviewed, assess_from_message, assess_patch_file,
-    assess_patch_for_packet, change_between, command_preflight, command_tested, commit_queue,
-    count_files, depends_on_from_message, doctor, drop_patch, existing_patch_preflight,
-    export_tested, fetch_pending_upstream, format_approval_receipt, format_assess_markdown,
-    format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
-    format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
-    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text,
-    public_subject_and_body, push_queue, read_queue, rebase_onto_main, rebase_plan, rebuild_inline,
-    rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
-    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
-    resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
-    status_report, status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
-    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, upstream_pr_body,
-    write_man_pages,
+    TO_UPSTREAM_ENVIRONMENT, WaitingOutcome, accept_upstream_preflight, accept_upstream_with,
+    add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps, already_approved,
+    amend_patch_with, amend_preflight, approve_patch_reviewed, assess_from_message,
+    assess_patch_file, assess_patch_for_packet, change_between, command_preflight, command_tested,
+    commit_queue, count_files, depends_on_from_message, doctor, drop_patch,
+    existing_patch_preflight, export_tested, fetch_pending_upstream, format_approval_receipt,
+    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
+    format_init_summary, format_product_changes, format_status_table, from_upstream_report_paths,
+    git_ok, hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
+    mark_rejected, mark_waiting, newly_ready_to_submit, parse_github_repo, parse_pull_request_url,
+    patch_text, public_subject_and_body, push_queue, read_queue, rebase_onto_main, rebase_plan,
+    rebuild_inline, rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request,
+    refresh_from_origin, refuse_script_with_credentials, report_paths, reset_from_origin,
+    resolve_conflict_with, resolve_preflight, restack, resume_rebuild, review_token,
+    review_token_path, set_script_echo, status_report, status_snapshot, store_assess_result,
+    store_patch_extras, stored_commit_message, submit_patch_with, sync_with, transfer_patch_with,
+    transfer_preflight, upstream_pr_body, write_man_pages,
 };
 
 const VERSION: &str = concat!(
@@ -443,7 +443,7 @@ fn print_resolve_artifact(
     Ok(())
 }
 
-/// `{id, status}` plus the follow-on conflict and its PR, if rebuild stopped.
+/// `{id, status, public}` plus the follow-on conflict and its PR, if rebuild stopped.
 fn resolve_artifact(
     repo: &Path,
     resolved_id: &str,
@@ -458,14 +458,15 @@ fn resolve_artifact(
             conflict_pr_create_artifact(repo, patch, Some(resolved_id))?,
         );
     }
-    let status = queue
-        .all_patches()
-        .find(|p| p.id == resolved_id)
-        .map(|p| p.status.as_str())
-        .unwrap_or("");
+    let patch = queue.all_patches().find(|p| p.id == resolved_id);
+    let status = patch.map(|p| p.status.as_str()).unwrap_or("");
+    // A public PR exists: submit must run again, for a delta review when
+    // the patch is queued, or to export it when it is still submitted.
+    let public = patch.is_some_and(|p| p.upstream.is_some());
     let mut value = serde_json::json!({
         "id": resolved_id,
         "status": status,
+        "public": public,
     });
     if let Some(patch) = conflict.filter(|_| follow_on_conflict) {
         value["conflict"] = conflict_json(patch);
@@ -500,6 +501,7 @@ fn print_amend_artifact(repo: &Path, result: &AmendResult) -> Result<(), Error> 
         let mut value = resolve_artifact(repo, &result.id, &result.queue, false)?;
         value["completed"] = serde_json::Value::Bool(true);
         value["changed"] = serde_json::Value::Bool(result.changed);
+        value["readyToSubmit"] = serde_json::json!(result.ready_to_submit);
         println!("{value}");
         return Ok(());
     }
@@ -1547,6 +1549,34 @@ fn cmd_submitted(
     Ok(())
 }
 
+fn cmd_waiting(
+    repo: &Path,
+    id: &str,
+    preflight_result: PathBuf,
+    run_url: Option<&str>,
+) -> Result<(), Error> {
+    let verdict = script_verdict(Some(preflight_result))?;
+    let (patch, outcome) = mark_waiting(repo, id, &verdict, run_url)?;
+    match outcome {
+        WaitingOutcome::Waiting => println!("{} waiting on {TO_UPSTREAM_ENVIRONMENT}", patch.id),
+        WaitingOutcome::Covered => println!(
+            "{} is {}; an approval already covers it, status unchanged",
+            patch.id, patch.status
+        ),
+    }
+    Ok(())
+}
+
+fn cmd_rejected(repo: &Path, id: &str, rejection: &Rejection) -> Result<(), Error> {
+    match mark_rejected(repo, id, rejection)? {
+        Some(patch) => println!("{} rejected", patch.id),
+        None => println!(
+            "{id} is no longer waiting for this run; nothing recorded (an amend, a resolve or a newer run took over)"
+        ),
+    }
+    Ok(())
+}
+
 fn cmd_sync(repo: &Path, merged_pr: Vec<String>) -> Result<(), Error> {
     let mut merged_prs = Vec::new();
     for item in merged_pr {
@@ -2107,6 +2137,27 @@ fn run() -> Result<(), Error> {
             pr,
             push_remote,
         } => cmd_submitted(&repo, &id, &pr_url, pr, &push_remote),
+        Commands::Waiting {
+            id,
+            preflight_result,
+            run_url,
+        } => cmd_waiting(&repo, &id, preflight_result, run_url.as_deref()),
+        Commands::Rejected {
+            id,
+            run_url,
+            cancelled,
+            by,
+            comment,
+        } => cmd_rejected(
+            &repo,
+            &id,
+            &Rejection {
+                run_url,
+                cancelled,
+                by,
+                comment,
+            },
+        ),
         Commands::Sync { merged_pr } => cmd_sync(&repo, merged_pr),
         Commands::AcceptUpstream {
             sha,

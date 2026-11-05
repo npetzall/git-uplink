@@ -118,7 +118,10 @@ pub const GROUPS: &[(&str, &[&str])] = &[
         "Checks",
         &["preflight", "assess", "report", "status", "doctor"],
     ),
-    ("Contributing upstream", &["approve", "submit", "submitted"]),
+    (
+        "Contributing upstream",
+        &["approve", "waiting", "rejected", "submit", "submitted"],
+    ),
     ("Ingesting upstream", &["sync", "accept-upstream", "merged"]),
     (
         "Edit",
@@ -798,7 +801,7 @@ pub enum Commands {
     /// is still written and printed, and report exits non-zero.
     ///
     /// Stored extras lead the packet while the patch content is unchanged
-    /// (same stable patch id, not `amended`). Submit runs the hook from branch
+    /// (same stable patch id, not a delta review). Submit runs the hook from branch
     /// `uplink/hooks` on the assessment package when nothing current is
     /// stored (see
     /// `assessment-hook.md` on that branch); a failed hook adds a warning note
@@ -920,6 +923,52 @@ pub enum Commands {
         /// Remote to push uplink/state to.
         #[arg(long = "push-remote", value_name = "remote", default_value = "origin")]
         push_remote: String,
+    },
+    /// Record that a submit run waits on the to-upstream review.
+    ///
+    /// Uplink submit runs it once every check passed, right before the job
+    /// that waits on the to-upstream Environment. The patch must be
+    /// upstream-bound, its upstream dependencies merged, its assessment
+    /// passed, and `--preflight-result` a passing result for the patch as
+    /// it is now; otherwise the command fails and the status is left as it
+    /// was. A `queued` or `rejected` patch becomes `waiting`. An approved or
+    /// submitted patch that an approval still covers is left as it is.
+    Waiting {
+        /// Patch the run asks IP to approve.
+        #[arg(value_name = "id")]
+        id: String,
+        /// Output of `git uplink preflight <id> --json` from the same run.
+        #[arg(long = "preflight-result", value_name = "path")]
+        preflight_result: PathBuf,
+        /// The submit run; defaults to the GitHub Actions run of this job.
+        #[arg(long = "run-url", value_name = "url")]
+        run_url: Option<String>,
+    },
+    /// Record that the to-upstream review of a waiting patch was rejected.
+    ///
+    /// Uplink submit runs it when the to-upstream Environment was rejected,
+    /// or the run was cancelled while waiting on it (`--cancelled`). The
+    /// patch becomes `rejected` and is never dispatched again on its own:
+    /// dispatch Uplink submit by hand, usually after an amend. Nothing is
+    /// recorded, and the command exits 0, when the patch is no longer
+    /// `waiting` for the run `--run-url` names: an amend, a resolve or a
+    /// newer run took over.
+    Rejected {
+        /// Patch whose review was rejected.
+        #[arg(value_name = "id")]
+        id: String,
+        /// The submit run that set `waiting`. Without it, any waiting run matches.
+        #[arg(long = "run-url", value_name = "url")]
+        run_url: Option<String>,
+        /// The run was cancelled instead of rejected.
+        #[arg(long, conflicts_with_all = ["by", "comment"])]
+        cancelled: bool,
+        /// Login of the reviewer who rejected it.
+        #[arg(long, value_name = "login")]
+        by: Option<String>,
+        /// The reviewer's comment.
+        #[arg(long, value_name = "text")]
+        comment: Option<String>,
     },
     /// Account for new public commits and rebuild main when upstream moved.
     ///
@@ -1138,8 +1187,9 @@ pub enum Commands {
     /// --command-only`).
     ///
     /// A submitted patch whose resolution adds or removes other lines than
-    /// the last approval covered becomes `amended` until IP approves the
-    /// delta. That includes keeping the patch's line over an upstream change
+    /// the last approval covered becomes `queued` again, and the next submit
+    /// asks IP to approve the delta; the public PR keeps the approved lines
+    /// until then. That includes keeping the patch's line over an upstream change
     /// of the same line: the patch then removes upstream's new line. A
     /// resolution that only follows upstream changes next to the patch's
     /// lines changes nothing that was approved: the patch stays `submitted`
@@ -1151,8 +1201,10 @@ pub enum Commands {
     /// `rebuild`.
     ///
     /// `readyToSubmit` in the output lists the resolved patch when it is
-    /// `queued` again, and the queued patches whose last unmerged upstream
-    /// dependency the rebuild marked merged.
+    /// `queued` again and has no public PR, and the queued patches whose
+    /// last unmerged upstream dependency the rebuild marked merged. `public`
+    /// is true when the resolved patch has a public PR: submit must then run
+    /// again.
     ///
     /// Locally: `git switch uplink/conflict/<id>-work`, fix the files and
     /// `git add` them, run `git uplink resolve <id>`, then `git uplink push`
@@ -1242,15 +1294,18 @@ pub enum Commands {
     /// `--title` / `--message[-file]` as the new title and message,
     /// re-assesses, and runs export preflight (upstream) or the preflight
     /// script (internal). A failing upstream assessment is refused and the
-    /// branch is left as it was. A submitted patch becomes `amended` (IP
-    /// approves the delta, then submit force-pushes the contrib branch) and
-    /// a patch that was not submitted becomes `queued`, unless the amend
+    /// branch is left as it was. The patch becomes `queued` again, whatever
+    /// review it was in (`waiting`, `approved`, `rejected`, `submitted`). A
+    /// submitted one keeps its public PR: IP approves the delta, then submit
+    /// force-pushes the contrib branch. That holds unless the amend
     /// adds and removes the same lines as before and leaves the public
     /// title and message as they were:
     /// then the last approval still covers the patch and it stays
     /// `submitted` or `approved`. Then `main` is rebuilt, and a follow-on
     /// conflict prints like `resolve`. A merge with no code or message change
-    /// prints `changed: false` and leaves the queue as it was.
+    /// prints `changed: false` and leaves the queue as it was. The JSON
+    /// output has `public` (the patch has a public PR, so submit must run
+    /// again) and `readyToSubmit` (patches the amend made ready to submit).
     Amend {
         /// Patch to amend.
         #[arg(value_name = "id")]

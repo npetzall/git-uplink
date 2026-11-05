@@ -15,10 +15,16 @@ pub const QUEUE_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PatchStatus {
+    /// Also read from `amended`, which older binaries wrote for a submitted
+    /// patch whose last approval no longer covered it.
+    #[serde(alias = "amended")]
     Queued,
+    /// A submit run passed its checks and waits on the to-upstream review.
+    Waiting,
     Approved,
     Submitted,
-    Amended,
+    /// The submit run that set `Waiting` was rejected or cancelled.
+    Rejected,
     Merged,
     Dropped,
     Conflict,
@@ -28,9 +34,10 @@ impl PatchStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
+            Self::Waiting => "waiting",
             Self::Approved => "approved",
             Self::Submitted => "submitted",
-            Self::Amended => "amended",
+            Self::Rejected => "rejected",
             Self::Merged => "merged",
             Self::Dropped => "dropped",
             Self::Conflict => "conflict",
@@ -485,6 +492,15 @@ impl Patch {
     pub fn last_approval(&self) -> Option<&PatchApproval> {
         self.approvals.last()
     }
+
+    /// True when the next review is of a delta: the patch has a public pull
+    /// request, and an amend or resolve made it `queued` again (it may be
+    /// `waiting` or `rejected` since). The public PR still has the last
+    /// approved content.
+    pub fn reviews_delta(&self) -> bool {
+        self.upstream.is_some()
+            && !matches!(self.status, PatchStatus::Approved | PatchStatus::Submitted)
+    }
 }
 
 fn skip_empty_option(value: &Option<String>) -> bool {
@@ -788,5 +804,18 @@ mod tests {
             PatchStatus::Conflict
         );
         assert!(serde_json::from_str::<PatchStatus>("\"bogus\"").is_err());
+        for status in [PatchStatus::Waiting, PatchStatus::Rejected] {
+            let json = serde_json::to_string(&status).unwrap();
+            assert_eq!(json, format!("\"{status}\""));
+            assert_eq!(serde_json::from_str::<PatchStatus>(&json).unwrap(), status);
+        }
+    }
+
+    #[test]
+    fn patch_status_reads_amended_as_queued() {
+        assert_eq!(
+            serde_json::from_str::<PatchStatus>("\"amended\"").unwrap(),
+            PatchStatus::Queued
+        );
     }
 }

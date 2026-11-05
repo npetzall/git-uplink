@@ -722,7 +722,8 @@ mod embed_tests {
             assert!(action.contains("uplink-packet-extra"), "{action}");
             assert!(action.contains("run-id:"), "{action}");
             assert!(action.contains("continue-on-error: true"), "{action}");
-            assert!(text.contains("needs: assess"), "{forge:?}");
+            assert!(text.contains("needs: [assess, preflight]"), "{forge:?}");
+            assert!(text.contains("needs: [packet, submit]"), "{forge:?}");
             assert!(text.contains("needs: [packet, preflight]"), "{forge:?}");
             assert!(!text.contains("finalize:"), "{forge:?}\n{text}");
             // The hook runs in `assess`, which must not hold the queue lock;
@@ -731,12 +732,21 @@ mod embed_tests {
             let packet_job = text.find("\n  packet:").expect("packet job");
             let submit_job = text.find("\n  submit:").expect("submit job");
             let lock = text.find("group: uplink-mutate").expect("uplink-mutate");
+            // `packet` and `rejected` hold it; never `assess` or `submit`.
             assert_eq!(
                 text.matches("group: uplink-mutate").count(),
-                1,
+                2,
                 "{forge:?}\n{text}"
             );
             assert!(packet_job < lock && lock < submit_job, "{forge:?}\n{text}");
+            let rejected_job = text.find("\n  rejected:").expect("rejected job");
+            let last_lock = text.rfind("group: uplink-mutate").unwrap();
+            assert!(
+                submit_job < rejected_job && rejected_job < last_lock,
+                "{forge:?}\n{text}"
+            );
+            assert!(text.contains("git uplink waiting"), "{forge:?}");
+            assert!(text.contains("git uplink rejected"), "{forge:?}");
             let hook = text
                 .find("uses: $/.github/actions/uplink-assessment-hook")
                 .unwrap();

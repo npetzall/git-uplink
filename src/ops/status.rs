@@ -193,50 +193,52 @@ pub(super) fn short_sha(sha: &str) -> &str {
     }
 }
 
+/// Queue counters. The first five count upstream-bound patches only.
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueCounts {
     pub queued: u32,
-    pub approved: u32,
+    pub waiting: u32,
     pub submitted: u32,
-    pub amended: u32,
     pub merged: u32,
-    pub dropped: u32,
-    pub conflict: u32,
-    pub tooling: u32,
+    pub rejected: u32,
+    /// Internal-only patches that are `queued` (shown as active).
     pub internal: u32,
-    pub internal_only: u32,
+    /// `queued` patches in every layer: tooling, upstream and internal.
+    pub active: u32,
 }
 
 pub fn summarize_queue(queue: &QueueState) -> QueueCounts {
     let mut counts = QueueCounts {
         queued: 0,
-        approved: 0,
+        waiting: 0,
         submitted: 0,
-        amended: 0,
         merged: 0,
-        dropped: 0,
-        conflict: 0,
-        tooling: 0,
+        rejected: 0,
         internal: 0,
-        internal_only: 0,
+        active: 0,
     };
     for patch in queue.all_patches() {
+        let queued = patch.status == PatchStatus::Queued;
+        if queued {
+            counts.active += 1;
+        }
+        if queue.is_internal(&patch.id) {
+            if queued {
+                counts.internal += 1;
+            }
+            continue;
+        }
+        if !queue.is_upstream(&patch.id) {
+            continue;
+        }
         match patch.status {
             PatchStatus::Queued => counts.queued += 1,
-            PatchStatus::Approved => counts.approved += 1,
+            PatchStatus::Waiting => counts.waiting += 1,
             PatchStatus::Submitted => counts.submitted += 1,
-            PatchStatus::Amended => counts.amended += 1,
             PatchStatus::Merged => counts.merged += 1,
-            PatchStatus::Dropped => counts.dropped += 1,
-            PatchStatus::Conflict => counts.conflict += 1,
-        }
-        if queue.is_tooling(&patch.id) && patch.status != PatchStatus::Dropped {
-            counts.tooling += 1;
-        }
-        if queue.is_internal(&patch.id) && patch.status != PatchStatus::Dropped {
-            counts.internal += 1;
-            counts.internal_only += 1;
+            PatchStatus::Rejected => counts.rejected += 1,
+            PatchStatus::Approved | PatchStatus::Dropped | PatchStatus::Conflict => {}
         }
     }
     counts

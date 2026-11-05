@@ -21,6 +21,9 @@ pub struct AmendResult {
     pub base_branch: Option<String>,
     pub work_branch: Option<String>,
     pub onto: Option<String>,
+    /// Patches the completed amend made ready to submit (see
+    /// [`super::submit::newly_ready_to_submit`]).
+    pub ready_to_submit: Vec<String>,
 }
 
 /// Starts an amend (cuts `uplink/amend/<id>` and `-work`), or with
@@ -145,6 +148,7 @@ fn start_amend(repo: &Path, id: &str) -> Result<AmendResult> {
         base_branch: Some(base),
         work_branch: Some(work),
         onto: Some(onto),
+        ready_to_submit: Vec::new(),
     })
 }
 
@@ -198,6 +202,7 @@ fn complete_amend(
     }
     restore_uplink_from_state(repo)?;
     let mut queue = read_queue_file(repo)?;
+    let before_queue = queue.clone();
     let patch = validate_amend(&queue, id)?;
     assert_resolution_clean(repo)?;
     let upstream_ref = upstream_ref_or_company(repo, &queue)?;
@@ -292,6 +297,7 @@ fn complete_amend(
             base_branch: None,
             work_branch: None,
             onto: None,
+            ready_to_submit: Vec::new(),
         }));
     }
 
@@ -343,6 +349,7 @@ fn complete_amend(
     write_queue_file(repo, &queue)?;
     commit_queue(repo, &format!("uplink: amend {id}"))?;
     let queue = rebuild_checked(repo, verdict)?;
+    let ready_to_submit = super::submit::newly_ready_to_submit(&before_queue, &queue);
     Ok(Checked::Recorded(AmendResult {
         queue,
         id: id.into(),
@@ -351,5 +358,6 @@ fn complete_amend(
         base_branch: None,
         work_branch: None,
         onto: None,
+        ready_to_submit,
     }))
 }
