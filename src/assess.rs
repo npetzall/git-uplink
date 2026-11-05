@@ -173,7 +173,9 @@ fn with_trailers(message: &str, patch: &Patch) -> String {
     append_patch_id_trailer(message, &patch.id)
 }
 
-fn public_subject_and_body(patch: &Patch) -> (String, String) {
+/// The assessed public subject and body of `patch`: what may leave the
+/// company. Never the stored or internal commit message.
+pub fn public_subject_and_body(patch: &Patch) -> (String, String) {
     if let Some(assess) = &patch.assess {
         let subject = if assess.public_subject.is_empty() {
             patch.title.clone()
@@ -406,6 +408,19 @@ pub fn export_commit_message(patch: &Patch) -> String {
     match patch.assess.as_ref().and_then(|a| a.co_author.as_deref()) {
         Some(co_author) => format!("{message}Co-Authored-By: {co_author}\n"),
         None => message,
+    }
+}
+
+/// The upstream PR body: the assessed public body, then a line naming Uplink.
+/// The `Uplink-Patch-Id` trailer stays on the exported commit only.
+pub fn upstream_pr_body(patch: &Patch) -> String {
+    const FOOTER: &str =
+        "Contribution exported by [Uplink](https://npetzall.github.io/git-uplink/).\n";
+    let (_, body) = public_subject_and_body(patch);
+    if body.is_empty() {
+        FOOTER.to_string()
+    } else {
+        format!("{body}\n\n{FOOTER}")
     }
 }
 

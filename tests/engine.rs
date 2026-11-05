@@ -5202,6 +5202,10 @@ fn export_message_is_the_title_only_without_an_assess_report() {
         git_uplink::export_commit_message(&patch),
         format!("Internal notes\n\nUplink-Patch-Id: {}\n", patch.id)
     );
+    assert_eq!(
+        git_uplink::upstream_pr_body(&patch),
+        "Contribution exported by [Uplink](https://npetzall.github.io/git-uplink/).\n"
+    );
 }
 
 #[test]
@@ -7925,6 +7929,22 @@ fn strips_the_internal_commit_section_and_adds_a_co_author_trailer() {
     assert!(!contrib_msg.contains("PROJ-9999"));
     assert!(!contrib_msg.contains(DEFAULT_CUTOFF));
     assert!(!contrib_msg.contains("Uplink-Export-Author"));
+    // The message the forge recreates is the export commit's, not the company's.
+    assert_eq!(submitted.message.trim_end(), contrib_msg.trim_end());
+    assert_eq!(
+        submitted.message.trim_end(),
+        git_uplink::export_commit_message(&patch).trim_end()
+    );
+    // The PR carries the same assessed public message, without the patch id.
+    assert_eq!(
+        git_uplink::public_subject_and_body(&patch).0,
+        "Use SHA-256 for tokens"
+    );
+    assert_eq!(
+        git_uplink::upstream_pr_body(&patch),
+        "Replace SHA-1 in the default hasher.\n\n\
+Contribution exported by [Uplink](https://npetzall.github.io/git-uplink/).\n"
+    );
     assert!(contrib_msg.ends_with(&format!(
         "\n\nUplink-Patch-Id: {}\nCo-Authored-By: Jane Public <jane@users.noreply.github.com>\n",
         patch.id
