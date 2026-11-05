@@ -26,13 +26,14 @@ use git_uplink::{
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
     format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text, push_queue,
-    read_queue, rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, refuse_script_with_credentials,
-    report_paths, reset_from_origin, resolve_conflict_with, resolve_preflight, restack,
-    resume_rebuild, review_token, review_token_path, set_script_echo, status_report,
-    status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
-    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, write_man_pages,
+    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text,
+    public_subject_and_body, push_queue, read_queue, rebase_onto_main, rebase_plan, rebuild_inline,
+    rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
+    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
+    resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
+    status_report, status_snapshot, store_assess_result, store_patch_extras, stored_commit_message,
+    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, upstream_pr_body,
+    write_man_pages,
 };
 
 const VERSION: &str = concat!(
@@ -547,10 +548,8 @@ fn submit_artifact(
     exported: &SubmitResult,
 ) -> Result<(), Error> {
     let branch = exported.branch.as_str();
-    let body = format!(
-        "Company contribution exported by Uplink.\n\nUplink-Patch-Id: {}\n",
-        patch.id
-    );
+    let body = upstream_pr_body(patch);
+    let (title, _) = public_subject_and_body(patch);
     let Ok((report_dir, _, _)) = report_paths(&patch.id) else {
         return Ok(());
     };
@@ -586,7 +585,7 @@ fn submit_artifact(
                     "repo": format!("{uo}/{ur}"),
                     "head": format!("{co}:{branch}"),
                     "base": queue.config.upstream_branch,
-                    "title": patch.title,
+                    "title": title,
                     "bodyFile": body_file,
                 }),
             );

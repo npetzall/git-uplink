@@ -42,9 +42,10 @@ pub use assess::{
     format_approver_packet, format_assess_checks_markdown, format_assess_markdown,
     format_contribution_packet, format_contribution_packet_with_extras,
     format_delta_approver_packet, format_incoming_packet, from_upstream_report_paths,
-    load_extra_markdown, parse_depends_on, patch_text, prepend_report_extras, report_paths,
-    review_token, review_token_path, split_internal_message, store_extras, stored_commit_message,
-    stored_extras_fresh, strip_html_comments,
+    load_extra_markdown, parse_depends_on, patch_text, prepend_report_extras,
+    public_subject_and_body, report_paths, review_token, review_token_path, split_internal_message,
+    store_extras, stored_commit_message, stored_extras_fresh, strip_html_comments,
+    upstream_pr_body,
 };
 pub use doctor::{DoctorReport, doctor, format_doctor_summary};
 pub use error::{AssessError, ConflictError, Error, PreflightError, Result};

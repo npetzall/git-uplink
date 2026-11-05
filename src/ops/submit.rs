@@ -11,6 +11,9 @@ pub struct SubmitResult {
     pub base: String,
     /// Tree of the export commit; the forge's API commit must match it.
     pub tree: String,
+    /// Message of the export commit (`export_commit_message`: the assessed
+    /// public message and trailers), read back from git so the forge
+    /// recreates it byte for byte. Never the company commit's message.
     pub message: String,
     /// True when `--push` force-pushed the branch to contrib (unsigned).
     pub pushed: bool,
