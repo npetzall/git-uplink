@@ -113,9 +113,12 @@ git switch -c fix/token-hash origin/main`}</Code>
         <p>
           Contribution happens later: an operator dispatches{" "}
           <strong>Uplink submit</strong> (or the pack does, with{" "}
-          <code>UPLINK_AUTO_SUBMIT</code>), IP approves, and the public pull
-          request opens. If maintainers ask for changes, make them in a new
-          internal PR, as usual.
+          <code>UPLINK_AUTO_SUBMIT</code>). When its checks pass the patch is{" "}
+          <strong>waiting</strong> for IP. IP approves and the public pull
+          request opens. If IP rejects the run, or it is cancelled, the patch is{" "}
+          <strong>rejected</strong>: fix what IP asked for and dispatch submit
+          again by hand; it is never submitted automatically. If maintainers ask
+          for changes, make them in a new internal PR, as usual.
         </p>
         <Lab scenario="solo-fix">Solo fix</Lab>
       </Section>
@@ -320,10 +323,11 @@ git push`}</Code>
           updates your patch (same id) and rebuilds <code>main</code>. If a
           later patch conflicts too, its owner gets the next PR. If your change
           was already submitted, <strong>Uplink submit</strong> runs again and
-          the same public PR is updated. IP reviews a small delta when your fix
-          changes the lines the patch adds or removes, which includes keeping
-          your line over an upstream change of the same line. A fix that only
-          follows upstream changes next to your lines needs no new approval.
+          the same public PR is updated. When your fix changes the lines the
+          patch adds or removes, which includes keeping your line over an
+          upstream change of the same line, the patch is queued again and IP
+          reviews a small delta. A fix that only follows upstream changes next
+          to your lines needs no new approval.
         </p>
         <p>
           An operator who rebuilds locally can fix a conflict without the PR. On
@@ -366,10 +370,11 @@ git push`}</Code>
           with that message. A company-only patch is not assessed and needs no
           IP approval; the check runs only the preflight script. Mark the PR
           ready, get it reviewed, and merge it. The patch keeps its id and{" "}
-          <code>main</code> is rebuilt. If it was already submitted, the change
-          goes to IP as a small delta when it changes the lines the patch adds
-          or removes, or the public title or message. After approval, the same
-          public PR is updated. Close the PR without merging to cancel.
+          <code>main</code> is rebuilt. If it was already submitted and the
+          change touches the lines the patch adds or removes, or the public
+          title or message, the patch is queued again and goes to IP as a small
+          delta. After approval, the same public PR is updated. Close the PR
+          without merging to cancel.
         </p>
       </Section>
 
