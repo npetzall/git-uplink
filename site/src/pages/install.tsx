@@ -28,15 +28,15 @@ export function InstallPage() {
           <a href="https://cli.github.com/" className={link}>
             GitHub CLI
           </a>
-          : download, verify the checksum and the{" "}
+          : download, verify the checksum, the{" "}
           <a
             href="https://docs.sigstore.dev/cosign/system_config/installation/"
             className={link}
           >
             cosign
           </a>{" "}
-          signature, make it executable, and move it onto{" "}
-          <code className={code}>PATH</code>.
+          signature and GitHub&apos;s release attestation, make it executable,
+          and move it onto <code className={code}>PATH</code>.
         </p>
         <pre
           className={pre}
@@ -46,6 +46,7 @@ grep " git-uplink-$target\\$" SHA256SUMS | shasum -a 256 -c
 cosign verify-blob "git-uplink-$target" --bundle "git-uplink-$target.sigstore.json" \\
   --certificate-identity https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main \\
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh release verify-asset --repo npetzall/git-uplink "git-uplink-$target"
 chmod +x "git-uplink-$target"
 mkdir -p ~/.local/bin && mv "git-uplink-$target" ~/.local/bin/git-uplink
 git uplink version`}</pre>

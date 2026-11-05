@@ -104,7 +104,8 @@ Pushes to `main` that match the product path filter run the release.
 
 - The version comes from the latest `vX.Y.Z` tag and the conventional commits since that tag (no tag starts at `0.0.0`).
 - The workflow calls `product.yml` with that version and every release target. Each build job writes the version with `python3 .github/update_version_in_cargo.py "${PRODUCT_VERSION}"`.
-- A GitHub Release is published only after that job succeeds: `gh release create --generate-notes` for a new tag, or `gh release upload --clobber` to refresh assets when the tag is already current.
+- A GitHub Release is published only after that job succeeds and only for a new version: `gh release create --draft --generate-notes` with every asset, then `gh release edit --draft=false`. An unchanged version skips the publish job.
+- Releases are immutable (repository setting): once published, the tag cannot move and assets cannot be added, replaced, or deleted. GitHub creates a release attestation for each one. A broken release is fixed by the next version, not in place.
 - Assets: Apple Silicon, Linux musl (amd64 and arm64), and Windows binaries, `SHA256SUMS`, and `git-uplink-<version>.cdx.json` / `git-uplink-<version>.spdx.json`.
 - Every asset is signed with cosign (keyless) in the publish job and gets a `<asset>.sigstore.json` bundle. The signer is `https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main`, issuer `https://token.actions.githubusercontent.com`. The pack's install action pins that identity, so renaming `release.yml` or releasing from another branch breaks installs.
 

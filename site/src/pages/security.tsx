@@ -328,6 +328,13 @@ export function SecurityPage() {
             release without a signature stops the job.
           </li>
           <li>
+            Releases are immutable: once published, a release&apos;s tag cannot
+            move and its assets cannot be added, replaced, or deleted. GitHub
+            attests each release (tag, commit, and asset digests), which{" "}
+            <code>gh release verify-asset</code> checks. A broken release is
+            fixed by the next version.
+          </li>
+          <li>
             Dependencies are checked with <code>cargo deny</code>, pnpm audit
             and Socket on every change.
           </li>
