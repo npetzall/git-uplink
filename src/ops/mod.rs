@@ -35,8 +35,8 @@ use crate::preflight::{
 use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
     add_event, apply_order_active, apply_order_upstream_layer, cannot_depend_on, get_patch,
-    get_patch_mut, is_active, move_patch, patch_path, read_queue as read_queue_file,
-    write_previous_main, write_queue as write_queue_file,
+    get_patch_mut, is_active, merged_detail, move_patch, patch_path, read_queue as read_queue_file,
+    set_merged, write_previous_main, write_queue as write_queue_file,
 };
 use crate::repo::{
     COMPANY_REMOTE, TempWorktree, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha,

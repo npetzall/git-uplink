@@ -192,7 +192,92 @@ pub fn drop_patch(repo: &Path, id: &str, reason: &str) -> Result<Patch> {
     })
 }
 
+/// Marks `id` merged on an operator's word. `via` is checked against the
+/// evidence it names, so the label can be trusted; `manual` is not checked.
 pub fn mark_merged(
+    repo: &Path,
+    id: &str,
+    via: MergeVia,
+    upstream_sha: Option<&str>,
+) -> Result<Patch> {
+    verify_merge_claim(repo, id, via, upstream_sha)?;
+    record_merged(repo, id, via, upstream_sha)
+}
+
+fn verify_merge_claim(
+    repo: &Path,
+    id: &str,
+    via: MergeVia,
+    upstream_sha: Option<&str>,
+) -> Result<()> {
+    let queue = read_queue_file(repo)?;
+    let patch = get_patch(&queue, id)?;
+    let need_sha = || {
+        upstream_sha.ok_or_else(|| {
+            Error::msg(format!(
+                "--via {via} needs --sha: the upstream commit that carries {id}"
+            ))
+        })
+    };
+    let resolve = |sha: &str| -> Result<String> {
+        let resolved = git(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("{sha}^{{commit}}"),
+            ],
+            GitOpts::allow_fail(),
+        )?;
+        if resolved.code != 0 {
+            return Err(Error::msg(format!("{sha} is not a commit in this clone")));
+        }
+        Ok(resolved.stdout)
+    };
+    match via {
+        MergeVia::Manual => Ok(()),
+        MergeVia::Pr => match patch.upstream.as_ref().and_then(|u| u.pr_number) {
+            Some(_) => Ok(()),
+            None => Err(Error::msg(format!(
+                "--via pr: {id} has no recorded public PR"
+            ))),
+        },
+        MergeVia::StablePatchId | MergeVia::Trailer => {
+            let sha = resolve(need_sha()?)?;
+            let stable = commit_stable_patch_id(repo, &sha)?;
+            if stable.is_none() || stable.as_deref() != patch.patch_id_stable.as_deref() {
+                return Err(Error::msg(format!(
+                    "--via {via}: the stable patch-id of {sha} does not match {id}"
+                )));
+            }
+            if via == MergeVia::Trailer && !has_trailer(repo, &queue, &sha, id) {
+                return Err(Error::msg(format!(
+                    "--via trailer: {sha} has no `{}: {id}` trailer",
+                    queue.config.trailer_key
+                )));
+            }
+            Ok(())
+        }
+        MergeVia::EmptyRebase => {
+            let at = match upstream_sha {
+                Some(sha) => resolve(sha)?,
+                None => "uplink/upstream".to_string(),
+            };
+            if patch_already_applied_on(repo, &at, &repo.join(patch_path(id)?))? {
+                Ok(())
+            } else {
+                Err(Error::msg(format!(
+                    "--via empty-rebase: {id} is not contained in {at}"
+                )))
+            }
+        }
+    }
+}
+
+/// Marks `id` merged with evidence the caller has already verified.
+pub(super) fn record_merged(
     repo: &Path,
     id: &str,
     via: MergeVia,
@@ -210,17 +295,12 @@ pub fn mark_merged(
         if !status.is_active() {
             return Err(Error::msg(format!("{id} is already {status}")));
         }
-        {
-            let patch = get_patch_mut(&mut queue, id)?;
-            patch.status = PatchStatus::Merged;
-            patch.conflict = None;
-            patch.merged = Some(PatchMerged {
-                via,
-                at: stamp(),
-                upstream_sha: upstream_sha.map(str::to_string),
-            });
-            add_event(patch, "merged", format!("Detected via {}", via.as_str()));
-        }
+        let merged = PatchMerged {
+            via,
+            at: stamp(),
+            upstream_sha: upstream_sha.map(str::to_string),
+        };
+        set_merged(&mut queue, id, merged, merged_detail(via, upstream_sha))?;
         write_queue_file(repo, &queue)?;
         commit_queue(repo, &format!("uplink: merged {id}"))?;
         Ok(get_patch(&queue, id)?.clone())

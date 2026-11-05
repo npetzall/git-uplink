@@ -464,18 +464,17 @@ pub(super) fn mark_empty_if_already_upstream(repo: &Path, id: &str) -> Result<()
     }
     let company_branch = queue.config.internal_branch.clone();
     ensure_clean_worktree(repo, "an empty import")?;
-    let current = get_patch_mut(&mut queue, id)?;
-    current.status = PatchStatus::Merged;
-    current.merged = Some(PatchMerged {
+    let merged = PatchMerged {
         via: MergeVia::EmptyRebase,
         at: stamp(),
         upstream_sha: Some(rev_parse(repo, "uplink/upstream")?),
-    });
-    add_event(
-        current,
-        "merged",
-        "Became empty on import; treating as already present upstream",
-    );
+    };
+    set_merged(
+        &mut queue,
+        id,
+        merged,
+        merged_detail(MergeVia::EmptyRebase, None),
+    )?;
     write_queue_file(repo, &queue)?;
     commit_queue(repo, &format!("uplink: empty apply {id}"))?;
     git(

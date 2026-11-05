@@ -184,7 +184,7 @@ pub(super) fn classify_commit(repo: &Path, queue: &QueueState, sha: &str) -> Res
     })
 }
 
-fn has_trailer(repo: &Path, queue: &QueueState, sha: &str, id: &str) -> bool {
+pub(super) fn has_trailer(repo: &Path, queue: &QueueState, sha: &str, id: &str) -> bool {
     let message = git_ok(repo, &["log", "-1", "--format=%B", sha]).unwrap_or_default();
     let trailer = format!("{}: {id}", queue.config.trailer_key);
     message.lines().any(|line| line.trim() == trailer)
@@ -228,7 +228,7 @@ pub(super) fn reconcile_incoming(
                 via: if has_trailer(repo, queue, sha, id) {
                     MergeVia::Trailer
                 } else {
-                    MergeVia::PatchId
+                    MergeVia::StablePatchId
                 },
                 modified: false,
             });
@@ -572,7 +572,7 @@ pub(super) fn apply_fetched_upstream(
             .all_patches()
             .any(|p| p.id == merge.id && eligible_for_flow_back(&queue, p));
         if active {
-            mark_merged(repo, &merge.id, merge.via, Some(&merge.sha))?;
+            record_merged(repo, &merge.id, merge.via, Some(&merge.sha))?;
             merged.push(merge.id.clone());
         }
     }
@@ -789,12 +789,22 @@ pub fn accept_upstream_preflight(
         };
         // The queue as accepting leaves it, before the rebuild.
         for merge in pending_merges(repo, &queue, &pending)? {
-            if let Some(patch) = queue
+            if queue
                 .upstream
-                .iter_mut()
-                .find(|p| p.id == merge.id && p.status.is_active())
+                .iter()
+                .any(|p| p.id == merge.id && p.status.is_active())
             {
-                patch.status = PatchStatus::Merged;
+                let merged = PatchMerged {
+                    via: merge.via,
+                    at: stamp(),
+                    upstream_sha: Some(merge.sha.clone()),
+                };
+                set_merged(
+                    &mut queue,
+                    &merge.id,
+                    merged,
+                    merged_detail(merge.via, Some(&merge.sha)),
+                )?;
             }
         }
         queue.verified_upstream = token.map(|token| VerifiedUpstream {

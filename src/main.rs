@@ -2460,7 +2460,10 @@ mod tests {
 
     #[test]
     fn merged_via_is_parsed_by_clap() {
-        assert_eq!(merged_via(&["--via", "patch-id"]), Some(MergeVia::PatchId));
+        assert_eq!(
+            merged_via(&["--via", "stable-patch-id"]),
+            Some(MergeVia::StablePatchId)
+        );
         assert_eq!(
             merged_via(&["--via", "empty-rebase"]),
             Some(MergeVia::EmptyRebase)

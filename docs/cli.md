@@ -432,10 +432,10 @@ Record that upstream merged a patch.
 
 - `<id>`: Patch that was merged.
 - `--via <how>`: How the merge was detected. Default: `manual`.
-  - `pr`: The GitHub PR recorded on the queue was merged.
-  - `trailer`: An upstream commit carries the `Uplink-Patch-Id` trailer.
-  - `patch-id`: `git patch-id --stable` matches an upstream commit.
-  - `empty-rebase`: The patch applies empty on upstream.
+  - `pr`: The GitHub PR recorded on the queue was merged; needs a recorded PR.
+  - `trailer`: An upstream commit carries the `Uplink-Patch-Id` trailer and its `git patch-id --stable` matches; needs `--sha`.
+  - `stable-patch-id`: `git patch-id --stable` of an upstream commit matches; needs `--sha`.
+  - `empty-rebase`: The patch is already contained in upstream (`--sha`, else uplink/upstream).
   - `manual`: Recorded by an operator.
 - `--sha <sha>`: Upstream commit that carries the patch.
 

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::types::{
-    PATCH_DIR, PREVIOUS_MAIN_PATH, Patch, PatchEvent, PatchLayer, PatchStatus, PreviousMain,
-    QUEUE_PATH, QueueState,
+    MergeVia, PATCH_DIR, PREVIOUS_MAIN_PATH, Patch, PatchEvent, PatchLayer, PatchMerged,
+    PatchStatus, PreviousMain, QUEUE_PATH, QueueState,
 };
 
 pub fn now_iso() -> String {
@@ -97,6 +97,49 @@ pub fn add_event(patch: &mut Patch, kind: &str, detail: impl Into<String>) {
         detail: detail.into(),
     });
     patch.updated_at = at;
+}
+
+/// Marks `id` merged and removes it from every other patch's `depends_on`:
+/// a merged patch is part of upstream, so nothing waits on it any more.
+/// The caller has verified `merged.via`.
+pub fn set_merged(
+    queue: &mut QueueState,
+    id: &str,
+    merged: PatchMerged,
+    detail: impl Into<String>,
+) -> Result<()> {
+    let patch = queue
+        .all_patches_mut()
+        .find(|p| p.id == id)
+        .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
+    patch.status = PatchStatus::Merged;
+    patch.conflict = None;
+    patch.merged = Some(merged);
+    add_event(patch, "merged", detail);
+    for other in queue.all_patches_mut() {
+        if other.id != id && other.depends_on.iter().any(|dep| dep == id) {
+            other.depends_on.retain(|dep| dep != id);
+            add_event(
+                other,
+                "dependency",
+                format!("Dropped dependency {id}: merged"),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The event detail for a merge detected via `via` at `upstream_sha`.
+pub fn merged_detail(via: MergeVia, upstream_sha: Option<&str>) -> String {
+    let at = upstream_sha
+        .map(|sha| format!(" {}", &sha[..sha.len().min(7)]))
+        .unwrap_or_default();
+    match via {
+        MergeVia::StablePatchId => format!("Stable patch-id matches upstream{at}"),
+        MergeVia::Trailer => format!("Trailer and stable patch-id match upstream{at}"),
+        MergeVia::EmptyRebase => "Empty rebase, superseded by upstream".into(),
+        MergeVia::Pr | MergeVia::Manual => format!("Detected via {}", via.as_str()),
+    }
 }
 
 /// Tooling, then upstream, then internal: the order patches apply on company main.
@@ -226,6 +269,51 @@ mod tests {
         let mut patch = patch(id);
         patch.depends_on = deps.iter().map(|s| (*s).to_string()).collect();
         patch
+    }
+
+    #[test]
+    fn set_merged_drops_the_patch_from_every_dependency_list() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch("upl_a"));
+        queue
+            .upstream
+            .push(patch_deps("upl_b", &["upl_a", "upl_x"]));
+        queue.internal.push(patch_deps("upl_c", &["upl_a"]));
+        let merged = PatchMerged {
+            via: MergeVia::EmptyRebase,
+            at: "t".into(),
+            upstream_sha: None,
+        };
+        set_merged(&mut queue, "upl_a", merged, "done").unwrap();
+
+        let get = |id: &str| queue.all_patches().find(|p| p.id == id).unwrap();
+        assert_eq!(get("upl_a").status, PatchStatus::Merged);
+        assert_eq!(get("upl_b").depends_on, vec!["upl_x".to_string()]);
+        assert!(get("upl_c").depends_on.is_empty());
+        let event = get("upl_c").events.last().unwrap();
+        assert_eq!(event.kind, "dependency");
+        assert_eq!(event.detail, "Dropped dependency upl_a: merged");
+    }
+
+    #[test]
+    fn merged_via_reads_the_former_patch_id_name() {
+        let merged: PatchMerged = serde_json::from_str(r#"{"via":"patch-id","at":"t"}"#).unwrap();
+        assert_eq!(merged.via, MergeVia::StablePatchId);
+        let written = serde_json::to_string(&merged).unwrap();
+        assert!(written.contains(r#""via":"stable-patch-id""#), "{written}");
+    }
+
+    #[test]
+    fn merged_detail_names_the_evidence() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            merged_detail(MergeVia::StablePatchId, Some(sha)),
+            "Stable patch-id matches upstream 0123456"
+        );
+        assert_eq!(
+            merged_detail(MergeVia::EmptyRebase, Some(sha)),
+            "Empty rebase, superseded by upstream"
+        );
     }
 
     #[test]
