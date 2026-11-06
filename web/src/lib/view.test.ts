@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseView, viewSearch } from "./view";
+import { parseView, sourceBranch, viewSearch } from "./view";
 
 describe("parseView", () => {
   it("defaults to the queue", () => {
@@ -7,6 +7,13 @@ describe("parseView", () => {
     expect(parseView("bogus")).toBe("queue");
     expect(parseView("ready")).toBe("ready");
     expect(parseView("stream")).toBe("stream");
+  });
+});
+
+describe("sourceBranch", () => {
+  it("names the branch each source reads", () => {
+    expect(sourceBranch("local")).toBe("local uplink/state");
+    expect(sourceBranch("remote")).toBe("origin/uplink/state");
   });
 });
 
