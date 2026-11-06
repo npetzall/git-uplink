@@ -34,7 +34,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 )
               }
             >
-              This checkout
+              Queue
             </NavLink>
             <a
               href={`${DOCS}lab`}
@@ -74,7 +74,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 )
               }
             >
-              This checkout
+              Queue
             </NavLink>
             <a
               href={`${DOCS}lab`}

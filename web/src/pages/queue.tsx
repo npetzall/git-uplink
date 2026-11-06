@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
 import { CopyButton } from "../components/copy-button";
+import { SourceToggle } from "../components/source-toggle";
 import { StatusBadge } from "../components/status-badge";
 import { Button } from "../components/ui/button";
 import {
@@ -16,6 +17,7 @@ import {
   parseSource,
   type QueueSource,
   refreshRemote,
+  type StateStatus,
   type StatusCounts,
   type StatusResponse,
 } from "../lib/api";
@@ -64,7 +66,7 @@ function LegendList({ values }: { values: string[] }) {
 
 function StatusLegend() {
   return (
-    <details className="mb-6 max-w-3xl rounded-xl border border-border bg-card px-4 py-3 text-sm">
+    <details className="mb-6 rounded-xl border border-border bg-card px-4 py-3 text-sm">
       <summary className="cursor-pointer font-medium">
         What do the statuses mean?
       </summary>
@@ -144,25 +146,35 @@ function PatchTable({
   );
 }
 
-function syncLabel(data: StatusResponse): string {
-  const state = data.state;
-  if (!state) {
+/** How the local uplink/state compares with origin. */
+function syncLabel(state: StateStatus): string {
+  if (!state.remote) {
     return "no origin tracking";
-  }
-  if (state.ahead === 0 && state.behind === 0) {
-    return "up to date with origin";
   }
   const parts: string[] = [];
   if (state.ahead) {
-    parts.push(`ahead ${state.ahead}`);
+    parts.push(`${state.ahead} ahead of origin`);
   }
   if (state.behind) {
-    parts.push(`behind ${state.behind}`);
+    parts.push(`${state.behind} behind origin`);
   }
-  if (!parts.length) {
-    return "no origin tracking";
-  }
-  return `${parts.join("  ")} ${state.remoteRef ?? "origin/uplink/state"}`;
+  return parts.length ? parts.join(", ") : "up to date with origin";
+}
+
+function SyncPill({ state }: { state: StateStatus }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full border px-2.5 py-0.5 align-middle text-xs font-normal tracking-normal",
+        state.behind
+          ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+          : "border-border text-muted-foreground",
+      )}
+      title={`Local uplink/state against ${state.remoteRef ?? "origin/uplink/state"}`}
+    >
+      {syncLabel(state)}
+    </span>
+  );
 }
 
 export function QueuePage() {
@@ -192,7 +204,7 @@ export function QueuePage() {
     !data?.tooling && !data?.upstream?.length && !data?.internal?.length;
 
   function setSource(next: QueueSource) {
-    if (next === "checkout") {
+    if (next === "local") {
       setSearchParams({});
     } else {
       setSearchParams({ source: next });
@@ -214,53 +226,41 @@ export function QueuePage() {
 
   return (
     <AppShell>
-      <div className="mb-6 flex max-w-3xl flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-2">
-          <h1 className="text-3xl font-semibold tracking-tight">
-            {source === "remote" ? "Remote queue" : "This checkout"}
+          <h1 className="flex flex-wrap items-center gap-3 text-3xl font-semibold tracking-tight">
+            {source === "remote" ? "Remote" : "Local"}{" "}
+            <span className="font-mono text-2xl">uplink/state</span>
+            {source === "local" && data?.state ? (
+              <SyncPill state={data.state} />
+            ) : null}
           </h1>
-          <p className="text-muted-foreground">
+          <p className="max-w-3xl text-muted-foreground">
             {source === "remote" ? (
               <>
                 Queue at{" "}
                 <code className="rounded bg-muted px-1.5">
                   origin/uplink/state
-                </code>
-                . Local branches are not moved.
+                </code>{" "}
+                as last fetched. Local branches are not moved.
               </>
             ) : (
               <>
-                Live queue from the directory where you ran{" "}
+                Queue on the local{" "}
+                <code className="rounded bg-muted px-1.5">uplink/state</code>{" "}
+                branch of the repository where you ran{" "}
                 <code className="rounded bg-muted px-1.5">
                   git uplink web-ui
                 </code>
-                . This is{" "}
-                <code className="rounded bg-muted px-1.5">
-                  .uplink/queue.json
-                </code>{" "}
-                from{" "}
-                <code className="rounded bg-muted px-1.5">uplink/state</code>.
+                , read with git. Uncommitted edits in{" "}
+                <code className="rounded bg-muted px-1.5">.uplink/</code> are
+                not shown.
               </>
             )}
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
-          <div className="flex rounded-lg border border-border p-0.5">
-            <Button
-              variant={source === "checkout" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setSource("checkout")}
-            >
-              Checkout
-            </Button>
-            <Button
-              variant={source === "remote" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setSource("remote")}
-            >
-              Remote
-            </Button>
-          </div>
+          <SourceToggle source={source} onChange={setSource} />
           <Button
             variant="outline"
             size="sm"
@@ -274,19 +274,6 @@ export function QueuePage() {
 
       <StatusLegend />
 
-      {data?.state ? (
-        <p
-          className={cn(
-            "mb-6 text-sm",
-            data.state.behind ? "text-amber-300" : "text-muted-foreground",
-          )}
-        >
-          {syncLabel(data)}
-          {data.state.uncommitted.length
-            ? ` · ${data.state.uncommitted.length} uncommitted .uplink path(s)`
-            : ""}
-        </p>
-      ) : null}
       {refreshError ? (
         <p className="mb-6 text-sm text-rose-300">{refreshError}</p>
       ) : null}
@@ -321,7 +308,7 @@ export function QueuePage() {
               <CardHeader>
                 <CardTitle className="text-base">Company HEAD</CardTitle>
               </CardHeader>
-              <CardContent className="font-mono text-xs text-muted-foreground">
+              <CardContent className="font-mono text-xs break-all text-muted-foreground">
                 {data.companyHead ?? "—"}
               </CardContent>
             </Card>
@@ -329,7 +316,7 @@ export function QueuePage() {
               <CardHeader>
                 <CardTitle className="text-base">uplink/upstream</CardTitle>
               </CardHeader>
-              <CardContent className="font-mono text-xs text-muted-foreground">
+              <CardContent className="font-mono text-xs break-all text-muted-foreground">
                 {data.upstreamHead ?? "not fetched"}
               </CardContent>
             </Card>
