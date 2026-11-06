@@ -416,8 +416,25 @@ git push`}</Code>
 git uplink web-ui`}</Code>
         <p>
           The web UI lists every patch, its status, and its dependencies, and
-          explains what each status means and what happens next.
+          explains what each status means and what happens next. It reads the
+          queue with git: <strong>Local</strong> is the{" "}
+          <code>uplink/state</code> branch in your clone,{" "}
+          <strong>Remote</strong> is <code>origin/uplink/state</code> as last
+          fetched. Uncommitted edits in <code>.uplink/</code> are not shown.
         </p>
+        <ul>
+          <li>
+            <strong>Ready to submit</strong> lists the queued upstream changes
+            that submit can take now: no public PR yet, and every upstream
+            change they depend on is merged.
+          </li>
+          <li>
+            <strong>Submit stream</strong> draws the active upstream changes as
+            a graph of columns. The first column has no open dependencies; a
+            change in a later column goes once everything it depends on is
+            merged. Read it left to right for the order to submit and merge.
+          </li>
+        </ul>
       </Section>
     </DocPage>
   );
