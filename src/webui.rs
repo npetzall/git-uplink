@@ -1149,7 +1149,20 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = json_body(response).await;
-        let ids: Vec<Vec<&str>> = body["layers"]
+        assert_eq!(
+            stream_ids(&body),
+            vec![vec!["upl_a", "upl_b"], vec!["upl_c"]]
+        );
+        assert_eq!(
+            body["layers"][0][1]["missing"],
+            serde_json::json!(["upl_gone"])
+        );
+        assert_eq!(body["layers"][1][0]["title"], "title upl_c");
+        assert_eq!(body["layers"][1][0]["stale"], false);
+    }
+
+    fn stream_ids(body: &serde_json::Value) -> Vec<Vec<String>> {
+        body["layers"]
             .as_array()
             .unwrap()
             .iter()
@@ -1158,16 +1171,69 @@ mod tests {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .map(|node| node["id"].as_str().unwrap())
+                    .map(|node| node["id"].as_str().unwrap().to_string())
                     .collect()
             })
-            .collect();
-        assert_eq!(ids, vec![vec!["upl_a", "upl_b"], vec!["upl_c"]]);
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn local_and_remote_tabs_read_their_own_ref() {
+        use crate::git::git_ok;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let local = queue_json(serde_json::json!([
+            queued("upl_a", &[]),
+            queued("upl_b", &["upl_a"]),
+        ]));
+        state_repo(repo, &[(".uplink/queue.json", &local)]);
+        let mut merged = queued("upl_a", &[]);
+        merged["status"] = "merged".into();
+        let remote = queue_json(serde_json::json!([merged, queued("upl_b", &[])]));
+        std::fs::write(repo.join(".uplink/queue.json"), remote).unwrap();
+        let commit = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-am",
+            "remote",
+        ];
+        git_ok(repo, &commit).unwrap();
+        let remote_sha = git_ok(repo, &["rev-parse", "HEAD"]).unwrap();
+        git_ok(
+            repo,
+            &[
+                "update-ref",
+                "refs/remotes/origin/uplink/state",
+                remote_sha.trim(),
+            ],
+        )
+        .unwrap();
+        git_ok(repo, &["reset", "-q", "--hard", "HEAD~1"]).unwrap();
+        let app = test_app(repo.to_path_buf());
+        let get = |uri: &'static str| {
+            let app = app.clone();
+            async move { json_body(app.oneshot(local_request(uri)).await.unwrap()).await }
+        };
+
         assert_eq!(
-            body["layers"][0][1]["missing"],
-            serde_json::json!(["upl_gone"])
+            get("/api/status").await["readyToSubmit"],
+            serde_json::json!(["upl_a"])
         );
-        assert_eq!(body["layers"][1][0]["title"], "title upl_c");
-        assert_eq!(body["layers"][1][0]["stale"], false);
+        assert_eq!(
+            get("/api/status?source=remote").await["readyToSubmit"],
+            serde_json::json!(["upl_b"])
+        );
+        assert_eq!(
+            stream_ids(&get("/api/submit-stream").await),
+            vec![vec!["upl_a"], vec!["upl_b"]]
+        );
+        let remote = get("/api/submit-stream?source=remote").await;
+        assert_eq!(remote["source"], "remote");
+        assert_eq!(stream_ids(&remote), vec![vec!["upl_b"]]);
     }
 }
