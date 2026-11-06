@@ -217,6 +217,105 @@ fn topological_layer(active: Vec<Patch>) -> Result<Vec<Patch>> {
     Ok(walk.ordered)
 }
 
+/// One active upstream patch in [`submit_layers`].
+#[derive(Debug)]
+pub struct StreamNode<'a> {
+    pub patch: &'a Patch,
+    /// Dependencies that are not active upstream patches (dropped, unknown
+    /// or internal). They do not place the patch, but they block its submit.
+    pub missing: Vec<String>,
+}
+
+/// Active upstream patches in the order they can go upstream. Column 0 has
+/// no dependency on another active upstream patch; a patch in column N
+/// depends on one in column N-1 and goes once all its dependencies are merged.
+/// Column 0 keeps queue order; later columns sort by where their dependencies
+/// sit, so edges cross less.
+pub fn submit_layers(queue: &QueueState) -> Result<Vec<Vec<StreamNode<'_>>>> {
+    let active: Vec<&Patch> = queue.upstream.iter().filter(|p| is_active(p)).collect();
+    let index: HashMap<&str, usize> = active
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.id.as_str(), i))
+        .collect();
+
+    fn depth(
+        i: usize,
+        active: &[&Patch],
+        index: &HashMap<&str, usize>,
+        memo: &mut [Option<usize>],
+        visiting: &mut [bool],
+    ) -> Result<usize> {
+        if let Some(layer) = memo[i] {
+            return Ok(layer);
+        }
+        if visiting[i] {
+            return Err(Error::msg(format!("Dependency cycle at {}", active[i].id)));
+        }
+        visiting[i] = true;
+        let mut layer = 0;
+        for dep in &active[i].depends_on {
+            if let Some(&j) = index.get(dep.as_str()) {
+                layer = layer.max(depth(j, active, index, memo, visiting)? + 1);
+            }
+        }
+        visiting[i] = false;
+        memo[i] = Some(layer);
+        Ok(layer)
+    }
+
+    let mut memo = vec![None; active.len()];
+    let mut visiting = vec![false; active.len()];
+    let mut layers: Vec<Vec<usize>> = Vec::new();
+    for i in 0..active.len() {
+        let layer = depth(i, &active, &index, &mut memo, &mut visiting)?;
+        if layers.len() <= layer {
+            layers.resize_with(layer + 1, Vec::new);
+        }
+        layers[layer].push(i);
+    }
+
+    // Row of each placed patch, for the barycenter of the next column.
+    let mut row: HashMap<usize, f64> = HashMap::new();
+    for column in &mut layers {
+        let key = |i: &usize| -> f64 {
+            let rows: Vec<f64> = active[*i]
+                .depends_on
+                .iter()
+                .filter_map(|dep| index.get(dep.as_str()).and_then(|j| row.get(j)))
+                .copied()
+                .collect();
+            if rows.is_empty() {
+                0.0
+            } else {
+                rows.iter().sum::<f64>() / rows.len() as f64
+            }
+        };
+        column.sort_by(|a, b| key(a).total_cmp(&key(b)).then(a.cmp(b)));
+        for (r, i) in column.iter().enumerate() {
+            row.insert(*i, r as f64);
+        }
+    }
+
+    Ok(layers
+        .into_iter()
+        .map(|column| {
+            column
+                .into_iter()
+                .map(|i| StreamNode {
+                    patch: active[i],
+                    missing: active[i]
+                        .depends_on
+                        .iter()
+                        .filter(|dep| !index.contains_key(dep.as_str()))
+                        .cloned()
+                        .collect(),
+                })
+                .collect()
+        })
+        .collect())
+}
+
 pub fn take_patch(queue: &mut QueueState, id: &str) -> Result<Patch> {
     if let Some(idx) = queue.upstream.iter().position(|p| p.id == id) {
         return Ok(queue.upstream.remove(idx));
@@ -363,6 +462,90 @@ mod tests {
         queue.upstream.push(patch_deps("upl_a", &["upl_b"]));
         queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
         let err = apply_order_active(&queue).unwrap_err();
+        assert!(err.to_string().contains("Dependency cycle"), "{err}");
+    }
+
+    fn stream_ids(queue: &QueueState) -> Vec<Vec<&str>> {
+        submit_layers(queue)
+            .unwrap()
+            .iter()
+            .map(|column| column.iter().map(|n| n.patch.id.as_str()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn submit_layers_puts_independent_patches_in_one_column() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch("upl_a"));
+        queue.upstream.push(patch("upl_b"));
+        assert_eq!(stream_ids(&queue), vec![vec!["upl_a", "upl_b"]]);
+        assert!(
+            submit_layers(&QueueState::empty(QueueConfig::default()))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn submit_layers_places_a_patch_after_its_deepest_dependency() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue
+            .upstream
+            .push(patch_deps("upl_d", &["upl_a", "upl_c"]));
+        queue
+            .upstream
+            .push(patch_deps("upl_c", &["upl_a", "upl_b"]));
+        queue.upstream.push(patch("upl_a"));
+        queue.upstream.push(patch("upl_b"));
+        assert_eq!(
+            stream_ids(&queue),
+            vec![vec!["upl_a", "upl_b"], vec!["upl_c"], vec!["upl_d"]]
+        );
+    }
+
+    #[test]
+    fn submit_layers_orders_columns_by_their_dependencies() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch("upl_a"));
+        queue.upstream.push(patch("upl_b"));
+        queue.upstream.push(patch_deps("upl_on_b", &["upl_b"]));
+        queue.upstream.push(patch_deps("upl_on_a", &["upl_a"]));
+        assert_eq!(
+            stream_ids(&queue),
+            vec![vec!["upl_a", "upl_b"], vec!["upl_on_a", "upl_on_b"]]
+        );
+    }
+
+    #[test]
+    fn submit_layers_skips_inactive_and_reports_missing_dependencies() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        let mut dropped = patch("upl_dropped");
+        dropped.status = PatchStatus::Dropped;
+        let mut merged = patch("upl_merged");
+        merged.status = PatchStatus::Merged;
+        queue.upstream.push(dropped);
+        queue.upstream.push(merged);
+        queue
+            .upstream
+            .push(patch_deps("upl_a", &["upl_dropped", "upl_int"]));
+        let mut conflict = patch("upl_conflict");
+        conflict.status = PatchStatus::Conflict;
+        queue.upstream.push(conflict);
+        queue.internal.push(patch("upl_int"));
+        let layers = submit_layers(&queue).unwrap();
+        assert_eq!(layers.len(), 1);
+        let ids: Vec<_> = layers[0].iter().map(|n| n.patch.id.as_str()).collect();
+        assert_eq!(ids, vec!["upl_a", "upl_conflict"]);
+        assert_eq!(layers[0][0].missing, vec!["upl_dropped", "upl_int"]);
+        assert!(layers[0][1].missing.is_empty());
+    }
+
+    #[test]
+    fn submit_layers_rejects_cycles() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch_deps("upl_a", &["upl_b"]));
+        queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
+        let err = submit_layers(&queue).unwrap_err();
         assert!(err.to_string().contains("Dependency cycle"), "{err}");
     }
 
