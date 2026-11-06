@@ -107,6 +107,27 @@ export type StatusResponse = {
   state?: StateStatus;
   /** Approved or submitted patches that changed since their last approval. */
   staleApprovals?: string[];
+  /** Queued upstream patches submit can take now, in queue order. */
+  readyToSubmit?: string[];
+};
+
+export type StreamNode = {
+  id: string;
+  title: string;
+  status: string;
+  dependsOn: string[];
+  /** Dependencies that are not active upstream patches. */
+  missing: string[];
+  /** The newest approval does not cover the patch as it is now. */
+  stale: boolean;
+};
+
+export type SubmitStreamResponse = {
+  present: boolean;
+  source: string;
+  error?: string;
+  /** Column 0 has no open dependencies; a patch in column N goes once its dependencies are merged. */
+  layers: StreamNode[][];
 };
 
 export type FileRevision = {
@@ -135,6 +156,14 @@ export type FileResponse = {
 
 export function parseSource(value: string | null): QueueSource {
   return value === "remote" ? "remote" : "local";
+}
+
+export async function loadSubmitStream(
+  source: QueueSource,
+): Promise<SubmitStreamResponse> {
+  const params = new URLSearchParams({ source });
+  const response = await fetch(`/api/submit-stream?${params}`);
+  return response.json();
 }
 
 export async function loadStatus(
