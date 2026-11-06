@@ -176,13 +176,7 @@ export function QueuePage() {
               <>
                 Queue on the local{" "}
                 <code className="rounded bg-muted px-1.5">uplink/state</code>{" "}
-                branch of the repository where you ran{" "}
-                <code className="rounded bg-muted px-1.5">
-                  git uplink web-ui
-                </code>
-                , read with git. Uncommitted edits in{" "}
-                <code className="rounded bg-muted px-1.5">.uplink/</code> are
-                not shown.
+                branch.
               </>
             )}
           </p>
