@@ -23,7 +23,7 @@ import type { FileDelta } from "../lib/patch";
 import { NEEDS_APPROVAL, shownStatus } from "../lib/status";
 
 function shortSha(sha: string): string {
-  return sha === "worktree" ? "worktree" : sha.slice(0, 12);
+  return sha.slice(0, 12);
 }
 
 function revisionLabel(

@@ -1,6 +1,7 @@
 import type { FileDelta } from "./patch";
 
-export type QueueSource = "checkout" | "remote";
+/** `local` is the uplink/state branch in this repository; `remote` is origin/uplink/state. Both are read with git. */
+export type QueueSource = "local" | "remote";
 
 export type PatchSource = {
   author?: string;
@@ -73,7 +74,6 @@ export type StateStatus = {
   remoteRef?: string;
   ahead?: number;
   behind?: number;
-  uncommitted: string[];
 };
 
 /** Queued, waiting, submitted, merged and rejected count the upstream layer; internal counts queued internal patches; active counts queued patches in every layer. */
@@ -134,7 +134,7 @@ export type FileResponse = {
 };
 
 export function parseSource(value: string | null): QueueSource {
-  return value === "remote" ? "remote" : "checkout";
+  return value === "remote" ? "remote" : "local";
 }
 
 export async function loadStatus(
