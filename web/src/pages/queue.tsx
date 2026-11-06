@@ -24,7 +24,12 @@ import {
 } from "../lib/api";
 import { LABEL_ORDER, STATUS_INFO, STATUS_ORDER } from "../lib/status";
 import { cn } from "../lib/utils";
-import { parseView, type QueueView, viewSearch } from "../lib/view";
+import {
+  parseView,
+  type QueueView,
+  sourceBranch,
+  viewSearch,
+} from "../lib/view";
 
 const COUNTERS: { key: keyof StatusCounts; label: string }[] = [
   { key: "queued", label: "Queued" },
@@ -112,6 +117,7 @@ export function QueuePage() {
   const [data, setData] = useState<StatusResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const fetchedOnce = useRef(false);
 
   useEffect(() => {
@@ -145,6 +151,7 @@ export function QueuePage() {
     try {
       await refreshRemote();
       setData(await loadStatus(source, false));
+      setReload((n) => n + 1);
     } catch (err) {
       setRefreshError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -285,9 +292,9 @@ export function QueuePage() {
               <CardHeader>
                 <CardTitle className="text-base">Ready to submit</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Queued upstream patches with no unmerged upstream dependency
-                  and no public pull request yet. Dispatch Uplink submit for any
-                  of them.
+                  Queued upstream patches on {sourceBranch(source)} with no
+                  unmerged upstream dependency and no public pull request yet.
+                  Dispatch Uplink submit for any of them.
                 </p>
               </CardHeader>
               <CardContent className="overflow-x-auto">
@@ -301,7 +308,7 @@ export function QueuePage() {
               </CardContent>
             </Card>
           ) : view === "stream" ? (
-            <SubmitStream source={source} search={search} />
+            <SubmitStream source={source} search={search} reload={reload} />
           ) : empty ? (
             <Card>
               <CardHeader>

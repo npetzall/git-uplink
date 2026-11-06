@@ -15,6 +15,7 @@ import {
   neighbours,
 } from "../lib/submit-stream";
 import { cn } from "../lib/utils";
+import { sourceBranch } from "../lib/view";
 import { PatchIdLink, patchHref } from "./patch-id-link";
 import { StatusBadge } from "./status-badge";
 
@@ -72,10 +73,13 @@ function NodeCard({
 export function SubmitStream({
   source,
   search,
+  reload,
 }: {
   source: QueueSource;
   /** Query string carried to the patch page. */
   search: string;
+  /** Changes when the stream should be read again, for example after a refresh. */
+  reload: number;
 }) {
   const [data, setData] = useState<SubmitStreamResponse | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -92,7 +96,8 @@ export function SubmitStream({
       .catch((err: Error) =>
         setData({ present: false, source, error: err.message, layers: [] }),
       );
-  }, [source]);
+    // reload is a trigger: a new value reads the stream again.
+  }, [source, reload]);
 
   const layers = useMemo(() => data?.layers ?? [], [data]);
   const edges = useMemo(() => edgesOf(layers), [layers]);
@@ -161,10 +166,10 @@ export function SubmitStream({
   return (
     <div className="space-y-4">
       <p className="max-w-3xl text-sm text-muted-foreground">
-        Active upstream patches in the order they can go upstream. The first
-        column has no open dependencies. A patch in a later column goes once
-        every patch it depends on is merged. Hover a patch to trace its
-        dependencies.
+        Active upstream patches on {sourceBranch(source)}, in the order they can
+        go upstream. The first column has no open dependencies. A patch in a
+        later column goes once every patch it depends on is merged. Hover a
+        patch to trace its dependencies.
       </p>
       <div className="overflow-x-auto pb-2">
         <div ref={graph} className="relative flex w-max gap-16 p-1">

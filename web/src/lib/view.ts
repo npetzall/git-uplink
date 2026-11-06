@@ -7,6 +7,11 @@ export function parseView(value: string | null): QueueView {
   return value === "ready" || value === "stream" ? value : "queue";
 }
 
+/** The branch a source reads, as shown to the operator. */
+export function sourceBranch(source: QueueSource): string {
+  return source === "remote" ? "origin/uplink/state" : "local uplink/state";
+}
+
 /** The query string for a source and view; the defaults are left out. */
 export function viewSearch(source: QueueSource, view: QueueView): string {
   const params = new URLSearchParams();
