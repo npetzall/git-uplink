@@ -149,6 +149,12 @@ git switch -c fix/token-hash origin/main`}</Code>
             independent public PRs, even if they are queued before yours.
           </li>
           <li>
+            Name only the change you build on, not the ones under it. If it
+            depends on another change, that one is applied before it too. An
+            older queue that lists whole chains is shortened with{" "}
+            <code>git uplink trim-deps</code>.
+          </li>
+          <li>
             Your change can be approved and submitted only after its
             dependencies have merged upstream. Until then the submit workflow
             stops in its first job. Each public PR stands alone on public{" "}

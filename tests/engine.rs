@@ -16,11 +16,12 @@ use git_uplink::{
     format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
     from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown,
     load_groups_file, mark_merged, mark_rejected, mark_waiting, newly_ready_to_submit,
-    parse_depends_on, preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan,
-    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
-    reset_from_origin, resolve_conflict, review_token, status_snapshot, store_patch_extras,
-    stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with, summarize_queue,
-    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, write_queue,
+    parse_depends_on, preflight_existing_patch, preflight_incoming_change, push_queue,
+    rebase_onto_main, rebase_plan, rebuild, rebuild_with, record_gated_pr, record_pull_request,
+    refresh_from_origin, report_paths, reset_from_origin, resolve_conflict, review_token,
+    status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch,
+    submit_patch_with, summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with,
+    transfer_preflight, trim_deps, write_queue,
 };
 use tempfile::TempDir;
 
@@ -7397,6 +7398,143 @@ fn refuses_import_when_a_stacked_change_does_not_declare_depends_on() {
             .count(),
         1
     );
+}
+
+/// Three stacked patches on `src/tokens.js`, each changing the line the one
+/// before it added: hash → log → log message. The first two are queued,
+/// `hash` with no dependency and `log` depending on `hash`. The checkout is
+/// on `feat/msg` with the third committed, not imported.
+fn stacked_chain(company: &Path) -> (Patch, Patch) {
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(company, &["checkout", "-b", "feat/log"], GitOpts::default()).unwrap();
+    let hashed = fs::read_to_string(company.join("src/tokens.js")).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &hashed.replace(
+            "return sha256(value);",
+            "console.log(\"hash\");\n  return sha256(value);",
+        ),
+    );
+    commit_all(company, "add log");
+    let log = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Log token hashes".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![hash.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(company, &["checkout", "-b", "feat/msg"], GitOpts::default()).unwrap();
+    let logged = fs::read_to_string(company.join("src/tokens.js")).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &logged.replace("console.log(\"hash\");", "console.log(\"token hash\");"),
+    );
+    commit_all(company, "reword log");
+    (hash, log)
+}
+
+#[test]
+fn suggests_only_the_last_patch_of_a_dependency_chain() {
+    let world = setup_world();
+    let company = &world.company;
+    let (_hash, log) = stacked_chain(company);
+
+    let err = add_patch(
+        company,
+        AddPatchOpts {
+            title: "Reword the hash log".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    match err {
+        Error::Preflight(pre) => assert_eq!(pre.suggested_depends_on, vec![log.id.clone()]),
+        other => panic!("expected preflight, got {other}"),
+    }
+
+    // Depending on `log` alone applies `hash` before it too.
+    let imported = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Reword the hash log".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![log.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(imported.depends_on, vec![log.id]);
+    assert_eq!(imported.status, PatchStatus::Queued);
+}
+
+#[test]
+fn trim_deps_keeps_direct_dependencies_and_what_applies() {
+    let world = setup_world();
+    let company = &world.company;
+    let (hash, log) = stacked_chain(company);
+    let reword = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Reword the hash log".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![hash.id.clone(), log.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(reword.depends_on, vec![hash.id.clone(), log.id.clone()]);
+    let state_before = rev_of(company, STATE_BRANCH);
+
+    let dry = trim_deps(company, true).unwrap();
+    assert_eq!(dry.len(), 1);
+    assert_eq!(dry[0].id, reword.id);
+    assert_eq!(dry[0].depends_on, vec![log.id.clone()]);
+    assert_eq!(dry[0].removed[0].id, hash.id);
+    assert_eq!(dry[0].removed[0].implied_by, log.id);
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+
+    let trimmed = trim_deps(company, false).unwrap();
+    assert_eq!(trimmed.len(), 1);
+    assert_ne!(rev_of(company, STATE_BRANCH), state_before);
+    let queue = status_snapshot(company).unwrap().queue;
+    let stored = queue.all_patches().find(|p| p.id == reword.id).unwrap();
+    assert_eq!(stored.depends_on, vec![log.id.clone()]);
+    let event = stored.events.last().unwrap();
+    assert_eq!(event.kind, "dependency");
+    assert!(event.detail.contains(&hash.id), "{}", event.detail);
+    preflight_existing_patch(company, &queue, &reword.id, None).unwrap();
+
+    let state_after = rev_of(company, STATE_BRANCH);
+    assert!(trim_deps(company, false).unwrap().is_empty());
+    assert_eq!(rev_of(company, STATE_BRANCH), state_after);
 }
 
 #[test]

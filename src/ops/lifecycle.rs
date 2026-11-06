@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 use super::*;
 use crate::assess::TO_UPSTREAM_ENVIRONMENT;
 
@@ -211,6 +213,68 @@ pub fn drop_patch(repo: &Path, id: &str, reason: &str) -> Result<Patch> {
         commit_queue(repo, &format!("uplink: drop {id}"))?;
         rebuild(repo)?;
         Ok(get_patch(&read_queue_file(repo)?, id)?.clone())
+    })
+}
+
+/// Ids `trim-deps` takes out of one patch's `depends_on`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrimmedDeps {
+    pub id: String,
+    /// `depends_on` after the trim.
+    pub depends_on: Vec<String>,
+    pub removed: Vec<TrimmedDep>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrimmedDep {
+    pub id: String,
+    /// The dependency kept that brings this one in.
+    pub implied_by: String,
+}
+
+/// Takes out of every `depends_on` the ids another of its dependencies
+/// brings in already. What applies before each patch stays the same, so
+/// nothing is rebuilt. With `dry_run`, or when nothing changes, writes
+/// nothing.
+pub fn trim_deps(repo: &Path, dry_run: bool) -> Result<Vec<TrimmedDeps>> {
+    with_queue_lock(repo, || {
+        let mut queue = read_queue_file(repo)?;
+        let snapshot = queue.clone();
+        let mut trimmed = Vec::new();
+        for patch in queue.all_patches_mut() {
+            let (kept, removed) = transitive_reduction(&snapshot, &patch.depends_on)?;
+            if kept == patch.depends_on {
+                continue;
+            }
+            let removed: Vec<TrimmedDep> = removed
+                .into_iter()
+                .map(|dep| TrimmedDep {
+                    id: dep.id,
+                    implied_by: dep.by,
+                })
+                .collect();
+            if !removed.is_empty() {
+                let detail = removed
+                    .iter()
+                    .map(|dep| format!("{} (implied by {})", dep.id, dep.implied_by))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                add_event(patch, "dependency", format!("Trimmed dependency {detail}"));
+            }
+            patch.depends_on = kept.clone();
+            trimmed.push(TrimmedDeps {
+                id: patch.id.clone(),
+                depends_on: kept,
+                removed,
+            });
+        }
+        if !dry_run && !trimmed.is_empty() {
+            write_queue_file(repo, &queue)?;
+            commit_queue(repo, "uplink: trim depends-on")?;
+        }
+        Ok(trimmed)
     })
 }
 

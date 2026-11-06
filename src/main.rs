@@ -33,7 +33,7 @@ use git_uplink::{
     resolve_conflict_with, resolve_preflight, restack, resume_rebuild, review_token,
     review_token_path, set_script_echo, status_report, status_snapshot, store_assess_result,
     store_patch_extras, stored_commit_message, submit_patch_with, sync_with, transfer_patch_with,
-    transfer_preflight, upstream_pr_body, write_man_pages,
+    transfer_preflight, trim_deps, upstream_pr_body, write_man_pages,
 };
 
 const VERSION: &str = concat!(
@@ -1658,6 +1658,41 @@ fn cmd_drop(repo: &Path, id: &str, reason: Option<&str>) -> Result<(), Error> {
     Ok(())
 }
 
+fn cmd_trim_deps(repo: &Path, dry_run: bool, json: bool) -> Result<(), Error> {
+    let trimmed = trim_deps(repo, dry_run)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&trimmed)?);
+        return Ok(());
+    }
+    if trimmed.is_empty() {
+        println!("Every depends-on list is direct already.");
+        return Ok(());
+    }
+    for patch in &trimmed {
+        let removed: Vec<String> = patch
+            .removed
+            .iter()
+            .map(|dep| format!("{} (implied by {})", dep.id, dep.implied_by))
+            .collect();
+        println!(
+            "{}: dropped {}; depends on {}",
+            patch.id,
+            removed.join(", "),
+            if patch.depends_on.is_empty() {
+                "nothing".to_string()
+            } else {
+                patch.depends_on.join(", ")
+            }
+        );
+    }
+    if dry_run {
+        println!("Dry run: nothing written.");
+    } else {
+        println!("Committed to uplink/state; run `git uplink push` to share it.");
+    }
+    Ok(())
+}
+
 fn cmd_rebuild(
     repo: &Path,
     branch: Option<String>,
@@ -2184,6 +2219,7 @@ fn run() -> Result<(), Error> {
         } => cmd_gated(&repo, &id, &pr_url, pr, &push_remote),
         Commands::Merged { id, via, sha } => cmd_merged(&repo, &id, via.into(), sha.as_deref()),
         Commands::Drop { id, reason } => cmd_drop(&repo, &id, reason.as_deref()),
+        Commands::TrimDeps { dry_run, json } => cmd_trim_deps(&repo, dry_run, json),
         Commands::Rebuild {
             branch,
             push,
