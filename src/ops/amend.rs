@@ -1,13 +1,7 @@
+use super::message::{commit_message_change, with_message};
 use super::transfer::{PreviewOutcome, apply_queue_preview, not_previewed};
 use super::*;
 use crate::gate::cut_amend_work;
-
-/// A new title and raw message for the amended patch, as from the merged PR.
-#[derive(Debug, Clone)]
-pub struct AmendMessage {
-    pub title: String,
-    pub message: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 pub struct AmendResult {
@@ -32,7 +26,7 @@ pub fn amend_patch(
     repo: &Path,
     id: &str,
     complete: bool,
-    message: Option<AmendMessage>,
+    message: Option<PatchMessage>,
 ) -> Result<AmendResult> {
     amend_patch_with(repo, id, complete, message, &ScriptVerdict::Run)
 }
@@ -42,7 +36,7 @@ pub fn amend_patch_with(
     repo: &Path,
     id: &str,
     complete: bool,
-    message: Option<AmendMessage>,
+    message: Option<PatchMessage>,
     preflight: &ScriptVerdict,
 ) -> Result<AmendResult> {
     if !complete && message.is_some() {
@@ -64,7 +58,7 @@ pub fn amend_patch_with(
 pub fn amend_preflight(
     repo: &Path,
     id: &str,
-    message: Option<AmendMessage>,
+    message: Option<PatchMessage>,
 ) -> Result<PreflightReport> {
     with_queue_lock(repo, || {
         Ok(Checked::report(complete_amend(
@@ -189,7 +183,7 @@ fn tree_of(repo: &Path, rev: &str) -> Result<String> {
 fn complete_amend(
     repo: &Path,
     id: &str,
-    new_message: Option<&AmendMessage>,
+    new_message: Option<&PatchMessage>,
     checks: Checks<'_>,
 ) -> Result<Checked<AmendResult>> {
     let base = GateKind::Amend.base_branch(id);
@@ -209,24 +203,7 @@ fn complete_amend(
     let original = find_patch_commit(repo, id, &upstream_ref)?;
     let onto = rev_parse(repo, &format!("{original}^"))?;
 
-    let mut updated = patch.clone();
-    if let Some(change) = new_message {
-        let title = change.title.trim();
-        if title.is_empty() {
-            return Err(Error::msg("The amended patch title cannot be empty"));
-        }
-        updated.title = title.to_string();
-    }
-    let raw_message = match new_message {
-        Some(change) => change
-            .message
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(updated.title.as_str())
-            .to_string(),
-        None => stored_commit_message(&patch),
-    };
+    let (mut updated, raw_message) = with_message(&patch, new_message)?;
 
     let before = rev_parse(repo, "HEAD")?;
     commit_resolution(repo, &onto, &company_commit_message(&patch))?;
@@ -251,15 +228,7 @@ fn complete_amend(
         if !intent.is_internal_only() {
             assert_assess_ok(&report, &updated.title)?;
         }
-        if new_message.is_some() {
-            updated.commit_message = report.commit_message.clone();
-        }
-        let message = company_commit_message(&updated);
-        git(
-            repo,
-            &["commit", "--amend", "--quiet", "-m", &message],
-            GitOpts::default(),
-        )?;
+        commit_message_change(repo, &mut updated, new_message, &report)?;
         Ok(report)
     })();
     let report = match checked {

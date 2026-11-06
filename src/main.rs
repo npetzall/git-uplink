@@ -12,9 +12,9 @@ use git_uplink::{
     SyncResult, TransferDirection, TransferResult, UpgradeResume, stdin_is_tty,
 };
 use git_uplink::{
-    AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendMessage, AmendResult, ApprovalReceipt,
-    AssessPackage, Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts,
-    InlineRebuild, InlineRebuildOpts, MergeVia, PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN,
+    AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendResult, ApprovalReceipt, AssessPackage,
+    Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, InlineRebuild,
+    InlineRebuildOpts, MergeVia, PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN, PatchMessage,
     PreflightError, PreflightReport, ProgressMode, PushOpts, RebuildOpts, RebuildResume, Rejection,
     RestackAction, RestackOpts, RunKind, STATE_BRANCH, ScriptEcho, ScriptVerdict,
     TO_UPSTREAM_ENVIRONMENT, WaitingOutcome, accept_upstream_preflight, accept_upstream_with,
@@ -180,7 +180,8 @@ fn print_failure_comment(err: &Error) {
     }
 }
 
-fn conflict_body(
+/// The comment on the conflict PR: what to do with it, and what failed.
+fn conflict_comment(
     id: &str,
     work_branch: &str,
     conflict: Option<&PatchConflict>,
@@ -188,20 +189,16 @@ fn conflict_body(
 ) -> String {
     let onto = conflict.and_then(|c| c.onto.as_deref());
     if let Some(conflict) = conflict.filter(|c| c.cause == ConflictCause::Preflight) {
-        return preflight_conflict_body(id, work_branch, conflict);
+        return preflight_conflict_comment(id, work_branch, conflict);
     }
     let intro = if let Some(from) = resolved_from {
-        format!(
-            "Rebuild after resolving `{from}` stopped on `{id}`. Checkout `{work_branch}`, remove the conflict markers, and open or update the PR into the protected base. Merge runs `git uplink resolve {id}`."
-        )
+        format!("Rebuild after resolving `{from}` stopped on `{id}`.")
     } else {
-        format!(
-            "Sync stopped on `{id}`. Checkout `{work_branch}`, remove the conflict markers, and push that work branch. Merge the PR into the protected base to run `git uplink resolve {id}`."
-        )
+        format!("Sync stopped on `{id}`.")
     };
     let mut body = format!(
-        "Company `main` is bot-owned. Resolve this conflict through the gated PR from `{work_branch}` into the protected base.\n\n\
-{intro}\n\n\
+        "Company `main` is bot-owned. Resolve this conflict through this gated PR from `{work_branch}` into the protected base.\n\n\
+{intro} Checkout `{work_branch}`, remove the conflict markers, and push that work branch. When the patch did not apply at all there are no markers: `{work_branch}` is one empty commit ahead, and the change has to be applied by hand. Then mark this PR ready and merge it, which runs `git uplink resolve {id}`.\n\n\
 Remaining patches wait until this id is resolved.\n"
     );
     if let Some(compare) = compare_url(onto, work_branch) {
@@ -209,15 +206,17 @@ Remaining patches wait until this id is resolved.\n"
             "\nCompare the failed apply (not frozen main): {compare}\n"
         ));
     }
+    body.push('\n');
+    body.push_str(MESSAGE_NOTE);
     body
 }
 
-/// The body of the conflict PR for a patch that applies and then fails
+/// The comment on the conflict PR for a patch that applies and then fails
 /// `preflight.sh`.
-fn preflight_conflict_body(id: &str, work_branch: &str, conflict: &PatchConflict) -> String {
+fn preflight_conflict_comment(id: &str, work_branch: &str, conflict: &PatchConflict) -> String {
     let mut body = format!(
-        "Company `main` is bot-owned. Fix this patch through the gated PR from `{work_branch}` into the protected base.\n\n\
-The rebuild applied every patch, and `preflight.sh` failed on the result. `git bisect` between `uplink/upstream` and the rebuilt tree found `{id}` as the first patch it fails on. `{work_branch}` is the queue up to and including `{id}`: commit the fix there and push. Merge the PR into the protected base to run `git uplink resolve {id}`.\n\n\
+        "Company `main` is bot-owned. Fix this patch through this gated PR from `{work_branch}` into the protected base.\n\n\
+The rebuild applied every patch, and `preflight.sh` failed on the result. `git bisect` between `uplink/upstream` and the rebuilt tree found `{id}` as the first patch it fails on. `{work_branch}` is the queue up to and including `{id}`: commit the fix there and push. Then mark this PR ready and merge it, which runs `git uplink resolve {id}`.\n\n\
 Company `main` stays at the last build that passed, and the remaining patches wait until this id is resolved.\n"
     );
     if let Some(compare) = compare_url(conflict.onto.as_deref(), work_branch) {
@@ -238,6 +237,8 @@ Company `main` stays at the last build that passed, and the remaining patches wa
             "\nThe end of what `preflight.sh` printed on the rebuilt tree:\n\n{fence}\n{output}\n{fence}\n"
         ));
     }
+    body.push('\n');
+    body.push_str(MESSAGE_NOTE);
     body
 }
 
@@ -252,18 +253,20 @@ fn conflict_pr_create_artifact(
         .and_then(|c| c.work_branch.as_deref())
         .filter(|s| !s.is_empty())
         .unwrap_or(base);
-    let body = conflict_body(&patch.id, work, conflict, resolved_from);
-    let body_file = match report_paths(&patch.id) {
-        Ok((dir, _, _)) => format!("{dir}/conflict.md"),
-        Err(_) => return Ok(serde_json::json!({"error": "invalid patch id"})),
+    let comment = conflict_comment(&patch.id, work, conflict, resolved_from);
+    let Some((body_file, comment_file)) =
+        write_gated_pr_files(repo, &patch.id, "conflict", &patch_body(patch), &comment)?
+    else {
+        return Ok(serde_json::json!({"error": "invalid patch id"}));
     };
-    write_markdown_file(repo, Path::new(&body_file), &body)?;
     Ok(serde_json::json!({
-        "title": format!("Uplink conflict: {}", patch.id),
+        "title": patch.title,
         "bodyFile": body_file,
+        "commentFile": comment_file,
         "head": work,
         "base": base,
-        "labels": ["uplink:conflict"]
+        "labels": [git_uplink::GateKind::Conflict.label()],
+        "draft": true
     }))
 }
 
@@ -363,31 +366,37 @@ fn transfer_artifact(
         value["work"] = serde_json::Value::String(result.work_branch.clone().unwrap_or_default());
         value["onto"] = serde_json::Value::String(result.onto.clone().unwrap_or_default());
         let kind = result.direction.gate_kind();
-        let body = format!(
+        let patch = result
+            .queue
+            .all_patches()
+            .find(|p| p.id == result.id)
+            .ok_or_else(|| Error::msg(format!("unknown patch {}", result.id)))?;
+        let comment = format!(
             "Transfer of `{}` {} needs product changes (git conflict, assess, or preflight).\n\n\
-Checkout `{}`, fix the tree, and merge this PR into the protected base. Closing the PR without merging aborts; the queue is unchanged.\n",
+Checkout `{}`, fix the tree, mark this PR ready, and merge it into the protected base. Closing the PR without merging aborts; the queue is unchanged.\n",
             result.id,
             result.direction.as_str(),
             result.work_branch.as_deref().unwrap_or("")
         );
-        let body = match why {
+        let comment = match why {
             Some(why) => format!(
-                "{body}\nThis change was merged into `main` and failed what an upstream-bound patch has to pass, so it was recorded internal-only. Merging this PR moves it to the upstream queue. To keep it internal-only, close the PR.\n\n{why}\n"
+                "{comment}\nThis change was merged into `main` and failed what an upstream-bound patch has to pass, so it was recorded internal-only. Merging this PR moves it to the upstream queue. To keep it internal-only, close the PR.\n\n{why}\n"
             ),
-            None => body,
+            None => comment,
         };
-        let body_file = match report_paths(&result.id) {
-            Ok((dir, _, _)) => format!("{dir}/transfer.md"),
-            Err(_) => "transfer.md".into(),
-        };
-        write_markdown_file(repo, Path::new(&body_file), &body)?;
+        let comment = format!("{comment}\n{MESSAGE_NOTE}");
+        let (body_file, comment_file) =
+            write_gated_pr_files(repo, &result.id, "transfer", &patch_body(patch), &comment)?
+                .ok_or_else(|| Error::msg(format!("invalid patch id {}", result.id)))?;
         value["gh"] = serde_json::json!({
             "prCreate": {
-                "title": format!("Uplink transfer {}: {}", result.direction.as_str(), result.id),
+                "title": patch.title,
                 "bodyFile": body_file,
+                "commentFile": comment_file,
                 "head": result.work_branch,
                 "base": result.base_branch,
-                "labels": [kind.label()]
+                "labels": [kind.label()],
+                "draft": true
             }
         });
     } else if result.pr_close_url.is_some() || result.pr_close_branch.is_some() {
@@ -477,23 +486,47 @@ fn resolve_artifact(
     Ok(value)
 }
 
-/// The amend PR description: instructions in a comment (stripped on merge),
-/// then the stored message body, which the author may edit.
-fn amend_body(patch: &Patch, work: &str, base: &str) -> String {
+/// The description of a gated PR: the stored message without the subject
+/// line that is the PR title. On merge it becomes the commit message again,
+/// so it holds nothing else.
+fn patch_body(patch: &Patch) -> String {
     let stored = stored_commit_message(patch);
     let body = match stored.split_once('\n') {
         Some((subject, rest)) if subject.trim() == patch.title.trim() => rest.trim(),
         None if stored.trim() == patch.title.trim() => "",
         _ => stored.trim(),
     };
+    format!("{body}\n")
+}
+
+/// The closing part of every gated PR comment.
+const MESSAGE_NOTE: &str = "On merge, the PR title and description become the patch title and commit message. Text below the internal cutoff line stays internal.\n";
+
+/// The comment on the amend PR: what to do with it.
+fn amend_comment(id: &str, work: &str, base: &str) -> String {
     format!(
-        "<!--\n\
-Uplink amend for `{id}`. Push the change to `{work}`, mark this PR ready, and merge it into `{base}`.\n\
-On merge, the PR title and this description become the patch title and commit message. Text below the internal cutoff line stays internal.\n\
-Closing without merging leaves the patch unchanged.\n\
--->\n\n{body}\n",
-        id = patch.id,
+        "Uplink amend for `{id}`. Push the change to `{work}`, mark this PR ready, and merge it into `{base}`. Closing without merging leaves the patch unchanged.\n\n{MESSAGE_NOTE}"
     )
+}
+
+/// Writes the description and the comment of a gated PR for `id` as
+/// `<name>.md` and `<name>-comment.md` in its report directory, and returns
+/// their paths.
+fn write_gated_pr_files(
+    repo: &Path,
+    id: &str,
+    name: &str,
+    body: &str,
+    comment: &str,
+) -> Result<Option<(String, String)>, Error> {
+    let Ok((dir, _, _)) = report_paths(id) else {
+        return Ok(None);
+    };
+    let body_file = format!("{dir}/{name}.md");
+    let comment_file = format!("{dir}/{name}-comment.md");
+    write_markdown_file(repo, Path::new(&body_file), body)?;
+    write_markdown_file(repo, Path::new(&comment_file), comment)?;
+    Ok(Some((body_file, comment_file)))
 }
 
 fn print_amend_artifact(repo: &Path, result: &AmendResult) -> Result<(), Error> {
@@ -512,15 +545,14 @@ fn print_amend_artifact(repo: &Path, result: &AmendResult) -> Result<(), Error> 
         .ok_or_else(|| Error::msg(format!("unknown patch {}", result.id)))?;
     let base = result.base_branch.clone().unwrap_or_default();
     let work = result.work_branch.clone().unwrap_or_default();
-    let body_file = match report_paths(&result.id) {
-        Ok((dir, _, _)) => format!("{dir}/amend.md"),
-        Err(_) => "amend.md".into(),
-    };
-    write_markdown_file(
+    let (body_file, comment_file) = write_gated_pr_files(
         repo,
-        Path::new(&body_file),
-        &amend_body(patch, &work, &base),
-    )?;
+        &result.id,
+        "amend",
+        &patch_body(patch),
+        &amend_comment(&result.id, &work, &base),
+    )?
+    .ok_or_else(|| Error::msg(format!("invalid patch id {}", result.id)))?;
     let value = serde_json::json!({
         "id": result.id,
         "completed": false,
@@ -532,6 +564,7 @@ fn print_amend_artifact(repo: &Path, result: &AmendResult) -> Result<(), Error> 
             "prCreate": {
                 "title": patch.title,
                 "bodyFile": body_file,
+                "commentFile": comment_file,
                 "head": work,
                 "base": base,
                 "labels": [git_uplink::GateKind::Amend.label()],
@@ -1798,9 +1831,14 @@ fn print_inline_rebuild(done: &InlineRebuild) -> Result<(), Error> {
     Ok(())
 }
 
-fn cmd_resolve(repo: &Path, id: &str, verdict: &ScriptVerdict) -> Result<(), Error> {
+fn cmd_resolve(
+    repo: &Path,
+    id: &str,
+    change: Option<PatchMessage>,
+    verdict: &ScriptVerdict,
+) -> Result<(), Error> {
     let before = read_queue(repo)?;
-    match resolve_conflict_with(repo, id, verdict) {
+    match resolve_conflict_with(repo, id, change, verdict) {
         Ok(queue) => print_resolve_artifact(repo, id, &before, &queue, false),
         Err(Error::Conflict(_)) => {
             let queue = read_queue(repo)?;
@@ -1814,11 +1852,28 @@ fn cmd_resolve(repo: &Path, id: &str, verdict: &ScriptVerdict) -> Result<(), Err
     }
 }
 
+/// The new title and message from `--title` and `--message[-file]`.
+fn patch_message(
+    title: Option<String>,
+    message: Option<String>,
+    message_file: Option<PathBuf>,
+) -> Result<Option<PatchMessage>, Error> {
+    let Some(title) = title else {
+        return Ok(None);
+    };
+    let message = if message.is_some() || message_file.is_some() {
+        Some(read_commit_message(message, message_file, &title)?)
+    } else {
+        None
+    };
+    Ok(Some(PatchMessage { title, message }))
+}
+
 fn cmd_amend(
     repo: &Path,
     id: &str,
     complete: bool,
-    change: Option<AmendMessage>,
+    change: Option<PatchMessage>,
     verdict: &ScriptVerdict,
 ) -> Result<(), Error> {
     if complete {
@@ -1856,10 +1911,11 @@ fn cmd_transfer(
     id: &str,
     direction: TransferDirection,
     complete: bool,
+    change: Option<PatchMessage>,
     verdict: &ScriptVerdict,
 ) -> Result<(), Error> {
     refuse_script_here(repo, verdict, None)?;
-    let result = transfer_patch_with(repo, id, direction, complete, verdict)?;
+    let result = transfer_patch_with(repo, id, direction, complete, change, verdict)?;
     print_transfer_artifact(repo, &result)?;
     if result.gated {
         eprintln!(
@@ -2272,22 +2328,30 @@ fn run() -> Result<(), Error> {
         }
         Commands::Resolve {
             id,
+            title,
+            message,
+            message_file,
             preflight_result,
             preflight_only,
         } => {
+            let change = patch_message(title, message, message_file)?;
             if preflight_only {
-                return finish_preflight_report(resolve_preflight(&repo, &id)?, None);
+                return finish_preflight_report(resolve_preflight(&repo, &id, change)?, None);
             }
-            cmd_resolve(&repo, &id, &script_verdict(preflight_result)?)
+            cmd_resolve(&repo, &id, change, &script_verdict(preflight_result)?)
         }
         Commands::Transfer {
             id,
             to_upstream,
             to_internal: _,
             complete,
+            title,
+            message,
+            message_file,
             preflight_result,
             preflight_only,
         } => {
+            let change = patch_message(title, message, message_file)?;
             // clap requires exactly one of --to-upstream / --to-internal.
             let direction = if to_upstream {
                 TransferDirection::ToUpstream
@@ -2296,7 +2360,7 @@ fn run() -> Result<(), Error> {
             };
             if preflight_only {
                 refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
-                let report = transfer_preflight(&repo, &id, direction, complete)?;
+                let report = transfer_preflight(&repo, &id, direction, complete, change)?;
                 return finish_preflight_report(report, None);
             }
             cmd_transfer(
@@ -2304,6 +2368,7 @@ fn run() -> Result<(), Error> {
                 &id,
                 direction,
                 complete,
+                change,
                 &script_verdict(preflight_result)?,
             )
         }
@@ -2316,17 +2381,7 @@ fn run() -> Result<(), Error> {
             preflight_result,
             preflight_only,
         } => {
-            let change = match title {
-                Some(title) => {
-                    let message = if message.is_some() || message_file.is_some() {
-                        Some(read_commit_message(message, message_file, &title)?)
-                    } else {
-                        None
-                    };
-                    Some(AmendMessage { title, message })
-                }
-                None => None,
-            };
+            let change = patch_message(title, message, message_file)?;
             if preflight_only {
                 refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
                 let report = amend_preflight(&repo, &id, change)?;
@@ -2480,6 +2535,30 @@ mod tests {
             "--message-file",
             "f"
         ]));
+    }
+
+    #[test]
+    fn resolve_and_transfer_take_the_merged_pr_message() {
+        let parse = |cmd: &[&str], args: &[&str]| {
+            let argv = ["git-uplink"].iter().chain(cmd).chain(args);
+            Cli::try_parse_from(argv).is_ok()
+        };
+        let resolve = ["resolve", "upl_x"];
+        assert!(parse(
+            &resolve,
+            &["--title", "T", "--message-file", "m.txt"]
+        ));
+        assert!(!parse(&resolve, &["--message-file", "m.txt"]));
+        let transfer = ["transfer", "upl_x", "--to-upstream"];
+        assert!(parse(
+            &transfer,
+            &["--complete", "--title", "T", "--message-file", "m.txt"]
+        ));
+        assert!(!parse(&transfer, &["--title", "T"]));
+        assert!(!parse(
+            &transfer,
+            &["--complete", "--message-file", "m.txt"]
+        ));
     }
 
     #[test]

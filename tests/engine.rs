@@ -4,24 +4,23 @@ use std::process::Command;
 use std::thread;
 
 use git_uplink::{
-    AddPatchOpts, AdoptGroup, AmendMessage, ApprovalReceipt, CheckStatus, ConflictError,
-    DEFAULT_CUTOFF, Error, Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
-    PREVIOUS_MAIN_PATH, Patch, PatchIntent, PatchStatus, PendingMerge, PreflightReport,
-    PreviousMain, ProgressMode, PushOpts, QueueConfig, QueueState, RebaseState, RebuildOpts,
-    Rejection, Result, STATE_BRANCH, ScriptVerdict, Settings, SettingsFlags, StepOutcome,
-    SubmitResult, SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection,
-    WaitingOutcome, accept_upstream, accept_upstream_at, add_patch, amend_patch, amend_patch_with,
-    amend_preflight, approve_patch, approve_patch_reviewed, assess_patch_for_packet, doctor,
-    drop_patch, extras_dir, format_approval_receipt, format_approver_packet,
-    format_contribution_packet, format_contribution_packet_with_extras, format_step_line,
-    from_upstream_report_paths, git, git_ok, init, init_repo, load_extra_markdown,
-    load_groups_file, mark_merged, mark_rejected, mark_waiting, newly_ready_to_submit,
-    parse_depends_on, preflight_existing_patch, preflight_incoming_change, push_queue,
-    rebase_onto_main, rebase_plan, rebuild, rebuild_with, record_gated_pr, record_pull_request,
-    refresh_from_origin, report_paths, reset_from_origin, resolve_conflict, review_token,
-    status_snapshot, store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch,
-    submit_patch_with, summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with,
-    transfer_preflight, trim_deps, write_queue,
+    AddPatchOpts, AdoptGroup, ApprovalReceipt, CheckStatus, ConflictError, DEFAULT_CUTOFF, Error,
+    Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia, PREVIOUS_MAIN_PATH,
+    Patch, PatchIntent, PatchMessage, PatchStatus, PendingMerge, PreflightReport, PreviousMain,
+    ProgressMode, PushOpts, QueueConfig, QueueState, RebaseState, RebuildOpts, Rejection, Result,
+    STATE_BRANCH, ScriptVerdict, Settings, SettingsFlags, StepOutcome, SubmitResult, SyncOpts,
+    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, WaitingOutcome, accept_upstream,
+    accept_upstream_at, add_patch, amend_patch, amend_patch_with, amend_preflight, approve_patch,
+    approve_patch_reviewed, assess_patch_for_packet, doctor, drop_patch, extras_dir,
+    format_approval_receipt, format_approver_packet, format_contribution_packet,
+    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
+    git_ok, init, init_repo, load_extra_markdown, load_groups_file, mark_merged, mark_rejected,
+    mark_waiting, newly_ready_to_submit, parse_depends_on, preflight_existing_patch,
+    preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan, rebuild, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
+    resolve_conflict, review_token, status_snapshot, store_patch_extras, stored_extras_fresh,
+    strip_html_comments, submit_patch, submit_patch_with, summarize_queue, sync, sync_with,
+    transfer_patch, transfer_patch_with, transfer_preflight, trim_deps, write_queue,
 };
 use tempfile::TempDir;
 
@@ -5083,6 +5082,110 @@ fn command_output_does_not_write_github_step_summary() {
 }
 
 #[test]
+fn a_patch_that_does_not_apply_at_all_opens_a_draft_on_an_empty_work_commit() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Upstream deletes the file: the 3-way apply fails without markers.
+    git(upstream, &["rm", "-q", "src/tokens.js"], GitOpts::default()).unwrap();
+    commit_all(upstream, "drop tokens");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let run = |args: &[&str]| -> serde_json::Value {
+        let out = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(args)
+            .current_dir(company)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let mut value = run(&["sync"]);
+    if value.get("conflict").is_none() {
+        value = run(&["accept-upstream"]);
+    }
+    assert_eq!(value["conflict"]["id"], ttl_patch.id.as_str(), "{value}");
+
+    let base = format!("uplink/conflict/{}", ttl_patch.id);
+    let work = format!("{base}-work");
+    assert_eq!(rev_of(company, &format!("{work}^")), rev_of(company, &base));
+    assert_eq!(
+        git_ok(company, &["diff", "--stat", &base, &work]).unwrap(),
+        ""
+    );
+
+    let pr = &value["gh"]["prCreate"];
+    assert_eq!(pr["draft"], true, "{value}");
+    assert_eq!(pr["title"], "Extend TTL");
+    assert_eq!(pr["head"], work.as_str());
+    assert_eq!(pr["base"], base.as_str());
+    let read = |key: &str| fs::read_to_string(company.join(pr[key].as_str().unwrap())).unwrap();
+    let body = read("bodyFile");
+    assert!(!body.contains("uplink"), "{body}");
+    let comment = read("commentFile");
+    assert!(comment.contains("one empty commit ahead"), "{comment}");
+    assert!(comment.contains("mark this PR ready"), "{comment}");
+
+    // The fix is made by hand on -work; the PR title and body become the
+    // patch title and message, and the empty commit is squashed away.
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "src/ttl.js", "export const TTL = 7200;\n");
+    git(company, &["add", "src/ttl.js"], GitOpts::default()).unwrap();
+    git_uplink::resolve_conflict_with(
+        company,
+        &ttl_patch.id,
+        Some(git_uplink::PatchMessage {
+            title: "Keep a longer TTL".into(),
+            message: Some("Keep a longer TTL\n\nTokens moved out of upstream.".into()),
+        }),
+        &ScriptVerdict::Run,
+    )
+    .unwrap();
+    let resolved = patch_of(company, &ttl_patch.id);
+    assert_eq!(resolved.status, PatchStatus::Queued);
+    assert_eq!(resolved.title, "Keep a longer TTL");
+    assert!(
+        resolved
+            .commit_message
+            .contains("Tokens moved out of upstream."),
+        "{}",
+        resolved.commit_message
+    );
+    let text = git_uplink::patch_text(company, &ttl_patch.id).unwrap();
+    assert_eq!(text.matches("\nSubject: ").count(), 1, "{text}");
+    assert!(
+        text.contains("Subject: [PATCH] Keep a longer TTL"),
+        "{text}"
+    );
+    assert!(text.contains("src/ttl.js"), "{text}");
+}
+
+#[test]
 fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
     let world = setup_world();
     let company = &world.company;
@@ -10053,6 +10156,94 @@ fn transfer_complete_applies_work_and_moves_the_patch() {
 }
 
 #[test]
+fn transfer_complete_takes_the_title_and_message_of_the_merged_pr() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    set_preflight_script(company, "grep -q ready NOTES.md");
+    let change = |title: &str| {
+        Some(git_uplink::PatchMessage {
+            title: title.into(),
+            message: Some(format!("{title}\n\nWhy it moves.")),
+        })
+    };
+    let refused = transfer_patch_with(
+        company,
+        &patch.id,
+        TransferDirection::ToUpstream,
+        false,
+        change("Too early"),
+        &ScriptVerdict::Run,
+    )
+    .unwrap_err();
+    assert!(
+        refused.to_string().contains("only with --complete"),
+        "{refused}"
+    );
+
+    let gated = transfer_patch(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    assert!(gated.gated, "{gated:?}");
+    let work = gated.work_branch.unwrap();
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "NOTES.md", "internal-notes\nready\n");
+    commit_all(company, "make preflight pass");
+    let done = transfer_patch_with(
+        company,
+        &patch.id,
+        TransferDirection::ToUpstream,
+        true,
+        change("Public notes"),
+        &ScriptVerdict::Run,
+    )
+    .unwrap();
+    assert!(done.transferred, "{done:?}");
+    let moved = patch_of(company, &patch.id);
+    assert_eq!(moved.title, "Public notes");
+    assert!(
+        moved.commit_message.contains("Why it moves."),
+        "{}",
+        moved.commit_message
+    );
+    let assess = moved.assess.as_ref().unwrap();
+    assert_eq!(assess.public_subject, "Public notes");
+    assert_eq!(assess.public_body, "Why it moves.");
+    let text = git_uplink::patch_text(company, &patch.id).unwrap();
+    assert!(text.contains("Subject: [PATCH] Public notes"), "{text}");
+
+    // Back to internal, through a gate again, with another message.
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    set_preflight_script(company, "grep -q fixed NOTES.md");
+    let gated = transfer_patch(company, &patch.id, TransferDirection::ToInternal, false).unwrap();
+    assert!(gated.gated, "{gated:?}");
+    let work = gated.work_branch.unwrap();
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "NOTES.md", "internal-notes\nready\nfixed\n");
+    commit_all(company, "make preflight pass again");
+    let done = transfer_patch_with(
+        company,
+        &patch.id,
+        TransferDirection::ToInternal,
+        true,
+        change("Internal notes"),
+        &ScriptVerdict::Run,
+    )
+    .unwrap();
+    assert!(done.transferred, "{done:?}");
+    let back = patch_of(company, &patch.id);
+    assert_eq!(back.title, "Internal notes");
+    assert!(
+        back.commit_message.starts_with("Internal notes"),
+        "{}",
+        back.commit_message
+    );
+}
+
+#[test]
 fn transfer_refuses_the_wrong_source_queue() {
     let world = setup_world();
     let company = &world.company;
@@ -11361,7 +11552,7 @@ fn amend_refuses_dropped_patches_and_a_message_without_complete() {
         company,
         &patch.id,
         false,
-        Some(AmendMessage {
+        Some(PatchMessage {
             title: "x".into(),
             message: None,
         }),
@@ -11484,7 +11675,7 @@ fn amend_complete_of_a_submitted_patch_takes_the_pr_message_and_is_amended() {
         company,
         &patch.id,
         true,
-        Some(AmendMessage {
+        Some(PatchMessage {
             title: "Extend TTL to 90 minutes".into(),
             message: Some(
                 "Extend TTL to 90 minutes\n\n<!-- instructions -->\nPer review.\n".into(),
@@ -11527,7 +11718,7 @@ fn amend_complete_refuses_a_leaking_message_and_keeps_the_branch() {
         company,
         &patch.id,
         true,
-        Some(AmendMessage {
+        Some(PatchMessage {
             title: "AcmeCorp TTL".into(),
             message: None,
         }),
@@ -11794,8 +11985,14 @@ fn transfer_start_decides_from_the_probe_without_running_the_script() {
     let marker = set_counting_preflight_script(company, "grep -q ready NOTES.md");
     let state = rev_of(company, STATE_BRANCH);
 
-    let failed =
-        transfer_preflight(company, &patch.id, TransferDirection::ToUpstream, false).unwrap();
+    let failed = transfer_preflight(
+        company,
+        &patch.id,
+        TransferDirection::ToUpstream,
+        false,
+        None,
+    )
+    .unwrap();
     assert!(!failed.ok, "{failed:?}");
     assert!(failed.token.is_some());
     // The probe changed nothing.
@@ -11822,6 +12019,7 @@ fn transfer_start_decides_from_the_probe_without_running_the_script() {
         &patch.id,
         TransferDirection::ToUpstream,
         false,
+        None,
         &ScriptVerdict::Reported(stale),
     )
     .unwrap_err();
@@ -11839,6 +12037,7 @@ fn transfer_start_decides_from_the_probe_without_running_the_script() {
         &patch.id,
         TransferDirection::ToUpstream,
         false,
+        None,
         &ScriptVerdict::Reported(failed),
     )
     .unwrap();
@@ -11859,8 +12058,14 @@ fn transfer_start_decides_from_the_probe_without_running_the_script() {
     write(company, "NOTES.md", "internal-notes\nready\n");
     commit_all(company, "make preflight pass");
     let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
-    let passed =
-        transfer_preflight(company, &patch.id, TransferDirection::ToUpstream, true).unwrap();
+    let passed = transfer_preflight(
+        company,
+        &patch.id,
+        TransferDirection::ToUpstream,
+        true,
+        None,
+    )
+    .unwrap();
     assert!(passed.ok, "{passed:?}");
     assert_eq!(git_ok(company, &["rev-parse", "HEAD"]).unwrap(), head);
     assert!(
@@ -11875,6 +12080,7 @@ fn transfer_start_decides_from_the_probe_without_running_the_script() {
         &patch.id,
         TransferDirection::ToUpstream,
         true,
+        None,
         &ScriptVerdict::Reported(passed),
     )
     .unwrap();
@@ -11903,8 +12109,14 @@ fn transfer_to_internal_takes_the_probe_of_the_previewed_tree() {
     .unwrap();
     let marker = set_counting_preflight_script(company, "grep -q sha256 src/tokens.js");
 
-    let report =
-        transfer_preflight(company, &patch.id, TransferDirection::ToInternal, false).unwrap();
+    let report = transfer_preflight(
+        company,
+        &patch.id,
+        TransferDirection::ToInternal,
+        false,
+        None,
+    )
+    .unwrap();
     assert!(report.ok && report.token.is_some(), "{report:?}");
     let runs = runs_of(&marker);
     let done = transfer_patch_with(
@@ -11912,6 +12124,7 @@ fn transfer_to_internal_takes_the_probe_of_the_previewed_tree() {
         &patch.id,
         TransferDirection::ToInternal,
         false,
+        None,
         &ScriptVerdict::Reported(report),
     )
     .unwrap();
@@ -12867,7 +13080,7 @@ fn accept_and_resolve_take_the_rebuild_verdict_from_a_probe() {
     commit_all(company, "work with limits");
     let head = rev_of(company, "HEAD");
     let state = rev_of(company, STATE_BRANCH);
-    let fixed = git_uplink::resolve_preflight(company, &second.id).unwrap();
+    let fixed = git_uplink::resolve_preflight(company, &second.id, None).unwrap();
     assert!(fixed.ok, "{fixed:?}");
     let rebuild = fixed.rebuild.as_deref().unwrap();
     assert!(rebuild.built.as_ref().unwrap().ok, "{rebuild:?}");
@@ -12877,7 +13090,7 @@ fn accept_and_resolve_take_the_rebuild_verdict_from_a_probe() {
     assert_eq!(patch_of(company, &second.id).status, PatchStatus::Conflict);
     let runs = runs_of(&marker);
 
-    git_uplink::resolve_conflict_with(company, &second.id, &ScriptVerdict::Reported(fixed))
+    git_uplink::resolve_conflict_with(company, &second.id, None, &ScriptVerdict::Reported(fixed))
         .unwrap();
     assert_eq!(runs_of(&marker), runs, "resolve must not run preflight.sh");
     assert_eq!(git_ok(company, &["show", "main:SECOND.md"]).unwrap(), "new");
@@ -13304,10 +13517,16 @@ fn gated_add_records_a_change_that_needs_an_internal_patch_and_starts_a_transfer
     assert_eq!(transfer["gh"]["prCreate"]["base"], gate.as_str());
     assert!(ref_exists(company, &gate));
     assert!(ref_exists(company, &format!("{gate}-work")));
-    let body =
-        fs::read_to_string(company.join(transfer["gh"]["prCreate"]["bodyFile"].as_str().unwrap()))
-            .unwrap();
-    assert!(body.contains("recorded internal-only"), "{body}");
+    let pr = &transfer["gh"]["prCreate"];
+    assert_eq!(pr["draft"], true, "{value}");
+    assert_eq!(pr["title"], patch_of(company, id).title.as_str());
+    let read = |key: &str| fs::read_to_string(company.join(pr[key].as_str().unwrap())).unwrap();
+    // The description becomes the patch message on merge, so the reason
+    // is only in the comment.
+    let body = read("bodyFile");
+    assert!(!body.contains("recorded internal-only"), "{body}");
+    let comment = read("commentFile");
+    assert!(comment.contains("recorded internal-only"), "{comment}");
 
     let queue = git_uplink::read_queue(company).unwrap();
     assert!(queue.is_internal(id));

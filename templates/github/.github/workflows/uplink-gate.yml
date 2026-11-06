@@ -118,9 +118,16 @@ jobs:
           elif [[ "$BASE_REF" == uplink/amend/* ]] && is_internal "${BASE_REF#uplink/amend/}"; then
             run_preflight --command-only
           elif [[ "$BASE_REF" == uplink/conflict/* ]]; then
-            # The resolution is new code: assess it with the patch's stored
-            # message, as resolve will after merge. A failure blocks the merge.
+            # The resolution is new code, and the PR title and description
+            # become the patch message on merge: assess both, as resolve will
+            # after merge. A failure blocks the merge.
+            {
+              printf '%s\n\n' "$TITLE"
+              printf '%s\n' "${BODY:-}"
+            } > /tmp/uplink-msg.txt
             git uplink assess --patch "${BASE_REF#uplink/conflict/}" \
+              --title "$TITLE" \
+              --message-file /tmp/uplink-msg.txt \
               --from "$FROM_SHA" \
               --head "$HEAD_SHA"
           elif [[ "$BASE_REF" == uplink/amend/* ]]; then

@@ -4,8 +4,9 @@
 #
 # Dispatch starts a transfer. If apply+assess+preflight pass, the queue is
 # updated immediately. If byte changes are needed, this workflow pushes the
-# protected base and -work branch and opens a PR. Merging that PR runs
-# --complete. Closing it without merging deletes both branches and leaves
+# protected base and -work branch and opens a draft PR with the patch title
+# and message. Merging that PR runs --complete with the PR title and
+# description as the patch title and message. Closing it without merging deletes both branches and leaves
 # the queue unchanged. Successful --to-internal of a submitted patch
 # dispatches Uplink abandon contrib (fire-and-forget; no uplink-mutate).
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, a patch moved
@@ -241,6 +242,7 @@ jobs:
 
               title=$(jq -r '.gh.prCreate.title' <<<"$transfer_json")
               body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$transfer_json")
+              comment_file=$(jq -r '.gh.prCreate.commentFile' <<<"$transfer_json")
               head=$(jq -r '.gh.prCreate.head' <<<"$transfer_json")
               base=$(jq -r '.gh.prCreate.base' <<<"$transfer_json")
               existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
@@ -248,8 +250,9 @@ jobs:
                 gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
                 # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
                 # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
-                url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+                url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --draft --title "$title" --base "$base" --head "$head" --body-file "$body_file")
                 gh pr edit "$url" --add-label uplink:conflict
+                gh pr comment "$url" --body-file "$comment_file"
               else
                 url="$existing"
               fi
@@ -268,14 +271,16 @@ jobs:
           git push origin "refs/heads/${work}:refs/heads/${work}" --force
           title=$(jq -r '.gh.prCreate.title' <<<"$transfer_json")
           body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$transfer_json")
+          comment_file=$(jq -r '.gh.prCreate.commentFile' <<<"$transfer_json")
           label=$(jq -r '.gh.prCreate.labels[0]' <<<"$transfer_json")
           existing=$(gh pr list --head "$work" --base "$base" --state open --json url --jq '.[0].url')
           if [ -z "$existing" ]; then
             gh label create "$label" --description "Uplink gated transfer" --color 1D76DB || true
             # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
             # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
-            url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$work" --body-file "$body_file")
+            url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --draft --title "$title" --base "$base" --head "$work" --body-file "$body_file")
             gh pr edit "$url" --add-label "$label"
+            gh pr comment "$url" --body-file "$comment_file"
           else
             echo "Reusing existing transfer PR $existing"
           fi
@@ -341,6 +346,8 @@ jobs:
         id: run
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
         run: |
           if [[ "$BASE_REF" == uplink/transfer-to-upstream/* ]]; then
             id="${BASE_REF#uplink/transfer-to-upstream/}"
@@ -352,7 +359,12 @@ jobs:
             echo "Unexpected base $BASE_REF"
             exit 1
           fi
-          report=$(git uplink transfer "$id" --"$direction" --complete --preflight-only) || true
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > "$RUNNER_TEMP/uplink-pr-msg.txt"
+          report=$(git uplink transfer "$id" --"$direction" --complete --title "$TITLE" \
+            --message-file "$RUNNER_TEMP/uplink-pr-msg.txt" --preflight-only) || true
           if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
             echo "git uplink printed no preflight result"
             exit 1
@@ -457,6 +469,8 @@ jobs:
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
           PREFLIGHT_REPORT: ${{ needs.complete-preflight.outputs.report }}
         run: |
           git uplink init
@@ -476,8 +490,14 @@ jobs:
             exit 1
           fi
 
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > "$RUNNER_TEMP/uplink-pr-msg.txt"
+
           main_before=$(git rev-parse origin/main)
-          transfer_json=$(git uplink transfer "$id" --"$direction" --complete \
+          transfer_json=$(git uplink transfer "$id" --"$direction" --complete --title "$TITLE" \
+            --message-file "$RUNNER_TEMP/uplink-pr-msg.txt" \
             --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 
           head=$(git rev-parse --abbrev-ref HEAD)
@@ -521,6 +541,7 @@ jobs:
 
             title=$(jq -r '.gh.prCreate.title' <<<"$transfer_json")
             body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$transfer_json")
+            comment_file=$(jq -r '.gh.prCreate.commentFile' <<<"$transfer_json")
             head=$(jq -r '.gh.prCreate.head' <<<"$transfer_json")
             base=$(jq -r '.gh.prCreate.base' <<<"$transfer_json")
             existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
@@ -528,8 +549,9 @@ jobs:
               gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
               # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
               # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
-              url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+              url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --draft --title "$title" --base "$base" --head "$head" --body-file "$body_file")
               gh pr edit "$url" --add-label uplink:conflict
+              gh pr comment "$url" --body-file "$comment_file"
             else
               url="$existing"
             fi

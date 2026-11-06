@@ -22,8 +22,9 @@
 #
 # On apply failure, or for the patch preflight.sh fails on, it records the
 # patch as conflict on uplink/state, pushes uplink/conflict/<id> (protected
-# base) and <id>-work, and opens a gated PR. Do not push the protected base
-# directly.
+# base) and <id>-work, and opens a draft gated PR with the patch title and
+# message; the instructions are a comment on it. Do not push the protected
+# base directly.
 #
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, a queued patch
 # whose last unmerged upstream dependency this run marked merged gets Uplink
@@ -228,6 +229,7 @@ jobs:
 
             title=$(jq -r '.gh.prCreate.title' <<<"$sync_json")
             body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$sync_json")
+            comment_file=$(jq -r '.gh.prCreate.commentFile' <<<"$sync_json")
             head=$(jq -r '.gh.prCreate.head' <<<"$sync_json")
             base=$(jq -r '.gh.prCreate.base' <<<"$sync_json")
             existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
@@ -235,8 +237,9 @@ jobs:
               gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
               # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
               # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
-              url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+              url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --draft --title "$title" --base "$base" --head "$head" --body-file "$body_file")
               gh pr edit "$url" --add-label uplink:conflict
+              gh pr comment "$url" --body-file "$comment_file"
             else
               url="$existing"
             fi
@@ -534,6 +537,7 @@ jobs:
 
           title=$(jq -r '.gh.prCreate.title' <<<"$sync_json")
           body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$sync_json")
+          comment_file=$(jq -r '.gh.prCreate.commentFile' <<<"$sync_json")
           head=$(jq -r '.gh.prCreate.head' <<<"$sync_json")
           base=$(jq -r '.gh.prCreate.base' <<<"$sync_json")
           existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
@@ -541,8 +545,9 @@ jobs:
             gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
             # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
             # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
-            url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+            url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --draft --title "$title" --base "$base" --head "$head" --body-file "$body_file")
             gh pr edit "$url" --add-label uplink:conflict
+            gh pr comment "$url" --body-file "$comment_file"
           else
             url="$existing"
           fi

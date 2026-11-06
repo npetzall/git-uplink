@@ -32,6 +32,21 @@ pub fn cut_gated_work(
     } else {
         git(repo, &["branch", "-f", &work, "HEAD"], GitOpts::default())?;
     }
+    // A patch that does not apply at all leaves nothing to commit. One empty
+    // commit puts the work branch ahead of the base, so a PR can be opened;
+    // the resolution squashes it away.
+    if rev_parse(repo, &work)? == onto {
+        git(
+            repo,
+            &["checkout", "-f", "--quiet", &work],
+            GitOpts::default(),
+        )?;
+        git(
+            repo,
+            &["commit", "--allow-empty", "--quiet", "-m", message],
+            GitOpts::default(),
+        )?;
+    }
     Ok((base, work))
 }
 

@@ -55,9 +55,11 @@ git uplink trim-deps [--dry-run] [--json]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
             [--preflight-result <path>] [--preflight-only] [--verify] [--json]
             [--interactive] [--continue] [--abort]
-git uplink resolve <id> [--preflight-result <path>] [--preflight-only]
-git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
+git uplink resolve <id> [--title <text>] [--message <text> | --message-file <path>]
             [--preflight-result <path>] [--preflight-only]
+git uplink transfer <id> (--to-upstream | --to-internal) [--complete] [--title <text>]
+            [--message <text> | --message-file <path>] [--preflight-result <path>]
+            [--preflight-only]
 git uplink amend <id> [--complete] [--title <text>]
             [--message <text> | --message-file <path>] [--preflight-result <path>]
             [--preflight-only]
@@ -456,6 +458,9 @@ When apply, assess (`--to-upstream`), or preflight fails it prints gated branche
 - `--to-upstream`: Move the patch to the upstream queue.
 - `--to-internal`: Move the patch to the internal queue.
 - `--complete`: Finish a gated transfer after the work PR is merged.
+- `--title <text>`: New patch title.
+- `--message <text>`: New commit message, as the PR title and body.
+- `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
 
   The file is the output of `git uplink preflight --json`, or of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
@@ -469,7 +474,7 @@ Revise a patch through a gated PR from uplink/amend/\<id>-work.
 
 Amends an internal-only patch, an upstream patch not yet submitted, or a submitted one a maintainer asked to change. Conflicted, merged, dropped, and tooling patches cannot be amended.
 
-Without `--complete` it replays the queue on `uplink/upstream` up to and including the patch, cuts protected `uplink/amend/<id>` there, and cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can open at once. The queue is not touched. It prints `base`, `work`, and `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the stored message after an HTML-comment instruction block).
+Without `--complete` it replays the queue on `uplink/upstream` up to and including the patch, cuts protected `uplink/amend/<id>` there, and cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can open at once. The queue is not touched. It prints `base`, `work`, and `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the stored message, the instructions are in `commentFile`).
 
 `--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. The patch becomes `queued` again, whatever review it was in (`waiting`, `approved`, `rejected`, `submitted`). A submitted one keeps its public PR: IP approves the delta, then submit force-pushes the contrib branch. That holds unless the amend adds and removes the same lines as before and leaves the public title and message as they were: then the last approval still covers the patch and it stays `submitted` or `approved`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was. The JSON output has `public` (the patch has a public PR, so submit must run again) and `readyToSubmit` (patches the amend made ready to submit).
 
@@ -558,6 +563,9 @@ A submitted patch whose resolution adds or removes other lines than the last app
 Locally: `git switch uplink/conflict/<id>-work`, fix the files and `git add` them, run `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. `git uplink rebuild -i` fixes them inline instead.
 
 - `<id>`: Patch whose conflict was resolved.
+- `--title <text>`: New patch title.
+- `--message <text>`: New commit message, as the PR title and body.
+- `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
 
   The file is the output of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the trees this command builds; otherwise the command fails and preflight has to run again.
@@ -651,7 +659,7 @@ While an adoption runs, and while it is paused, `uplink/state` is locked: every 
 
 ## Gated PRs
 
-`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs.
+`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch title and whose body (`bodyFile`) is the stored message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title and body as `--title` and `--message-file`.
 
 ## Credentials and identity
 

@@ -104,6 +104,7 @@ pub fn add_patch_or_gate(repo: &Path, opts: AddPatchOpts) -> Result<AddOutcome> 
         &internal.id,
         TransferDirection::ToUpstream,
         false,
+        None,
         &preflight,
     )
     .map_err(|err| err.to_string());
