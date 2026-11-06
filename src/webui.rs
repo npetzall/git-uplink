@@ -15,10 +15,10 @@ use tokio::net::TcpListener;
 
 use crate::assess::{FileDelta, revision_delta};
 use crate::ops::{
-    QueueCounts, StateStatus, approval_stale_at, refresh_from_origin, stale_approvals_at,
-    state_status_at, summarize_queue,
+    QueueCounts, StateStatus, approval_stale_at, ready_to_submit_ids, refresh_from_origin,
+    stale_approvals_at, state_status_at, summarize_queue,
 };
-use crate::queue::{get_patch, patch_path, require_path_component};
+use crate::queue::{get_patch, patch_path, require_path_component, submit_layers};
 use crate::repo::{
     COMPANY_REMOTE, FileRevision, file_history, has_ref, queue_at, rev_parse, show_at,
 };
@@ -109,6 +109,33 @@ struct StatusResponse {
     /// Approved or submitted patches that changed since their last approval.
     #[serde(skip_serializing_if = "Option::is_none")]
     stale_approvals: Option<Vec<String>>,
+    /// Queued upstream patches that submit can take now, in queue order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ready_to_submit: Option<Vec<String>>,
+}
+
+/// Active upstream patches by the column they can go upstream in.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitStreamResponse {
+    present: bool,
+    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    layers: Vec<Vec<StreamNodeBody>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamNodeBody {
+    id: String,
+    title: String,
+    status: String,
+    depends_on: Vec<String>,
+    /// Dependencies that are not active upstream patches.
+    missing: Vec<String>,
+    /// The newest approval does not cover the patch as it is now.
+    stale: bool,
 }
 
 #[derive(Serialize)]
@@ -193,6 +220,7 @@ fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/status", get(status))
         .route("/api/refresh", post(refresh))
+        .route("/api/submit-stream", get(submit_stream))
         .route("/api/patches/{id}", get(patch_detail))
         .route("/api/patches/{id}/diff", get(patch_diff))
         .route("/api/file", get(file_at))
@@ -298,6 +326,7 @@ fn missing_status(cwd: String, source: QueueSource, error: String) -> StatusResp
         last_sync: None,
         state: None,
         stale_approvals: None,
+        ready_to_submit: None,
     }
 }
 
@@ -427,7 +456,48 @@ fn build_status(repo: &Path, source: QueueSource, fetch: bool) -> StatusResponse
         last_sync: queue.last_sync.clone(),
         state,
         stale_approvals: Some(stale_approvals_at(repo, &source_ref(source), &queue)),
+        ready_to_submit: Some(ready_to_submit_ids(&queue)),
     }
+}
+
+fn build_submit_stream(repo: &Path, source: QueueSource) -> SubmitStreamResponse {
+    let body = |error: Option<String>, layers| SubmitStreamResponse {
+        present: true,
+        source: source.as_str().into(),
+        error,
+        layers,
+    };
+    let queue = match queue_for_source(repo, source) {
+        Ok(queue) => queue,
+        Err(err) => {
+            return SubmitStreamResponse {
+                present: false,
+                ..body(Some(err.to_string()), Vec::new())
+            };
+        }
+    };
+    let layers = match submit_layers(&queue) {
+        Ok(layers) => layers,
+        Err(err) => return body(Some(err.to_string()), Vec::new()),
+    };
+    let git_ref = source_ref(source);
+    let layers = layers
+        .into_iter()
+        .map(|column| {
+            column
+                .into_iter()
+                .map(|node| StreamNodeBody {
+                    id: node.patch.id.clone(),
+                    title: node.patch.title.clone(),
+                    status: node.patch.status.as_str().into(),
+                    depends_on: node.patch.depends_on.clone(),
+                    missing: node.missing,
+                    stale: approval_stale_at(repo, &git_ref, &queue, node.patch),
+                })
+                .collect()
+        })
+        .collect();
+    body(None, layers)
 }
 
 fn build_patch(repo: &Path, id: &str, source: QueueSource) -> PatchResponse {
@@ -476,6 +546,24 @@ async fn status(
         tokio::task::spawn_blocking(move || build_status(&repo, source, fetch))
             .await
             .unwrap_or_else(|err| missing_status(cwd, source, format!("status worker: {err}"))),
+    )
+}
+
+async fn submit_stream(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PatchQuery>,
+) -> Json<SubmitStreamResponse> {
+    let source = QueueSource::parse(query.source.as_deref());
+    let repo = state.repo.clone();
+    Json(
+        tokio::task::spawn_blocking(move || build_submit_stream(&repo, source))
+            .await
+            .unwrap_or_else(|err| SubmitStreamResponse {
+                present: false,
+                source: source.as_str().into(),
+                error: Some(format!("submit stream worker: {err}")),
+                layers: Vec::new(),
+            }),
     )
 }
 
@@ -1011,6 +1099,7 @@ mod tests {
         assert_eq!(body["present"], true, "{body}");
         assert_eq!(body["source"], "local");
         assert_eq!(body["upstream"][0]["id"], "upl_a");
+        assert_eq!(body["readyToSubmit"], serde_json::json!(["upl_a"]));
 
         let response = app
             .oneshot(local_request("/api/file?path=.uplink/queue.json"))
@@ -1031,7 +1120,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         crate::git::git_ok(dir.path(), &["init", "-q"]).unwrap();
         let response = test_app(dir.path().to_path_buf())
-            .oneshot(local_request("/api/status"))
+            .oneshot(local_request("/api/submit-stream"))
             .await
             .unwrap();
         let body = json_body(response).await;
@@ -1042,5 +1131,43 @@ mod tests {
                 .is_some_and(|e| e.contains("uplink/state")),
             "{body}"
         );
+    }
+
+    #[tokio::test]
+    async fn submit_stream_lists_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let upstream = serde_json::json!([
+            queued("upl_c", &["upl_a", "upl_b"]),
+            queued("upl_a", &[]),
+            queued("upl_b", &["upl_gone"]),
+        ]);
+        state_repo(repo, &[(".uplink/queue.json", &queue_json(upstream))]);
+        let response = test_app(repo.to_path_buf())
+            .oneshot(local_request("/api/submit-stream"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        let ids: Vec<Vec<&str>> = body["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|column| {
+                column
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|node| node["id"].as_str().unwrap())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(ids, vec![vec!["upl_a", "upl_b"], vec!["upl_c"]]);
+        assert_eq!(
+            body["layers"][0][1]["missing"],
+            serde_json::json!(["upl_gone"])
+        );
+        assert_eq!(body["layers"][1][0]["title"], "title upl_c");
+        assert_eq!(body["layers"][1][0]["stale"], false);
     }
 }

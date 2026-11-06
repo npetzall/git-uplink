@@ -255,6 +255,15 @@ fn ready_to_submit(queue: &QueueState, patch: &Patch) -> bool {
             .all(|dep_id| get_patch(queue, dep_id).is_ok_and(|dep| !blocks_submit(queue, dep)))
 }
 
+/// Ids of every patch [`ready_to_submit`] is true for, in queue order.
+pub fn ready_to_submit_ids(queue: &QueueState) -> Vec<String> {
+    queue
+        .all_patches()
+        .filter(|patch| ready_to_submit(queue, patch))
+        .map(|patch| patch.id.clone())
+        .collect()
+}
+
 /// Patches a command made ready to submit: ready in `after`, and not in
 /// `before`. A patch that was ready already is not listed again.
 pub fn newly_ready_to_submit(before: &QueueState, after: &QueueState) -> Vec<String> {
