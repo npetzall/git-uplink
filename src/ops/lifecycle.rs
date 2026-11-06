@@ -25,12 +25,25 @@ pub(super) fn changed_since_review(id: &str) -> Error {
 /// does not cover its current content, for example after a replay onto a
 /// moved upstream. `submit` refuses it until it is approved again.
 pub fn approval_stale(repo: &Path, queue: &QueueState, patch: &Patch) -> bool {
-    if !queue.is_upstream(&patch.id)
-        || !matches!(patch.status, PatchStatus::Approved | PatchStatus::Submitted)
-    {
+    needs_covering_approval(queue, patch) && covering_approval(repo, patch).is_none()
+}
+
+/// [`approval_stale`] with the patch file read from `git_ref` instead of the
+/// `.uplink/` folder.
+pub fn approval_stale_at(repo: &Path, git_ref: &str, queue: &QueueState, patch: &Patch) -> bool {
+    if !needs_covering_approval(queue, patch) {
         return false;
     }
-    covering_approval(repo, patch).is_none()
+    let text =
+        patch_path(&patch.id).and_then(|path| show_at(repo, git_ref, &path.to_string_lossy()));
+    text.ok()
+        .and_then(|text| covering_approval_for(repo, patch, &text))
+        .is_none()
+}
+
+fn needs_covering_approval(queue: &QueueState, patch: &Patch) -> bool {
+    queue.is_upstream(&patch.id)
+        && matches!(patch.status, PatchStatus::Approved | PatchStatus::Submitted)
 }
 
 /// The status of a patch after a conflict resolution or an amend rewrote it.
@@ -64,6 +77,15 @@ pub fn stale_approvals(repo: &Path, queue: &QueueState) -> Vec<String> {
     queue
         .all_patches()
         .filter(|patch| approval_stale(repo, queue, patch))
+        .map(|patch| patch.id.clone())
+        .collect()
+}
+
+/// [`stale_approvals`] with patch files read from `git_ref`.
+pub fn stale_approvals_at(repo: &Path, git_ref: &str, queue: &QueueState) -> Vec<String> {
+    queue
+        .all_patches()
+        .filter(|patch| approval_stale_at(repo, git_ref, queue, patch))
         .map(|patch| patch.id.clone())
         .collect()
 }

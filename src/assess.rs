@@ -345,7 +345,13 @@ fn hash_text(repo: &Path, content: &str) -> Result<String> {
 /// An approval records the token it was given for, and `submit` exports only
 /// content with that approval.
 pub fn review_token(repo: &Path, patch: &Patch) -> Result<String> {
-    let changes = changed_lines(&patch_text(repo, &patch.id)?);
+    review_token_for(repo, patch, &patch_text(repo, &patch.id)?)
+}
+
+/// [`review_token`] for `patch` with the patch file `text`, for example as
+/// read from a git ref.
+pub fn review_token_for(repo: &Path, patch: &Patch, text: &str) -> Result<String> {
+    let changes = changed_lines(text);
     hash_text(
         repo,
         &format!(
@@ -386,7 +392,16 @@ pub fn approval_covers(repo: &Path, approval: &PatchApproval, patch: &Patch, tok
 
 /// The newest approval of `patch`, when it covers the patch as it is now.
 pub fn covering_approval<'a>(repo: &Path, patch: &'a Patch) -> Option<&'a PatchApproval> {
-    let token = review_token(repo, patch).ok()?;
+    covering_approval_for(repo, patch, &patch_text(repo, &patch.id).ok()?)
+}
+
+/// [`covering_approval`] for `patch` with the patch file `text`.
+pub fn covering_approval_for<'a>(
+    repo: &Path,
+    patch: &'a Patch,
+    text: &str,
+) -> Option<&'a PatchApproval> {
+    let token = review_token_for(repo, patch, text).ok()?;
     patch
         .last_approval()
         .filter(|approval| approval_covers(repo, approval, patch, &token))
