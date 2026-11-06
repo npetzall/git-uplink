@@ -494,7 +494,6 @@ export function PatchPage() {
               <CardContent>
                 <ul className="space-y-2 text-sm">
                   {patch.events.map((event, index) => (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: the event log is append-only
                     <li key={`${event.at}-${index}`}>
                       <span className="font-mono text-xs text-muted-foreground">
                         {event.at}

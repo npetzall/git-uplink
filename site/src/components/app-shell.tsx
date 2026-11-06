@@ -51,7 +51,6 @@ function NavLinks({ onClick }: { onClick?: () => void }) {
  */
 function useScrollToHash() {
   const { pathname, hash } = useLocation();
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll again when the same hash is opened on another page
   useEffect(() => {
     const id = decodeURIComponent(hash.slice(1));
     if (!id) return;

@@ -95,11 +95,9 @@ function SingleSideHunks({ file }: { file: PatchFile }) {
     <table className={TABLE}>
       <tbody>
         {file.hunks.map((hunk, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
           <Fragment key={index}>
             <HunkHeader text={hunk.header} span={span} />
             {hunk.lines.map((line, row) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
               <tr key={row} className={LINE_STYLE[line.kind]}>
                 {showOld ? <td className={NUM}>{line.oldNo}</td> : null}
                 {showNew ? <td className={NUM}>{line.newNo}</td> : null}
@@ -151,11 +149,9 @@ function SplitHunks({ file }: { file: PatchFile }) {
       </colgroup>
       <tbody>
         {file.hunks.map((hunk, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
           <Fragment key={index}>
             <HunkHeader text={hunk.header} span={6} />
             {splitRows(hunk.lines, patchLineSide).map((row, at) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
               <tr key={at}>
                 <SplitCell line={row.left} number={row.left?.oldNo} />
                 <SplitCell line={row.right} number={row.right?.newNo} />
@@ -239,7 +235,6 @@ export function PatchView({ text }: { text: string }) {
         </p>
       ) : null}
       {patch.files.map((file, index) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: a patch lists its files in a fixed order
         <PatchFileView key={`${index}-${file.path}`} file={file} />
       ))}
     </div>
@@ -313,7 +308,6 @@ function SingleSideDelta({ lines }: { lines: DeltaLine[] }) {
     <table className={TABLE}>
       <tbody>
         {lines.map((line, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
           <tr key={index} className={OUTER_STYLE[line.outer]}>
             <td
               className={cn(
@@ -342,7 +336,6 @@ function SplitDelta({ lines }: { lines: DeltaLine[] }) {
       </colgroup>
       <tbody>
         {splitRows(lines, deltaLineSide).map((row, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: diff lines are fixed per render and never reorder
           <tr key={index}>
             <DeltaText line={row.left} wrap />
             <DeltaText line={row.right} wrap />
