@@ -217,6 +217,111 @@ fn topological_layer(active: Vec<Patch>) -> Result<Vec<Patch>> {
     Ok(walk.ordered)
 }
 
+/// `ids` and every patch they depend on, directly or through another
+/// dependency, dependencies first. `depends_on` lists direct dependencies
+/// only; this is what applies before a patch. Dependencies are followed
+/// through every patch in the queue, whatever its status, so dropping a
+/// patch does not drop what it depended on. Unknown ids are kept, for the
+/// caller to report.
+pub fn dependency_closure(queue: &QueueState, ids: &[String]) -> Result<Vec<String>> {
+    struct Walk<'a> {
+        queue: &'a QueueState,
+        visiting: HashSet<String>,
+        visited: HashSet<String>,
+        ordered: Vec<String>,
+    }
+
+    fn visit(walk: &mut Walk<'_>, id: &str) -> Result<()> {
+        if walk.visited.contains(id) {
+            return Ok(());
+        }
+        if !walk.visiting.insert(id.to_string()) {
+            return Err(Error::msg(format!("Dependency cycle at {id}")));
+        }
+        let deps = walk
+            .queue
+            .all_patches()
+            .find(|p| p.id == id)
+            .map(|p| p.depends_on.clone())
+            .unwrap_or_default();
+        for dep in &deps {
+            visit(walk, dep)?;
+        }
+        walk.visiting.remove(id);
+        walk.visited.insert(id.to_string());
+        walk.ordered.push(id.to_string());
+        Ok(())
+    }
+
+    let mut walk = Walk {
+        queue,
+        visiting: HashSet::new(),
+        visited: HashSet::new(),
+        ordered: Vec::new(),
+    };
+    for id in ids {
+        visit(&mut walk, id)?;
+    }
+    Ok(walk.ordered)
+}
+
+/// What `id` brings in besides itself: [`dependency_closure`] of its
+/// `depends_on`.
+fn implied_by(queue: &QueueState, id: &str) -> Result<HashSet<String>> {
+    let deps = queue
+        .all_patches()
+        .find(|p| p.id == id)
+        .map(|p| p.depends_on.clone())
+        .unwrap_or_default();
+    Ok(dependency_closure(queue, &deps)?.into_iter().collect())
+}
+
+/// One id [`transitive_reduction`] left out, and an id kept that brings it in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImpliedDependency {
+    pub id: String,
+    pub by: String,
+}
+
+/// `ids` without the ones another of them already brings in, and without
+/// repeats, in their order. The closure, and so what applies, is unchanged.
+pub fn transitive_reduction(
+    queue: &QueueState,
+    ids: &[String],
+) -> Result<(Vec<String>, Vec<ImpliedDependency>)> {
+    let mut unique: Vec<&String> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !unique.contains(&id) {
+            unique.push(id);
+        }
+    }
+    let implied: Vec<HashSet<String>> = unique
+        .iter()
+        .map(|id| implied_by(queue, id))
+        .collect::<Result<_>>()?;
+    let mut kept = Vec::new();
+    let mut removed = Vec::new();
+    for id in &unique {
+        let by = unique
+            .iter()
+            .zip(&implied)
+            .find(|(other, set)| *other != id && set.contains(id.as_str()));
+        match by {
+            Some((other, _)) => removed.push(ImpliedDependency {
+                id: (*id).clone(),
+                by: (*other).clone(),
+            }),
+            None => kept.push((*id).clone()),
+        }
+    }
+    Ok((kept, removed))
+}
+
+/// [`transitive_reduction`] without the report of what was left out.
+pub fn direct_dependencies(queue: &QueueState, ids: &[String]) -> Result<Vec<String>> {
+    Ok(transitive_reduction(queue, ids)?.0)
+}
+
 /// One active upstream patch in [`submit_layers`].
 #[derive(Debug)]
 pub struct StreamNode<'a> {
@@ -463,6 +568,81 @@ mod tests {
         queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
         let err = apply_order_active(&queue).unwrap_err();
         assert!(err.to_string().contains("Dependency cycle"), "{err}");
+    }
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn dependency_closure_puts_dependencies_first() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch("upl_a"));
+        queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
+        queue.upstream.push(patch_deps("upl_c", &["upl_b"]));
+        queue.upstream.push(patch("upl_d"));
+        assert_eq!(
+            dependency_closure(&queue, &ids(&["upl_c", "upl_d"])).unwrap(),
+            ids(&["upl_a", "upl_b", "upl_c", "upl_d"])
+        );
+        assert_eq!(
+            dependency_closure(&queue, &ids(&["upl_a", "upl_b", "upl_c"])).unwrap(),
+            ids(&["upl_a", "upl_b", "upl_c"])
+        );
+    }
+
+    #[test]
+    fn dependency_closure_follows_dropped_patches_and_keeps_unknown_ids() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch("upl_a"));
+        let mut dropped = patch_deps("upl_b", &["upl_a"]);
+        dropped.status = PatchStatus::Dropped;
+        queue.upstream.push(dropped);
+        assert_eq!(
+            dependency_closure(&queue, &ids(&["upl_b", "upl_x"])).unwrap(),
+            ids(&["upl_a", "upl_b", "upl_x"])
+        );
+    }
+
+    #[test]
+    fn dependency_closure_rejects_cycles() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch_deps("upl_a", &["upl_b"]));
+        queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
+        let err = dependency_closure(&queue, &ids(&["upl_a"])).unwrap_err();
+        assert!(err.to_string().contains("Dependency cycle"), "{err}");
+    }
+
+    #[test]
+    fn transitive_reduction_keeps_the_last_patch_of_a_chain() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch("upl_a"));
+        queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
+        let (kept, removed) =
+            transitive_reduction(&queue, &ids(&["upl_a", "upl_b", "upl_a"])).unwrap();
+        assert_eq!(kept, ids(&["upl_b"]));
+        assert_eq!(
+            removed,
+            vec![ImpliedDependency {
+                id: "upl_a".into(),
+                by: "upl_b".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn transitive_reduction_of_a_diamond_keeps_both_sides() {
+        let mut queue = QueueState::empty(QueueConfig::default());
+        queue.upstream.push(patch("upl_a"));
+        queue.upstream.push(patch_deps("upl_b", &["upl_a"]));
+        queue.upstream.push(patch_deps("upl_c", &["upl_a"]));
+        let list = ids(&["upl_a", "upl_b", "upl_c"]);
+        let kept = direct_dependencies(&queue, &list).unwrap();
+        assert_eq!(kept, ids(&["upl_b", "upl_c"]));
+        assert_eq!(
+            dependency_closure(&queue, &kept).unwrap(),
+            dependency_closure(&queue, &list).unwrap()
+        );
     }
 
     fn stream_ids(queue: &QueueState) -> Vec<Vec<&str>> {

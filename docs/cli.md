@@ -51,6 +51,7 @@ git uplink accept-upstream [--sha <sha>] [--fetch-only] [--preflight-result <pat
 git uplink gated <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink merged <id> [--via <how>] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
+git uplink trim-deps [--dry-run] [--json]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
             [--preflight-result <path>] [--preflight-only] [--verify] [--json]
             [--interactive] [--continue] [--abort]
@@ -136,6 +137,8 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 
   Refused unless it is the company branch: a change merged into any other branch has not passed the company branch's review. Import passes the PR's base branch.
 - `--depends-on <id>`: Patch this one depends on, on top of the message trailers (repeatable).
+
+  Name only the direct dependencies: the patches they depend on are applied before them too.
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
 
   The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
@@ -154,7 +157,7 @@ Lists the first-parent commits of `--branch` since it left `uplink/upstream`. Gr
 
 The UI is a tree of groups and their commits beside the selected commit's change (`git show`) or group's form: title, an Upstream box (unticked is internal-only), and the message, ending with the internal cutoff line. A new group starts from its first commit's subject and message. Enter or a double-click on a commit offers New group, Move to (or Add to) the previous or next group, and Skip; commits keep their order. ←/→ moves between the panes; text fields take Ctrl+a/Ctrl+e and Alt+←/→. Ctrl+s adopts and Ctrl+w writes the groups file and exits, each after a confirmation. The mouse selects rows, places the cursor, ticks the box and scrolls.
 
-The patches are added after the ones already in the queue. Each upstream-bound patch is applied onto `uplink/upstream`, alone and then with queued patches, and depends only on the patches it needs to apply. It must then pass the export preflight (`preflight.sh`); when the script passes only with more queued patches, it depends on those too (`--no-preflight-deps` skips that search).
+The patches are added after the ones already in the queue. Each upstream-bound patch is applied onto `uplink/upstream`, alone and then with queued patches, and depends only on the patches it needs to apply: first the ones whose lines its hunks change or keep as context (`git blame`), else the ones found by trying them. A dependency's own dependencies are not listed again. It must then pass the export preflight (`preflight.sh`); when the script passes only with more queued patches, it depends on those too (`--no-preflight-deps` skips that search).
 
 Internal-only groups are added last, after every upstream-bound group and after the internal patches already queued, in history order. Company main is built from the queue on the branch `uplink/adopt-main`, and each internal-only patch is applied there, depends on the queued patches (upstream or internal) it needs to apply, and must pass `preflight.sh` on company main with it. A group made Internal-only during the run moves to the end with them.
 
@@ -488,6 +491,17 @@ Remove a patch from the queue.
 
 - `<id>`: Patch to drop.
 - `--reason <text>`: Why it was dropped; "dropped by operator" when omitted.
+
+### `trim-deps`
+
+Shorten every depends-on list to direct dependencies.
+
+A dependency brings in its own dependencies: when B depends on A, a patch that depends on B gets A applied before it too. Lists written before that held the whole chain. This takes out every id another dependency in the same list brings in already, with a `dependency` event on the patch. What applies before each patch stays the same, so nothing is rebuilt or preflighted.
+
+Commits `uplink/state` when a list changed; `git uplink push` sends it. `Uplink-Depends-On` trailers in old commit messages are left as they are.
+
+- `--dry-run`: Print what would change, write nothing.
+- `--json`: Print the trimmed patches as JSON.
 
 ### `rebuild`
 

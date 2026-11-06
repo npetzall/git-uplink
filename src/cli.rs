@@ -125,7 +125,15 @@ pub const GROUPS: &[(&str, &[&str])] = &[
     ("Ingesting upstream", &["sync", "accept-upstream", "merged"]),
     (
         "Edit",
-        &["transfer", "amend", "drop", "rebuild", "gated", "resolve"],
+        &[
+            "transfer",
+            "amend",
+            "drop",
+            "trim-deps",
+            "rebuild",
+            "gated",
+            "resolve",
+        ],
     ),
     ("Tools", &["web-ui", "man", "version"]),
 ];
@@ -378,6 +386,9 @@ pub enum Commands {
         #[arg(long = "base-branch", value_name = "branch")]
         base_branch: Option<String>,
         /// Patch this one depends on, on top of the message trailers (repeatable).
+        ///
+        /// Name only the direct dependencies: the patches they depend on
+        /// are applied before them too.
         #[arg(long = "depends-on", value_name = "id")]
         depends_on: Vec<String>,
         /// Take the verdict of preflight.sh from this file instead of running it.
@@ -434,7 +445,9 @@ pub enum Commands {
     /// The patches are added after the ones already in the queue. Each
     /// upstream-bound patch is applied onto `uplink/upstream`, alone and then
     /// with queued patches, and depends only on the patches it needs to
-    /// apply. It must then pass the export preflight (`preflight.sh`); when
+    /// apply: first the ones whose lines its hunks change or keep as
+    /// context (`git blame`), else the ones found by trying them. A
+    /// dependency's own dependencies are not listed again. It must then pass the export preflight (`preflight.sh`); when
     /// the script passes only with more queued patches, it depends on those
     /// too (`--no-preflight-deps` skips that search).
     ///
@@ -1076,6 +1089,26 @@ pub enum Commands {
         /// Why it was dropped; "dropped by operator" when omitted.
         #[arg(long, value_name = "text")]
         reason: Option<String>,
+    },
+    /// Shorten every depends-on list to direct dependencies.
+    ///
+    /// A dependency brings in its own dependencies: when B depends on A, a
+    /// patch that depends on B gets A applied before it too. Lists written
+    /// before that held the whole chain. This takes out every id another
+    /// dependency in the same list brings in already, with a `dependency`
+    /// event on the patch. What applies before each patch stays the same, so
+    /// nothing is rebuilt or preflighted.
+    ///
+    /// Commits `uplink/state` when a list changed; `git uplink push` sends
+    /// it. `Uplink-Depends-On` trailers in old commit messages are left as
+    /// they are.
+    TrimDeps {
+        /// Print what would change, write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the trimmed patches as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Replay main from the queue.
     ///

@@ -14,8 +14,8 @@ use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::hooks::{PREFLIGHT_SCRIPT_PATH, hooks_source};
 use crate::queue::{
-    active_upstream, apply_order_active, apply_order_upstream_layer, get_patch, patch_path,
-    read_queue,
+    active_upstream, apply_order_active, apply_order_upstream_layer, dependency_closure,
+    direct_dependencies, get_patch, patch_path, read_queue,
 };
 use crate::repo::{
     TempWorktree, ensure_revs, ensure_upstream_ref, has_ref, path_exists_at, rev_parse,
@@ -579,13 +579,14 @@ fn dep_patch_abs(repo: &Path, id: &str) -> Result<PathBuf> {
     Ok(repo.join(patch_path(id)?))
 }
 
+/// Applies `dep_ids` and everything they depend on, dependencies first.
 fn apply_deps(
     dir: &Path,
     repo: &Path,
     queue: &QueueState,
     dep_ids: &[String],
 ) -> Result<ApplyOutcome> {
-    for id in dep_ids {
+    for id in &dependency_closure(queue, dep_ids)? {
         let dep = get_patch(queue, id)?;
         // Already in upstream, possibly in another form than its patch file.
         if dep.status == PatchStatus::Merged {
@@ -614,51 +615,48 @@ fn format_suggestion(ids: &[String]) -> String {
     }
 }
 
+/// The queued patch `patch_id` (in the queue already) needs to apply onto
+/// public upstream, as [`detect_depends_on`] finds them; it and the patches
+/// that depend on it are not candidates. Empty when none is found.
 pub fn suggest_depends_on(
     repo: &Path,
     queue: &QueueState,
+    patch_id: &str,
     candidate_abs: &Path,
-    candidate_message: &str,
+    title: &str,
 ) -> Result<Vec<String>> {
-    let candidates: Vec<String> = active_upstream(queue)
-        .into_iter()
-        .map(|p| p.id.clone())
-        .collect();
-    with_upstream_worktree(repo, |dir| {
-        let alone = apply_abs(dir, candidate_abs, candidate_message)?;
-        if alone != ApplyOutcome::Conflict {
-            return Ok(Vec::new());
+    let candidates = upstream_candidates(queue, Some(patch_id))?;
+    Ok(
+        detect_depends_on_in(repo, queue, &[], &candidates, candidate_abs, title, None)?
+            .unwrap_or_default(),
+    )
+}
+
+/// Active upstream patches that may be a dependency: with `exclude`, not
+/// that patch nor one that depends on it, which would be a cycle.
+fn upstream_candidates(queue: &QueueState, exclude: Option<&str>) -> Result<Vec<String>> {
+    let mut candidates = Vec::new();
+    for patch in active_upstream(queue) {
+        if let Some(exclude) = exclude
+            && (patch.id == exclude
+                || dependency_closure(queue, &patch.depends_on)?
+                    .iter()
+                    .any(|id| id == exclude))
+        {
+            continue;
         }
-        for id in &candidates {
-            reset_export(dir, repo)?;
-            if apply_deps(dir, repo, queue, std::slice::from_ref(id))? == ApplyOutcome::Conflict {
-                continue;
-            }
-            if apply_abs(dir, candidate_abs, candidate_message)? != ApplyOutcome::Conflict {
-                return Ok(vec![id.clone()]);
-            }
-        }
-        let mut prefix = Vec::new();
-        for id in &candidates {
-            prefix.push(id.clone());
-            reset_export(dir, repo)?;
-            if apply_deps(dir, repo, queue, &prefix)? == ApplyOutcome::Conflict {
-                continue;
-            }
-            if apply_abs(dir, candidate_abs, candidate_message)? != ApplyOutcome::Conflict {
-                return Ok(prefix);
-            }
-        }
-        Ok(Vec::new())
-    })
+        candidates.push(patch.id.clone());
+    }
+    Ok(candidates)
 }
 
 /// The active upstream patches `candidate_abs` needs to apply onto public
-/// upstream: none when it applies alone, else the smallest set found by
-/// trying each patch alone, then growing prefixes, then dropping every
-/// entry it applies without. `None` when no set makes it apply.
-/// With `keep_branch`, that branch is left at upstream + the set + the
-/// candidate for inspection.
+/// upstream, direct dependencies only: none when it applies alone, else the
+/// patches whose lines its hunks touch (see [`blamed_depends_on`]), else
+/// the first set found by trying each patch alone, then growing prefixes.
+/// Then every entry it applies without is dropped. `None` when no set
+/// makes it apply. With `keep_branch`, that branch is left at upstream +
+/// the set + the candidate for inspection.
 pub(crate) fn detect_depends_on(
     repo: &Path,
     queue: &QueueState,
@@ -666,10 +664,7 @@ pub(crate) fn detect_depends_on(
     title: &str,
     keep_branch: Option<&str>,
 ) -> Result<Option<Vec<String>>> {
-    let candidates: Vec<String> = active_upstream(queue)
-        .into_iter()
-        .map(|p| p.id.clone())
-        .collect();
+    let candidates = upstream_candidates(queue, None)?;
     detect_depends_on_in(
         repo,
         queue,
@@ -723,6 +718,13 @@ fn detect_depends_on_in(
         if applies_with(&[])? {
             found = Some(Vec::new());
         }
+        if found.is_none()
+            && let Some(blamed) =
+                blamed_depends_on(dir, repo, queue, base, candidates, candidate_abs, title)?
+            && applies_with(&blamed)?
+        {
+            found = Some(blamed);
+        }
         for id in candidates {
             if found.is_some() {
                 break;
@@ -741,9 +743,11 @@ fn detect_depends_on_in(
                 found = Some(prefix.clone());
             }
         }
-        let Some(mut deps) = found else {
+        let Some(deps) = found else {
             return Ok(None);
         };
+        // What applies stays the same; only the ids other ids bring in go.
+        let mut deps = direct_dependencies(queue, &deps)?;
         for i in (0..deps.len()).rev() {
             if deps.len() < 2 {
                 break;
@@ -759,6 +763,127 @@ fn detect_depends_on_in(
             git(dir, &["branch", "-f", branch, "HEAD"], GitOpts::default())?;
         }
         Ok(Some(deps))
+    })
+}
+
+/// The patches among `candidates` whose lines `candidate_abs` changes or
+/// keeps as context, as direct dependencies. Applies `base` and every
+/// candidate, then the candidate on top, and runs `git blame` on the lines
+/// before each hunk of the candidate: a line from a queued patch's commit
+/// makes that patch a dependency. Finds dependencies on the text only, not
+/// on code the candidate calls. `None` when the candidate does not apply
+/// on top of them all, or its diff cannot be read; the caller then probes.
+fn blamed_depends_on(
+    dir: &Path,
+    repo: &Path,
+    queue: &QueueState,
+    base: &[String],
+    candidates: &[String],
+    candidate_abs: &Path,
+    title: &str,
+) -> Result<Option<Vec<String>>> {
+    reset_export(dir, repo)?;
+    if apply_deps(dir, repo, queue, base)? == ApplyOutcome::Conflict {
+        return Ok(None);
+    }
+    let stack_base = rev_parse(dir, "HEAD")?;
+    let mut by_commit = std::collections::HashMap::new();
+    for id in &dependency_closure(queue, candidates)? {
+        let patch = get_patch(queue, id)?;
+        if patch.status == PatchStatus::Merged {
+            continue;
+        }
+        match apply_abs(dir, &dep_patch_abs(repo, id)?, &patch.title)? {
+            ApplyOutcome::Conflict => return Ok(None),
+            ApplyOutcome::Empty => {}
+            ApplyOutcome::Applied => {
+                by_commit.insert(rev_parse(dir, "HEAD")?, id.clone());
+            }
+        }
+    }
+    let stack_tip = rev_parse(dir, "HEAD")?;
+    if apply_abs(dir, candidate_abs, title)? != ApplyOutcome::Applied {
+        return Ok(None);
+    }
+    let diff = git_ok(
+        dir,
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            "-U3",
+            &stack_tip,
+            "HEAD",
+        ],
+    )?;
+    let Some(hunks) = pre_image_hunks(&diff) else {
+        return Ok(None);
+    };
+    let range = format!("{stack_base}..{stack_tip}");
+    let mut found = Vec::new();
+    for (path, start, len) in hunks {
+        let lines = format!("{start},+{len}");
+        let blame = git_ok(
+            dir,
+            &["blame", "--porcelain", "-L", &lines, &range, "--", &path],
+        )?;
+        for sha in blame_commits(&blame) {
+            if let Some(id) = by_commit.get(sha)
+                && !found.contains(id)
+            {
+                found.push(id.clone());
+            }
+        }
+    }
+    // Back in queue order, then only the ones no other one brings in.
+    let ordered: Vec<String> = candidates
+        .iter()
+        .filter(|id| found.contains(id))
+        .cloned()
+        .chain(found.iter().filter(|id| !candidates.contains(id)).cloned())
+        .collect();
+    Ok(Some(direct_dependencies(queue, &ordered)?))
+}
+
+/// `(path, first line, line count)` of the pre-image of every hunk in a
+/// unified `diff`, for files that existed before. `None` for a path git
+/// quoted, which this does not unquote.
+fn pre_image_hunks(diff: &str) -> Option<Vec<(String, usize, usize)>> {
+    let mut hunks = Vec::new();
+    let mut path: Option<String> = None;
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("--- ") {
+            // Git ends the name with a tab when it has a space.
+            let rest = rest.trim_end_matches('\t');
+            path = match rest {
+                "/dev/null" => None,
+                _ if rest.starts_with('"') => return None,
+                _ => Some(rest.strip_prefix("a/").unwrap_or(rest).to_string()),
+            };
+        } else if let Some(rest) = line.strip_prefix("@@ -") {
+            let Some(path) = &path else { continue };
+            let old = rest.split(' ').next()?;
+            let (start, len) = match old.split_once(',') {
+                Some((start, len)) => (start.parse().ok()?, len.parse().ok()?),
+                None => (old.parse().ok()?, 1),
+            };
+            if len > 0 {
+                hunks.push((path.clone(), start, len));
+            }
+        }
+    }
+    Some(hunks)
+}
+
+/// The commit of every line in `git blame --porcelain` output.
+fn blame_commits(porcelain: &str) -> impl Iterator<Item = &str> {
+    porcelain.lines().filter_map(|line| {
+        let sha = line.split(' ').next()?;
+        let is_header = !line.starts_with('\t')
+            && (sha.len() == 40 || sha.len() == 64)
+            && sha.bytes().all(|b| b.is_ascii_hexdigit());
+        is_header.then_some(sha)
     })
 }
 
@@ -784,7 +909,9 @@ pub fn export_tested(
     if let Some(sha) = short_sha(repo, "uplink/upstream") {
         lines.push(format!("uplink/upstream@{sha}"));
     }
-    for id in depends_on {
+    // What `apply_deps` applies: the dependencies of the dependencies too.
+    let applied = dependency_closure(queue, depends_on).unwrap_or_else(|_| depends_on.to_vec());
+    for id in &applied {
         match get_patch(queue, id) {
             // Not applied: it is in upstream already. See `apply_deps`.
             Ok(dep) if dep.status == PatchStatus::Merged => {}
@@ -877,7 +1004,8 @@ pub(crate) fn export_preflight_with(
     with_upstream_worktree(repo, |dir| {
         let deps = apply_deps(dir, repo, queue, &patch.depends_on)?;
         if deps == ApplyOutcome::Conflict {
-            let suggested = suggest_depends_on(repo, queue, candidate_abs, &patch.title)?;
+            let suggested =
+                suggest_depends_on(repo, queue, &patch.id, candidate_abs, &patch.title)?;
             return Err(Error::Preflight(PreflightError::new(
                 format!(
                     "Declared depends-on [{}] do not apply onto public upstream before \"{}\".{}",
@@ -897,7 +1025,8 @@ pub(crate) fn export_preflight_with(
 
         let applied = apply_abs(dir, candidate_abs, &patch.title)?;
         if applied == ApplyOutcome::Conflict {
-            let suggested = suggest_depends_on(repo, queue, candidate_abs, &patch.title)?;
+            let suggested =
+                suggest_depends_on(repo, queue, &patch.id, candidate_abs, &patch.title)?;
             let extra = if patch.depends_on.is_empty() {
                 " alone".to_string()
             } else {
@@ -970,27 +1099,76 @@ fn suggest_command_deps(
     script: &PreflightScript,
     dir: &Path,
 ) -> Result<Vec<String>> {
-    let candidates: Vec<String> = active_upstream(queue)
+    let declared = dependency_closure(queue, &patch.depends_on)?;
+    let mut candidates: Vec<String> = upstream_candidates(queue, Some(&patch.id))?
         .into_iter()
-        .filter(|item| item.id != patch.id && !patch.depends_on.contains(&item.id))
-        .map(|item| item.id.clone())
+        .filter(|id| !declared.contains(id))
         .collect();
+    // Patches that change the same files are the likely ones: try them first.
+    let touched = patch_paths(candidate_abs);
+    candidates.sort_by_key(|id| {
+        let shares = dep_patch_abs(repo, id)
+            .map(|abs| !patch_paths(&abs).is_disjoint(&touched))
+            .unwrap_or(false);
+        !shares
+    });
+    let passes_with = |deps: &[String]| -> Result<Option<bool>> {
+        reset_export(dir, repo)?;
+        if apply_deps(dir, repo, queue, deps)? == ApplyOutcome::Conflict
+            || apply_abs(dir, candidate_abs, &patch.title)? == ApplyOutcome::Conflict
+        {
+            return Ok(None);
+        }
+        Ok(Some(script.run_quiet(dir).0 == 0))
+    };
     let mut prefix = patch.depends_on.clone();
+    let mut passed = false;
     for id in candidates {
         prefix.push(id);
-        reset_export(dir, repo)?;
-        if apply_deps(dir, repo, queue, &prefix)? == ApplyOutcome::Conflict {
-            continue;
-        }
-        if apply_abs(dir, candidate_abs, &patch.title)? == ApplyOutcome::Conflict {
-            continue;
-        }
-        let (code, _) = script.run_quiet(dir);
-        if code == 0 {
-            return Ok(prefix);
+        match passes_with(&prefix)? {
+            Some(true) => {
+                passed = true;
+                break;
+            }
+            Some(false) => {}
+            // Leave out a patch that does not apply with the others.
+            None => {
+                prefix.pop();
+            }
         }
     }
-    Ok(Vec::new())
+    if !passed {
+        return Ok(Vec::new());
+    }
+    // Drop added patches the script passes without; the one that made it pass stays.
+    let mut deps = direct_dependencies(queue, &prefix)?;
+    let last = prefix.last().cloned();
+    for i in (0..deps.len()).rev() {
+        if patch.depends_on.contains(&deps[i]) || Some(&deps[i]) == last.as_ref() {
+            continue;
+        }
+        let mut fewer = deps.clone();
+        fewer.remove(i);
+        if passes_with(&fewer)? == Some(true) {
+            deps = fewer;
+        }
+    }
+    Ok(deps)
+}
+
+/// Paths a patch file changes, before and after. Empty when it cannot be read.
+fn patch_paths(patch_abs: &Path) -> std::collections::HashSet<String> {
+    let Ok(text) = fs::read_to_string(patch_abs) else {
+        return Default::default();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let name = line
+                .strip_prefix("--- a/")
+                .or_else(|| line.strip_prefix("+++ b/"))?;
+            Some(name.trim_end_matches('\t').to_string())
+        })
+        .collect()
 }
 
 pub fn preflight_existing_patch(
@@ -1349,6 +1527,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pre_image_hunks_reads_old_ranges_of_existing_files() {
+        let diff = "\
+diff --git a/src/a.js b/src/a.js
+index 1..2 100644
+--- a/src/a.js
++++ b/src/a.js
+@@ -3,7 +3,8 @@ fn
+ x
+@@ -20 +21,2 @@
+-y
+diff --git a/new.txt b/new.txt
+new file mode 100644
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1 @@
++z
+diff --git a/my file b/my file
+--- a/my file\t
++++ b/my file\t
+@@ -1,2 +1,2 @@
+";
+        assert_eq!(
+            pre_image_hunks(diff).unwrap(),
+            vec![
+                ("src/a.js".to_string(), 3, 7),
+                ("src/a.js".to_string(), 20, 1),
+                ("my file".to_string(), 1, 2),
+            ]
+        );
+        assert!(pre_image_hunks("--- \"a/caf\\303\\251\"\n@@ -1 +1 @@\n").is_none());
+    }
+
+    #[test]
+    fn blame_commits_reads_only_header_lines() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let porcelain = format!(
+            "{a} 1 1 2\nauthor x\nsummary {b} looks like a sha\n\tline one\n{a} 2 2\n\t{b} 1 1\n{b} 9 3 1\nboundary\n\tline three\n"
+        );
+        let shas: Vec<&str> = blame_commits(&porcelain).collect();
+        assert_eq!(shas, vec![a.as_str(), a.as_str(), b.as_str()]);
+    }
+
+    #[test]
     fn upstream_worktree_is_removed_when_the_closure_panics() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
@@ -1364,6 +1586,95 @@ mod tests {
         assert!(panicked.is_err());
         let worktrees = git_ok(repo, &["worktree", "list", "--porcelain"]).unwrap();
         assert_eq!(worktrees.matches("worktree ").count(), 1, "{worktrees}");
+    }
+
+    fn queued(id: &str, deps: &[&str]) -> Patch {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "title": id,
+            "status": "queued",
+            "dependsOn": deps,
+            "createdAt": "t",
+            "updatedAt": "t",
+            "source": {},
+            "events": []
+        }))
+        .unwrap()
+    }
+
+    /// Commits `from` → `to` on a branch named `to`, with `edit` applied to
+    /// `f.txt`, and writes the diff from `from` to `out`.
+    fn commit_patch(repo: &Path, from: &str, to: &str, edit: (&str, &str), out: &Path) {
+        git_ok(repo, &["checkout", "-q", "-b", to, from]).unwrap();
+        let text = fs::read_to_string(repo.join("f.txt")).unwrap();
+        assert!(text.contains(edit.0), "{to}: {}", edit.0);
+        fs::write(repo.join("f.txt"), text.replace(edit.0, edit.1)).unwrap();
+        git_ok(repo, &["commit", "-q", "-am", to]).unwrap();
+        let diff = git_ok(repo, &["diff", "--full-index", from, to]).unwrap();
+        fs::write(out, format!("{diff}\n")).unwrap();
+    }
+
+    /// Queued `upl_a` changes line 2 and `upl_b` line 18 of a 20-line file,
+    /// out of each other's context. Each candidate is blamed on its own.
+    #[test]
+    fn blamed_depends_on_names_the_patches_whose_lines_a_hunk_touches() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let out = tempfile::tempdir().unwrap();
+        git_ok(repo, &["init", "-q", "-b", "main"]).unwrap();
+        git_ok(repo, &["config", "user.name", "t"]).unwrap();
+        git_ok(repo, &["config", "user.email", "t@example.com"]).unwrap();
+        git_ok(repo, &["config", "commit.gpgsign", "false"]).unwrap();
+        let lines: String = (1..=20).map(|i| format!("l{i}\n")).collect();
+        fs::write(repo.join("f.txt"), lines).unwrap();
+        git_ok(repo, &["add", "f.txt"]).unwrap();
+        git_ok(repo, &["commit", "-q", "-m", "init"]).unwrap();
+        git_ok(repo, &["branch", "uplink/upstream"]).unwrap();
+
+        let patches = repo.join(crate::types::PATCH_DIR);
+        fs::create_dir_all(&patches).unwrap();
+        let patch = |name: &str| patches.join(format!("{name}.patch"));
+        let cand = |name: &str| out.path().join(format!("{name}.patch"));
+        commit_patch(repo, "main", "upl_a", ("l2\n", "a2\n"), &patch("upl_a"));
+        commit_patch(repo, "upl_a", "upl_b", ("l18\n", "b18\n"), &patch("upl_b"));
+        // On A's line, on B's line, on both, and on upstream's lines only.
+        commit_patch(repo, "upl_b", "on_a", ("a2\n", "c2\n"), &cand("on_a"));
+        commit_patch(repo, "upl_b", "on_b", ("b18\n", "c18\n"), &cand("on_b"));
+        commit_patch(repo, "on_a", "on_ab", ("b18\n", "c18\n"), &cand("on_ab"));
+        let both = git_ok(repo, &["diff", "--full-index", "upl_b", "on_ab"]).unwrap();
+        fs::write(cand("on_ab"), format!("{both}\n")).unwrap();
+        commit_patch(
+            repo,
+            "upl_b",
+            "on_upstream",
+            ("l10\n", "c10\n"),
+            &cand("on_upstream"),
+        );
+
+        let blamed = |queue: &QueueState, name: &str| {
+            let candidates = vec!["upl_a".to_string(), "upl_b".to_string()];
+            with_upstream_worktree(repo, |dir| {
+                blamed_depends_on(dir, repo, queue, &[], &candidates, &cand(name), name)
+            })
+            .unwrap()
+        };
+
+        let mut independent = QueueState::empty(crate::types::QueueConfig::default());
+        independent.upstream.push(queued("upl_a", &[]));
+        independent.upstream.push(queued("upl_b", &[]));
+        assert_eq!(blamed(&independent, "on_a"), Some(vec!["upl_a".into()]));
+        assert_eq!(blamed(&independent, "on_b"), Some(vec!["upl_b".into()]));
+        assert_eq!(
+            blamed(&independent, "on_ab"),
+            Some(vec!["upl_a".into(), "upl_b".into()])
+        );
+        assert_eq!(blamed(&independent, "on_upstream"), Some(Vec::new()));
+
+        // With B depending on A, B alone brings A in.
+        let mut chained = QueueState::empty(crate::types::QueueConfig::default());
+        chained.upstream.push(queued("upl_a", &[]));
+        chained.upstream.push(queued("upl_b", &["upl_a"]));
+        assert_eq!(blamed(&chained, "on_ab"), Some(vec!["upl_b".into()]));
     }
 
     #[test]
