@@ -132,7 +132,6 @@ function OperationsView({
   return (
     <div className="space-y-4" data-testid="lab-operations">
       {operations.map((op, index) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: a step's operations are a fixed list
         <div key={`${op.actor}-${index}`}>
           <p className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
             {op.workflow ?? op.actor}
@@ -161,7 +160,6 @@ export function LabClient() {
   const scenario = scenarioById(params.get("scenario") ?? DEFAULT_SCENARIO_ID);
   const mode = parseMode(params.get("mode"));
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: start over at step 0 when the scenario changes
   useEffect(() => {
     setStepCount(0);
   }, [scenario.id]);
@@ -534,7 +532,6 @@ export function LabClient() {
             <CardContent>
               <ol className="space-y-2 font-mono text-xs leading-5 text-zinc-400">
                 {state.log.map((line, index) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: the log is append-only
                   <li key={`${index}-${line}`}>
                     <span className="text-teal-500">
                       {String(index + 1).padStart(2, "0")}
