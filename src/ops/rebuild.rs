@@ -1,3 +1,4 @@
+use super::message::{commit_message_change, with_message};
 use super::*;
 
 #[derive(Debug, Clone, Default)]
@@ -812,31 +813,46 @@ fn publish_rebuilt_company(
 }
 
 pub fn resolve_conflict(repo: &Path, id: &str) -> Result<QueueState> {
-    resolve_conflict_with(repo, id, &ScriptVerdict::Run)
+    resolve_conflict_with(repo, id, None, &ScriptVerdict::Run)
 }
 
-/// [`resolve_conflict`], taking the verdict of `preflight.sh` on the
-/// rebuild from `preflight`.
+/// [`resolve_conflict`] with a new title and message from the merged PR,
+/// taking the verdict of `preflight.sh` on the rebuild from `preflight`.
 pub fn resolve_conflict_with(
     repo: &Path,
     id: &str,
+    message: Option<PatchMessage>,
     preflight: &ScriptVerdict,
 ) -> Result<QueueState> {
     with_queue_lock(repo, || {
-        resolve_once(repo, id, Checks::Record(preflight)).map(Checked::recorded)
+        resolve_once(repo, id, message.as_ref(), Checks::Record(preflight)).map(Checked::recorded)
     })
 }
 
 /// What `preflight.sh` says about the rebuild `resolve` would end with.
 /// The queue is left as it was; the checkout is not, so run it in a clone
 /// made for it.
-pub fn resolve_preflight(repo: &Path, id: &str) -> Result<PreflightReport> {
+pub fn resolve_preflight(
+    repo: &Path,
+    id: &str,
+    message: Option<PatchMessage>,
+) -> Result<PreflightReport> {
     with_queue_lock(repo, || {
-        Ok(Checked::report(resolve_once(repo, id, Checks::Probe)))
+        Ok(Checked::report(resolve_once(
+            repo,
+            id,
+            message.as_ref(),
+            Checks::Probe,
+        )))
     })
 }
 
-fn resolve_once(repo: &Path, id: &str, checks: Checks<'_>) -> Result<Checked<QueueState>> {
+fn resolve_once(
+    repo: &Path,
+    id: &str,
+    change: Option<&PatchMessage>,
+    checks: Checks<'_>,
+) -> Result<Checked<QueueState>> {
     let base = GateKind::Conflict.base_branch(id);
     let work = GateKind::Conflict.work_branch(id);
     let head = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -857,32 +873,42 @@ fn resolve_once(repo: &Path, id: &str, checks: Checks<'_>) -> Result<Checked<Que
         .as_ref()
         .and_then(|c| c.onto.clone())
         .unwrap_or(recover_onto(repo, GateKind::Conflict, id, &head)?);
-    let message = company_commit_message(&patch);
+    let (mut updated, raw_message) = with_message(&patch, change)?;
     let before = rev_parse(repo, "HEAD")?;
-    commit_resolution(repo, &onto, &message)?;
+    commit_resolution(repo, &onto, &company_commit_message(&patch))?;
     // The resolution is new code, so the stored assessment no longer
     // describes it. An upstream-bound resolution must pass; otherwise the
     // branch is put back as it was so the resolution can be fixed.
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
-    let report = assess_from_message(
-        repo,
-        &queue,
-        &onto,
-        "HEAD",
-        &stored_commit_message(&patch),
-        Some(&patch.title),
-        intent,
-    )?;
-    if !intent.is_internal_only()
-        && let Err(err) = assert_assess_ok(&report, &patch.title)
-    {
-        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-        return Err(err);
-    }
+    let checked = (|| -> Result<AssessReport> {
+        let report = assess_from_message(
+            repo,
+            &queue,
+            &onto,
+            "HEAD",
+            &raw_message,
+            Some(&updated.title),
+            intent,
+        )?;
+        if !intent.is_internal_only() {
+            assert_assess_ok(&report, &updated.title)?;
+        }
+        commit_message_change(repo, &mut updated, change, &report)?;
+        Ok(report)
+    })();
+    let report = match checked {
+        Ok(report) => report,
+        Err(err) => {
+            git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+            return Err(err);
+        }
+    };
     fs::create_dir_all(repo.join(".uplink/patches"))?;
     fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
     {
         let patch = get_patch_mut(&mut queue, id)?;
+        patch.title = updated.title;
+        patch.commit_message = updated.commit_message;
         patch.assess = Some(report);
         patch.conflict = None;
         let rel = patch_path(id)?.to_string_lossy().into_owned();

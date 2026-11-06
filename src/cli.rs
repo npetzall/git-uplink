@@ -81,7 +81,7 @@ While an adoption runs, and while it is paused, `uplink/state` is locked: every 
     (
         "Gated PRs",
         "\
-`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs.",
+`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch title and whose body (`bodyFile`) is the stored message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title and body as `--title` and `--message-file`.",
     ),
     (
         "Credentials and identity",
@@ -1248,6 +1248,25 @@ pub enum Commands {
         /// Patch whose conflict was resolved.
         #[arg(value_name = "id")]
         id: String,
+        /// New patch title.
+        #[arg(long, value_name = "text")]
+        title: Option<String>,
+        /// New commit message, as the PR title and body.
+        #[arg(
+            long,
+            value_name = "text",
+            requires = "title",
+            conflicts_with = "message_file"
+        )]
+        message: Option<String>,
+        /// New commit message, as the PR title and body (- reads stdin).
+        #[arg(
+            long = "message-file",
+            value_name = "path",
+            requires = "title",
+            conflicts_with = "message"
+        )]
+        message_file: Option<PathBuf>,
         /// Take the verdict of preflight.sh from this file instead of running it.
         ///
         /// The file is the output of this command with `--preflight-only`,
@@ -1292,6 +1311,25 @@ pub enum Commands {
         /// Finish a gated transfer after the work PR is merged.
         #[arg(long)]
         complete: bool,
+        /// New patch title.
+        #[arg(long, value_name = "text", requires = "complete")]
+        title: Option<String>,
+        /// New commit message, as the PR title and body.
+        #[arg(
+            long,
+            value_name = "text",
+            requires = "title",
+            conflicts_with = "message_file"
+        )]
+        message: Option<String>,
+        /// New commit message, as the PR title and body (- reads stdin).
+        #[arg(
+            long = "message-file",
+            value_name = "path",
+            requires = "title",
+            conflicts_with = "message"
+        )]
+        message_file: Option<PathBuf>,
         /// Take the verdict of preflight.sh from this file instead of running it.
         ///
         /// The file is the output of `git uplink preflight --json`,
@@ -1321,7 +1359,7 @@ pub enum Commands {
     /// cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can
     /// open at once. The queue is not touched. It prints `base`, `work`, and
     /// `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the
-    /// stored message after an HTML-comment instruction block).
+    /// stored message, the instructions are in `commentFile`).
     ///
     /// `--complete` runs on the merged base (or `-work`). It squashes
     /// everything above the patch's own commit into the patch, takes

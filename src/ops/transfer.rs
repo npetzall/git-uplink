@@ -1,3 +1,4 @@
+use super::message::{commit_message_change, with_message};
 use super::*;
 
 #[derive(Debug, Clone)]
@@ -25,21 +26,30 @@ pub fn transfer_patch(
     direction: TransferDirection,
     complete: bool,
 ) -> Result<TransferResult> {
-    transfer_patch_with(repo, id, direction, complete, &ScriptVerdict::Run)
+    transfer_patch_with(repo, id, direction, complete, None, &ScriptVerdict::Run)
 }
 
-/// [`transfer_patch`], taking the verdict of `preflight.sh` from `preflight`.
+/// [`transfer_patch`] with a new title and message from the merged PR
+/// (`complete` only), taking the verdict of `preflight.sh` from `preflight`.
 pub fn transfer_patch_with(
     repo: &Path,
     id: &str,
     direction: TransferDirection,
     complete: bool,
+    message: Option<PatchMessage>,
     preflight: &ScriptVerdict,
 ) -> Result<TransferResult> {
     with_queue_lock(repo, || {
         let before = read_queue_file(repo)?;
-        let mut result =
-            transfer(repo, id, direction, complete, Checks::Record(preflight))?.recorded();
+        let mut result = transfer(
+            repo,
+            id,
+            direction,
+            complete,
+            message.as_ref(),
+            Checks::Record(preflight),
+        )?
+        .recorded();
         result.ready_to_submit = newly_ready_to_submit(&before, &result.queue);
         Ok(result)
     })
@@ -53,6 +63,7 @@ pub fn transfer_preflight(
     id: &str,
     direction: TransferDirection,
     complete: bool,
+    message: Option<PatchMessage>,
 ) -> Result<PreflightReport> {
     with_queue_lock(repo, || {
         Ok(Checked::report(transfer(
@@ -60,6 +71,7 @@ pub fn transfer_preflight(
             id,
             direction,
             complete,
+            message.as_ref(),
             Checks::Probe,
         )))
     })
@@ -70,10 +82,15 @@ fn transfer(
     id: &str,
     direction: TransferDirection,
     complete: bool,
+    message: Option<&PatchMessage>,
     checks: Checks<'_>,
 ) -> Result<Checked<TransferResult>> {
     if complete {
-        complete_transfer(repo, id, direction, checks)
+        complete_transfer(repo, id, direction, message, checks)
+    } else if message.is_some() {
+        Err(Error::msg(
+            "A new title or message applies only with --complete",
+        ))
     } else {
         start_transfer(repo, id, direction, checks)
     }
@@ -524,6 +541,7 @@ pub(super) fn complete_transfer(
     repo: &Path,
     id: &str,
     direction: TransferDirection,
+    change: Option<&PatchMessage>,
     checks: Checks<'_>,
 ) -> Result<Checked<TransferResult>> {
     let kind = direction.gate_kind();
@@ -543,11 +561,24 @@ pub(super) fn complete_transfer(
     let message = company_commit_message(&patch);
     let before = rev_parse(repo, "HEAD")?;
     commit_resolution(repo, &onto, &message)?;
+    let (updated, message_report) =
+        match change_message(repo, &queue, &patch, &onto, direction, change) {
+            Ok(changed) => changed,
+            Err(err) => {
+                git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+                return Err(err);
+            }
+        };
     fs::create_dir_all(repo.join(".uplink/patches"))?;
     fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
 
     let mut preview = queue.clone();
     move_patch(&mut preview, id, direction.to_internal())?;
+    {
+        let current = get_patch_mut(&mut preview, id)?;
+        current.title = updated.title.clone();
+        current.commit_message = updated.commit_message.clone();
+    }
     let checked = transfer_checks(
         repo,
         &preview,
@@ -568,6 +599,9 @@ pub(super) fn complete_transfer(
         return Ok(Checked::Probed(report?));
     }
     let (assess_report, _) = checked?;
+    // An internal-only patch is not assessed for upstream; a new message
+    // still needs its own assessment.
+    let assess_report = assess_report.or(message_report);
 
     let rel = patch_path(id)?.to_string_lossy().into_owned();
     let stable = stable_patch_id(repo, &rel)?;
@@ -575,6 +609,11 @@ pub(super) fn complete_transfer(
     let (pr_close_url, pr_close_number, pr_close_branch) =
         pr_close_from_patch(get_patch(&queue, id)?, direction);
     record_transfer(&mut queue, id, direction, stable, assess_report)?;
+    {
+        let current = get_patch_mut(&mut queue, id)?;
+        current.title = updated.title;
+        current.commit_message = updated.commit_message;
+    }
     write_queue_file(repo, &queue)?;
     commit_queue(
         repo,
@@ -597,6 +636,33 @@ pub(super) fn complete_transfer(
         pr_close_branch,
         ready_to_submit: Vec::new(),
     }))
+}
+
+/// `patch` with the title and message of `change`, committed on HEAD, and
+/// the assessment of that message in the patch's new layer.
+fn change_message(
+    repo: &Path,
+    queue: &QueueState,
+    patch: &Patch,
+    onto: &str,
+    direction: TransferDirection,
+    change: Option<&PatchMessage>,
+) -> Result<(Patch, Option<AssessReport>)> {
+    let (mut updated, raw_message) = with_message(patch, change)?;
+    if change.is_none() {
+        return Ok((updated, None));
+    }
+    let report = assess_from_message(
+        repo,
+        queue,
+        onto,
+        "HEAD",
+        &raw_message,
+        Some(&updated.title),
+        PatchIntent::from_internal_only(direction.to_internal()),
+    )?;
+    commit_message_change(repo, &mut updated, change, &report)?;
+    Ok((updated, Some(report)))
 }
 
 /// Moves the patch to its new layer as queued, with the gated work's patch id.
