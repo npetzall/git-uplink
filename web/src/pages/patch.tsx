@@ -21,6 +21,7 @@ import {
 } from "../lib/api";
 import type { FileDelta } from "../lib/patch";
 import { NEEDS_APPROVAL, shownStatus } from "../lib/status";
+import { parseView, viewSearch } from "../lib/view";
 
 function shortSha(sha: string): string {
   return sha.slice(0, 12);
@@ -45,7 +46,7 @@ export function PatchPage() {
   const { id = "" } = useParams();
   const [searchParams] = useSearchParams();
   const source = parseSource(searchParams.get("source"));
-  const home = source === "remote" ? "/?source=remote" : "/";
+  const home = `/${viewSearch(source, parseView(searchParams.get("view")))}`;
 
   const [data, setData] = useState<PatchResponse | null>(null);
   const [patchSha, setPatchSha] = useState<string>("");

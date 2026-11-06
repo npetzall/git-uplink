@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
-import { CopyButton } from "../components/copy-button";
+import { PatchTable } from "../components/patch-table";
 import { SourceToggle } from "../components/source-toggle";
 import { StatusBadge } from "../components/status-badge";
+import { SubmitStream } from "../components/submit-stream";
 import { Button } from "../components/ui/button";
 import {
   Card,
@@ -11,9 +12,9 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
+import { Tabs } from "../components/ui/tabs";
 import {
   loadStatus,
-  type Patch,
   parseSource,
   type QueueSource,
   refreshRemote,
@@ -21,14 +22,9 @@ import {
   type StatusCounts,
   type StatusResponse,
 } from "../lib/api";
-import {
-  LABEL_ORDER,
-  NEEDS_APPROVAL,
-  STATUS_INFO,
-  STATUS_ORDER,
-  shownStatus,
-} from "../lib/status";
+import { LABEL_ORDER, STATUS_INFO, STATUS_ORDER } from "../lib/status";
 import { cn } from "../lib/utils";
+import { parseView, type QueueView, viewSearch } from "../lib/view";
 
 const COUNTERS: { key: keyof StatusCounts; label: string }[] = [
   { key: "queued", label: "Queued" },
@@ -77,75 +73,6 @@ function StatusLegend() {
   );
 }
 
-function PatchTable({
-  patches,
-  empty,
-  source,
-  layer,
-  stale = [],
-}: {
-  patches: Patch[];
-  empty: string;
-  source: QueueSource;
-  layer: "tooling" | "upstream" | "internal";
-  /** Ids whose approval no longer covers their content. */
-  stale?: string[];
-}) {
-  if (!patches.length) {
-    return <p className="text-sm text-muted-foreground">{empty}</p>;
-  }
-  const query = source === "remote" ? "?source=remote" : "";
-  return (
-    <table className="w-full min-w-[560px] text-left text-sm">
-      <thead className="text-xs tracking-wide text-muted-foreground uppercase">
-        <tr className="border-b">
-          <th className="py-2 pr-3 font-medium">ID</th>
-          <th className="py-2 pr-3 font-medium">Change</th>
-          <th className="py-2 pr-3 font-medium">Status</th>
-          <th className="py-2 font-medium">Depends on</th>
-        </tr>
-      </thead>
-      <tbody>
-        {patches.map((patch) => (
-          <tr key={patch.id} className="border-b border-border/60">
-            <td className="py-2 pr-3 font-mono text-xs">
-              <span className="inline-flex items-center gap-1">
-                <Link
-                  to={`/patches/${encodeURIComponent(patch.id)}${query}`}
-                  className="text-primary hover:underline"
-                >
-                  {patch.id}
-                </Link>
-                <CopyButton
-                  value={patch.id}
-                  label={`Copy patch id ${patch.id}`}
-                />
-              </span>
-            </td>
-            <td className="py-2 pr-3">
-              <Link
-                to={`/patches/${encodeURIComponent(patch.id)}${query}`}
-                className="hover:underline"
-              >
-                {patch.title}
-              </Link>
-            </td>
-            <td className="space-x-1 py-2 pr-3">
-              <StatusBadge value={shownStatus(patch.status, layer)} />
-              {stale.includes(patch.id) ? (
-                <StatusBadge value={NEEDS_APPROVAL} />
-              ) : null}
-            </td>
-            <td className="py-2 font-mono text-xs text-muted-foreground">
-              {(patch.dependsOn ?? []).join(", ") || "—"}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
 /** How the local uplink/state compares with origin. */
 function syncLabel(state: StateStatus): string {
   if (!state.remote) {
@@ -180,6 +107,8 @@ function SyncPill({ state }: { state: StateStatus }) {
 export function QueuePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const source = parseSource(searchParams.get("source"));
+  const view = parseView(searchParams.get("view"));
+  const search = viewSearch(source, view);
   const [data, setData] = useState<StatusResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -202,13 +131,12 @@ export function QueuePage() {
 
   const empty =
     !data?.tooling && !data?.upstream?.length && !data?.internal?.length;
+  const ready = (data?.readyToSubmit ?? []).flatMap((id) =>
+    (data?.upstream ?? []).filter((patch) => patch.id === id),
+  );
 
-  function setSource(next: QueueSource) {
-    if (next === "local") {
-      setSearchParams({});
-    } else {
-      setSearchParams({ source: next });
-    }
+  function show(nextSource: QueueSource, nextView: QueueView) {
+    setSearchParams(new URLSearchParams(viewSearch(nextSource, nextView)));
   }
 
   async function onRefresh() {
@@ -260,7 +188,7 @@ export function QueuePage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
-          <SourceToggle source={source} onChange={setSource} />
+          <SourceToggle source={source} onChange={(next) => show(next, view)} />
           <Button
             variant="outline"
             size="sm"
@@ -336,7 +264,51 @@ export function QueuePage() {
               </CardContent>
             </Card>
           </div>
-          {empty ? (
+
+          <Tabs
+            label="Queue views"
+            value={view}
+            onChange={(next) => show(source, next)}
+            items={[
+              { value: "queue", label: "Queue" },
+              {
+                value: "ready",
+                label: (
+                  <>
+                    Ready to submit
+                    <span className="rounded-full bg-muted px-1.5 font-mono text-xs">
+                      {ready.length}
+                    </span>
+                  </>
+                ),
+              },
+              { value: "stream", label: "Submit stream" },
+            ]}
+          />
+
+          {view === "ready" ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Ready to submit</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Queued upstream patches with no unmerged upstream dependency
+                  and no public pull request yet. Dispatch Uplink submit for any
+                  of them.
+                </p>
+              </CardHeader>
+              <CardContent className="overflow-x-auto">
+                <PatchTable
+                  search={search}
+                  layer="upstream"
+                  patches={ready}
+                  stale={data.staleApprovals}
+                  empty="Nothing ready to submit."
+                />
+              </CardContent>
+            </Card>
+          ) : view === "stream" ? (
+            <SubmitStream source={source} search={search} />
+          ) : empty ? (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Patch queue</CardTitle>
@@ -355,7 +327,7 @@ export function QueuePage() {
                 </CardHeader>
                 <CardContent className="overflow-x-auto">
                   <PatchTable
-                    source={source}
+                    search={search}
                     layer="tooling"
                     patches={data.tooling ? [data.tooling] : []}
                     empty="No tooling patch. Run git uplink init --forge …"
@@ -368,7 +340,7 @@ export function QueuePage() {
                 </CardHeader>
                 <CardContent className="overflow-x-auto">
                   <PatchTable
-                    source={source}
+                    search={search}
                     layer="upstream"
                     patches={data.upstream ?? []}
                     stale={data.staleApprovals}
@@ -382,7 +354,7 @@ export function QueuePage() {
                 </CardHeader>
                 <CardContent className="overflow-x-auto">
                   <PatchTable
-                    source={source}
+                    search={search}
                     layer="internal"
                     patches={data.internal ?? []}
                     empty="No internal patches."
