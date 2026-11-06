@@ -9,8 +9,9 @@ use crate::adopt::{self, AdoptGroup};
 use crate::assess::{
     AssessPackage, IncomingCommitRow, IncomingMergeRow, IncomingPacket, approval_covers,
     assert_assess_ok, assess_from_message, assess_patch_file, company_commit_message,
-    covering_approval, depends_on_from_message, format_incoming_packet, from_upstream_report_paths,
-    patch_text, report_paths, review_token, store_extras, stored_commit_message,
+    covering_approval, covering_approval_for, depends_on_from_message, format_incoming_packet,
+    from_upstream_report_paths, patch_text, report_paths, review_token, store_extras,
+    stored_commit_message,
 };
 use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
@@ -46,7 +47,7 @@ use crate::repo::{
     is_ancestor, merge_base, new_patch_id, patch_already_applied_on, path_exists_at,
     point_branch_at, promote_upstream, push_branch_force, push_state_branch, queue_at,
     refresh_company_branch, refresh_upstream_ref, replace_state_from_origin, restore_paths_from,
-    rev_parse, set_state_branch, stable_patch_id, stable_patch_id_from_contents, stamp,
+    rev_parse, set_state_branch, show_at, stable_patch_id, stable_patch_id_from_contents, stamp,
     state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
 use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings, clean_list};
