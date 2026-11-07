@@ -140,7 +140,7 @@ fn export_onto(
             &["checkout", "-f", "--quiet", "--detach", start],
             GitOpts::default(),
         )?;
-        apply_patch_file(repo, patch, &snapshot.join(patch_path(id)?), true)
+        apply_patch_file(repo, queue, patch, &snapshot.join(patch_path(id)?), true)
     })();
     let applied = match applied {
         Ok(v) => v,

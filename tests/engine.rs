@@ -15960,3 +15960,211 @@ fn mark_merged_verifies_the_claimed_evidence() {
     let merged = mark_merged(company, id, MergeVia::StablePatchId, Some(&landed)).unwrap();
     assert_eq!(merged.merged.unwrap().via, MergeVia::StablePatchId);
 }
+
+fn commit_as(repo: &Path, name: &str, email: &str, message: &str) {
+    git(repo, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        repo,
+        &["commit", "-m", message],
+        GitOpts {
+            extra_env: vec![
+                ("GIT_AUTHOR_NAME".into(), name.into()),
+                ("GIT_AUTHOR_EMAIL".into(), email.into()),
+            ],
+            ..GitOpts::default()
+        },
+    )
+    .unwrap();
+}
+
+/// The message and `Co-Authored-By` values of the commit of `id` on `branch`.
+fn company_commit_of(repo: &Path, branch: &str, id: &str) -> (String, String) {
+    let grep = format!("--grep=Uplink-Patch-Id: {id}");
+    let message = git_ok(repo, &["log", "-1", &grep, "--format=%B", branch]).unwrap();
+    let trailers = git_ok(
+        repo,
+        &[
+            "log",
+            "-1",
+            &grep,
+            "--format=%(trailers:key=Co-Authored-By,valueonly)",
+            branch,
+        ],
+    )
+    .unwrap();
+    (message, trailers.trim().to_string())
+}
+
+#[test]
+fn add_records_internal_authors_as_co_authors_below_the_cutoff_on_main_only() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_as(company, "Asha", "asha@example.com", "use sha256");
+    write(company, "NOTES.md", "pairing\n");
+    commit_as(
+        company,
+        "Ben",
+        "ben@example.com",
+        "notes\n\nCo-authored-by: Cam <cam@example.com>",
+    );
+    write(company, "NOTES.md", "pairing\nagain\n");
+    commit_as(company, "Asha", "ASHA@example.com", "more notes");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Use SHA-256 for tokens".into(),
+            message: Some("Use SHA-256 for tokens\n\nReplace SHA-1.\n".into()),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        patch.source.authors,
+        [
+            "Asha <asha@example.com>",
+            "Ben <ben@example.com>",
+            "Cam <cam@example.com>"
+        ]
+    );
+    assert!(!patch.commit_message.contains("Co-Authored-By"));
+    let stored =
+        fs::read_to_string(company.join(format!(".uplink/patches/{}.patch", patch.id))).unwrap();
+    assert!(
+        stored.contains("Co-Authored-By: Cam <cam@example.com>"),
+        "{stored}"
+    );
+
+    rebuild(company).unwrap();
+    let (message, trailers) = company_commit_of(company, "main", &patch.id);
+    assert_eq!(
+        trailers,
+        "Asha <asha@example.com>\nBen <ben@example.com>\nCam <cam@example.com>"
+    );
+    let cutoff = message.find(DEFAULT_CUTOFF).expect("cutoff added");
+    assert!(
+        cutoff < message.find("Co-Authored-By").unwrap(),
+        "{message}"
+    );
+
+    approve_patch(company, &patch.id).unwrap();
+    let submitted = submit_patch(company, &patch.id, true).unwrap();
+    let contrib_msg = git_ok(company, &["log", "-1", "--format=%B", &submitted.branch]).unwrap();
+    for name in ["Asha", "Ben", "Cam", "Co-Authored-By", DEFAULT_CUTOFF] {
+        assert!(!contrib_msg.contains(name), "{contrib_msg}");
+    }
+}
+
+#[test]
+fn amend_adds_a_missing_author_once() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_notes(company);
+    assert!(
+        patch.source.authors.is_empty(),
+        "{:?}",
+        patch.source.authors
+    );
+
+    for round in ["reviewed", "reviewed again"] {
+        amend_patch(company, &patch.id, false, None).unwrap();
+        let base = format!("uplink/amend/{}", patch.id);
+        let work = format!("{base}-work");
+        git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+        write(company, "NOTES.md", &format!("internal-notes\n{round}\n"));
+        commit_as(company, "Dana", "dana@example.com", "address review");
+        git(company, &["checkout", "--quiet", &base], GitOpts::default()).unwrap();
+        git(company, &["merge", "--squash", &work], GitOpts::default()).unwrap();
+        commit_as(company, "Dana", "dana@example.com", "Amend (#7)");
+        let done = amend_patch(company, &patch.id, true, None).unwrap();
+        assert!(done.completed && done.changed, "{done:?}");
+        let after = patch_of(company, &patch.id);
+        assert_eq!(after.source.authors, ["Dana <dana@example.com>"]);
+        let (message, trailers) = company_commit_of(company, "main", &patch.id);
+        assert_eq!(trailers, "Dana <dana@example.com>", "{message}");
+        assert!(message.contains(DEFAULT_CUTOFF), "{message}");
+    }
+}
+
+#[test]
+fn resolving_a_conflict_adds_the_resolver_as_author() {
+    let world = setup_world();
+    let company = &world.company;
+    let upstream = &world.upstream;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_as(company, "Asha", "asha@example.com", "longer ttl");
+    let ttl_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            title: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    write(
+        upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 1800;"),
+    );
+    commit_all(upstream, "shorten default ttl");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_git-uplink");
+    // `accept-upstream` only does something when sync left the upstream pending.
+    for args in [["sync"], ["accept-upstream"]] {
+        Command::new(bin)
+            .args(args)
+            .current_dir(company)
+            .output()
+            .unwrap();
+    }
+    let conflicted = patch_of(company, &ttl_patch.id);
+    assert_eq!(conflicted.status, PatchStatus::Conflict);
+    let work_branch = work_branch_of(&conflicted);
+    git(
+        company,
+        &["checkout", "--quiet", &work_branch],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_as(company, "Erin", "erin@example.com", "resolve ttl");
+    resolve_conflict(company, &ttl_patch.id).unwrap();
+
+    let after = patch_of(company, &ttl_patch.id);
+    assert_eq!(
+        after.source.authors,
+        ["Asha <asha@example.com>", "Erin <erin@example.com>"]
+    );
+    let (message, trailers) = company_commit_of(company, "main", &ttl_patch.id);
+    assert_eq!(
+        trailers, "Asha <asha@example.com>\nErin <erin@example.com>",
+        "{message}"
+    );
+    assert!(!message.contains("Uplink Bot"), "{message}");
+}

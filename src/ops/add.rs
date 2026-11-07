@@ -5,7 +5,6 @@ pub struct AddPatchOpts {
     pub title: String,
     pub message: Option<String>,
     pub internal_only: bool,
-    pub author: Option<String>,
     pub depends_on: Vec<String>,
     pub from_ref: Option<String>,
     pub head_ref: Option<String>,
@@ -147,7 +146,11 @@ pub(super) fn add_patch_once(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(opts.title.as_str());
-    let mut patch = new_queued_patch(opts, depends_on_from_message(raw_message, &opts.depends_on));
+    let mut patch = new_queued_patch(
+        opts,
+        depends_on_from_message(raw_message, &opts.depends_on),
+        patch_authors(repo, from_sha, head_sha)?,
+    );
     let id = patch.id.clone();
     check_add_dependencies(queue, opts, &patch.depends_on)?;
     add_event(
@@ -165,7 +168,7 @@ pub(super) fn add_patch_once(
         raw_message,
     )?;
 
-    let message = company_commit_message(&patch);
+    let message = company_commit_message(queue, &patch);
     write_product_patch(repo, &id, from_sha, &message, head_sha)?;
     let rel = patch_path(&id)?.to_string_lossy().into_owned();
     patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
@@ -196,7 +199,7 @@ pub(super) fn add_patch_once(
     Ok(get_patch(&read_queue_file(repo)?, &id)?.clone())
 }
 
-fn new_queued_patch(opts: &AddPatchOpts, depends_on: Vec<String>) -> Patch {
+fn new_queued_patch(opts: &AddPatchOpts, depends_on: Vec<String>, authors: Vec<String>) -> Patch {
     let created_at = stamp();
     Patch {
         id: new_patch_id(),
@@ -208,7 +211,7 @@ fn new_queued_patch(opts: &AddPatchOpts, depends_on: Vec<String>) -> Patch {
         updated_at: created_at,
         patch_id_stable: None,
         source: PatchSource {
-            author: opts.author.clone(),
+            authors,
             note: opts.note.clone(),
             internal_pr_number: opts.internal_pr_number,
             internal_pr_url: opts.internal_pr_url.clone(),

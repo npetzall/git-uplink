@@ -2028,7 +2028,6 @@ fn run() -> Result<(), Error> {
                     from_ref: from,
                     head_ref: head,
                     depends_on,
-                    author: env::var("GIT_AUTHOR_NAME").ok(),
                     internal_pr_number: pr,
                     internal_pr_url: pr_url,
                     base_branch,

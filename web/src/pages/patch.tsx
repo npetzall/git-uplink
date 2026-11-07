@@ -245,6 +245,22 @@ export function PatchPage() {
                     {patch.patchIdStable ?? "—"}
                   </dd>
                 </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-xs text-muted-foreground uppercase">
+                    Authors
+                  </dt>
+                  <dd>
+                    {patch.source?.authors?.length ? (
+                      <ul>
+                        {patch.source.authors.map((author) => (
+                          <li key={author}>{author}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      "—"
+                    )}
+                  </dd>
+                </div>
               </dl>
               {patch.upstream?.prUrl ? (
                 <p>

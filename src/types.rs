@@ -288,8 +288,11 @@ pub struct AssessReport {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchSource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author: Option<String>,
+    /// The people who wrote the patch internally, `Name <email>`, each once.
+    /// Added as `Co-Authored-By` below the cutoff on company main; never
+    /// exported. An old `author` field is ignored when read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -750,6 +753,14 @@ impl QueueStateWire {
 #[cfg(test)]
 mod tests {
     use super::{CheckStatus, PatchIntent, PatchStatus};
+
+    #[test]
+    fn an_old_patch_source_author_is_ignored() {
+        let source: super::PatchSource =
+            serde_json::from_str(r#"{"author": "Jane", "note": "n"}"#).unwrap();
+        assert!(source.authors.is_empty());
+        assert_eq!(serde_json::to_string(&source).unwrap(), r#"{"note":"n"}"#);
+    }
 
     #[test]
     fn patch_intent_uses_kebab_case_json() {

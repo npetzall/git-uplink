@@ -238,6 +238,14 @@ git switch -c fix/token-hash origin/main`}</Code>
           reruns. If the change is not meant for upstream, label it
           internal-only.
         </p>
+        <p>
+          Uplink records who wrote the change internally: the authors of the
+          PR's commits and their <code>Co-authored-by</code> trailers. People
+          who later amend it or resolve a conflict in it are added. On company{" "}
+          <code>main</code> they are <code>Co-Authored-By</code> trailers below
+          the cutoff (Uplink adds the cutoff when the message has none). They
+          are never exported.
+        </p>
       </Section>
 
       <Section

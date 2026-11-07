@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::assess::{assert_assess_ok, assess_from_message};
+use crate::assess::{assert_assess_ok, assess_from_message, patch_authors};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{add_event, cannot_depend_on, get_patch, patch_path};
@@ -499,6 +499,7 @@ pub(crate) fn adopted_patch(
         updated_at: created_at,
         patch_id_stable: None,
         source: PatchSource {
+            authors: patch_authors(repo, &group.from_sha, &group.head_sha)?,
             note: Some(format!("{ADOPT_NOTE_PREFIX}{range}")),
             ..Default::default()
         },

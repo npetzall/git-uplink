@@ -38,6 +38,7 @@ pub(super) fn with_message(
 /// HEAD's message to match. Without one, HEAD already has it.
 pub(super) fn commit_message_change(
     repo: &Path,
+    queue: &QueueState,
     updated: &mut Patch,
     change: Option<&PatchMessage>,
     report: &AssessReport,
@@ -53,7 +54,7 @@ pub(super) fn commit_message_change(
             "--amend",
             "--quiet",
             "-m",
-            &company_commit_message(updated),
+            &company_commit_message(queue, updated),
         ],
         GitOpts::default(),
     )?;

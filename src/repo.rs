@@ -212,6 +212,7 @@ pub fn write_product_patch(
 
 pub fn apply_patch_file(
     repo: &Path,
+    queue: &QueueState,
     patch: &Patch,
     patch_file_abs: &Path,
     export_message: bool,
@@ -247,7 +248,7 @@ pub fn apply_patch_file(
     let message = if export_message {
         export_commit_message(patch)
     } else {
-        company_commit_message(patch)
+        company_commit_message(queue, patch)
     };
     git(repo, &["commit", "-m", &message], GitOpts::default())?;
     let formatted = git_ok(repo, &["format-patch", "--full-index", "-1", "--stdout"])?;

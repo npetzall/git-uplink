@@ -718,6 +718,9 @@ struct AmendedPatch {
     title: String,
     contents: String,
     assess: AssessReport,
+    /// The patch's authors with the people who amended it.
+    #[serde(default)]
+    authors: Vec<String>,
 }
 
 /// An upgrade that stopped on a patch, in `.git/uplink-upgrade.json`: what
@@ -794,8 +797,13 @@ fn resume_paused(repo: &Path, resume: UpgradeResume) -> Result<Option<PausedUpgr
         UpgradeResume::Continue => {
             assert_resolution_clean(repo)?;
             let queue = read_queue_file(repo)?;
-            let stored = get_patch(&queue, &paused.patch_id)?;
-            commit_resolution(repo, &paused.onto, &company_commit_message(stored))?;
+            let mut stored = get_patch(&queue, &paused.patch_id)?.clone();
+            merge_authors(
+                &mut stored.source.authors,
+                resolution_authors(repo, &paused.onto)?,
+            );
+            let stored = &stored;
+            commit_resolution(repo, &paused.onto, &company_commit_message(&queue, stored))?;
             if rev_parse(repo, "HEAD")? == paused.onto {
                 paused.dropped.push(patch);
             } else {
@@ -813,6 +821,7 @@ fn resume_paused(repo: &Path, resume: UpgradeResume) -> Result<Option<PausedUpgr
                     title: patch.1,
                     contents: format_patch_at_head(repo)?,
                     assess,
+                    authors: stored.source.authors.clone(),
                 });
             }
         }
@@ -904,6 +913,9 @@ fn prepare_tooling_upgrade(repo: &Path, resume: Option<UpgradeResume>) -> Result
     for (id, _) in &ready.dropped {
         mark_dropped(&mut trial_queue, id, "trial")?;
     }
+    for patch in &ready.amended {
+        get_patch_mut(&mut trial_queue, &patch.id)?.source.authors = patch.authors.clone();
+    }
     let mut replace = vec![(ready.plan.id.clone(), ready.plan.formatted.clone())];
     replace.extend(
         ready
@@ -994,6 +1006,7 @@ fn finish_tooling_upgrade(repo: &Path, ready: ReadyUpgrade) -> Result<Upgraded> 
             let stable = stable_patch_id_from_contents(repo, &amended.contents)?;
             let patch = get_patch_mut(queue, &amended.id)?;
             patch.assess = Some(amended.assess.clone());
+            patch.source.authors = amended.authors.clone();
             patch.conflict = None;
             patch.patch_id_stable = Some(stable);
             add_event(patch, "amended", upgrade_reason("Amended"));

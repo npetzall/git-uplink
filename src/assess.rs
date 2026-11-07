@@ -30,6 +30,9 @@ static PERSON: LazyLock<Regex> =
 static EXPORT_AUTHOR_HEADER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?im)^Uplink-Export-Author:\s*(.+)$").expect("export-author header regex")
 });
+static CO_AUTHOR_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^Co-Authored-By:\s*(.+)$").expect("co-author trailer regex")
+});
 static TICKET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b[A-Z]{2,10}-\d+\b").expect("ticket regex"));
 
@@ -210,8 +213,120 @@ pub fn stored_commit_message(patch: &Patch) -> String {
     patch.title.clone()
 }
 
-pub fn company_commit_message(patch: &Patch) -> String {
-    with_trailers(&stored_commit_message(patch), patch)
+/// The message of `patch` on company main: the stored message, the
+/// `Uplink-Patch-Id` trailer, and a `Co-Authored-By` trailer per internal
+/// author. The authors go below the cutoff, so they are internal: the cutoff
+/// is added when the stored message has none. An author the stored message
+/// already names as co-author is not repeated.
+pub fn company_commit_message(queue: &QueueState, patch: &Patch) -> String {
+    let stored = stored_commit_message(patch);
+    let authors: Vec<&String> = patch
+        .source
+        .authors
+        .iter()
+        .filter(|author| !names_co_author(&stored, author))
+        .collect();
+    if authors.is_empty() {
+        return with_trailers(&stored, patch);
+    }
+    let marker = cutoff_marker(queue);
+    let base = if strip_html_comments(&stored).contains(&marker) {
+        stored
+    } else {
+        format!("{}\n\n{marker}", stored.trim_end())
+    };
+    let mut message = with_trailers(&base, patch);
+    for author in authors {
+        message.push_str(&format!("Co-Authored-By: {author}\n"));
+    }
+    message
+}
+
+/// The email of a `Name <email>` person, lowercased.
+fn person_email(person: &str) -> Option<String> {
+    parse_person(Some(person)).map(|(_, email)| email.to_ascii_lowercase())
+}
+
+/// True when `message` has a `Co-Authored-By` line (any case) for the email of `author`.
+fn names_co_author(message: &str, author: &str) -> bool {
+    let Some(email) = person_email(author) else {
+        return false;
+    };
+    CO_AUTHOR_LINE
+        .captures_iter(message)
+        .filter_map(|caps| person_email(caps[1].trim()))
+        .any(|found| found == email)
+}
+
+/// Adds the people in `new` that `authors` does not have yet (by email), in order.
+pub fn merge_authors(authors: &mut Vec<String>, new: impl IntoIterator<Item = String>) {
+    for person in new {
+        let Some(email) = person_email(&person) else {
+            continue;
+        };
+        if !authors
+            .iter()
+            .any(|known| person_email(known).as_deref() == Some(email.as_str()))
+        {
+            authors.push(person);
+        }
+    }
+}
+
+/// True for an identity that is not a person: the uplink bot, or a forge bot.
+fn is_bot(name: &str, email: &str) -> bool {
+    email.eq_ignore_ascii_case(crate::git::BOT_EMAIL)
+        || name.ends_with("[bot]")
+        || email.to_ascii_lowercase().contains("[bot]@")
+}
+
+/// The people who wrote `from..head`: the authors of its non-merge commits
+/// and the `Co-authored-by` trailers in them, as `Name <email>`, each once.
+pub fn patch_authors(repo: &Path, from: &str, head: &str) -> Result<Vec<String>> {
+    let range = format!("{from}..{head}");
+    let log = git_ok(
+        repo,
+        &[
+            "log",
+            "--no-merges",
+            "--reverse",
+            "--format=%an <%ae>%x00%(trailers:key=Co-authored-by,valueonly,separator=%x00)%x1e",
+            &range,
+        ],
+    )?;
+    let mut people = Vec::new();
+    for record in log.split('\u{1e}') {
+        for value in record.split('\u{0}') {
+            if let Some((name, email)) = parse_person(Some(value.trim()))
+                && !is_bot(&name, &email)
+            {
+                people.push(format!("{name} <{email}>"));
+            }
+        }
+    }
+    let mut authors = Vec::new();
+    merge_authors(&mut authors, people);
+    Ok(authors)
+}
+
+/// The authors of a resolution or amend on `onto..HEAD`. When it is only in
+/// the index or work tree (no commit of a person yet), the operator's own
+/// `user.name` and `user.email`.
+pub fn resolution_authors(repo: &Path, onto: &str) -> Result<Vec<String>> {
+    let mut authors = patch_authors(repo, onto, "HEAD")?;
+    if authors.is_empty() {
+        let pending = git_ok(
+            repo,
+            &["status", "--porcelain", "--", ".", ":(exclude).uplink"],
+        )?;
+        if !pending.trim().is_empty()
+            && let Some((name, email)) = crate::git::operator_identity(repo)
+            && !is_bot(&name, &email)
+        {
+            authors.push(format!("{name} <{email}>"));
+        }
+    }
+    Ok(authors)
 }
 
 /// What `patch` (format-patch text) changes, file by file: each file's
@@ -2301,6 +2416,156 @@ HcmV?d00001
 --
 2.50.0
 ";
+
+    fn authored_patch(message: &str, authors: &[&str]) -> Patch {
+        let mut patch: Patch = serde_json::from_value(serde_json::json!({
+            "id": "upl_0123456789",
+            "title": "Use SHA-256",
+            "commitMessage": message,
+            "status": "queued",
+            "dependsOn": [],
+            "createdAt": "2026-10-01T00:00:00.000Z",
+            "updatedAt": "2026-10-01T00:00:00.000Z",
+            "patchIdStable": null,
+            "source": {},
+            "events": [],
+        }))
+        .unwrap();
+        patch.source.authors = authors.iter().map(|a| a.to_string()).collect();
+        patch
+    }
+
+    fn empty_queue() -> QueueState {
+        QueueState::empty(crate::types::QueueConfig::default())
+    }
+
+    #[test]
+    fn only_the_text_before_the_first_cutoff_is_public() {
+        let message = format!(
+            "Use SHA-256\n\nPublic reason.\n\n{DEFAULT_CUTOFF}\nTicket: PROJ-1\n\n{DEFAULT_CUTOFF}\nSecret: PROJ-2\n"
+        );
+        let (public, internal) = split_internal_message(&message, DEFAULT_CUTOFF);
+        assert_eq!(public, "Use SHA-256\n\nPublic reason.");
+        assert!(internal.contains("PROJ-1"), "{internal}");
+        assert!(internal.contains(DEFAULT_CUTOFF), "{internal}");
+        assert!(internal.contains("PROJ-2"), "{internal}");
+
+        let report = assess_export(
+            &empty_queue(),
+            &message,
+            Some("Use SHA-256"),
+            (None, None),
+            None,
+        );
+        assert_eq!(report.public_subject, "Use SHA-256");
+        assert_eq!(report.public_body, "Public reason.");
+        let mut patch = authored_patch(&message, &[]);
+        patch.assess = Some(report);
+        let exported = export_commit_message(&patch);
+        assert!(!exported.contains("PROJ"), "{exported}");
+        assert!(!exported.contains(DEFAULT_CUTOFF), "{exported}");
+    }
+
+    #[test]
+    fn a_cutoff_inside_an_html_comment_does_not_split() {
+        let message = format!(
+            "Subject\n\n<!-- {DEFAULT_CUTOFF} -->\nStill public.\n\n{DEFAULT_CUTOFF}\nInternal.\n"
+        );
+        let (public, internal) = split_internal_message(&message, DEFAULT_CUTOFF);
+        assert_eq!(public, "Subject\n\nStill public.");
+        assert_eq!(internal, "Internal.");
+    }
+
+    #[test]
+    fn company_message_without_authors_is_unchanged() {
+        let patch = authored_patch("Use SHA-256\n\nPublic reason.", &[]);
+        assert_eq!(
+            company_commit_message(&empty_queue(), &patch),
+            "Use SHA-256\n\nPublic reason.\n\nUplink-Patch-Id: upl_0123456789\n"
+        );
+    }
+
+    #[test]
+    fn company_message_adds_the_cutoff_before_internal_authors() {
+        let patch = authored_patch(
+            "Use SHA-256\n\nPublic reason.",
+            &["Asha <asha@corp.example>", "Ben <ben@corp.example>"],
+        );
+        assert_eq!(
+            company_commit_message(&empty_queue(), &patch),
+            format!(
+                "Use SHA-256\n\nPublic reason.\n\n{DEFAULT_CUTOFF}\n\n\
+Uplink-Patch-Id: upl_0123456789\n\
+Co-Authored-By: Asha <asha@corp.example>\n\
+Co-Authored-By: Ben <ben@corp.example>\n"
+            )
+        );
+    }
+
+    #[test]
+    fn company_message_keeps_an_existing_cutoff_and_skips_named_co_authors() {
+        let message = format!(
+            "Use SHA-256\n\n{DEFAULT_CUTOFF}\nTicket: PROJ-1\nco-authored-by: ASHA <Asha@Corp.Example>"
+        );
+        let patch = authored_patch(
+            &message,
+            &["Asha <asha@corp.example>", "Ben <ben@corp.example>"],
+        );
+        let company = company_commit_message(&empty_queue(), &patch);
+        assert_eq!(company.matches(DEFAULT_CUTOFF).count(), 1, "{company}");
+        assert!(!company.contains("Co-Authored-By: Asha"), "{company}");
+        assert!(
+            company.ends_with(
+                "Uplink-Patch-Id: upl_0123456789\nCo-Authored-By: Ben <ben@corp.example>\n"
+            ),
+            "{company}"
+        );
+        let (public, _) = split_internal_message(&company, DEFAULT_CUTOFF);
+        assert!(!public.contains("Ben"), "{public}");
+    }
+
+    #[test]
+    fn export_message_never_names_internal_authors() {
+        let message = "Use SHA-256\n\nPublic reason.";
+        let mut patch = authored_patch(message, &["Asha <asha@corp.example>"]);
+        patch.assess = Some(assess_export(
+            &empty_queue(),
+            message,
+            Some("Use SHA-256"),
+            (None, None),
+            None,
+        ));
+        let exported = export_commit_message(&patch);
+        assert!(!exported.contains("asha"), "{exported}");
+    }
+
+    #[test]
+    fn merge_authors_adds_each_email_once_and_keeps_order() {
+        let mut authors = vec!["Asha <asha@corp.example>".to_string()];
+        merge_authors(
+            &mut authors,
+            [
+                "A. Sha <ASHA@corp.example>".to_string(),
+                "Ben <ben@corp.example>".to_string(),
+                "not a person".to_string(),
+                "Ben B <ben@corp.example>".to_string(),
+            ],
+        );
+        assert_eq!(
+            authors,
+            ["Asha <asha@corp.example>", "Ben <ben@corp.example>"]
+        );
+    }
+
+    #[test]
+    fn bots_are_not_authors() {
+        assert!(is_bot("Uplink Bot", crate::git::BOT_EMAIL));
+        assert!(is_bot(
+            "github-actions[bot]",
+            "41898282+github-actions[bot]@users.noreply.github.com"
+        ));
+        assert!(!is_bot("Asha", "asha@corp.example"));
+    }
 
     #[test]
     fn changed_lines_is_what_the_patch_adds_and_removes() {

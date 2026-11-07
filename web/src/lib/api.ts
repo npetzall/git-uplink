@@ -4,7 +4,8 @@ import type { FileDelta } from "./patch";
 export type QueueSource = "local" | "remote";
 
 export type PatchSource = {
-  author?: string;
+  /** Internal authors, `Name <email>`. Co-authors on company main; never exported. */
+  authors?: string[];
   note?: string;
   internalPrNumber?: number;
   internalPrUrl?: string;
