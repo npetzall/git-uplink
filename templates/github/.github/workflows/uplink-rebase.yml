@@ -7,17 +7,36 @@
 # main lists the old patches as its own until it is rebased from the commit
 # it started on. git uplink rebase finds that commit.
 #
-# Dispatched three ways:
-# - by hand, with the pull request number;
-# - by the label uplink:rebase on the pull request (Uplink PR checks removes
-#   the label and dispatches);
-# - by the workflows that rebuild main, for every open pull request the
-#   rebuild left behind, when repository variable UPLINK_AUTO_REBASE is
-#   `true`.
+# Job "Uplink rebase hint" runs when a pull request into main is opened,
+# reopened or pushed. It comments how to rebase when the main the branch was
+# cut from has been replaced by a rebuild, and removes the comment once the
+# branch is rebased; with repository variable UPLINK_AUTO_REBASE set to
+# `true` it dispatches Uplink rebase instead of waiting for the developer.
+# It is here and not in Uplink PR checks for the same reason as the label
+# below: a pull request that conflicts runs no pull_request workflow. It
+# only reads: the branch is fetched, never checked out.
+#
+# Job "Uplink rebase" runs three ways:
+# - dispatched by hand, with the pull request number;
+# - dispatched by the workflows that rebuild main (and by the hint job),
+#   for every open pull request the rebuild left behind, when repository
+#   variable UPLINK_AUTO_REBASE is `true`;
+# - on the label uplink:rebase. That is pull_request_target, not
+#   pull_request: GitHub runs no pull_request workflow while the pull
+#   request conflicts, and a replaced main often makes it conflict. The
+#   workflow comes from main; the branch is fetched and rebased in a
+#   worktree, and nothing from it runs. While the label is on, the rebase
+#   is in progress: it is taken off at the end, whatever the outcome, and
+#   adding it again asks again. Taking it off with the Actions token starts
+#   no workflow.
+#
+# On the label, Uplink PR checks cancels its own run for that event, so
+# nothing is checked on the head this run replaces. A push runs the checks
+# on the new head; when nothing is pushed, that cancelled run is re-run.
 #
 # The only input is the pull request number. The commit to rebase from is
-# worked out here, never taken from the dispatch or from a comment: a wrong
-# one makes a rebase drop or repeat commits.
+# worked out here, never taken from the dispatch, the event or a comment: a
+# wrong one makes a rebase drop or repeat commits.
 #
 # The push is --force-with-lease on the head this run read, so a push the
 # developer made meanwhile wins. It uses the internal App or PAT, not the
@@ -30,30 +49,67 @@
 #
 # This workflow does not write uplink/state (not uplink-mutate).
 name: Uplink rebase
-run-name: Uplink rebase #${{ inputs.pr_number }}
+run-name: ${{ github.event_name == 'pull_request_target' && github.event.action != 'labeled' && 'Uplink rebase hint' || 'Uplink rebase' }} #${{ inputs.pr_number || github.event.pull_request.number }}
 
-on:
+on: # zizmor: ignore[dangerous-triggers] YAML from default branch; the branch is fetched or rebased in a worktree, nothing from it runs
   workflow_dispatch:
     inputs:
       pr_number:
         description: Pull request whose branch to rebase onto main
         required: true
         type: string
-
-concurrency:
-  group: uplink-rebase-${{ inputs.pr_number }}
-  cancel-in-progress: false
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled]
+    branches:
+      - main
 
 permissions: {}
 
+# Concurrency is per job: a hint event must never replace a pending rebase.
 jobs:
-  rebase:
-    name: Uplink rebase
-    if: github.ref == 'refs/heads/main'
+  hint:
+    name: Uplink rebase hint
+    if: ${{ github.event_name == 'pull_request_target' && github.event.action != 'labeled' }}
+    concurrency:
+      group: uplink-rebase-hint-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ github.event.pull_request.number }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}
+
+  rebase:
+    name: Uplink rebase
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'pull_request_target' && github.event.label.name == 'uplink:rebase')
+    concurrency:
+      group: uplink-rebase-${{ inputs.pr_number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,7 +143,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ inputs.pr_number }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
         run: |
           set -euo pipefail
@@ -161,16 +217,60 @@ jobs:
         uses: $/.github/actions/uplink-rebase-comment
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          pr-number: ${{ inputs.pr_number }}
+          pr-number: ${{ inputs.pr_number || github.event.pull_request.number }}
           rebased-from: ${{ steps.rebase.outputs.old }}
+
+      # Uplink PR checks cancelled its run for the label. Nothing was pushed,
+      # so no new run comes: re-run that one. On a re-run it does not cancel.
+      # A pull request that conflicts has no such run.
+      - name: Re-run the cancelled PR checks
+        if: ${{ always() && github.event_name == 'pull_request_target' && steps.rebase.outputs.outcome != 'rebased' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          latest() {
+            gh run list --workflow uplink-pr.yml --event pull_request --commit "$HEAD_SHA" \
+              --limit 1 --json databaseId,status,conclusion \
+              --jq '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"'
+          }
+          # The cancel may not have landed yet.
+          for _ in $(seq 24); do
+            read -r id status conclusion <<<"$(latest)" || true
+            if [ -z "${id:-}" ] || [ "$status" = "completed" ]; then
+              break
+            fi
+            sleep 5
+          done
+          if [ -n "${id:-}" ] && [ "${status:-}" = "completed" ] && [ "${conclusion:-}" = "cancelled" ]; then
+            gh run rerun "$id"
+            echo "Re-ran Uplink PR checks run ${id}"
+          fi
 
       - name: Note the stop on the pull request
         if: ${{ steps.rebase.outputs.outcome == 'conflict' || steps.rebase.outputs.outcome == 'unknown' }}
         uses: $/.github/actions/uplink-rebase-comment
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          pr-number: ${{ inputs.pr_number }}
+          pr-number: ${{ inputs.pr_number || github.event.pull_request.number }}
           note: Uplink rebase could not rebase this branch for you (conflicts, or no commit to rebase from). Rebase it by hand.
+
+      # Last, whatever happened: while the label is on, the rebase is in
+      # progress, and once it is off, adding it again asks again.
+      - name: Remove the label
+        if: ${{ always() && github.event_name == 'pull_request_target' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Already gone (taken off by hand) is fine.
+          gh api --method DELETE "repos/${GH_REPO}/issues/${PR_NUMBER}/labels/uplink%3Arebase" > /dev/null \
+            || echo "::notice title=Uplink rebase::label uplink:rebase was not on #${PR_NUMBER}"
 
       - name: Fail when the branch was not rebased
         if: ${{ steps.rebase.outputs.outcome == 'conflict' || steps.rebase.outputs.outcome == 'unknown' }}

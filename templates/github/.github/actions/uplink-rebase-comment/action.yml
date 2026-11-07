@@ -1,9 +1,9 @@
 name: Uplink rebase comment
 description: >-
   Tell a pull request that the main it was cut from has been replaced by a
-  rebuild, and how to rebase it: one comment per PR, written when the branch
-  needs a rebase or needs another one, removed once the developer has rebased
-  and pushed. Without pr-number it looks at every open pull request into
+  rebuild, and how to rebase it: one comment per PR, edited in place, written
+  when the branch needs a rebase and again after every rebuild, removed once
+  the developer has rebased and pushed. Without pr-number it looks at every open pull request into
   main. With auto-rebase it also dispatches Uplink rebase for a pull request
   it writes the comment on. The pull request's branch is fetched, never
   checked out, and nothing the pull request controls is put into the comment.
@@ -56,14 +56,23 @@ runs:
             -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
             fetch --quiet origin "$@"
         }
-        # "<id> <kind> <fork point>" of this PR's rebase comment, empty when it has none.
+        # "<id> <kind> <fork point>" of this PR's rebase comment, empty when
+        # it has none. A PR has one: a rebuild and the PR's own hint run can
+        # both post one, so any after the oldest is deleted.
         find_comment() {
-          gh api --paginate "repos/${GH_REPO}/issues/$1/comments" --jq '
+          local found extra
+          found=$(gh api --paginate "repos/${GH_REPO}/issues/$1/comments" --jq '
             .[]
             | select(.user.login == "github-actions[bot]")
             | select(.body | test("<!-- uplink:rebase [a-z]+( [0-9a-f]+)? -->"))
             | (.body | capture("<!-- uplink:rebase (?<kind>[a-z]+)( (?<fork>[0-9a-f]+))? -->")) as $m
-            | "\(.id) \($m.kind) \($m.fork // "")"' | head -n 1
+            | "\(.id) \($m.kind) \($m.fork // "")"')
+          while read -r extra _; do
+            if [[ "$extra" =~ ^[0-9]+$ ]]; then
+              gh api --method DELETE "repos/${GH_REPO}/issues/comments/${extra}" > /dev/null 2>&1 || true
+            fi
+          done < <(tail -n +2 <<<"$found")
+          head -n 1 <<<"$found"
         }
         # Writes $body as this PR's rebase comment: in place when there is
         # one, and as a new one when another run has just removed it.
@@ -157,7 +166,10 @@ runs:
               if [ "$kind" = "needs" ] && [ "$old_fork" = "$fork" ]; then
                 changed=false
               fi
-              if [ "$changed" = "false" ] && [ -z "$NOTE" ]; then
+              # A run for one PR (every push, reopen) leaves an unchanged
+              # comment alone. A rebuild writes it again, so its run link
+              # names the latest rebuild.
+              if [ "$changed" = "false" ] && [ -z "$NOTE" ] && [ -n "$PR_NUMBER" ]; then
                 continue
               fi
               {
