@@ -2,8 +2,9 @@ use super::*;
 
 #[derive(Clone, Default)]
 pub struct AddPatchOpts {
-    pub title: String,
-    pub message: Option<String>,
+    /// The commit message: subject, blank line, body, and the internal part
+    /// below the cutoff.
+    pub message: String,
     pub internal_only: bool,
     pub depends_on: Vec<String>,
     pub from_ref: Option<String>,
@@ -18,8 +19,16 @@ pub struct AddPatchOpts {
     pub preflight: ScriptVerdict,
 }
 
+impl AddPatchOpts {
+    /// The subject of the message.
+    pub fn subject(&self) -> String {
+        first_line(&strip_html_comments(&self.message)).to_string()
+    }
+}
+
 pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
     let queued = read_queue_file(repo)?;
+    message_subject(&opts.message, &cutoff_marker(&queued))?;
     // Only the forge knows where a PR merged: by the time import runs, a
     // rebuild may have rewritten the company branch, so git cannot tell.
     let company_branch = &queued.config.internal_branch;
@@ -28,7 +37,7 @@ pub fn add_patch(repo: &Path, opts: AddPatchOpts) -> Result<Patch> {
     {
         return Err(Error::msg(format!(
             "\"{}\" was merged into {base}, not company {company_branch}; only changes merged into {company_branch} are imported.",
-            opts.title
+            opts.subject()
         )));
     }
     let head_ref = opts.head_ref.as_deref().unwrap_or("HEAD");
@@ -140,12 +149,7 @@ pub(super) fn add_patch_once(
     from_sha: &str,
     head_sha: &str,
 ) -> Result<Patch> {
-    let raw_message = opts
-        .message
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(opts.title.as_str());
+    let raw_message = opts.message.trim();
     let mut patch = new_queued_patch(
         opts,
         depends_on_from_message(raw_message, &opts.depends_on),
@@ -187,7 +191,7 @@ pub(super) fn add_patch_once(
     let rebuild = !opts.internal_only && queue.internal.iter().any(is_active);
     queue.push_patch(patch, opts.internal_only);
     write_queue_file(repo, queue)?;
-    commit_queue(repo, &format!("uplink: add {id} {}", opts.title))?;
+    commit_queue(repo, &format!("uplink: add {id} {}", opts.subject()))?;
     if rebuild {
         // Not tested: an import only reorders what a reviewed pull request
         // already merged into main. Main can also hold merges that are not
@@ -203,8 +207,7 @@ fn new_queued_patch(opts: &AddPatchOpts, depends_on: Vec<String>, authors: Vec<S
     let created_at = stamp();
     Patch {
         id: new_patch_id(),
-        title: opts.title.clone(),
-        commit_message: String::new(),
+        commit_message: strip_html_comments(&opts.message),
         status: PatchStatus::Queued,
         depends_on,
         created_at: created_at.clone(),
@@ -239,7 +242,7 @@ fn check_add_dependencies(
         if cannot_depend_on(queue, opts.internal_only, dep_id) {
             return Err(Error::msg(format!(
                 "Upstream-bound patch \"{}\" cannot depend on internal-only patch {dep_id}.",
-                opts.title
+                opts.subject()
             )));
         }
     }
@@ -274,18 +277,10 @@ fn assess_new_patch(
     raw_message: &str,
 ) -> Result<()> {
     let intent = PatchIntent::from_internal_only(opts.internal_only);
-    let report = assess_from_message(
-        repo,
-        queue,
-        from_sha,
-        head_sha,
-        raw_message,
-        Some(&opts.title),
-        intent,
-    )?;
-    patch.commit_message = report.commit_message.clone();
+    let report = assess_from_message(repo, queue, from_sha, head_sha, raw_message, intent)?;
+    patch.commit_message = strip_html_comments(raw_message);
     if !opts.internal_only {
-        assert_assess_ok(&report, &opts.title)?;
+        assert_assess_ok(&report, &opts.subject())?;
     }
     patch.assess = Some(report);
     Ok(())
@@ -306,7 +301,7 @@ fn validate_candidate(
     }
     let explicit_range = opts.from_ref.is_some() && opts.head_ref.is_some();
     if !explicit_range {
-        assert_change_already_on_company(repo, queue, candidate_abs, &opts.title, head_sha)?;
+        assert_change_already_on_company(repo, queue, candidate_abs, &opts.subject(), head_sha)?;
     }
     Ok(())
 }

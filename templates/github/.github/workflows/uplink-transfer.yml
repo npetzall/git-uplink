@@ -4,9 +4,9 @@
 #
 # Dispatch starts a transfer. If apply+assess+preflight pass, the queue is
 # updated immediately. If byte changes are needed, this workflow pushes the
-# protected base and -work branch and opens a draft PR with the patch title
-# and message. Merging that PR runs --complete with the PR title and
-# description as the patch title and message. Closing it without merging deletes both branches and leaves
+# protected base and -work branch and opens a draft PR with the patch
+# subject as title and the rest of the message as description. Merging that
+# PR runs --complete with the PR title and description as the new message. Closing it without merging deletes both branches and leaves
 # the queue unchanged. Successful --to-internal of a submitted patch
 # dispatches Uplink abandon contrib (fire-and-forget; no uplink-mutate).
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, a patch moved
@@ -363,7 +363,7 @@ jobs:
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > "$RUNNER_TEMP/uplink-pr-msg.txt"
-          report=$(git uplink transfer "$id" --"$direction" --complete --title "$TITLE" \
+          report=$(git uplink transfer "$id" --"$direction" --complete \
             --message-file "$RUNNER_TEMP/uplink-pr-msg.txt" --preflight-only) || true
           if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
             echo "git uplink printed no preflight result"
@@ -496,7 +496,7 @@ jobs:
           } > "$RUNNER_TEMP/uplink-pr-msg.txt"
 
           main_before=$(git rev-parse origin/main)
-          transfer_json=$(git uplink transfer "$id" --"$direction" --complete --title "$TITLE" \
+          transfer_json=$(git uplink transfer "$id" --"$direction" --complete \
             --message-file "$RUNNER_TEMP/uplink-pr-msg.txt" \
             --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 

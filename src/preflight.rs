@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::assess::{depends_on_from_message, export_commit_message};
+use crate::assess::{depends_on_from_message, export_commit_message, strip_html_comments};
 use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::hooks::{PREFLIGHT_SCRIPT_PATH, hooks_source};
@@ -595,7 +595,7 @@ fn apply_deps(
         let result = apply_abs(
             dir,
             &dep_patch_abs(repo, id)?,
-            &format!("{} (dep)", dep.title),
+            &format!("{} (dep)", dep.subject()),
         )?;
         if result == ApplyOutcome::Conflict {
             return Ok(ApplyOutcome::Conflict);
@@ -793,7 +793,7 @@ fn blamed_depends_on(
         if patch.status == PatchStatus::Merged {
             continue;
         }
-        match apply_abs(dir, &dep_patch_abs(repo, id)?, &patch.title)? {
+        match apply_abs(dir, &dep_patch_abs(repo, id)?, patch.subject())? {
             ApplyOutcome::Conflict => return Ok(None),
             ApplyOutcome::Empty => {}
             ApplyOutcome::Applied => {
@@ -915,7 +915,7 @@ pub fn export_tested(
         match get_patch(queue, id) {
             // Not applied: it is in upstream already. See `apply_deps`.
             Ok(dep) if dep.status == PatchStatus::Merged => {}
-            Ok(dep) => lines.push(format!("`{}` {}", dep.id, dep.title)),
+            Ok(dep) => lines.push(format!("`{}` {}", dep.id, dep.subject())),
             Err(_) => lines.push(format!("`{id}`")),
         }
     }
@@ -1005,7 +1005,7 @@ pub(crate) fn export_preflight_with(
         let deps = apply_deps(dir, repo, queue, &patch.depends_on)?;
         if deps == ApplyOutcome::Conflict {
             let suggested =
-                suggest_depends_on(repo, queue, &patch.id, candidate_abs, &patch.title)?;
+                suggest_depends_on(repo, queue, &patch.id, candidate_abs, patch.subject())?;
             return Err(Error::Preflight(PreflightError::new(
                 format!(
                     "Declared depends-on [{}] do not apply onto public upstream before \"{}\".{}",
@@ -1014,7 +1014,7 @@ pub(crate) fn export_preflight_with(
                     } else {
                         patch.depends_on.join(", ")
                     },
-                    patch.title,
+                    patch.subject(),
                     format_suggestion(&suggested)
                 ),
                 suggested,
@@ -1023,10 +1023,10 @@ pub(crate) fn export_preflight_with(
             )));
         }
 
-        let applied = apply_abs(dir, candidate_abs, &patch.title)?;
+        let applied = apply_abs(dir, candidate_abs, patch.subject())?;
         if applied == ApplyOutcome::Conflict {
             let suggested =
-                suggest_depends_on(repo, queue, &patch.id, candidate_abs, &patch.title)?;
+                suggest_depends_on(repo, queue, &patch.id, candidate_abs, patch.subject())?;
             let extra = if patch.depends_on.is_empty() {
                 " alone".to_string()
             } else {
@@ -1035,7 +1035,7 @@ pub(crate) fn export_preflight_with(
             return Err(Error::Preflight(PreflightError::new(
                 format!(
                     "Patch \"{}\" does not apply onto public upstream{extra}. Company main is not a valid export base.{}",
-                    patch.title,
+                    patch.subject(),
                     format_suggestion(&suggested)
                 ),
                 suggested,
@@ -1115,7 +1115,7 @@ fn suggest_command_deps(
     let passes_with = |deps: &[String]| -> Result<Option<bool>> {
         reset_export(dir, repo)?;
         if apply_deps(dir, repo, queue, deps)? == ApplyOutcome::Conflict
-            || apply_abs(dir, candidate_abs, &patch.title)? == ApplyOutcome::Conflict
+            || apply_abs(dir, candidate_abs, patch.subject())? == ApplyOutcome::Conflict
         {
             return Ok(None);
         }
@@ -1199,11 +1199,11 @@ pub fn existing_patch_preflight(
 }
 
 pub struct IncomingPreflight {
-    pub title: String,
     pub from_ref: String,
     pub head_ref: String,
     pub depends_on: Vec<String>,
-    pub message: Option<String>,
+    /// The commit message of the incoming change.
+    pub message: String,
     /// Read `preflight.sh` from this revision instead of `uplink/hooks`.
     pub hooks_ref: Option<String>,
     pub internal_only: bool,
@@ -1384,11 +1384,12 @@ pub(crate) fn build_company_stack(repo: &Path, queue: &QueueState, branch: &str)
                     patch.id
                 )));
             }
-            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
+            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, patch.subject())?;
             if result == ApplyOutcome::Conflict {
                 return Err(Error::msg(format!(
                     "Queued patch {} (\"{}\") does not apply on company main; fix the queue (git uplink rebuild -i) first.",
-                    patch.id, patch.title
+                    patch.id,
+                    patch.subject()
                 )));
             }
         }
@@ -1416,7 +1417,7 @@ fn apply_upstream_layer(
                 patch.id
             )));
         }
-        let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, &patch.title)?;
+        let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, patch.subject())?;
         if result == ApplyOutcome::Conflict {
             let before = before
                 .map(|title| format!(" before \"{title}\""))
@@ -1424,7 +1425,7 @@ fn apply_upstream_layer(
             return Err(Error::Preflight(PreflightError::new(
                 format!(
                     "Queued patch \"{}\" does not apply onto tooling + upstream{before}.",
-                    patch.title
+                    patch.subject()
                 ),
                 Vec::new(),
                 "apply",
@@ -1475,17 +1476,15 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
         "upl_preflight_{}",
         &Uuid::new_v4().simple().to_string()[..8]
     );
-    let depends_on =
-        depends_on_from_message(opts.message.as_deref().unwrap_or(""), &opts.depends_on);
+    let depends_on = depends_on_from_message(&opts.message, &opts.depends_on);
     let patch = Patch {
         id: id.clone(),
-        title: opts.title.clone(),
         status: PatchStatus::Queued,
         depends_on,
         created_at: String::new(),
         updated_at: String::new(),
         patch_id_stable: None,
-        commit_message: String::new(),
+        commit_message: strip_html_comments(&opts.message),
         source: Default::default(),
         assess: None,
         upstream: None,
@@ -1510,7 +1509,7 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
             &ScriptVerdict::Run,
         )?;
         // Keep the token: the script passed on that tree, whatever follows.
-        match assert_upstream_layer_preflight(repo, &queue, &candidate_abs, &opts.title) {
+        match assert_upstream_layer_preflight(repo, &queue, &candidate_abs, patch.subject()) {
             Err(Error::Preflight(err)) => Err(Error::Preflight(match &token {
                 Some(token) => err.with_token(token),
                 None => err,
@@ -1591,7 +1590,7 @@ diff --git a/my file b/my file
     fn queued(id: &str, deps: &[&str]) -> Patch {
         serde_json::from_value(serde_json::json!({
             "id": id,
-            "title": id,
+            "commitMessage": id,
             "status": "queued",
             "dependsOn": deps,
             "createdAt": "t",
@@ -1861,13 +1860,12 @@ diff --git a/my file b/my file
 
         let patch = |id: &str, status: PatchStatus| Patch {
             id: id.into(),
-            title: format!("title of {id}"),
             status,
             depends_on: Vec::new(),
             created_at: String::new(),
             updated_at: String::new(),
             patch_id_stable: None,
-            commit_message: String::new(),
+            commit_message: format!("title of {id}"),
             source: Default::default(),
             assess: None,
             upstream: None,

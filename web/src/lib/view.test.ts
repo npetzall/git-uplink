@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseView, sourceBranch, viewSearch } from "./view";
+import { parseView, patchSubject, sourceBranch, viewSearch } from "./view";
 
 describe("parseView", () => {
   it("defaults to the queue", () => {
@@ -23,5 +23,14 @@ describe("viewSearch", () => {
     expect(viewSearch("remote", "queue")).toBe("?source=remote");
     expect(viewSearch("local", "stream")).toBe("?view=stream");
     expect(viewSearch("remote", "ready")).toBe("?source=remote&view=ready");
+  });
+});
+
+describe("patchSubject", () => {
+  it("is the first non-empty line of the message", () => {
+    expect(patchSubject({ commitMessage: "\nUse SHA-256\n\nWhy." })).toBe(
+      "Use SHA-256",
+    );
+    expect(patchSubject({ commitMessage: "" })).toBe("");
   });
 });

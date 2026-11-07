@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 const OVERVIEW: &str = "\
-Developers open PRs and merge them; they never push main. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message, adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
+Developers open PRs and merge them; they never push main. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message (its first line is the patch subject), adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
 
 On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment; `approve` and `submit` run after that review. git uplink talks to git only; workflows use gh for GitHub and follow-up commands (`submitted`, `gated`) to record results.
 
@@ -63,9 +63,9 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
 If company `main` already matches public upstream, init rebuilds `main` with the tooling patch.
 If `main` is fast-forward ahead, init leaves `main` alone and records the unique first-parent commits as patches after tooling. It adopts them the way `git uplink adopt --branch` does: one group at a time, each upstream-bound group depending on the queued patches it needs to apply onto upstream and to pass `preflight.sh`, each in its own `uplink/state` commit. Every commit must be in a group, so a failing group can be amended, made internal-only, or have its preflight failure ignored, but not skipped. A paused or interrupted adoption is taken up with `git uplink adopt --continue` (or ended with `--abort`).
 
-Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON. The UI shows the commits as a tree of groups beside the selected commit's change or group's form (title, an Upstream box, and the message, ending with the internal cutoff line). Enter or a double-click on a commit offers New group, Move/Add to previous or next group, and Skip; commits keep their order. Ctrl+s adopts after a confirmation. The mouse selects, places the cursor and ticks the box. The JSON:
+Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON. The UI shows the commits as a tree of groups beside the selected commit's change or group's form (an Upstream box and the message, ending with the internal cutoff line; its first line is the subject). Enter or a double-click on a commit offers New group, Move/Add to previous or next group, and Skip; commits keep their order. Ctrl+s adopts after a confirmation. The mouse selects, places the cursor and ticks the box. The JSON:
 
-    [{ \"commits\": [\"abc123\", \"def456\"], \"title\": \"...\", \"intent\": \"upstream\" }]
+    [{ \"commits\": [\"abc123\", \"def456\"], \"message\": \"...\", \"intent\": \"upstream\" }]
 
 Adopt-group `intent` is `upstream` (the default) or `internal-only`; it is not stored on the patch. Merge commits are one row each (the merge SHA, not the hidden PR branch).
 
@@ -81,7 +81,7 @@ While an adoption runs, and while it is paused, `uplink/state` is locked: every 
     (
         "Gated PRs",
         "\
-`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch title and whose body (`bodyFile`) is the stored message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title and body as `--title` and `--message-file`.",
+`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch subject (the first line of the stored message) and whose body (`bodyFile`) is the rest of the message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title, a blank line and the PR body as `--message-file`.",
     ),
     (
         "Credentials and identity",
@@ -348,17 +348,18 @@ pub enum Commands {
     /// force push of `main`. An upstream import with an empty internal queue,
     /// and every internal-only import, only records the patch.
     Add {
-        /// Queue entry name.
-        #[arg(long, value_name = "text")]
-        title: String,
         /// The single commit message stored on the patch (PR title, blank line, PR body).
         ///
-        /// HTML comments are stripped. Company `main` keeps the cutoff;
-        /// contrib export removes it. If neither message flag is set, the
-        /// title is the whole message. `Uplink-Depends-On: upl_...` lines in
-        /// the message become `dependsOn` and are left out of the public
-        /// message.
-        #[arg(long, value_name = "text", conflicts_with = "message_file")]
+        /// Its first line is the patch subject. HTML comments are stripped.
+        /// Company `main` keeps the cutoff; contrib export removes it.
+        /// `Uplink-Depends-On: upl_...` lines in the message become
+        /// `dependsOn` and are left out of the public message.
+        #[arg(
+            long,
+            value_name = "text",
+            conflicts_with = "message_file",
+            required_unless_present = "message_file"
+        )]
         message: Option<String>,
         /// Read the commit message from a file (- reads stdin).
         #[arg(long = "message-file", value_name = "path", conflicts_with = "message")]
@@ -432,10 +433,11 @@ pub enum Commands {
     /// skipped commit.
     ///
     /// The UI is a tree of groups and their commits beside the selected
-    /// commit's change (`git show`) or group's form: title, an Upstream box
-    /// (unticked is internal-only), and the message, ending with the
-    /// internal cutoff line. A new group starts from its first commit's
-    /// subject and message. Enter or a double-click on a commit offers New
+    /// commit's change (`git show`) or group's form: an Upstream box
+    /// (unticked is internal-only) and the message, ending with the
+    /// internal cutoff line. The message's first line is the patch subject.
+    /// A new group starts from its first commit's message; the cutoff is
+    /// added only when the message has none. Enter or a double-click on a commit offers New
     /// group, Move to (or Add to) the previous or next group, and Skip;
     /// commits keep their order. ←/→ moves between the panes; text fields
     /// take Ctrl+a/Ctrl+e and Alt+←/→. Ctrl+s adopts and Ctrl+w writes the
@@ -459,7 +461,7 @@ pub enum Commands {
     /// apply, and must pass `preflight.sh` on company main with it. A
     /// group made Internal-only during the run moves to the end with them.
     ///
-    /// Each group gets a line, `<patch-id> - <sha> - <title>`, with a spinner
+    /// Each group gets a line, `<patch-id> - <sha> - <subject>`, with a spinner
     /// while it is checked. A patch that passes is added to the queue in its
     /// own `uplink/state` commit right away (✓). A group whose change is
     /// queued already is skipped (−).
@@ -492,7 +494,7 @@ pub enum Commands {
     ///
     /// Every decision is written to the groups file
     /// (`.git/uplink/adopt/<branch>.json` unless `--write-groups` says
-    /// otherwise): full commit ids, title, intent and message, plus
+    /// otherwise): full commit ids, message and intent, plus
     /// `ignorePreflight` and `amended` (an amended commit, kept by a ref
     /// under `refs/uplink/adopt-amended/`). `--groups` on that file adopts
     /// the same way without asking, skipping groups added before.
@@ -713,9 +715,6 @@ pub enum Commands {
         /// Head revision, HEAD by default (fetched from origin if missing).
         #[arg(long, value_name = "ref")]
         head: Option<String>,
-        /// Title of the incoming change.
-        #[arg(long, value_name = "text")]
-        title: Option<String>,
         /// Commit message of the incoming change (PR title, blank line, PR body).
         #[arg(long, value_name = "text", conflicts_with = "message_file")]
         message: Option<String>,
@@ -764,9 +763,6 @@ pub enum Commands {
         /// Head revision, HEAD by default (fetched from origin if missing).
         #[arg(long, value_name = "ref")]
         head: Option<String>,
-        /// Title of the change.
-        #[arg(long, value_name = "text")]
-        title: Option<String>,
         /// Commit message of the change (PR title, blank line, PR body).
         #[arg(long, value_name = "text", conflicts_with = "message_file")]
         message: Option<String>,
@@ -776,7 +772,7 @@ pub enum Commands {
         /// Assess as an internal-only change: never exported, leak scan skipped.
         #[arg(long, conflicts_with = "patch")]
         internal_only: bool,
-        /// Assess a queued patch in its layer, with its stored title and message.
+        /// Assess a queued patch in its layer, with its stored message.
         ///
         /// Without `--from` and `--head` the patch file in the queue is
         /// assessed as it is; nothing is applied. That assessment also has
@@ -785,8 +781,8 @@ pub enum Commands {
         /// says in `storedExtras` whether the assessment-hook result stored
         /// with the patch is still for its content, and in `coveredBy` the
         /// approval that already covers it, if any. With them, the change
-        /// between the two revisions is assessed as that patch. `--title` or
-        /// `--message[-file]` override the stored ones, for example for a
+        /// between the two revisions is assessed as that patch.
+        /// `--message[-file]` overrides the stored message, for example for a
         /// conflict resolution or amend. The gate uses it on
         /// conflict-resolution PRs.
         #[arg(long, value_name = "id", conflicts_with = "internal_only")]
@@ -839,7 +835,7 @@ pub enum Commands {
         /// Store this assessment instead of assessing here: `assessment.json` of `assess --patch <id> --package`.
         ///
         /// Refused when it is not for the patch as it is now: the patch
-        /// file, title, message or `uplink.toml` changed since, or the
+        /// file, message or `uplink.toml` changed since, or the
         /// result does not match what assessing the patch gives. The company
         /// assessment hook read the same package, so this also covers
         /// --extra-dir.
@@ -883,7 +879,7 @@ pub enum Commands {
         /// Review token of the packet that was reviewed.
         ///
         /// `report` writes it to `.uplink/reports/<id>/review-token`. It
-        /// names what the patch changes, the public title and the public
+        /// names what the patch changes, the patch subject and the public
         /// message. What the patch changes is the lines it adds and removes
         /// per file, plus the files it creates, deletes, renames or
         /// replaces; the unchanged lines around them are not part of it.
@@ -1248,24 +1244,11 @@ pub enum Commands {
         /// Patch whose conflict was resolved.
         #[arg(value_name = "id")]
         id: String,
-        /// New patch title.
-        #[arg(long, value_name = "text")]
-        title: Option<String>,
         /// New commit message, as the PR title and body.
-        #[arg(
-            long,
-            value_name = "text",
-            requires = "title",
-            conflicts_with = "message_file"
-        )]
+        #[arg(long, value_name = "text", conflicts_with = "message_file")]
         message: Option<String>,
         /// New commit message, as the PR title and body (- reads stdin).
-        #[arg(
-            long = "message-file",
-            value_name = "path",
-            requires = "title",
-            conflicts_with = "message"
-        )]
+        #[arg(long = "message-file", value_name = "path", conflicts_with = "message")]
         message_file: Option<PathBuf>,
         /// Take the verdict of preflight.sh from this file instead of running it.
         ///
@@ -1311,14 +1294,11 @@ pub enum Commands {
         /// Finish a gated transfer after the work PR is merged.
         #[arg(long)]
         complete: bool,
-        /// New patch title.
-        #[arg(long, value_name = "text", requires = "complete")]
-        title: Option<String>,
         /// New commit message, as the PR title and body.
         #[arg(
             long,
             value_name = "text",
-            requires = "title",
+            requires = "complete",
             conflicts_with = "message_file"
         )]
         message: Option<String>,
@@ -1326,7 +1306,7 @@ pub enum Commands {
         #[arg(
             long = "message-file",
             value_name = "path",
-            requires = "title",
+            requires = "complete",
             conflicts_with = "message"
         )]
         message_file: Option<PathBuf>,
@@ -1363,7 +1343,7 @@ pub enum Commands {
     ///
     /// `--complete` runs on the merged base (or `-work`). It squashes
     /// everything above the patch's own commit into the patch, takes
-    /// `--title` / `--message[-file]` as the new title and message,
+    /// `--message[-file]` as the new message,
     /// re-assesses, and runs export preflight (upstream) or the preflight
     /// script (internal). A failing upstream assessment is refused and the
     /// branch is left as it was. The patch becomes `queued` again, whatever
@@ -1371,7 +1351,7 @@ pub enum Commands {
     /// submitted one keeps its public PR: IP approves the delta, then submit
     /// force-pushes the contrib branch. That holds unless the amend
     /// adds and removes the same lines as before and leaves the public
-    /// title and message as they were:
+    /// message as it was:
     /// then the last approval still covers the patch and it stays
     /// `submitted` or `approved`. Then `main` is rebuilt, and a follow-on
     /// conflict prints like `resolve`. A merge with no code or message change
@@ -1385,14 +1365,11 @@ pub enum Commands {
         /// Fold the merged amend PR into the patch.
         #[arg(long)]
         complete: bool,
-        /// New patch title.
-        #[arg(long, value_name = "text", requires = "complete")]
-        title: Option<String>,
         /// New commit message, as the PR title and body.
         #[arg(
             long,
             value_name = "text",
-            requires = "title",
+            requires = "complete",
             conflicts_with = "message_file"
         )]
         message: Option<String>,
@@ -1400,7 +1377,7 @@ pub enum Commands {
         #[arg(
             long = "message-file",
             value_name = "path",
-            requires = "title",
+            requires = "complete",
             conflicts_with = "message"
         )]
         message_file: Option<PathBuf>,

@@ -763,7 +763,7 @@ export function InternalsPage() {
           <p>
             The patch keeps its id. Closing the PR without merging cancels. An
             amend of a submitted patch goes back to IP only when it changes the
-            lines the patch adds or removes, or its public title or message.
+            lines the patch adds or removes, or its public message.
           </p>
         </Step>
         <Step

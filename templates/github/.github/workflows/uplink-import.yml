@@ -104,7 +104,7 @@ jobs:
           } > "$RUNNER_TEMP/uplink-msg.txt"
           extra=()
           if [ "$INTERNAL_ONLY" = "true" ]; then extra+=(--internal-only); fi
-          report=$(git uplink preflight --json --title "$TITLE" \
+          report=$(git uplink preflight --json \
             --message-file "$RUNNER_TEMP/uplink-msg.txt" \
             --from "$FROM_SHA" --head "$HEAD_SHA" "${extra[@]}") || true
           if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
@@ -177,7 +177,7 @@ jobs:
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
           set +e
-          git uplink add --title "$TITLE" --message-file /tmp/uplink-msg.txt \
+          git uplink add --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" --head "$HEAD_SHA" --base-branch "$BASE_REF" \
             --pr "$PR_NUMBER" --pr-url "$PR_URL" \
             --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --gate --json "${extra[@]}" > /tmp/uplink-add.out

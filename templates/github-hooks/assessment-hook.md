@@ -29,8 +29,7 @@ Before it runs the hook, the caller runs `git uplink assess` and uploads the res
 | --- | --- |
 | `kind` | `pr` for a pull request check, `patch` for Uplink submit |
 | `patch`, `state` | For `patch`: the patch id (`upl_…`) and the `uplink/state` commit it was read at |
-| `title` | The public pull request title |
-| `message` | `stored` (the whole message), `subject` and `body` (what is public), `coAuthor` |
+| `message` | `internal` (the whole message as stored), `public` (what leaves the company: the subject, a blank line, the body), `coAuthor`. The subject is the first line of `public` and the public pull request title |
 | `ok`, `checks` | The result. Each check has `id`, `status` (`pass`, `warn`, `fail`, `skip`) and `detail`. For `patch` there is a `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream |
 | `settings` | `bannedWords` from `uplink.toml`, or `problem` when it could not be read |
 | `changeBlob` | Git blob id of `change.patch` |

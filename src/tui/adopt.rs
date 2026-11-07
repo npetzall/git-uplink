@@ -33,7 +33,6 @@ const SIDEWAYS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
-    Title,
     Upstream,
     Message,
 }
@@ -75,7 +74,6 @@ enum Confirm {
 struct Spots {
     tree: Rect,
     detail: Rect,
-    title: Rect,
     upstream: Rect,
     message: Rect,
     popup: Rect,
@@ -194,7 +192,7 @@ impl Ui<'_> {
             return Ok(self.on_popup_key(key));
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let in_text = matches!(self.focus, Focus::Field(Field::Title | Field::Message));
+        let in_text = matches!(self.focus, Focus::Field(Field::Message));
         match key.code {
             KeyCode::Char('c') if ctrl => return Err(self.aborted()),
             KeyCode::Char('s') if ctrl => {
@@ -231,7 +229,7 @@ impl Ui<'_> {
             KeyCode::End => self.select(usize::MAX),
             KeyCode::Right | KeyCode::Tab => self.focus_right(),
             KeyCode::Enter => match self.row() {
-                Row::Group(_) => self.focus = Focus::Field(Field::Title),
+                Row::Group(_) => self.focus = Focus::Field(Field::Message),
                 row => {
                     if let Some(commit) = row.commit() {
                         self.open_actions(commit);
@@ -246,7 +244,7 @@ impl Ui<'_> {
 
     fn focus_right(&mut self) {
         self.focus = match self.row() {
-            Row::Group(_) => Focus::Field(Field::Title),
+            Row::Group(_) => Focus::Field(Field::Message),
             _ => Focus::Commit,
         };
     }
@@ -282,34 +280,19 @@ impl Ui<'_> {
             self.focus = Focus::Tree;
             return;
         };
-        let next = |f| match f {
-            Field::Title => Field::Upstream,
+        let other = |f| match f {
             Field::Upstream => Field::Message,
-            Field::Message => Field::Title,
-        };
-        let prev = |f| match f {
-            Field::Title => Field::Message,
-            Field::Upstream => Field::Title,
             Field::Message => Field::Upstream,
         };
         match (field, key.code) {
             (_, KeyCode::Esc) => self.focus = Focus::Tree,
-            (_, KeyCode::Tab) => self.focus = Focus::Field(next(field)),
-            (_, KeyCode::BackTab) => self.focus = Focus::Field(prev(field)),
+            (_, KeyCode::Tab | KeyCode::BackTab) => self.focus = Focus::Field(other(field)),
             (Field::Upstream, KeyCode::Char(' ') | KeyCode::Enter) => {
                 let form = self.tree.form_mut(id);
                 form.upstream = !form.upstream;
             }
             (Field::Upstream, KeyCode::Left) => self.focus = Focus::Tree,
-            (Field::Upstream, KeyCode::Up) | (Field::Title, KeyCode::Up) => {
-                self.focus = Focus::Field(Field::Title);
-            }
-            (Field::Upstream, KeyCode::Down) | (Field::Title, KeyCode::Down | KeyCode::Enter) => {
-                self.focus = Focus::Field(next(field));
-            }
-            (Field::Title, _) => {
-                self.tree.form_mut(id).title.handle_key(key);
-            }
+            (Field::Upstream, KeyCode::Down) => self.focus = Focus::Field(Field::Message),
             (Field::Message, KeyCode::Up) if self.tree.form(id).message.on_first_line() => {
                 self.focus = Focus::Field(Field::Upstream);
             }
@@ -393,8 +376,8 @@ impl Ui<'_> {
     fn validate(&mut self) -> Option<Vec<AdoptGroup>> {
         let groups = self.tree.to_groups();
         let ids = self.tree.group_ids();
-        if let Some(i) = groups.iter().position(|g| g.title.is_empty()) {
-            self.show_problem(ids[i], format!("group {} has no title", i + 1));
+        if let Some(i) = groups.iter().position(|g| g.subject().is_empty()) {
+            self.show_problem(ids[i], format!("group {} has no subject line", i + 1));
             return None;
         }
         let resolved = match resolve_groups(self.analysis, &groups) {
@@ -413,25 +396,19 @@ impl Ui<'_> {
                 .map(|c| c.first_parent.as_str())
                 .unwrap_or("");
             let head = group.commits.last().map(String::as_str).unwrap_or("");
-            let message = group
-                .message
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or(group.title.as_str());
             let checked = assess_from_message(
                 self.repo,
                 self.queue,
                 from,
                 head,
-                message,
-                Some(&group.title),
+                &group.message,
                 group.intent,
             )
             .and_then(|report| {
                 if group.intent.is_internal_only() {
                     Ok(())
                 } else {
-                    assert_assess_ok(&report, &group.title)
+                    assert_assess_ok(&report, group.subject())
                 }
             });
             if let Err(err) = checked {
@@ -444,7 +421,7 @@ impl Ui<'_> {
 
     fn show_problem(&mut self, id: GroupId, status: String) {
         self.select_where(|row| row == Row::Group(id));
-        self.focus = Focus::Field(Field::Title);
+        self.focus = Focus::Field(Field::Message);
         self.status = status;
     }
 
@@ -577,7 +554,7 @@ impl Ui<'_> {
             if double {
                 self.last_click = None;
                 match self.row() {
-                    Row::Group(_) => self.focus = Focus::Field(Field::Title),
+                    Row::Group(_) => self.focus = Focus::Field(Field::Message),
                     row => {
                         if let Some(commit) = row.commit() {
                             self.open_actions(commit);
@@ -593,14 +570,8 @@ impl Ui<'_> {
             }
             return;
         };
-        let (title, upstream, message) = (spots.title, spots.upstream, spots.message);
-        if contains(title, x, y) {
-            self.focus = Focus::Field(Field::Title);
-            self.tree
-                .form_mut(id)
-                .title
-                .place_cursor((x - title.x) as usize, 0);
-        } else if contains(upstream, x, y) {
+        let (upstream, message) = (spots.upstream, spots.message);
+        if contains(upstream, x, y) {
             self.focus = Focus::Field(Field::Upstream);
             let form = self.tree.form_mut(id);
             form.upstream = !form.upstream;
@@ -688,7 +659,7 @@ impl Ui<'_> {
                     ListItem::new(format!(
                         "▾ {} {}  {tag}",
                         self.tree.number(id),
-                        form.title.text()
+                        form.subject()
                     ))
                     .style(Style::default().add_modifier(Modifier::BOLD))
                 }
@@ -794,7 +765,6 @@ impl Ui<'_> {
             .constraints([
                 Constraint::Length(1),
                 Constraint::Length(1),
-                Constraint::Length(1),
                 Constraint::Length(if warn { 2 } else { 0 }),
                 Constraint::Length(1),
                 Constraint::Min(1),
@@ -809,40 +779,21 @@ impl Ui<'_> {
         };
         let form = self.tree.form_mut(id);
 
-        let label = format!("{}Title: ", mark(Field::Title));
-        let label_width = width(&label) as u16;
-        let title_area = Rect {
-            x: rows[0].x + label_width,
-            width: rows[0].width.saturating_sub(label_width),
-            ..rows[0]
-        };
-        let view = form.title.view(title_area.width as usize, 1);
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{label}{}",
-                view.lines.first().map_or("", String::as_str)
-            )),
-            rows[0],
-        );
-        if focus == Focus::Field(Field::Title) {
-            frame.set_cursor_position((title_area.x + view.cursor.0, title_area.y));
-        }
-
         let check = if form.upstream { "x" } else { " " };
         let upstream_text = format!(
             "{}[{check}] Upstream (unticked: internal-only)",
             mark(Field::Upstream)
         );
-        frame.render_widget(Paragraph::new(upstream_text.clone()), rows[1]);
+        frame.render_widget(Paragraph::new(upstream_text.clone()), rows[0]);
         let upstream_area = Rect {
-            width: (width(&upstream_text) as u16).min(rows[1].width),
-            ..rows[1]
+            width: (width(&upstream_text) as u16).min(rows[0].width),
+            ..rows[0]
         };
 
         frame.render_widget(
             Paragraph::new(format!("  Commits: {}", shorts.join(", ")))
                 .style(Style::default().add_modifier(Modifier::DIM)),
-            rows[2],
+            rows[1],
         );
         if warn {
             frame.render_widget(
@@ -851,17 +802,17 @@ impl Ui<'_> {
                 )
                 .style(Style::default().fg(Color::Yellow))
                 .wrap(Wrap { trim: true }),
-                rows[3],
+                rows[2],
             );
         }
         frame.render_widget(
             Paragraph::new(format!("{}Message:", mark(Field::Message))),
-            rows[4],
+            rows[3],
         );
         let message_area = Rect {
-            x: rows[5].x + 2,
-            width: rows[5].width.saturating_sub(2),
-            ..rows[5]
+            x: rows[4].x + 2,
+            width: rows[4].width.saturating_sub(2),
+            ..rows[4]
         };
         let view = form
             .message
@@ -873,7 +824,6 @@ impl Ui<'_> {
             ));
         }
         frame.render_widget(Paragraph::new(view.lines.join("\n")), message_area);
-        self.spots.title = title_area;
         self.spots.upstream = upstream_area;
         self.spots.message = message_area;
     }

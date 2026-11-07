@@ -167,7 +167,10 @@ pub fn format_status_table(snapshot: &StatusSnapshot) -> String {
         let _ = writeln!(
             out,
             "{:<12}  {:<10}  {:<14}  {}  {link}",
-            patch.id, patch.status, layer, patch.title
+            patch.id,
+            patch.status,
+            layer,
+            patch.subject()
         );
     }
     if !snapshot.stale_approvals.is_empty() {

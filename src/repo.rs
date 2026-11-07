@@ -747,7 +747,7 @@ pub fn commits_with_patch_id(repo: &Path, args: &[&str]) -> Result<Vec<(String, 
 
 pub fn queue_at(repo: &Path, sha: &str) -> Result<QueueState> {
     let raw = show_at(repo, sha, QUEUE_PATH)?;
-    Ok(serde_json::from_str(&raw)?)
+    crate::queue::parse_queue(&raw)
 }
 
 pub fn set_state_branch(repo: &Path, branch: &str, sha: &str) -> Result<()> {

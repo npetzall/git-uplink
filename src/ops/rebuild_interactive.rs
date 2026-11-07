@@ -161,7 +161,11 @@ fn pause_path(repo: &Path) -> Result<PathBuf> {
 
 fn read_paused(repo: &Path) -> Result<Option<PausedRebuild>> {
     match fs::read_to_string(pause_path(repo)?) {
-        Ok(raw) => Ok(Some(serde_json::from_str(&raw)?)),
+        Ok(raw) => {
+            let mut value: serde_json::Value = serde_json::from_str(&raw)?;
+            crate::queue::migrate_legacy_messages(&mut value);
+            Ok(Some(serde_json::from_value(value)?))
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.into()),
     }
@@ -190,9 +194,9 @@ pub fn paused_rebuild_message(repo: &Path) -> Option<String> {
     if !path.is_file() {
         return None;
     }
-    let message = fs::read_to_string(&path)
+    let message = read_paused(repo)
         .ok()
-        .and_then(|raw| serde_json::from_str::<PausedRebuild>(&raw).ok())
+        .flatten()
         .map(|paused| {
             format!(
                 "a rebuild is paused, so uplink/state is locked. Finish it first.\n{}",
@@ -289,12 +293,11 @@ git uplink rebuild --abort, then git uplink drop {} (or git uplink merged {} whe
         &queue,
         &stop.onto,
         "HEAD",
-        &stored_commit_message(&patch),
-        Some(&patch.title),
+        &patch.commit_message.clone(),
         intent,
     )?;
     if !intent.is_internal_only()
-        && let Err(err) = assert_assess_ok(&report, &patch.title)
+        && let Err(err) = assert_assess_ok(&report, patch.subject())
     {
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
         return Err(err);
@@ -354,7 +357,7 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
             )?;
             paused.stop = Some(Stop {
                 id: stop.patch.id.clone(),
-                title: stop.patch.title.clone(),
+                title: stop.patch.subject().to_string(),
                 onto: stop.onto,
                 cause: match stop.cause {
                     Stopped::Apply { files } => StopCause::Apply { files },

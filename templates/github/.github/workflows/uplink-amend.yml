@@ -6,13 +6,13 @@
 # and including the patch, which becomes the protected base
 # uplink/amend/<id>. A -work branch one empty commit ahead is pushed and a
 # draft PR is opened. Commit the change on -work and edit the PR title and
-# description (they become the patch title and message). Merging runs
+# description (they become the subject and body of the patch message). Merging runs
 # git uplink amend --complete, which re-assesses the patch and rebuilds
 # company main. If preflight.sh fails on the rebuilt tree, the first patch
 # it fails on (found with git bisect) gets a conflict PR, as in sync. For a
 # patch with a public PR Uplink submit is dispatched: the patch is queued
 # again and needs a delta approval when the amend changes the lines it adds
-# or removes, or the public title or message, and stays submitted when it
+# or removes, or the public message, and stays submitted when it
 # does not. Any other patch the amend makes queued again (waiting, approved
 # or rejected before) is dispatched when UPLINK_AUTO_SUBMIT is `true`. Closing without merging deletes both branches and leaves the
 # queue unchanged. Closed-PR jobs load YAML from the default branch so *-work
@@ -221,7 +221,7 @@ jobs:
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > "$RUNNER_TEMP/uplink-amend-msg.txt"
-          report=$(git uplink amend "$id" --complete --title "$TITLE" \
+          report=$(git uplink amend "$id" --complete \
             --message-file "$RUNNER_TEMP/uplink-amend-msg.txt" --preflight-only) || true
           if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
             echo "git uplink printed no preflight result"
@@ -345,7 +345,7 @@ jobs:
           } > "$RUNNER_TEMP/uplink-amend-msg.txt"
 
           main_before=$(git rev-parse origin/main)
-          amend_json=$(git uplink amend "$id" --complete --title "$TITLE" \
+          amend_json=$(git uplink amend "$id" --complete \
             --message-file "$RUNNER_TEMP/uplink-amend-msg.txt" \
             --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 

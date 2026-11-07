@@ -270,10 +270,9 @@ pub struct AssessCheck {
 pub struct AssessReport {
     pub at: String,
     pub ok: bool,
-    #[serde(default)]
-    pub commit_message: String,
-    pub public_subject: String,
-    pub public_body: String,
+    /// The internal message with HTML comments, `Uplink-Depends-On` lines
+    /// and everything from the cutoff on removed: what may leave the company.
+    pub public_message: String,
     /// `Name <email>` from `Uplink-Export-Author`, exported as a `Co-Authored-By` trailer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub co_author: Option<String>,
@@ -465,8 +464,7 @@ pub struct PatchConflict {
 #[serde(rename_all = "camelCase")]
 pub struct Patch {
     pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// The internal commit message. Its first line is the patch's subject.
     pub commit_message: String,
     pub status: PatchStatus,
     pub depends_on: Vec<String>,
@@ -492,6 +490,11 @@ pub struct Patch {
 }
 
 impl Patch {
+    /// The first non-empty line of the commit message: the patch's name.
+    pub fn subject(&self) -> &str {
+        first_line(&self.commit_message)
+    }
+
     pub fn last_approval(&self) -> Option<&PatchApproval> {
         self.approvals.last()
     }
@@ -504,6 +507,15 @@ impl Patch {
         self.upstream.is_some()
             && !matches!(self.status, PatchStatus::Approved | PatchStatus::Submitted)
     }
+}
+
+/// The first non-empty line of `message`, trimmed.
+pub fn first_line(message: &str) -> &str {
+    message
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
 }
 
 fn skip_empty_option(value: &Option<String>) -> bool {
@@ -783,10 +795,10 @@ mod tests {
     #[test]
     fn adopt_group_intent_defaults_to_upstream() {
         let group: crate::AdoptGroup =
-            serde_json::from_str(r#"{"commits": ["abc"], "title": "Metrics"}"#).unwrap();
+            serde_json::from_str(r#"{"commits": ["abc"], "message": "Metrics"}"#).unwrap();
         assert_eq!(group.intent, PatchIntent::Upstream);
         let err = serde_json::from_str::<crate::AdoptGroup>(
-            r#"{"commits": ["abc"], "title": "Metrics", "intent": "internal"}"#,
+            r#"{"commits": ["abc"], "message": "Metrics", "intent": "internal"}"#,
         )
         .unwrap_err();
         assert!(err.to_string().contains("internal"), "{err}");

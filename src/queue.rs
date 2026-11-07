@@ -37,9 +37,71 @@ pub fn read_queue(repo: &Path) -> Result<QueueState> {
         crate::repo::ensure_state_worktree(repo)?;
     }
     let raw = fs::read_to_string(repo.join(QUEUE_PATH))?;
-    let mut queue: QueueState = serde_json::from_str(&raw)?;
+    let mut queue = parse_queue(&raw)?;
     queue.settings = crate::settings::load_settings(repo, queue.config.forge);
     Ok(queue)
+}
+
+/// `queue.json` as written by this or an earlier binary.
+pub fn parse_queue(raw: &str) -> Result<QueueState> {
+    let mut value: serde_json::Value = serde_json::from_str(raw)?;
+    migrate_legacy_messages(&mut value);
+    Ok(serde_json::from_value(value)?)
+}
+
+/// Rewrites state written before a patch had only a commit message:
+/// a patch's `title` becomes its `commitMessage` when that is empty, an
+/// adopt group's `title` its `message`, and an assessment's
+/// `publicSubject` and `publicBody` become `publicMessage`.
+pub fn migrate_legacy_messages(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(migrate_legacy_messages),
+        Value::Object(map) => {
+            // An adopt group: `title` with an optional `message`.
+            if map.get("commits").is_some_and(Value::is_array)
+                && let Some(Value::String(title)) = map.remove("title")
+            {
+                let empty = map
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_none_or(|m| m.trim().is_empty());
+                if empty {
+                    map.insert("message".into(), Value::String(title));
+                }
+            }
+            if map.contains_key("createdAt")
+                && map.contains_key("status")
+                && let Some(Value::String(title)) = map.remove("title")
+            {
+                let empty = map
+                    .get("commitMessage")
+                    .and_then(Value::as_str)
+                    .is_none_or(|m| m.trim().is_empty());
+                if empty {
+                    map.insert("commitMessage".into(), Value::String(title));
+                }
+            }
+            if map.contains_key("checks") && map.contains_key("publicSubject") {
+                let take =
+                    |map: &mut serde_json::Map<String, Value>, key: &str| match map.remove(key) {
+                        Some(Value::String(s)) => s.trim().to_string(),
+                        _ => String::new(),
+                    };
+                let subject = take(map, "publicSubject");
+                let body = take(map, "publicBody");
+                map.remove("commitMessage");
+                let message = if body.is_empty() {
+                    subject
+                } else {
+                    format!("{subject}\n\n{body}")
+                };
+                map.insert("publicMessage".into(), Value::String(message));
+            }
+            map.values_mut().for_each(migrate_legacy_messages);
+        }
+        _ => {}
+    }
 }
 
 /// Temp file for [`write_queue`]; `commit_queue` never stages `*.tmp`.
@@ -458,7 +520,7 @@ mod tests {
     fn patch(id: &str) -> Patch {
         serde_json::from_value(serde_json::json!({
             "id": id,
-            "title": id,
+            "commitMessage": id,
             "status": "queued",
             "dependsOn": [],
             "createdAt": "t",
@@ -467,6 +529,57 @@ mod tests {
             "events": []
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn legacy_title_and_public_parts_become_messages() {
+        let mut value = serde_json::json!({
+            "upstream": [{
+                "id": "upl_a",
+                "title": "Use SHA-256",
+                "status": "queued",
+                "dependsOn": [],
+                "createdAt": "t",
+                "updatedAt": "t",
+                "source": {},
+                "events": [],
+                "assess": {
+                    "at": "t",
+                    "ok": true,
+                    "commitMessage": "Use SHA-256\n\nWhy.",
+                    "publicSubject": "Use SHA-256",
+                    "publicBody": "Why.",
+                    "cutoffFound": false,
+                    "checks": []
+                }
+            }, {
+                "id": "upl_b",
+                "title": "Old title",
+                "commitMessage": "Kept subject\n\nBody",
+                "status": "queued",
+                "dependsOn": [],
+                "createdAt": "t",
+                "updatedAt": "t",
+                "source": {},
+                "events": []
+            }]
+        });
+        migrate_legacy_messages(&mut value);
+        let a: Patch = serde_json::from_value(value["upstream"][0].clone()).unwrap();
+        assert_eq!(a.commit_message, "Use SHA-256");
+        assert_eq!(
+            a.assess.as_ref().unwrap().public_message,
+            "Use SHA-256\n\nWhy."
+        );
+        let b: Patch = serde_json::from_value(value["upstream"][1].clone()).unwrap();
+        assert_eq!(b.subject(), "Kept subject");
+
+        let written = serde_json::to_value(&a).unwrap();
+        assert!(written.get("title").is_none(), "{written}");
+        let assess = &written["assess"];
+        assert!(assess.get("publicSubject").is_none(), "{assess}");
+        assert!(assess.get("commitMessage").is_none(), "{assess}");
+        assert_eq!(assess["publicMessage"], "Use SHA-256\n\nWhy.");
     }
 
     fn patch_deps(id: &str, deps: &[&str]) -> Patch {

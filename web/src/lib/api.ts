@@ -52,8 +52,8 @@ export type PatchMerged = {
 
 export type Patch = {
   id: string;
-  title: string;
-  commitMessage?: string;
+  /** The internal commit message; its first line is the subject. */
+  commitMessage: string;
   status: string;
   dependsOn?: string[];
   createdAt?: string;

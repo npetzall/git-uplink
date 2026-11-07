@@ -1,4 +1,4 @@
-import type { QueueSource } from "./api";
+import type { Patch, QueueSource } from "./api";
 
 /** The tab under the queue cards. */
 export type QueueView = "queue" | "ready" | "stream";
@@ -23,4 +23,14 @@ export function viewSearch(source: QueueSource, view: QueueView): string {
   }
   const query = params.toString();
   return query ? `?${query}` : "";
+}
+
+/** The patch's name: the first non-empty line of its commit message. */
+export function patchSubject(patch: Pick<Patch, "commitMessage">): string {
+  return (
+    (patch.commitMessage ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line !== "") ?? ""
+  );
 }

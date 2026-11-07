@@ -191,7 +191,8 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
                 };
                 return Err(Error::msg(format!(
                     "Preview rebuild stopped on {} (\"{}\"): {list}",
-                    patch.id, patch.title
+                    patch.id,
+                    patch.subject()
                 )));
             }
             last_good = git_ok(repo, &["rev-parse", "HEAD"])?;
@@ -880,7 +881,7 @@ fn resolve_once(
         .and_then(|c| c.onto.clone())
         .unwrap_or(recover_onto(repo, GateKind::Conflict, id, &head)?);
     merge_authors(&mut patch.source.authors, resolution_authors(repo, &onto)?);
-    let (mut updated, raw_message) = with_message(&patch, change)?;
+    let (updated, raw_message) = with_message(&patch, change)?;
     let before = rev_parse(repo, "HEAD")?;
     commit_resolution(repo, &onto, &company_commit_message(&queue, &patch))?;
     // The resolution is new code, so the stored assessment no longer
@@ -888,19 +889,11 @@ fn resolve_once(
     // branch is put back as it was so the resolution can be fixed.
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
     let checked = (|| -> Result<AssessReport> {
-        let report = assess_from_message(
-            repo,
-            &queue,
-            &onto,
-            "HEAD",
-            &raw_message,
-            Some(&updated.title),
-            intent,
-        )?;
+        let report = assess_from_message(repo, &queue, &onto, "HEAD", &raw_message, intent)?;
         if !intent.is_internal_only() {
-            assert_assess_ok(&report, &updated.title)?;
+            assert_assess_ok(&report, updated.subject())?;
         }
-        commit_message_change(repo, &queue, &mut updated, change, &report)?;
+        commit_message_change(repo, &queue, &updated, change)?;
         Ok(report)
     })();
     let report = match checked {
@@ -914,7 +907,6 @@ fn resolve_once(
     fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
     {
         let patch = get_patch_mut(&mut queue, id)?;
-        patch.title = updated.title;
         patch.commit_message = updated.commit_message;
         patch.source.authors = updated.source.authors;
         patch.assess = Some(report);

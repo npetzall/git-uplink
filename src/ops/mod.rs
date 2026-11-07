@@ -9,9 +9,10 @@ use crate::adopt::{self, AdoptGroup};
 use crate::assess::{
     AssessPackage, IncomingCommitRow, IncomingMergeRow, IncomingPacket, approval_covers,
     assert_assess_ok, assess_from_message, assess_patch_file, company_commit_message,
-    covering_approval, covering_approval_for, depends_on_from_message, format_incoming_packet,
-    from_upstream_report_paths, merge_authors, patch_authors, patch_text, report_paths,
-    resolution_authors, review_token, store_extras, stored_commit_message,
+    covering_approval, covering_approval_for, cutoff_marker, depends_on_from_message,
+    format_incoming_packet, from_upstream_report_paths, merge_authors, message_subject,
+    patch_authors, patch_text, report_paths, resolution_authors, review_token, store_extras,
+    strip_html_comments,
 };
 use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
@@ -56,6 +57,7 @@ use crate::types::{
     PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchEvent, PatchIntent, PatchLayer,
     PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingMerge, PendingUpstream,
     PreviousMain, QueueConfig, QueueState, STATE_BRANCH, TransferDirection, VerifiedUpstream,
+    first_line,
 };
 
 mod add;

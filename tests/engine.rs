@@ -696,7 +696,7 @@ fn init_records_remote_urls_and_internal_branch() {
         Some(TOOLING_PATCH_KIND)
     );
     assert!(queue.is_tooling(&queue.patch_refs()[0].id));
-    assert_eq!(queue.patch_refs()[0].title, TOOLING_PATCH_TITLE);
+    assert_eq!(queue.patch_refs()[0].subject(), TOOLING_PATCH_TITLE);
     assert!(
         world
             .company
@@ -1243,7 +1243,7 @@ fn queue_at_remote_differs_from_local_after_add() {
     let patch = add_landed_patch(
         &clone,
         AddPatchOpts {
-            title: "Readme".into(),
+            message: "Readme".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -1271,7 +1271,7 @@ fn file_history_lists_patch_revisions() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Readme".into(),
+            message: "Readme".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -1731,7 +1731,7 @@ fn add_internal_change(company: &Path, branch: &str, file: &str, contents: &str)
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: format!("Change {file}"),
+            message: format!("Change {file}"),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -1857,7 +1857,10 @@ fn init_upgrade_drops_a_patch_the_new_pack_holds() {
 
     let result = upgrade(company).unwrap();
     assert!(result.tooling_changed);
-    assert_eq!(result.dropped, [(fix.id.clone(), fix.title.clone())]);
+    assert_eq!(
+        result.dropped,
+        [(fix.id.clone(), fix.subject().to_string())]
+    );
     assert!(result.overrides.is_empty());
     let dropped = result.queue.all_patches().find(|p| p.id == fix.id).unwrap();
     assert_eq!(dropped.status, PatchStatus::Dropped);
@@ -1923,7 +1926,7 @@ fn pause_upgrade_on(company: &Path, patch: &Patch) -> String {
             "upgrade paused: {} (\"{}\") changes files of the tooling pack and does not apply on the new pack.\n\
 The checkout holds the new pack with the failed apply. In conflict:\n  {PR_TEMPLATE}\n\
 Resolve them, git add them, then:  git uplink init --upgrade --continue\n",
-            patch.id, patch.title
+            patch.id, patch.subject()
         )),
         "{err}"
     );
@@ -1974,7 +1977,10 @@ fn init_upgrade_pauses_on_a_conflicting_patch_and_continues_with_the_resolution(
     git(company, &["add", PR_TEMPLATE], GitOpts::default()).unwrap();
     let result = upgrade_resuming(company, UpgradeResume::Continue).unwrap();
     assert!(result.tooling_changed);
-    assert_eq!(result.amended, [(patch.id.clone(), patch.title.clone())]);
+    assert_eq!(
+        result.amended,
+        [(patch.id.clone(), patch.subject().to_string())]
+    );
     assert!(result.dropped.is_empty());
     let amended = result
         .queue
@@ -2007,7 +2013,10 @@ fn init_upgrade_continue_drops_a_patch_resolved_to_the_new_pack() {
 
     let result = upgrade_resuming(company, UpgradeResume::Continue).unwrap();
     assert!(result.amended.is_empty());
-    assert_eq!(result.dropped, [(patch.id.clone(), patch.title.clone())]);
+    assert_eq!(
+        result.dropped,
+        [(patch.id.clone(), patch.subject().to_string())]
+    );
     let dropped = result
         .queue
         .all_patches()
@@ -2029,7 +2038,10 @@ fn init_upgrade_drop_drops_the_patch_it_paused_on() {
     pause_upgrade_on(company, &patch);
 
     let result = upgrade_resuming(company, UpgradeResume::Drop).unwrap();
-    assert_eq!(result.dropped, [(patch.id.clone(), patch.title.clone())]);
+    assert_eq!(
+        result.dropped,
+        [(patch.id.clone(), patch.subject().to_string())]
+    );
     assert!(tooling_patch_path(company, &patch.id).is_file());
     assert_back_on_clean_main(company);
     assert_eq!(
@@ -2463,9 +2475,8 @@ fn rev(repo: &Path) -> String {
 fn adopt_group(commits: &[&str], title: &str, intent: PatchIntent) -> AdoptGroup {
     AdoptGroup {
         commits: commits.iter().map(|s| s.to_string()).collect(),
-        title: title.into(),
         intent,
-        message: None,
+        message: title.into(),
         ..Default::default()
     }
 }
@@ -2517,9 +2528,9 @@ fn init_adopts_linear_history_without_moving_main() {
         queue.patch_refs()[0].kind.as_deref(),
         Some(TOOLING_PATCH_KIND)
     );
-    assert_eq!(queue.patch_refs()[1].title, "Metrics");
+    assert_eq!(queue.patch_refs()[1].subject(), "Metrics");
     assert!(queue.is_upstream(&queue.patch_refs()[1].id));
-    assert_eq!(queue.patch_refs()[2].title, "Dashboards");
+    assert_eq!(queue.patch_refs()[2].subject(), "Dashboards");
     assert!(queue.is_internal(&queue.patch_refs()[2].id));
     assert!(
         queue.patch_refs()[1]
@@ -2641,7 +2652,7 @@ fn rebuild_leaves_stored_patch_bytes_unchanged() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -2773,8 +2784,8 @@ fn init_adopts_each_merge_commit_as_a_patch() {
         ],
     );
     assert_eq!(queue.all_patches().count(), 3);
-    assert_eq!(queue.patch_refs()[1].title, "One");
-    assert_eq!(queue.patch_refs()[2].title, "Two");
+    assert_eq!(queue.patch_refs()[1].subject(), "One");
+    assert_eq!(queue.patch_refs()[2].subject(), "Two");
     // Dependencies are found the way adopt --branch finds them: Two applies
     // onto upstream without One.
     assert!(queue.patch_refs()[2].depends_on.is_empty());
@@ -2817,8 +2828,8 @@ fn init_adopts_mixed_merge_then_direct_commit() {
         ],
     );
     assert_eq!(queue.all_patches().count(), 3);
-    assert_eq!(queue.patch_refs()[1].title, "One");
-    assert_eq!(queue.patch_refs()[2].title, "Hotfix");
+    assert_eq!(queue.patch_refs()[1].subject(), "One");
+    assert_eq!(queue.patch_refs()[2].subject(), "Hotfix");
 }
 
 #[test]
@@ -2858,7 +2869,7 @@ fn init_skips_empty_first_parent_merge_in() {
         vec![adopt_group(&[&real], "Real", PatchIntent::Upstream)],
     );
     assert_eq!(queue.all_patches().count(), 2);
-    assert_eq!(queue.patch_refs()[1].title, "Real");
+    assert_eq!(queue.patch_refs()[1].subject(), "Real");
 }
 
 #[test]
@@ -3079,7 +3090,7 @@ fn add_records_the_patch_and_rebuilds_upstream_under_internal() {
     let internal = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -3105,7 +3116,7 @@ fn add_records_the_patch_and_rebuilds_upstream_under_internal() {
     let patch = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main^".into()),
             head_ref: Some(head_sha),
             ..Default::default()
@@ -3163,7 +3174,7 @@ fn add_refuses_when_the_change_is_not_on_main() {
     let err = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -3208,7 +3219,7 @@ fn add_from_explicit_range_does_not_require_company_main() {
     let patch = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some(from),
             head_ref: Some(head),
             ..Default::default()
@@ -3251,7 +3262,7 @@ fn internal_only_add_from_explicit_range_does_not_rebuild_main() {
     let patch = add_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some(from),
             head_ref: Some(head),
@@ -3335,11 +3346,10 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
     preflight_incoming_change(
         &clone,
         IncomingPreflight {
-            title: "Use SHA-256 for tokens".into(),
             from_ref: from.clone(),
             head_ref: head.clone(),
             depends_on: Vec::new(),
-            message: None,
+            message: "Use SHA-256 for tokens".into(),
             hooks_ref: None,
             internal_only: false,
         },
@@ -3368,13 +3378,13 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
     let patch = add_landed_patch(
         &clone,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
     )
     .unwrap();
-    assert_eq!(patch.title, "Use SHA-256 for tokens");
+    assert_eq!(patch.subject(), "Use SHA-256 for tokens");
     assert!(
         has_git_ref(&clone, "uplink/upstream"),
         "add should fetch uplink/upstream from origin when the tracking ref is missing"
@@ -3468,11 +3478,10 @@ fn preflight_fetches_missing_from_and_head_from_origin() {
     preflight_incoming_change(
         &clone,
         IncomingPreflight {
-            title: "Use SHA-256 for tokens".into(),
             from_ref: from,
             head_ref: head.clone(),
             depends_on: Vec::new(),
-            message: None,
+            message: "Use SHA-256 for tokens".into(),
             hooks_ref: None,
             internal_only: false,
         },
@@ -3490,11 +3499,10 @@ fn preflight_missing_revs_without_origin_fails_clearly() {
     let err = preflight_incoming_change(
         &world.company,
         IncomingPreflight {
-            title: "missing".into(),
             from_ref: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into(),
             head_ref: "cafebabecafebabecafebabecafebabecafebabe".into(),
             depends_on: Vec::new(),
-            message: None,
+            message: "missing".into(),
             hooks_ref: None,
             internal_only: false,
         },
@@ -3521,11 +3529,10 @@ fn preflight_missing_revs_not_on_origin_fails_clearly() {
     let err = preflight_incoming_change(
         company,
         IncomingPreflight {
-            title: "missing".into(),
             from_ref: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into(),
             head_ref: "cafebabecafebabecafebabecafebabecafebabe".into(),
             depends_on: Vec::new(),
-            message: None,
+            message: "missing".into(),
             hooks_ref: None,
             internal_only: false,
         },
@@ -3557,7 +3564,7 @@ fn sync_skips_rebuilding_main_when_upstream_is_unchanged() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -3596,7 +3603,7 @@ fn approve_receipt_records_the_state_branch_commit() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -3636,7 +3643,7 @@ fn rebuilds_company_main_with_stacked_patches_including_internal_only() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -3662,7 +3669,7 @@ fn rebuilds_company_main_with_stacked_patches_including_internal_only() {
     let log_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Log token hashes".into(),
+            message: "Log token hashes".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash_patch.id.clone()],
             ..Default::default()
@@ -3689,7 +3696,7 @@ fn rebuilds_company_main_with_stacked_patches_including_internal_only() {
     let internal = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Vendor telemetry".into(),
+            message: "Vendor telemetry".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -3727,7 +3734,7 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -3745,7 +3752,7 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -3822,7 +3829,7 @@ fn sync_applies_flowed_back_commits_without_approval() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -3926,7 +3933,7 @@ fn world_with_hash_patch() -> (World, Patch) {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -4310,7 +4317,7 @@ fn add_refuses_a_change_merged_into_another_branch() {
     // The helper lands the change on main, so pin the range before it does.
     let from = rev_of(company, "main");
     let opts = |base: &str| AddPatchOpts {
-        title: "Use SHA-256 for tokens".into(),
+        message: "Use SHA-256 for tokens".into(),
         from_ref: Some(from.clone()),
         base_branch: Some(base.into()),
         ..Default::default()
@@ -4341,7 +4348,17 @@ fn add_refuses_a_change_merged_into_another_branch() {
 fn retitle(repo: &Path, id: &str, title: &str) {
     let mut queue = git_uplink::read_queue(repo).unwrap();
     let patch = queue.all_patches_mut().find(|p| p.id == id).unwrap();
-    patch.title = title.into();
+    // The subject is the first line of the message.
+    let rest = patch
+        .commit_message
+        .split_once('\n')
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or_default();
+    patch.commit_message = if rest.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title}\n{rest}")
+    };
     write_queue(repo, &queue).unwrap();
     git_uplink::commit_queue(repo, "uplink: retitle").unwrap();
 }
@@ -4650,7 +4667,7 @@ fn review_token_ignores_the_rest_of_the_queue() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add notes".into(),
+            message: "Add notes".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -4743,7 +4760,7 @@ fn sync_detects_merged_patches_by_a_custom_trailer_key() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -4820,7 +4837,7 @@ fn drop_and_merged_refuse_patches_they_do_not_apply_to() {
     let upstream = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -4856,7 +4873,7 @@ fn mark_merged_commits_the_queue() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -4901,7 +4918,7 @@ fn sync_detects_several_patches_merged_by_patch_id() {
         let patch = add_landed_patch(
             company,
             AddPatchOpts {
-                title: title.into(),
+                message: title.into(),
                 from_ref: Some("main".into()),
                 ..Default::default()
             },
@@ -4952,7 +4969,7 @@ fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -5012,7 +5029,7 @@ fn command_output_does_not_write_github_step_summary() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -5096,7 +5113,7 @@ fn a_patch_that_does_not_apply_at_all_opens_a_draft_on_an_empty_work_commit() {
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -5160,15 +5177,14 @@ fn a_patch_that_does_not_apply_at_all_opens_a_draft_on_an_empty_work_commit() {
         company,
         &ttl_patch.id,
         Some(git_uplink::PatchMessage {
-            title: "Keep a longer TTL".into(),
-            message: Some("Keep a longer TTL\n\nTokens moved out of upstream.".into()),
+            message: "Keep a longer TTL\n\nTokens moved out of upstream.".into(),
         }),
         &ScriptVerdict::Run,
     )
     .unwrap();
     let resolved = patch_of(company, &ttl_patch.id);
     assert_eq!(resolved.status, PatchStatus::Queued);
-    assert_eq!(resolved.title, "Keep a longer TTL");
+    assert_eq!(resolved.subject(), "Keep a longer TTL");
     assert!(
         resolved
             .commit_message
@@ -5200,7 +5216,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -5313,7 +5329,7 @@ fn export_message_is_the_title_only_without_an_assess_report() {
 }
 
 #[test]
-fn add_refuses_a_title_with_a_company_keyword_when_the_message_is_clean() {
+fn add_refuses_a_subject_with_a_company_keyword_when_the_body_is_clean() {
     let world = setup_world();
     let company = &world.company;
     set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
@@ -5324,12 +5340,11 @@ fn add_refuses_a_title_with_a_company_keyword_when_the_message_is_clean() {
         &TOKENS.replace("return 3600;", "return 7200;"),
     );
     commit_all(company, "longer ttl");
-    // The title becomes the public PR title; the message alone is clean.
+    // The subject becomes the public PR title; the body alone is clean.
     let err = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL for AcmeCorp".into(),
-            message: Some("Extend TTL\n\nLonger sessions.".into()),
+            message: "Extend TTL for AcmeCorp\n\nLonger sessions.".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -5359,8 +5374,7 @@ fn depends_on_lines_above_the_cutoff_are_not_exported() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
-            message: Some(format!("Extend TTL\n\nLonger sessions.\n\n{line}\n")),
+            message: format!("Extend TTL\n\nLonger sessions.\n\n{line}\n"),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -5394,7 +5408,7 @@ fn resolve_refuses_a_resolution_that_fails_the_assessment() {
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -5477,7 +5491,7 @@ fn submitted_conflict_resolve_that_changes_the_patch_requires_delta_approval_and
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -5691,7 +5705,7 @@ fn submitted_ttl_patch_in_conflict(world: &World, upstream_tokens: &str) -> (Pat
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -5842,7 +5856,7 @@ fn report_assesses_the_patch_file_with_the_settings_of_today() {
     let notes = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add notes".into(),
+            message: "Add notes".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash_patch.id.clone()],
             ..Default::default()
@@ -5935,8 +5949,11 @@ fn assess_writes_a_package_for_a_patch_and_for_a_change() {
             .as_str()
     );
     assert_eq!(package["ok"], true);
-    assert_eq!(package["title"], "Use SHA-256 for tokens");
-    assert_eq!(package["message"]["subject"], "Use SHA-256 for tokens");
+    assert!(package.get("title").is_none(), "{package}");
+    let public = package["message"]["public"].as_str().unwrap();
+    assert!(public.starts_with("Use SHA-256 for tokens"), "{public}");
+    let internal = package["message"]["internal"].as_str().unwrap();
+    assert!(internal.starts_with("Use SHA-256 for tokens"), "{internal}");
     assert_eq!(
         package["settings"]["bannedWords"],
         serde_json::json!(["AcmeCorp"])
@@ -5982,7 +5999,7 @@ fn assess_writes_a_package_for_a_patch_and_for_a_change() {
         company,
         &[
             "assess",
-            "--title",
+            "--message",
             "Add notes",
             "--from",
             "main",
@@ -6022,7 +6039,7 @@ fn assess_of_a_patch_fails_while_an_upstream_dependency_is_not_merged() {
     let notes = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add notes".into(),
+            message: "Add notes".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash_patch.id.clone()],
             ..Default::default()
@@ -6211,9 +6228,9 @@ fn report_stores_an_assessment_only_for_the_patch_as_it_is_now() {
     write_queue(company, &queue).unwrap();
     git_uplink::commit_queue(company, "uplink: forget the extras").unwrap();
 
-    // The title changed after the assessment.
+    // The subject changed after the assessment.
     retitle(company, id, "Use SHA-256 everywhere");
-    refused(&result, "the title or message changed since");
+    refused(&result, "the message changed since");
 
     // The patch file changed after the assessment.
     let dir = temp_dir();
@@ -6255,7 +6272,7 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
     let asha = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -6278,7 +6295,7 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
     let ben = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -6405,7 +6422,7 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -6428,7 +6445,7 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
     let internal = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Vendor flag".into(),
+            message: "Vendor flag".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -6498,7 +6515,7 @@ fn can_drop_an_internal_only_patch_from_the_company_build() {
     let internal = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Vendor flag".into(),
+            message: "Vendor flag".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -6536,7 +6553,7 @@ fn imports_as_queued_not_contribution_approved() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(88),
             ..Default::default()
@@ -6549,7 +6566,7 @@ fn imports_as_queued_not_contribution_approved() {
     let again = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(88),
             ..Default::default()
@@ -6596,7 +6613,7 @@ fn merge_then_import_stays_queued_and_approvable() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some(from_sha),
             head_ref: Some(head_sha),
             internal_pr_number: Some(12),
@@ -6651,7 +6668,7 @@ fn import_marks_merged_when_already_on_upstream() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some(from_sha),
             head_ref: Some(head_sha),
             ..Default::default()
@@ -6702,7 +6719,7 @@ fn serializes_two_adds_in_one_checkout_so_both_patches_survive() {
             add_patch(
                 &company_a,
                 AddPatchOpts {
-                    title: "Readme from Asha".into(),
+                    message: "Readme from Asha".into(),
                     from_ref: Some(main_sha),
                     head_ref: Some(sha_a),
                     internal_pr_number: Some(101),
@@ -6717,7 +6734,7 @@ fn serializes_two_adds_in_one_checkout_so_both_patches_survive() {
             add_patch(
                 &company_b,
                 AddPatchOpts {
-                    title: "Notes from Ben".into(),
+                    message: "Notes from Ben".into(),
                     from_ref: Some(main_sha),
                     head_ref: Some(sha_b),
                     internal_pr_number: Some(102),
@@ -6824,7 +6841,7 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
         add_patch(
             &asha_t,
             AddPatchOpts {
-                title: "Readme from Asha".into(),
+                message: "Readme from Asha".into(),
                 from_ref: Some(from_a),
                 head_ref: Some(sha_a),
                 internal_pr_number: Some(201),
@@ -6843,7 +6860,7 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
         add_patch(
             &ben_t,
             AddPatchOpts {
-                title: "Notes from Ben".into(),
+                message: "Notes from Ben".into(),
                 from_ref: Some(from_b),
                 head_ref: Some(sha_b),
                 internal_pr_number: Some(202),
@@ -6866,7 +6883,7 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
     let mut titles: Vec<_> = snapshot
         .queue
         .all_patches()
-        .map(|p| p.title.clone())
+        .map(|p| p.subject().to_string())
         .collect();
     titles.sort();
     assert_eq!(titles, vec!["Notes from Ben", "Readme from Asha"]);
@@ -6903,7 +6920,7 @@ fn push_publishes_a_local_add() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Readme".into(),
+            message: "Readme".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -6942,7 +6959,7 @@ fn status_reports_ahead_after_local_add() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Readme".into(),
+            message: "Readme".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -6979,7 +6996,7 @@ fn status_reports_behind_when_origin_moved() {
     add_landed_patch(
         &ahead,
         AddPatchOpts {
-            title: "Readme".into(),
+            message: "Readme".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7084,7 +7101,7 @@ fn push_appends_local_only_patches_when_origin_moved() {
     add_landed_patch(
         &asha,
         AddPatchOpts {
-            title: "Readme from Asha".into(),
+            message: "Readme from Asha".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(201),
             ..Default::default()
@@ -7098,7 +7115,7 @@ fn push_appends_local_only_patches_when_origin_moved() {
     add_landed_patch(
         &ben,
         AddPatchOpts {
-            title: "Notes from Ben".into(),
+            message: "Notes from Ben".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(202),
             ..Default::default()
@@ -7128,7 +7145,7 @@ fn push_appends_local_only_patches_when_origin_moved() {
         .queue
         .all_patches()
         .filter(|p| p.kind.is_none())
-        .map(|p| p.title.clone())
+        .map(|p| p.subject().to_string())
         .collect();
     assert_eq!(patch_titles, ["Notes from Ben", "Readme from Asha"]);
     drop((asha_keep, ben_keep));
@@ -7148,7 +7165,7 @@ fn world_with_shared_patch() -> (World, PathBuf, Patch) {
     let shared = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Shared readme".into(),
+            message: "Shared readme".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(301),
             ..Default::default()
@@ -7166,7 +7183,7 @@ fn add_notes_patch(repo: &Path) {
     add_landed_patch(
         repo,
         AddPatchOpts {
-            title: "Notes from Ben".into(),
+            message: "Notes from Ben".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(302),
             ..Default::default()
@@ -7201,7 +7218,7 @@ fn push_keeps_a_local_drop_of_a_patch_that_is_also_on_origin() {
     let queue = status_snapshot(&integrated).unwrap().queue;
     let shared_now = queue.all_patches().find(|p| p.id == shared.id).unwrap();
     assert_eq!(shared_now.status, PatchStatus::Dropped);
-    assert!(queue.all_patches().any(|p| p.title == "Notes from Ben"));
+    assert!(queue.all_patches().any(|p| p.subject() == "Notes from Ben"));
     drop((asha_keep, ben_keep));
 }
 
@@ -7243,7 +7260,7 @@ fn rebuild_push_leaves_origin_main_when_state_push_is_rejected() {
     add_landed_patch(
         &asha,
         AddPatchOpts {
-            title: "Readme from Asha".into(),
+            message: "Readme from Asha".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(401),
             ..Default::default()
@@ -7283,7 +7300,7 @@ fn push_fast_forwards_when_local_is_behind() {
     add_landed_patch(
         &ahead,
         AddPatchOpts {
-            title: "Readme".into(),
+            message: "Readme".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7356,7 +7373,7 @@ fn push_skips_a_local_patch_whose_internal_pr_is_already_on_origin() {
     add_landed_patch(
         &asha,
         AddPatchOpts {
-            title: "Readme".into(),
+            message: "Readme".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(99),
             ..Default::default()
@@ -7403,7 +7420,7 @@ fn push_skips_a_local_patch_whose_internal_pr_is_already_on_origin() {
     add_patch(
         &ben,
         AddPatchOpts {
-            title: "Readme again".into(),
+            message: "Readme again".into(),
             from_ref: Some("main^".into()),
             head_ref: Some("HEAD".into()),
             internal_pr_number: Some(99),
@@ -7429,7 +7446,7 @@ fn push_skips_a_local_patch_whose_internal_pr_is_already_on_origin() {
         .queue
         .all_patches()
         .filter(|p| p.kind.is_none())
-        .map(|p| p.title.clone())
+        .map(|p| p.subject().to_string())
         .collect();
     assert_eq!(titles, vec!["Readme"]);
 }
@@ -7453,7 +7470,7 @@ fn refuses_import_when_a_stacked_change_does_not_declare_depends_on() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7480,7 +7497,7 @@ fn refuses_import_when_a_stacked_change_does_not_declare_depends_on() {
     let err = add_patch(
         company,
         AddPatchOpts {
-            title: "Log token hashes".into(),
+            message: "Log token hashes".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7523,7 +7540,7 @@ fn stacked_chain(company: &Path) -> (Patch, Patch) {
     let hash = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7544,7 +7561,7 @@ fn stacked_chain(company: &Path) -> (Patch, Patch) {
     let log = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Log token hashes".into(),
+            message: "Log token hashes".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash.id.clone()],
             ..Default::default()
@@ -7572,7 +7589,7 @@ fn suggests_only_the_last_patch_of_a_dependency_chain() {
     let err = add_patch(
         company,
         AddPatchOpts {
-            title: "Reword the hash log".into(),
+            message: "Reword the hash log".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7587,7 +7604,7 @@ fn suggests_only_the_last_patch_of_a_dependency_chain() {
     let imported = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Reword the hash log".into(),
+            message: "Reword the hash log".into(),
             from_ref: Some("main".into()),
             depends_on: vec![log.id.clone()],
             ..Default::default()
@@ -7606,7 +7623,7 @@ fn trim_deps_keeps_direct_dependencies_and_what_applies() {
     let reword = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Reword the hash log".into(),
+            message: "Reword the hash log".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash.id.clone(), log.id.clone()],
             ..Default::default()
@@ -7659,7 +7676,7 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7683,7 +7700,7 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
     let err = add_patch(
         company,
         AddPatchOpts {
-            title: "Add hash checker".into(),
+            message: "Add hash checker".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7700,7 +7717,7 @@ fn refuses_import_when_export_build_fails_without_the_used_patches() {
     let imported = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add hash checker".into(),
+            message: "Add hash checker".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash_patch.id.clone()],
             ..Default::default()
@@ -7730,7 +7747,7 @@ fn records_depends_on_from_commit_message_trailers() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7750,7 +7767,7 @@ fn records_depends_on_from_commit_message_trailers() {
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend token TTL".into(),
+            message: "Extend token TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7777,8 +7794,7 @@ fn records_depends_on_from_commit_message_trailers() {
     let imported = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Log token hashes".into(),
-            message: Some(format!(
+            message: format!(
                 "Log token hashes\n\n\
 Public rationale.\n\n\
 <!--\nUplink-Depends-On: upl_deadbeef00\n-->\n\n\
@@ -7787,7 +7803,7 @@ See also {} in the queue.\n\n\
 Uplink-Depends-On: {}\n\
 Uplink-Depends-On: {}\n",
                 ttl_patch.id, hash_patch.id, ttl_patch.id
-            )),
+            ),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7818,7 +7834,7 @@ fn incoming_preflight_reads_depends_on_from_the_message() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7847,14 +7863,10 @@ fn incoming_preflight_reads_depends_on_from_the_message() {
     preflight_incoming_change(
         company,
         IncomingPreflight {
-            title: "Log token hashes".into(),
             from_ref: from,
             head_ref: head,
             depends_on: Vec::new(),
-            message: Some(format!(
-                "Log token hashes\n\nUplink-Depends-On: {}\n",
-                hash_patch.id
-            )),
+            message: format!("Log token hashes\n\nUplink-Depends-On: {}\n", hash_patch.id),
             hooks_ref: None,
             internal_only: false,
         },
@@ -7881,7 +7893,7 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7941,7 +7953,7 @@ fn user_git_config_and_hooks_do_not_change_the_imported_patch() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -7983,7 +7995,7 @@ fn preflight_command_does_not_see_uplink_credentials() {
             "main",
             "--head",
             "HEAD",
-            "--title",
+            "--message",
             "Use SHA-256 for tokens",
         ])
         .current_dir(company)
@@ -8061,7 +8073,7 @@ fn preflight_shows_the_script_output_and_what_it_ran_on() {
         "main",
         "--head",
         "HEAD",
-        "--title",
+        "--message",
         "Use SHA-256 for tokens",
     ];
     let (ok, stdout, stderr) = run_uplink(company, &incoming);
@@ -8113,7 +8125,7 @@ fn strips_the_internal_commit_section_and_adds_a_co_author_trailer() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Seed internal".into(),
+            message: "Seed internal".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -8135,8 +8147,7 @@ fn strips_the_internal_commit_section_and_adds_a_co_author_trailer() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
-            message: Some(hash_pr_message()),
+            message: hash_pr_message(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8227,8 +8238,7 @@ fn exports_no_co_author_trailer_without_an_export_author_header() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
-            message: Some("Use SHA-256 for tokens\n\nReplace SHA-1.\n".into()),
+            message: "Use SHA-256 for tokens\n\nReplace SHA-1.\n".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8264,7 +8274,7 @@ fn refuses_approve_and_submit_until_an_upstream_dependency_is_merged() {
     let first = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8281,7 +8291,7 @@ fn refuses_approve_and_submit_until_an_upstream_dependency_is_merged() {
     let second = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add flag".into(),
+            message: "Add flag".into(),
             from_ref: Some("main".into()),
             depends_on: vec![first.id.clone()],
             ..Default::default()
@@ -8324,7 +8334,7 @@ fn world_with_stacked_patches() -> (World, Patch, Patch, Vec<String>, Vec<String
     let first = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8342,7 +8352,7 @@ fn world_with_stacked_patches() -> (World, Patch, Patch, Vec<String>, Vec<String
     let second = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add flag".into(),
+            message: "Add flag".into(),
             from_ref: Some("main".into()),
             depends_on: vec![first.id.clone()],
             ..Default::default()
@@ -8443,7 +8453,7 @@ fn world_with_ttl_flag_and_notes() -> (World, Patch, Patch, Patch) {
     let ttl = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8460,7 +8470,7 @@ fn world_with_ttl_flag_and_notes() -> (World, Patch, Patch, Patch) {
     let flag = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add flag".into(),
+            message: "Add flag".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8477,7 +8487,7 @@ fn world_with_ttl_flag_and_notes() -> (World, Patch, Patch, Patch) {
     let notes = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add notes".into(),
+            message: "Add notes".into(),
             from_ref: Some("main".into()),
             depends_on: vec![flag.id.clone()],
             ..Default::default()
@@ -8629,7 +8639,7 @@ fn add_cli_prints_what_became_ready_to_submit() {
     land_on_main(company, &head);
     let add = || -> serde_json::Value {
         let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
-            .args(["add", "--title", "Use SHA-256 for tokens", "--pr", "7"])
+            .args(["add", "--message", "Use SHA-256 for tokens", "--pr", "7"])
             .args(["--from", &from, "--head", &head, "--json"])
             .current_dir(company)
             .output()
@@ -8700,7 +8710,7 @@ fn submit_pushes_to_contrib_only_with_push() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8760,7 +8770,7 @@ fn submit_cli_prints_the_contrib_commit_for_the_forge() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8839,7 +8849,7 @@ fn does_not_squash_git_commit_messages_on_import() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Seed internal".into(),
+            message: "Seed internal".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -8867,7 +8877,7 @@ fn does_not_squash_git_commit_messages_on_import() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8939,7 +8949,7 @@ fn refuses_import_when_the_export_diff_names_the_company() {
     let err = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -8975,10 +8985,9 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
-            message: Some(format!(
+            message: format!(
                 "Use SHA-256 for tokens\n\nSHA-1 is weak.\n\n{DEFAULT_CUTOFF}\n\nTicket: PROJ-9\n"
-            )),
+            ),
             from_ref: Some("main".into()),
             internal_pr_number: Some(44),
             ..Default::default()
@@ -9076,7 +9085,7 @@ fn report_extra_dir_prepends_markdown_and_rejects_dotdot_names() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -9142,7 +9151,7 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -9260,7 +9269,7 @@ fn submit_does_not_commit_queue_until_submitted() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -9330,7 +9339,7 @@ fn submitted_push_replays_pr_fields_when_origin_state_moved() {
     let asha_patch = add_landed_patch(
         &asha,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -9352,7 +9361,7 @@ fn submitted_push_replays_pr_fields_when_origin_state_moved() {
     add_landed_patch(
         &ben,
         AddPatchOpts {
-            title: "Notes from Ben".into(),
+            message: "Notes from Ben".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -9379,7 +9388,7 @@ fn submitted_push_replays_pr_fields_when_origin_state_moved() {
         Some(url)
     );
     assert!(
-        queue.all_patches().any(|p| p.title == "Notes from Ben"),
+        queue.all_patches().any(|p| p.subject() == "Notes from Ben"),
         "origin must keep Ben's import that moved uplink/state"
     );
 }
@@ -9399,7 +9408,7 @@ fn gated_records_the_conflict_pr_on_the_patch() {
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -9460,7 +9469,7 @@ fn add_internal_only_does_not_rebuild_main() {
     let patch = add_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some("main^".into()),
             head_ref: Some(head_sha),
@@ -9495,7 +9504,7 @@ fn rebuild_applies_earlier_internal_after_later_upstream() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -9517,7 +9526,7 @@ fn rebuild_applies_earlier_internal_after_later_upstream() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -9557,7 +9566,7 @@ fn upstream_add_refuses_depends_on_internal_and_internal_may_depend_on_upstream(
     let internal = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -9583,7 +9592,7 @@ fn upstream_add_refuses_depends_on_internal_and_internal_may_depend_on_upstream(
     let err = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some(from_sha.clone()),
             head_ref: Some(head_sha.clone()),
             depends_on: vec![internal.id.clone()],
@@ -9599,7 +9608,7 @@ fn upstream_add_refuses_depends_on_internal_and_internal_may_depend_on_upstream(
     let upstream = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some(from_sha),
             head_ref: Some(head_sha),
             ..Default::default()
@@ -9617,7 +9626,7 @@ fn upstream_add_refuses_depends_on_internal_and_internal_may_depend_on_upstream(
     let stacked = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Internal flag".into(),
+            message: "Internal flag".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             depends_on: vec![upstream.id.clone()],
@@ -9661,7 +9670,7 @@ fn rebuild_empty_apply_merges_upstream_only() {
     let upstream = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main^".into()),
             head_ref: Some(head_sha.clone()),
             ..Default::default()
@@ -9689,7 +9698,7 @@ fn rebuild_empty_apply_merges_upstream_only() {
     let internal = add_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some("main^".into()),
             head_ref: Some(notes_sha),
@@ -9726,11 +9735,10 @@ fn incoming_preflight_skips_internal_only() {
     preflight_incoming_change(
         &world.company,
         IncomingPreflight {
-            title: "Vendor telemetry".into(),
             from_ref: "does-not-exist".into(),
             head_ref: "also-missing".into(),
             depends_on: Vec::new(),
-            message: None,
+            message: "Vendor telemetry".into(),
             hooks_ref: None,
             internal_only: true,
         },
@@ -9757,7 +9765,7 @@ fn incoming_preflight_fails_when_candidate_needs_internal() {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Company hasher".into(),
+            message: "Company hasher".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -9777,11 +9785,10 @@ fn incoming_preflight_fails_when_candidate_needs_internal() {
     let err = preflight_incoming_change(
         company,
         IncomingPreflight {
-            title: "Log company hasher".into(),
             from_ref: from,
             head_ref: head,
             depends_on: Vec::new(),
-            message: None,
+            message: "Log company hasher".into(),
             hooks_ref: None,
             internal_only: false,
         },
@@ -9852,7 +9859,7 @@ fn add_internal_notes(company: &Path) -> Patch {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -9892,7 +9899,7 @@ fn assess_warns_about_binary_files_in_the_export() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add logo".into(),
+            message: "Add logo".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -9928,10 +9935,9 @@ fn add_patch_with_banned_acme(company: &Path, code: &str, trailers: &str) -> Err
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
-            message: Some(format!(
+            message: format!(
                 "Use SHA-256 for tokens\n\nReplace SHA-1.\n\n{DEFAULT_CUTOFF}\n\n{trailers}"
-            )),
+            ),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -10016,7 +10022,7 @@ fn transfer_to_upstream_gates_on_assess_failure_without_writing_queue() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Vendor secret".into(),
+            message: "Vendor secret".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -10163,8 +10169,7 @@ fn transfer_complete_takes_the_title_and_message_of_the_merged_pr() {
     set_preflight_script(company, "grep -q ready NOTES.md");
     let change = |title: &str| {
         Some(git_uplink::PatchMessage {
-            title: title.into(),
-            message: Some(format!("{title}\n\nWhy it moves.")),
+            message: format!("{title}\n\nWhy it moves."),
         })
     };
     let refused = transfer_patch_with(
@@ -10198,15 +10203,14 @@ fn transfer_complete_takes_the_title_and_message_of_the_merged_pr() {
     .unwrap();
     assert!(done.transferred, "{done:?}");
     let moved = patch_of(company, &patch.id);
-    assert_eq!(moved.title, "Public notes");
+    assert_eq!(moved.subject(), "Public notes");
     assert!(
         moved.commit_message.contains("Why it moves."),
         "{}",
         moved.commit_message
     );
     let assess = moved.assess.as_ref().unwrap();
-    assert_eq!(assess.public_subject, "Public notes");
-    assert_eq!(assess.public_body, "Why it moves.");
+    assert_eq!(assess.public_message, "Public notes\n\nWhy it moves.");
     let text = git_uplink::patch_text(company, &patch.id).unwrap();
     assert!(text.contains("Subject: [PATCH] Public notes"), "{text}");
 
@@ -10235,7 +10239,7 @@ fn transfer_complete_takes_the_title_and_message_of_the_merged_pr() {
     .unwrap();
     assert!(done.transferred, "{done:?}");
     let back = patch_of(company, &patch.id);
-    assert_eq!(back.title, "Internal notes");
+    assert_eq!(back.subject(), "Internal notes");
     assert!(
         back.commit_message.starts_with("Internal notes"),
         "{}",
@@ -10262,7 +10266,7 @@ fn transfer_refuses_the_wrong_source_queue() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -10294,7 +10298,7 @@ fn transfer_to_internal_of_submitted_clears_upstream() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -10348,7 +10352,7 @@ fn transfer_to_internal_refuses_while_upstream_dependents_exist() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -10374,7 +10378,7 @@ fn transfer_to_internal_refuses_while_upstream_dependents_exist() {
     let log_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Log token hashes".into(),
+            message: "Log token hashes".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash_patch.id.clone()],
             ..Default::default()
@@ -10432,7 +10436,7 @@ fn transfer_to_upstream_allows_internal_dependents() {
     let hash_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -10451,7 +10455,7 @@ fn transfer_to_upstream_allows_internal_dependents() {
     let notes = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Internal notes".into(),
+            message: "Internal notes".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             depends_on: vec![hash_patch.id.clone()],
@@ -11205,7 +11209,7 @@ fn a_forge_queue_without_uplink_toml_fails_closed() {
     let err = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -11295,11 +11299,10 @@ fn preflight_sh_runs_in_the_export_tree_and_reaches_its_siblings() {
     let err = preflight_incoming_change(
         company,
         IncomingPreflight {
-            title: "Use SHA-256 for tokens".into(),
             from_ref: "main".into(),
             head_ref: "HEAD".into(),
             depends_on: Vec::new(),
-            message: None,
+            message: "Use SHA-256 for tokens".into(),
             hooks_ref: None,
             internal_only: false,
         },
@@ -11442,11 +11445,10 @@ fn preflight_keeps_uncommitted_work_and_rebuild_refuses_it() {
     preflight_incoming_change(
         company,
         IncomingPreflight {
-            title: "Use SHA-256 for tokens".into(),
             from_ref: "main".into(),
             head_ref: "HEAD".into(),
             depends_on: Vec::new(),
-            message: None,
+            message: "Use SHA-256 for tokens".into(),
             hooks_ref: None,
             internal_only: false,
         },
@@ -11480,7 +11482,7 @@ fn add_ttl_patch(company: &Path) -> Patch {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -11553,8 +11555,7 @@ fn amend_refuses_dropped_patches_and_a_message_without_complete() {
         &patch.id,
         false,
         Some(PatchMessage {
-            title: "x".into(),
-            message: None,
+            message: "x".into(),
         }),
     )
     .unwrap_err();
@@ -11575,7 +11576,7 @@ fn amend_complete_refreshes_an_internal_patch_and_rebuilds_main() {
     assert!(done.completed && done.changed, "{done:?}");
     let after = patch_of(company, &patch.id);
     assert_eq!(after.status, PatchStatus::Queued);
-    assert_eq!(after.title, patch.title);
+    assert_eq!(after.subject(), patch.subject());
     assert_ne!(after.patch_id_stable, patch.patch_id_stable);
     assert!(after.events.iter().any(|e| e.kind == "amended"));
     assert_eq!(
@@ -11676,17 +11677,14 @@ fn amend_complete_of_a_submitted_patch_takes_the_pr_message_and_is_amended() {
         &patch.id,
         true,
         Some(PatchMessage {
-            title: "Extend TTL to 90 minutes".into(),
-            message: Some(
-                "Extend TTL to 90 minutes\n\n<!-- instructions -->\nPer review.\n".into(),
-            ),
+            message: "Extend TTL to 90 minutes\n\n<!-- instructions -->\nPer review.\n".into(),
         }),
     )
     .unwrap();
     assert!(done.changed);
     let after = patch_of(company, &patch.id);
     assert_eq!(after.status, PatchStatus::Queued);
-    assert_eq!(after.title, "Extend TTL to 90 minutes");
+    assert_eq!(after.subject(), "Extend TTL to 90 minutes");
     assert!(after.commit_message.contains("Per review."), "{after:?}");
     assert!(!after.commit_message.contains("instructions"));
     assert!(after.assess.as_ref().unwrap().ok);
@@ -11719,14 +11717,13 @@ fn amend_complete_refuses_a_leaking_message_and_keeps_the_branch() {
         &patch.id,
         true,
         Some(PatchMessage {
-            title: "AcmeCorp TTL".into(),
-            message: None,
+            message: "AcmeCorp TTL".into(),
         }),
     )
     .unwrap_err();
     assert!(matches!(err, Error::Assess(_)), "{err}");
     assert_eq!(rev_of(company, &base), before);
-    assert_eq!(patch_of(company, &patch.id).title, patch.title);
+    assert_eq!(patch_of(company, &patch.id).subject(), patch.subject());
 }
 
 #[test]
@@ -11834,7 +11831,7 @@ test -z "$(git config --get credential.helper)""#,
             "main",
             "--head",
             "HEAD",
-            "--title",
+            "--message",
             "Use SHA-256 for tokens",
         ])
         .current_dir(company)
@@ -11918,7 +11915,7 @@ fn add_takes_the_preflight_result_and_never_runs_the_script() {
         ..report.clone()
     };
     let opts = |preflight: PreflightReport| AddPatchOpts {
-        title: "Use SHA-256 for tokens".into(),
+        message: "Use SHA-256 for tokens".into(),
         from_ref: Some("main".into()),
         preflight: ScriptVerdict::Reported(preflight),
         ..Default::default()
@@ -11961,7 +11958,7 @@ fn add_fails_with_the_reported_failure_without_running_the_script() {
     let err = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             preflight: ScriptVerdict::Reported(report),
             ..Default::default()
@@ -12101,7 +12098,7 @@ fn transfer_to_internal_takes_the_probe_of_the_previewed_tree() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -12173,7 +12170,7 @@ fn submit_takes_the_preflight_result_of_the_queued_patch() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -12201,7 +12198,7 @@ fn approved_with_preflight(world: &World) -> (Patch, PreflightReport) {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -12282,7 +12279,7 @@ fn a_job_with_credentials_submits_with_the_result_of_a_job_without() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -12464,7 +12461,7 @@ fn approve_refuses_an_upstream_patch_without_an_assess_report() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -12486,7 +12483,7 @@ fn submit_refuses_an_approved_patch_without_an_assess_report() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -12593,7 +12590,7 @@ fn land_without_rebuild(company: &Path, name: &str) -> String {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: format!("Document {name}"),
+            message: format!("Document {name}"),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -12813,7 +12810,7 @@ fn add_internal_file(company: &Path, file: &str, contents: &str) -> Patch {
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: format!("Add {file}"),
+            message: format!("Add {file}"),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -13181,7 +13178,7 @@ fn imports_of_two_merges_close_together_are_not_preflighted_as_rebuilds() {
         add_patch(
             company,
             AddPatchOpts {
-                title: title.into(),
+                message: title.into(),
                 from_ref: Some(base.clone()),
                 head_ref: Some(head.into()),
                 ..Default::default()
@@ -13354,7 +13351,7 @@ fn import_while_the_queue_is_blocked_is_recorded_with_the_conflict() {
     let internal = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Longer TTL".into(),
+            message: "Longer TTL".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -13397,7 +13394,7 @@ fn import_while_the_queue_is_blocked_is_recorded_with_the_conflict() {
     let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
         .args([
             "add",
-            "--title",
+            "--message",
             "Describe the kit",
             "--from",
             &base,
@@ -13443,7 +13440,7 @@ fn gated_add_records_a_change_that_needs_an_internal_patch_and_starts_a_transfer
     add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Longer TTL".into(),
+            message: "Longer TTL".into(),
             internal_only: true,
             from_ref: Some("main".into()),
             ..Default::default()
@@ -13471,7 +13468,7 @@ fn gated_add_records_a_change_that_needs_an_internal_patch_and_starts_a_transfer
         Command::new(env!("CARGO_BIN_EXE_git-uplink"))
             .args([
                 "add",
-                "--title",
+                "--message",
                 "Scale the TTL",
                 "--from",
                 &base,
@@ -13519,7 +13516,7 @@ fn gated_add_records_a_change_that_needs_an_internal_patch_and_starts_a_transfer
     assert!(ref_exists(company, &format!("{gate}-work")));
     let pr = &transfer["gh"]["prCreate"];
     assert_eq!(pr["draft"], true, "{value}");
-    assert_eq!(pr["title"], patch_of(company, id).title.as_str());
+    assert_eq!(pr["title"], patch_of(company, id).subject());
     let read = |key: &str| fs::read_to_string(company.join(pr[key].as_str().unwrap())).unwrap();
     // The description becomes the patch message on merge, so the reason
     // is only in the comment.
@@ -13548,7 +13545,7 @@ fn gated_add_takes_the_failed_preflight_from_the_probe() {
         &[
             "preflight",
             "--json",
-            "--title",
+            "--message",
             "Use SHA-256 for tokens",
             "--from",
             &base,
@@ -13562,7 +13559,7 @@ fn gated_add_takes_the_failed_preflight_from_the_probe() {
     let outcome = git_uplink::add_patch_or_gate(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some(base),
             head_ref: Some(head),
             preflight: ScriptVerdict::Reported(report),
@@ -13597,7 +13594,7 @@ fn gated_add_takes_the_failed_preflight_from_the_probe() {
     let err = git_uplink::add_patch_or_gate(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some(base),
             head_ref: Some(head),
             preflight: ScriptVerdict::Reported(stale),
@@ -13699,7 +13696,7 @@ fn adopt_fork_world(company: &Path) -> Fork {
     let queued = add_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some(rev_of(company, "main")),
             head_ref: Some(hash.clone()),
             ..Default::default()
@@ -13801,7 +13798,7 @@ fn adopt_branch_appends_picked_commits_with_detected_dependencies() {
     assert_eq!(adopted[2].depends_on, vec![fork.queued.id.clone()]);
 
     let queue = &result.adoption.as_ref().unwrap().queue;
-    let titles: Vec<&str> = queue.upstream.iter().map(|p| p.title.as_str()).collect();
+    let titles: Vec<&str> = queue.upstream.iter().map(|p| p.subject()).collect();
     assert_eq!(
         titles,
         [
@@ -14127,7 +14124,7 @@ fn adopt_branch_writes_the_groups_file() {
     let groups = fork_groups_file(company);
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].commits, vec![fork.new_file.clone()]);
-    assert_eq!(groups[0].message.as_deref(), Some("Add limits"));
+    assert_eq!(groups[0].message, "Add limits");
     let raw = fs::read_to_string(&path).unwrap();
     assert!(!raw.contains("ignorePreflight"), "{raw}");
 }
@@ -14248,7 +14245,7 @@ fn adopt_branch_decides_ignore_internal_only_or_skip() {
                 let titles: Vec<&str> = adoption.adopted.iter().map(|a| a.title.as_str()).collect();
                 assert_eq!(titles, ["Fork notes", "Add limits"]);
                 assert!(adoption.queue.is_internal(&adoption.adopted[1].id));
-                assert_eq!(groups[1].title, "Add limits");
+                assert_eq!(groups[1].subject(), "Add limits");
                 assert_eq!(groups[1].intent, PatchIntent::InternalOnly);
             }
             _ => {
@@ -14389,7 +14386,7 @@ fn adopt_branch_abort_abort_keep_and_skip_a_paused_group() {
             "main"
         );
         let queue = git_uplink::read_queue(company).unwrap();
-        let has_limits = queue.all_patches().any(|p| p.title == "Add limits");
+        let has_limits = queue.all_patches().any(|p| p.subject() == "Add limits");
         match resume {
             AdoptResume::Abort => {
                 assert_eq!(result.aborted, Some(AdoptResume::Abort));
@@ -14470,7 +14467,7 @@ fn adopt_branch_failure_mid_run_resets_uplink_state() {
     assert_eq!(rev_of(company, STATE_BRANCH), state_before);
     assert_eq!(patches(), patches_before);
     let queue = git_uplink::read_queue(company).unwrap();
-    assert!(!queue.all_patches().any(|p| p.title == "Fork notes"));
+    assert!(!queue.all_patches().any(|p| p.subject() == "Fork notes"));
 }
 
 fn init_adopt_opts(world: &World, groups: Vec<AdoptGroup>) -> InitOpts {
@@ -14797,7 +14794,7 @@ fn diverged_clones(path: &str) -> (World, PathBuf, Vec<TempDir>, PathBuf, Patch,
         add_landed_patch(
             repo,
             AddPatchOpts {
-                title: format!("{path} from {who}"),
+                message: format!("{path} from {who}"),
                 from_ref: Some("main".into()),
                 internal_pr_number: Some(pr),
                 ..Default::default()
@@ -14831,7 +14828,7 @@ fn restack_adds_local_patches_again_on_top_of_origin_and_push_fast_forwards() {
     let mine = add_landed_patch(
         &asha,
         AddPatchOpts {
-            title: "Readme from Asha".into(),
+            message: "Readme from Asha".into(),
             from_ref: Some("main".into()),
             internal_pr_number: Some(201),
             ..Default::default()
@@ -14855,7 +14852,7 @@ fn restack_adds_local_patches_again_on_top_of_origin_and_push_fast_forwards() {
         .queue
         .all_patches()
         .filter(|p| p.kind.is_none())
-        .map(|p| p.title.clone())
+        .map(|p| p.subject().to_string())
         .collect();
     assert_eq!(titles, ["Notes from Ben", "Readme from Asha"]);
     let backup = result.backup.unwrap();
@@ -15253,7 +15250,7 @@ fn rebuild_inline_of_a_submitted_patch_that_changes_its_lines_needs_delta_approv
     let ttl = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -15371,7 +15368,7 @@ fn rebuild_inline_keeps_an_upstream_bound_resolution_that_fails_the_assessment_p
     let ttl = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -15472,8 +15469,8 @@ fn init_adds_internal_groups_last_on_company_main_with_their_dependencies() {
             .all_patches()
             .find(|p| p.id == id)
             .unwrap()
-            .title
-            .clone()
+            .subject()
+            .to_string()
     };
     let adopted: Vec<String> = log
         .lines()
@@ -15481,7 +15478,7 @@ fn init_adds_internal_groups_last_on_company_main_with_their_dependencies() {
         .map(|rest| title_of(rest.split_whitespace().next().unwrap()))
         .collect();
     assert_eq!(adopted, ["Metrics", "Api", "Dashboards", "Panels"]);
-    let internal: Vec<&str> = queue.internal.iter().map(|p| p.title.as_str()).collect();
+    let internal: Vec<&str> = queue.internal.iter().map(|p| p.subject()).collect();
     assert_eq!(internal, ["Dashboards", "Panels"]);
     let (dash, panels) = (&queue.internal[0], &queue.internal[1]);
     assert!(dash.depends_on.is_empty(), "{:?}", dash.depends_on);
@@ -15612,7 +15609,7 @@ fn restack_preflights_internal_patches_on_its_stack_unless_told_not_to() {
     add_landed_patch(
         &asha,
         AddPatchOpts {
-            title: "Internal from Asha".into(),
+            message: "Internal from Asha".into(),
             from_ref: Some("main".into()),
             internal_only: true,
             internal_pr_number: Some(201),
@@ -15670,7 +15667,7 @@ fn queued_with_preflight(world: &World) -> (Patch, PreflightReport) {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
+            message: "Use SHA-256 for tokens".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -15851,7 +15848,7 @@ fn world_with_dependent_notes() -> (World, Patch, Patch) {
     let notes = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Add notes".into(),
+            message: "Add notes".into(),
             from_ref: Some("main".into()),
             depends_on: vec![hash_patch.id.clone()],
             ..Default::default()
@@ -16023,8 +16020,7 @@ fn add_records_internal_authors_as_co_authors_below_the_cutoff_on_main_only() {
     let patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Use SHA-256 for tokens".into(),
-            message: Some("Use SHA-256 for tokens\n\nReplace SHA-1.\n".into()),
+            message: "Use SHA-256 for tokens\n\nReplace SHA-1.\n".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },
@@ -16112,7 +16108,7 @@ fn resolving_a_conflict_adds_the_resolver_as_author() {
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
-            title: "Extend TTL".into(),
+            message: "Extend TTL".into(),
             from_ref: Some("main".into()),
             ..Default::default()
         },

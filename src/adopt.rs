@@ -4,12 +4,12 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::assess::{assert_assess_ok, assess_from_message, patch_authors};
+use crate::assess::{assert_assess_ok, assess_from_message, patch_authors, strip_html_comments};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{add_event, cannot_depend_on, get_patch, patch_path};
 use crate::repo::{has_ref, new_patch_id, rev_parse, stamp};
-use crate::types::{Patch, PatchIntent, PatchSource, PatchStatus, QueueState};
+use crate::types::{Patch, PatchIntent, PatchSource, PatchStatus, QueueState, first_line};
 
 pub use crate::run::{
     ADOPT_AMENDED_REF_PREFIX, AdoptDecider, AdoptDecision, AdoptFailure, AdoptFailureKind,
@@ -38,11 +38,11 @@ pub struct AdoptCommit {
 #[serde(rename_all = "camelCase")]
 pub struct AdoptGroup {
     pub commits: Vec<String>,
-    pub title: String,
+    /// The commit message: subject, blank line, body, and the internal part
+    /// below the cutoff.
+    pub message: String,
     #[serde(default)]
     pub intent: PatchIntent,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
     /// Adopt the group even when `preflight.sh` fails on it. It then also
     /// depends on the upstream patch queued before it. `adopt --branch` only.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -51,6 +51,13 @@ pub struct AdoptGroup {
     /// adopted instead of the commits'. `adopt --branch` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amended: Option<String>,
+}
+
+impl AdoptGroup {
+    /// The first line of the message, to name the group.
+    pub fn subject(&self) -> &str {
+        first_line(&self.message)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +74,7 @@ pub(crate) struct ResolvedGroup {
     pub(crate) from_sha: String,
     pub(crate) head_sha: String,
     pub(crate) shas: Vec<String>,
+    /// The subject of `message`, to name the group.
     pub(crate) title: String,
     pub(crate) intent: PatchIntent,
     pub(crate) message: String,
@@ -234,7 +242,9 @@ pub fn load_groups_file(path: &Path) -> Result<Vec<AdoptGroup>> {
             ))
         })?
     };
-    let groups: Vec<AdoptGroup> = serde_json::from_str(&raw)?;
+    let mut value: serde_json::Value = serde_json::from_str(&raw)?;
+    crate::queue::migrate_legacy_messages(&mut value);
+    let groups: Vec<AdoptGroup> = serde_json::from_value(value)?;
     Ok(groups)
 }
 
@@ -248,9 +258,8 @@ pub fn resolve_groups(analysis: &AheadAnalysis, groups: &[AdoptGroup]) -> Result
         .into_iter()
         .map(|g| AdoptGroup {
             commits: g.shas,
-            title: g.title,
+            message: g.message,
             intent: g.intent,
-            message: Some(g.message),
             ignore_preflight: g.ignore_preflight,
             amended: g.amended,
         })
@@ -377,6 +386,14 @@ pub(crate) fn resolve_group(
     // Indices are unique, so a span as long as the count means no gaps.
     let first = indices[0];
     let last = *indices.last().unwrap();
+    let message = group.message.trim().to_string();
+    let title = first_line(&strip_html_comments(&message)).to_string();
+    if title.is_empty() {
+        return Err(Error::msg(format!(
+            "adopt group {} has no message",
+            group_idx + 1
+        )));
+    }
     if last + 1 - first != indices.len() {
         let skipped = if analysis.allow_skip {
             "; a group cannot span a skipped commit"
@@ -384,21 +401,9 @@ pub(crate) fn resolve_group(
             ""
         };
         return Err(Error::msg(format!(
-            "adopt group \"{}\" is not a contiguous first-parent run{skipped}",
-            group.title
+            "adopt group \"{title}\" is not a contiguous first-parent run{skipped}"
         )));
     }
-    let title = group.title.trim();
-    if title.is_empty() {
-        return Err(Error::msg("adopt group title is empty"));
-    }
-    let message = group
-        .message
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(title)
-        .to_string();
     Ok(ResolvedGroup {
         from_sha: analysis.commits[first].first_parent.clone(),
         head_sha: analysis.commits[last].sha.clone(),
@@ -406,7 +411,7 @@ pub(crate) fn resolve_group(
             .iter()
             .map(|i| analysis.commits[*i].sha.clone())
             .collect(),
-        title: title.to_string(),
+        title,
         intent: group.intent,
         message,
         ignore_preflight: group.ignore_preflight,
@@ -491,8 +496,7 @@ pub(crate) fn adopted_patch(
     let created_at = stamp();
     let mut patch = Patch {
         id: new_patch_id(),
-        title: group.title.clone(),
-        commit_message: String::new(),
+        commit_message: strip_html_comments(&group.message),
         status: PatchStatus::Queued,
         depends_on,
         created_at: created_at.clone(),
@@ -523,10 +527,8 @@ pub(crate) fn adopted_patch(
         &group.from_sha,
         &group.head_sha,
         &group.message,
-        Some(&group.title),
         intent,
     )?;
-    patch.commit_message = report.commit_message.clone();
     if !intent.is_internal_only() {
         assert_assess_ok(&report, &group.title)?;
     }

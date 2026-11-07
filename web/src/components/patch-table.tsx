@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { Patch } from "../lib/api";
 import { NEEDS_APPROVAL, shownStatus } from "../lib/status";
+import { patchSubject } from "../lib/view";
 import { PatchIdLink, patchHref } from "./patch-id-link";
 import { StatusBadge } from "./status-badge";
 
@@ -43,7 +44,7 @@ export function PatchTable({
                 to={patchHref(patch.id, search)}
                 className="hover:underline"
               >
-                {patch.title}
+                {patchSubject(patch)}
               </Link>
             </td>
             <td className="space-x-1 py-2 pr-3">

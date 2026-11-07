@@ -69,11 +69,11 @@ export const stackedDependsOn: LabScenario = {
         branchPush("feat/ben-log-nodep", "ben-log.diff", "Log token hashes"),
         you(
           [
-            'git uplink preflight --title "Log token hashes" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>',
+            "git uplink preflight --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>",
           ],
           "Local check; the PR body has no Uplink-Depends-On line.",
         ),
-        preflightCi("Log token hashes"),
+        preflightCi(),
       ],
       apply: (state) => ({
         ...state,

@@ -33,11 +33,11 @@ export const internalOnly: LabScenario = {
         ),
         you(
           [
-            'git uplink assess --title "Vendor telemetry" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>',
+            "git uplink assess --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>",
           ],
           "No uplink:internal-only label. Assess fails on companyTelemetry.",
         ),
-        assessCi("Vendor telemetry"),
+        assessCi(),
       ],
       apply: (state) => ({
         ...state,

@@ -126,7 +126,6 @@ jobs:
               printf '%s\n' "${BODY:-}"
             } > /tmp/uplink-msg.txt
             git uplink assess --patch "${BASE_REF#uplink/conflict/}" \
-              --title "$TITLE" \
               --message-file /tmp/uplink-msg.txt \
               --from "$FROM_SHA" \
               --head "$HEAD_SHA"
@@ -138,7 +137,6 @@ jobs:
               printf '%s\n' "${BODY:-}"
             } > /tmp/uplink-msg.txt
             git uplink assess --patch "${BASE_REF#uplink/amend/}" \
-              --title "$TITLE" \
               --message-file /tmp/uplink-msg.txt \
               --from "${FROM_SHA}^" \
               --head "$HEAD_SHA"
@@ -148,7 +146,6 @@ jobs:
               printf '%s\n' "${BODY:-}"
             } > /tmp/uplink-msg.txt
             run_preflight \
-              --title "$TITLE" \
               --message-file /tmp/uplink-msg.txt \
               --from "$FROM_SHA" \
               --head "$HEAD_SHA"

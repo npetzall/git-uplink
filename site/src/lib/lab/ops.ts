@@ -62,28 +62,28 @@ function addCommand(opts: {
   ]
     .filter(Boolean)
     .join(" ");
-  return `git uplink add --title "${opts.title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha> --pr <n>${flags ? ` ${flags}` : ""}`;
+  return `git uplink add --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha> --pr <n>${flags ? ` ${flags}` : ""}`;
 }
 
-export function assessCi(title: string, extra = ""): LabOperation {
+export function assessCi(extra = ""): LabOperation {
   const flag = extra ? ` ${extra}` : "";
   return ciJob(
     "Uplink upstream assess",
     [
       "git uplink init",
-      `git uplink assess --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
+      `git uplink assess --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
     ],
     "Runs when the internal PR is opened or updated, with the optional assessment hook (pr). One PR comment, updated in place. Skipped for uplink:internal-only.",
   );
 }
 
-export function preflightCi(title: string, extra = ""): LabOperation {
+export function preflightCi(extra = ""): LabOperation {
   const flag = extra ? ` ${extra}` : "";
   return ciJob(
     "Uplink upstream preflight",
     [
       "git uplink init",
-      `git uplink preflight --json --title "${title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
+      `git uplink preflight --json --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>${flag}`,
     ],
     "Same PR. Skipped for uplink:internal-only. preflight.sh runs in a step with no token; a separate job posts the comment.",
   );
@@ -103,9 +103,7 @@ export function importOps(opts: {
       [add, publish],
       "After engineering review. Merge is the internal product gate.",
     ),
-    ...(opts.internalOnly
-      ? []
-      : [assessCi(opts.title), preflightCi(opts.title)]),
+    ...(opts.internalOnly ? [] : [assessCi(), preflightCi()]),
     ...(opts.internalOnly
       ? []
       : [
@@ -113,7 +111,7 @@ export function importOps(opts: {
             "Uplink import",
             [
               "git uplink init",
-              `git uplink preflight --json --title "${opts.title}" --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>`,
+              `git uplink preflight --json --message-file /tmp/uplink-msg.txt --from <base.sha> --head <head.sha>`,
             ],
             "Preflight job, after the merge: read-only token, no App token. It runs preflight.sh and hands its result to the import job.",
           ),
