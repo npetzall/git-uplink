@@ -20,15 +20,19 @@
 # stored with the patch: the change has no patch id yet, and this workflow
 # file is the pull request's own copy. Uplink submit assesses the patch.
 #
-# Two more jobs are not checks. "Uplink rebase hint" comments how to rebase
-# when the main the branch was cut from has been replaced by a rebuild, and
-# removes the comment once the branch is rebased; with repository variable
-# UPLINK_AUTO_REBASE set to `true` it dispatches Uplink rebase instead of
-# waiting for the developer. "Uplink rebase request" runs when the label
-# uplink:rebase is added: it removes the label and dispatches Uplink rebase.
-# The checks run on that event like on any other label: a skipped check
-# counts as passed, so skipping them would let the label turn a failure
-# green.
+# The rebase hint for a branch cut from a replaced main is in Uplink rebase,
+# not here: this workflow does not run at all while the pull request
+# conflicts, which a replaced main often causes.
+#
+# One job is not a check. The label uplink:rebase starts Uplink rebase
+# itself (pull_request_target, for the same reason). On that event "Uplink
+# rebase requested"
+# cancels this run, so no check runs on the head that is about to be
+# replaced. Cancelled, not skipped: a skipped check counts as passed and
+# would let the label turn a failure green. Every other job waits for it.
+# When Uplink rebase pushes, the push runs these checks on the new head;
+# when it pushes nothing, it re-runs this run, and on a re-run the job does
+# not cancel.
 #
 # Put both check names in the required status checks for the PR.
 # This workflow does not write uplink/state (not uplink-mutate).
@@ -55,9 +59,31 @@ permissions:
   contents: read
 
 jobs:
+  # Not a check. Ends this run on the first attempt of the event that asks
+  # Uplink rebase to replace the head.
+  rebase-requested:
+    name: Uplink rebase requested
+    if: ${{ github.run_attempt == 1 && github.event.action == 'labeled' && github.event.label.name == 'uplink:rebase' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel this run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run cancel "$GITHUB_RUN_ID"
+          # Wait for the cancel to land, so no job that needs this one starts.
+          for _ in $(seq 60); do sleep 5; done
+          echo "::error title=Uplink rebase requested::run was not cancelled"
+          exit 1
+
   assess:
     name: Uplink upstream assess
-    if: ${{ !contains(join(github.event.pull_request.labels.*.name, ','), 'uplink:internal-only') }}
+    needs: rebase-requested
+    if: ${{ !cancelled() && !contains(join(github.event.pull_request.labels.*.name, ','), 'uplink:internal-only') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -164,7 +190,8 @@ jobs:
   # The comment is posted by the job below, which never runs the script.
   preflight:
     name: Uplink upstream preflight
-    if: ${{ !contains(join(github.event.pull_request.labels.*.name, ','), 'uplink:internal-only') }}
+    needs: rebase-requested
+    if: ${{ !cancelled() && !contains(join(github.event.pull_request.labels.*.name, ','), 'uplink:internal-only') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -257,51 +284,3 @@ jobs:
           report: ${{ needs.preflight.outputs.report }}
           pr-number: ${{ github.event.pull_request.number }}
           token: ${{ secrets.GITHUB_TOKEN }}
-
-  # Not a check. The branch is fetched and read, never checked out.
-  rebase-hint:
-    name: Uplink rebase hint
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      actions: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.base.ref }}
-
-      - uses: $/.github/actions/install-git-uplink
-        with:
-          repo: ${{ vars.UPLINK_SRC }}
-          version: ${{ vars.UPLINK_VERSION }}
-          signer: ${{ vars.UPLINK_SIGNER }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: $/.github/actions/uplink-rebase-comment
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pr-number: ${{ github.event.pull_request.number }}
-          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}
-
-  # Not a check. The label is a request, so it is taken off before the
-  # rebase is dispatched: adding it again asks again.
-  rebase-request:
-    name: Uplink rebase request
-    if: ${{ github.event.action == 'labeled' && github.event.label.name == 'uplink:rebase' }}
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      actions: write
-    steps:
-      - name: Remove the label and dispatch Uplink rebase
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          gh api --method DELETE "repos/${GH_REPO}/issues/${PR_NUMBER}/labels/uplink%3Arebase" > /dev/null
-          gh workflow run "Uplink rebase" --ref main -f "pr_number=${PR_NUMBER}"

@@ -460,15 +460,24 @@ mod embed_tests {
             text.contains("types: [opened, synchronize, reopened, edited, labeled, unlabeled]"),
             "{text}"
         );
-        // The one job that looks at the label is the rebase request, which
-        // is not a check.
+        // The one job that looks at the label is the one that cancels the
+        // run for uplink:rebase, which is not a check. The others wait for
+        // it and are cancelled with the run, never skipped by it.
         for (key, job) in jobs_of(&text) {
+            if key == "rebase-requested" {
+                continue;
+            }
             assert!(
-                key == "rebase-request"
-                    || (!job.contains("github.event.action")
-                        && !job.contains("github.event.label")),
+                !job.contains("github.event.action") && !job.contains("github.event.label"),
                 "{key} must run for every label\n{job}"
             );
+            if key != "preflight-comment" {
+                assert!(
+                    job.contains("\n    needs: rebase-requested\n")
+                        && job.contains("\n    if: ${{ !cancelled()"),
+                    "{key} must wait for rebase-requested\n{job}"
+                );
+            }
         }
         assert!(
             paths.contains(&".github/pull_request_template.md"),
@@ -1572,28 +1581,91 @@ mod embed_tests {
             );
             assert_eq!(comment.matches("gh workflow run").count(), 1, "{comment}");
 
-            let hint = job("uplink-pr.yml", "rebase-hint");
+            // One comment per pull request: duplicates are deleted, and a
+            // rebuild (no pr-number) writes an unchanged one again.
+            assert!(
+                comment.contains("done < <(tail -n +2 <<<\"$found\")")
+                    && comment.contains(
+                        "if [ \"$changed\" = \"false\" ] && [ -z \"$NOTE\" ] && [ -n \"$PR_NUMBER\" ]; then"
+                    ),
+                "{comment}"
+            );
+
+            // The hint runs where a conflicting pull request still runs a
+            // workflow: pull_request_target in Uplink rebase, not PR checks.
+            let hint = job("uplink-rebase.yml", "hint");
             assert!(
                 hint.contains(action)
                     && hint.contains("pr-number: ${{ github.event.pull_request.number }}")
                     && hint.contains("persist-credentials: false")
-                    && !hint.contains("\n    if:"),
+                    && hint.contains(
+                        "\n    if: ${{ github.event_name == 'pull_request_target' && github.event.action != 'labeled' }}\n"
+                    )
+                    && hint.contains("\n      cancel-in-progress: true\n"),
                 "{forge:?}\n{hint}"
             );
-            let request = job("uplink-pr.yml", "rebase-request");
             assert!(
-                request.contains(
-                    "if: ${{ github.event.action == 'labeled' && github.event.label.name == 'uplink:rebase' }}"
-                ),
-                "{forge:?}\n{request}"
+                job("uplink-rebase.yml", "rebase").contains("\n      cancel-in-progress: false\n"),
+                "{forge:?}"
             );
-            let unlabel = request.find("labels/uplink%3Arebase").unwrap();
-            let dispatch = request.find("gh workflow run \"Uplink rebase\"").unwrap();
-            assert!(unlabel < dispatch, "{forge:?}\n{request}");
-            assert!(!request.contains("secrets.UPLINK"), "{forge:?}\n{request}");
+            assert!(
+                !text("uplink-pr.yml").contains("uplink-rebase-comment"),
+                "{forge:?}"
+            );
+            // The label goes to Uplink rebase itself; PR checks only cancel
+            // their own first attempt for it.
+            let pr = text("uplink-pr.yml");
+            assert!(!pr.contains("gh workflow run"), "{forge:?}\n{pr}");
+            let requested = job("uplink-pr.yml", "rebase-requested");
+            assert!(
+                requested.contains(
+                    "if: ${{ github.run_attempt == 1 && github.event.action == 'labeled' && github.event.label.name == 'uplink:rebase' }}"
+                ) && requested.contains("gh run cancel \"$GITHUB_RUN_ID\"")
+                    && !requested.contains("secrets.UPLINK"),
+                "{forge:?}\n{requested}"
+            );
 
             let rebase = text("uplink-rebase.yml");
             assert!(rebase.contains("name: Uplink rebase\n"), "{rebase}");
+            // Runs on the label even when the pull request conflicts, which
+            // a pull_request workflow never does.
+            assert!(
+                rebase.contains(
+                    "  pull_request_target:\n    types: [opened, reopened, synchronize, labeled]\n"
+                ) && rebase.contains("zizmor: ignore[dangerous-triggers]")
+                    // Per job: a hint event must not replace a pending rebase.
+                    && !rebase.contains("\nconcurrency:")
+                    && !rebase.contains("\n  pull_request:\n")
+                    && rebase.contains(
+                        "(github.event_name == 'pull_request_target' && github.event.label.name == 'uplink:rebase')"
+                    ),
+                "{forge:?}\n{rebase}"
+            );
+            // The label stays on while the rebase runs and comes off after
+            // the push, whatever the outcome. The cancelled checks are
+            // re-run only when nothing was pushed.
+            let push = rebase.find("origin push --quiet origin").unwrap();
+            let unlabel = rebase.find("labels/uplink%3Arebase").unwrap();
+            let fail = rebase
+                .find("- name: Fail when the branch was not rebased")
+                .unwrap();
+            assert!(push < unlabel && unlabel < fail, "{forge:?}\n{rebase}");
+            let unlabel_step = steps_of(&job("uplink-rebase.yml", "rebase"))
+                .into_iter()
+                .find(|step| step.contains("labels/uplink%3Arebase"))
+                .unwrap()
+                .to_string();
+            assert!(
+                unlabel_step
+                    .contains("if: ${{ always() && github.event_name == 'pull_request_target' }}"),
+                "{forge:?}\n{unlabel_step}"
+            );
+            assert!(
+                rebase.contains(
+                    "if: ${{ always() && github.event_name == 'pull_request_target' && steps.rebase.outputs.outcome != 'rebased' }}"
+                ) && rebase.contains("gh run rerun \"$id\""),
+                "{forge:?}\n{rebase}"
+            );
             assert!(!rebase.contains("group: uplink-mutate"), "{rebase}");
             // The pull request number is the only input: the commit to
             // rebase from is worked out in the job.

@@ -343,10 +343,17 @@ sequenceDiagram
   participant Checks as uplink-pr.yml
   participant PR as Internal PR
   participant Job as uplink-rebase.yml
-  Checks->>Checks: git uplink rebase --plan (head fetched, never checked out)
-  Checks-->>PR: comment with the rebase command
-  alt rebase label, or UPLINK_AUTO_REBASE
-    Checks->>Job: dispatch with the PR number only
+  PR->>Job: opened, reopened or pushed (pull_request_target, runs even while the PR conflicts)
+  Job->>Job: hint job: git uplink rebase --plan (head fetched, never checked out)
+  Job-->>PR: one comment with the rebase command, edited in place
+  alt label uplink:rebase
+    PR->>Job: pull_request_target, runs even while the PR conflicts
+    PR-->>Checks: the run for the label cancels itself
+    Job->>Job: git uplink rebase --plan, then rebase in a worktree, hooks off
+    Job->>PR: push --force-with-lease, or re-run the cancelled checks
+    Job->>PR: remove the label, whatever the outcome
+  else UPLINK_AUTO_REBASE
+    Job->>Job: hint job dispatches the rebase with the PR number only
     Job->>Job: git uplink rebase --plan, then rebase in a worktree, hooks off
     Job->>PR: push --force-with-lease on the head it read
   else neither
