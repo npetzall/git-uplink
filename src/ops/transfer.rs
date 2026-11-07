@@ -185,16 +185,14 @@ pub(super) fn assess_transfer_to_upstream(
         queue,
         from_ref,
         head_ref,
-        &stored_commit_message(patch),
-        Some(&patch.title),
+        &patch.commit_message.clone(),
         PatchIntent::Upstream,
     )?;
-    assert_assess_ok(&report, &patch.title)?;
+    assert_assess_ok(&report, patch.subject())?;
     Ok(report)
 }
 
 pub(super) fn apply_upstream_assess(patch: &mut Patch, report: AssessReport) {
-    patch.commit_message = report.commit_message.clone();
     patch.assess = Some(report);
 }
 
@@ -372,7 +370,7 @@ pub(super) fn apply_queue_preview(
                         "transfer"
                     },
                     item.id,
-                    item.title
+                    item.subject()
                 )));
             }
             return Ok(PreviewOutcome::Conflict {
@@ -577,7 +575,6 @@ pub(super) fn complete_transfer(
     move_patch(&mut preview, id, direction.to_internal())?;
     {
         let current = get_patch_mut(&mut preview, id)?;
-        current.title = updated.title.clone();
         current.commit_message = updated.commit_message.clone();
         current.source.authors = updated.source.authors.clone();
     }
@@ -613,7 +610,6 @@ pub(super) fn complete_transfer(
     record_transfer(&mut queue, id, direction, stable, assess_report)?;
     {
         let current = get_patch_mut(&mut queue, id)?;
-        current.title = updated.title;
         current.commit_message = updated.commit_message;
         current.source.authors = updated.source.authors;
     }
@@ -651,7 +647,7 @@ fn change_message(
     direction: TransferDirection,
     change: Option<&PatchMessage>,
 ) -> Result<(Patch, Option<AssessReport>)> {
-    let (mut updated, raw_message) = with_message(patch, change)?;
+    let (updated, raw_message) = with_message(patch, change)?;
     if change.is_none() {
         return Ok((updated, None));
     }
@@ -661,10 +657,9 @@ fn change_message(
         onto,
         "HEAD",
         &raw_message,
-        Some(&updated.title),
         PatchIntent::from_internal_only(direction.to_internal()),
     )?;
-    commit_message_change(repo, queue, &mut updated, change, &report)?;
+    commit_message_change(repo, queue, &updated, change)?;
     Ok((updated, Some(report)))
 }
 

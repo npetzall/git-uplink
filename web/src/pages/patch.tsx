@@ -21,7 +21,7 @@ import {
 } from "../lib/api";
 import type { FileDelta } from "../lib/patch";
 import { NEEDS_APPROVAL, shownStatus } from "../lib/status";
-import { parseView, viewSearch } from "../lib/view";
+import { parseView, patchSubject, viewSearch } from "../lib/view";
 
 function shortSha(sha: string): string {
   return sha.slice(0, 12);
@@ -190,7 +190,9 @@ export function PatchPage() {
               <StatusBadge value={NEEDS_APPROVAL} />
             ) : null}
             {data?.layer ? <StatusBadge value={data.layer} /> : null}
-            <span className="text-lg text-foreground">{patch.title}</span>
+            <span className="text-lg text-foreground">
+              {patchSubject(patch)}
+            </span>
           </div>
         ) : null}
       </div>

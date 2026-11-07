@@ -259,10 +259,11 @@ fn apply_deps(repo: &Path, queue: &QueueState, deps: &[String], info: &AdoptFail
         if dep.status == PatchStatus::Merged {
             continue;
         }
-        if apply_abs(repo, &repo.join(patch_path(id)?), &dep.title)? == ApplyOutcome::Conflict {
+        if apply_abs(repo, &repo.join(patch_path(id)?), dep.subject())? == ApplyOutcome::Conflict {
             return Err(Error::msg(format!(
                 "{id} (\"{}\") does not apply onto public upstream, so {} cannot be amended on it",
-                dep.title, info.item
+                dep.subject(),
+                info.item
             )));
         }
     }

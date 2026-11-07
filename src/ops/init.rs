@@ -812,8 +812,7 @@ fn resume_paused(repo: &Path, resume: UpgradeResume) -> Result<Option<PausedUpgr
                     &queue,
                     &paused.onto,
                     "HEAD",
-                    &stored_commit_message(stored),
-                    Some(&stored.title),
+                    &stored.commit_message.clone(),
                     PatchIntent::InternalOnly,
                 )?;
                 paused.amended.push(AmendedPatch {
@@ -942,7 +941,7 @@ fn prepare_tooling_upgrade(repo: &Path, resume: Option<UpgradeResume>) -> Result
                 dropped: ready.dropped.clone(),
                 amended: ready.amended.clone(),
                 patch_id: patch.id.clone(),
-                patch_title: patch.title.clone(),
+                patch_title: patch.subject().to_string(),
                 onto: rev_parse(repo, "HEAD")?,
                 files: if files.is_empty() {
                     touched
@@ -969,7 +968,7 @@ fn prepare_tooling_upgrade(repo: &Path, resume: Option<UpgradeResume>) -> Result
         {
             ready
                 .dropped
-                .push((id.clone(), get_patch(&queue, id)?.title.clone()));
+                .push((id.clone(), get_patch(&queue, id)?.subject().to_string()));
         }
     }
     for id in trial.applied.iter().filter(|id| !queue.is_tooling(id)) {
@@ -977,7 +976,7 @@ fn prepare_tooling_upgrade(repo: &Path, resume: Option<UpgradeResume>) -> Result
         if !files.is_empty() {
             ready.overrides.push(ToolingOverride {
                 id: id.clone(),
-                title: get_patch(&queue, id)?.title.clone(),
+                title: get_patch(&queue, id)?.subject().to_string(),
                 files,
             });
         }

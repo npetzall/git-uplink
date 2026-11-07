@@ -37,15 +37,14 @@ pub use assess::{
     ApprovalReceipt, AssessPackage, FROM_UPSTREAM_ENVIRONMENT, IncomingCommitRow, IncomingMergeRow,
     IncomingPacket, PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN, PackageKind,
     TO_UPSTREAM_ENVIRONMENT, already_approved, assert_assess_ok, assess_from_message,
-    assess_patch_file, change_between, changed_lines, company_commit_message,
+    assess_patch_file, change_between, changed_lines, company_commit_message, cutoff_marker,
     depends_on_from_message, export_commit_message, extras_dir, format_approval_receipt,
     format_approver_packet, format_assess_checks_markdown, format_assess_markdown,
     format_contribution_packet, format_contribution_packet_with_extras,
     format_delta_approver_packet, format_incoming_packet, from_upstream_report_paths,
-    load_extra_markdown, parse_depends_on, patch_text, prepend_report_extras,
+    load_extra_markdown, message_subject, parse_depends_on, patch_text, prepend_report_extras,
     public_subject_and_body, report_paths, review_token, review_token_path, split_internal_message,
-    store_extras, stored_commit_message, stored_extras_fresh, strip_html_comments,
-    upstream_pr_body,
+    split_subject_body, store_extras, stored_extras_fresh, strip_html_comments, upstream_pr_body,
 };
 pub use doctor::{DoctorReport, doctor, format_doctor_summary};
 pub use error::{AssessError, ConflictError, Error, PreflightError, Result};
@@ -93,7 +92,7 @@ pub use types::{
     PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchExtras, PatchIntent, PatchLayer,
     PatchStatus, PatchUpstream, PendingMerge, PendingUpstream, PreviousMain, QUEUE_PATH,
     QUEUE_VERSION, QueueConfig, QueueState, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
-    TransferDirection, VerifiedUpstream,
+    TransferDirection, VerifiedUpstream, first_line,
 };
 
 #[cfg(test)]

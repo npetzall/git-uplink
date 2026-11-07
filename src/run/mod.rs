@@ -204,8 +204,8 @@ pub enum RunItem {
 impl RunItem {
     pub fn title(&self) -> &str {
         match self {
-            Self::Group(group) => &group.title,
-            Self::Queued(item) => &item.patch.title,
+            Self::Group(group) => group.subject(),
+            Self::Queued(item) => item.patch.subject(),
         }
     }
 
@@ -488,7 +488,11 @@ fn run_path(repo: &Path) -> Result<PathBuf> {
 /// The run in progress, if any.
 pub fn read_run(repo: &Path) -> Result<Option<BranchRun>> {
     match fs::read_to_string(run_path(repo)?) {
-        Ok(raw) => Ok(Some(serde_json::from_str(&raw)?)),
+        Ok(raw) => {
+            let mut value: serde_json::Value = serde_json::from_str(&raw)?;
+            crate::queue::migrate_legacy_messages(&mut value);
+            Ok(Some(serde_json::from_value(value)?))
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.into()),
     }
@@ -513,9 +517,9 @@ pub fn blocking_queue_run(repo: &Path) -> Option<String> {
     if !path.is_file() {
         return None;
     }
-    let message = fs::read_to_string(&path)
+    let message = read_run(repo)
         .ok()
-        .and_then(|raw| serde_json::from_str::<BranchRun>(&raw).ok())
+        .flatten()
         .map(|run| run.blocking_message(repo))
         .unwrap_or_else(|| {
             format!(
@@ -816,16 +820,16 @@ fn adopt_next(ctx: &mut Ctx<'_>, run: &mut BranchRun) -> Result<Step> {
     } = candidate(ctx, run, &queue)?;
     let id = patch.id.clone();
     let label = if sha.is_empty() {
-        format!("{id} - {}", patch.title)
+        format!("{id} - {}", patch.subject())
     } else {
-        format!("{id} - {sha} - {}", patch.title)
+        format!("{id} - {sha} - {}", patch.subject())
     };
     ctx.lines.start(label);
     let test_branch = (run.keep_test_branches && !internal_only)
         .then(|| format!("{ADOPT_TEST_BRANCH_PREFIX}{}-{id}", index + 1));
     let mut done = BranchAdopted {
         id: id.clone(),
-        title: patch.title.clone(),
+        title: patch.subject().to_string(),
         intent: if internal_only {
             PatchIntent::InternalOnly
         } else {
@@ -977,7 +981,8 @@ fn check_item(
     }) {
         ctx.lines.line(StepOutcome::skip(format!(
             "already queued as {} \"{}\"",
-            existing.id, existing.title
+            existing.id,
+            existing.subject()
         )));
         run.already_queued.push(patch.id.clone());
         return Ok(Checked::Instead(Step::AlreadyQueued));
@@ -1017,7 +1022,7 @@ fn check_item(
     };
     let mut stack_tip = None;
     if let Some(stack) = run.stack.clone() {
-        match apply_on_stack(repo, &stack, candidate_abs, &patch.title)? {
+        match apply_on_stack(repo, &stack, candidate_abs, patch.subject())? {
             OnStack::Applied(tip) => stack_tip = Some(tip),
             OnStack::Empty => {
                 ctx.lines.line(StepOutcome::skip(already_in));
@@ -1030,7 +1035,7 @@ fn check_item(
                     format!("does not apply on top of {on_queue}"),
                     format!(
                         "\"{}\" does not apply on {stack}: {}.",
-                        patch.title,
+                        patch.subject(),
                         run.stack_words()
                     ),
                 );
@@ -1046,7 +1051,7 @@ fn check_item(
         };
         if matches!(item, RunItem::Group(_))
             && let Some(found) =
-                detect_internal_depends_on(repo, queue, candidate_abs, &patch.title)?
+                detect_internal_depends_on(repo, queue, candidate_abs, patch.subject())?
             && !found.is_empty()
         {
             add_event(
@@ -1087,7 +1092,7 @@ fn check_item(
         return Ok(Checked::Add { stack_tip });
     }
 
-    let Some(found) = detect_depends_on(repo, queue, candidate_abs, &patch.title, test_branch)?
+    let Some(found) = detect_depends_on(repo, queue, candidate_abs, patch.subject(), test_branch)?
     else {
         let info = failure(
             AdoptFailureKind::Apply,

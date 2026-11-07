@@ -2,7 +2,7 @@
 
 # CLI reference
 
-Developers open PRs and merge them; they never push main. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message, adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
+Developers open PRs and merge them; they never push main. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message (its first line is the patch subject), adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
 
 On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment; `approve` and `submit` run after that review. git uplink talks to git only; workflows use gh for GitHub and follow-up commands (`submitted`, `gated`) to record results.
 
@@ -16,10 +16,9 @@ git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <na
             [--internal-branch <branch>] [--forge <forge>] [--upgrade] [--continue]
             [--drop] [--abort] [--adopt-groups <path>] [--no-preview] [--json]
             [--preflight <cmd>] [--banned-word <word>]...
-git uplink add --title <text> [--message <text> | --message-file <path>] [--from <ref>]
-            [--head <ref>] [--internal-only] [--pr <n>] [--pr-url <url>]
-            [--base-branch <branch>] [--depends-on <id>]... [--preflight-result <path>]
-            [--gate] [--json]
+git uplink add [--message <text> | --message-file <path>] [--from <ref>] [--head <ref>]
+            [--internal-only] [--pr <n>] [--pr-url <url>] [--base-branch <branch>]
+            [--depends-on <id>]... [--preflight-result <path>] [--gate] [--json]
 git uplink adopt [--branch <ref>] [--groups <path>] [--write-groups <path>] [--continue]
             [--skip] [--abort] [--abort-keep] [--keep-test-branches]
             [--no-preflight-deps] [--no-preview] [--json]
@@ -29,10 +28,10 @@ git uplink restack [--continue] [--skip] [--abort] [--abort-keep] [--no-prefligh
 git uplink refresh
 git uplink reset
 git uplink rebase [--plan] [--head <rev>] [--json] [--no-fetch]
-git uplink preflight [<id>] [--from <ref>] [--head <ref>] [--title <text>]
+git uplink preflight [<id>] [--from <ref>] [--head <ref>]
             [--message <text> | --message-file <path>] [--depends-on <id>]...
             [--internal-only] [--command-only] [--hooks <rev>] [--json]
-git uplink assess [--from <ref>] [--head <ref>] [--title <text>]
+git uplink assess [--from <ref>] [--head <ref>]
             [--message <text> | --message-file <path>] [--internal-only | --patch <id>]
             [--package <dir>] [--json]
 git uplink report <id> [--out <path>] [--extra-dir <path>] [--store-extras]
@@ -55,14 +54,13 @@ git uplink trim-deps [--dry-run] [--json]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
             [--preflight-result <path>] [--preflight-only] [--verify] [--json]
             [--interactive] [--continue] [--abort]
-git uplink resolve <id> [--title <text>] [--message <text> | --message-file <path>]
+git uplink resolve <id> [--message <text> | --message-file <path>]
             [--preflight-result <path>] [--preflight-only]
-git uplink transfer <id> (--to-upstream | --to-internal) [--complete] [--title <text>]
+git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
             [--message <text> | --message-file <path>] [--preflight-result <path>]
             [--preflight-only]
-git uplink amend <id> [--complete] [--title <text>]
-            [--message <text> | --message-file <path>] [--preflight-result <path>]
-            [--preflight-only]
+git uplink amend <id> [--complete] [--message <text> | --message-file <path>]
+            [--preflight-result <path>] [--preflight-only]
 git uplink web-ui [--port <port>] [--no-open]
 git uplink man <dir>
 git uplink version
@@ -125,10 +123,9 @@ Record a merged change as a queued patch on local uplink/state.
 
 Merge lands the change on `main`; import records the patch on `uplink/state` (`upstream[]` by default, `internal[]` with `uplink:internal-only`). Upstream import rebuilds when an active internal patch must stay on top, and publishes that replay with a plain force push of `main`. An upstream import with an empty internal queue, and every internal-only import, only records the patch.
 
-- `--title <text>`: Queue entry name.
 - `--message <text>`: The single commit message stored on the patch (PR title, blank line, PR body).
 
-  HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. If neither message flag is set, the title is the whole message. `Uplink-Depends-On: upl_...` lines in the message become `dependsOn` and are left out of the public message.
+  Its first line is the patch subject. HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. `Uplink-Depends-On: upl_...` lines in the message become `dependsOn` and are left out of the public message.
 - `--message-file <path>`: Read the commit message from a file (- reads stdin).
 - `--from <ref>`: Base revision, the company branch by default (fetched from origin if missing).
 - `--head <ref>`: Head revision, HEAD by default (fetched from origin if missing).
@@ -157,13 +154,13 @@ Pick commits from another local branch and queue them as patches.
 
 Lists the first-parent commits of `--branch` since it left `uplink/upstream`. Group them in the terminal UI, or pass `--groups`; a commit in no group is skipped. Commits already on company `main` start out skipped. A group is one contiguous run, so it cannot span a skipped commit.
 
-The UI is a tree of groups and their commits beside the selected commit's change (`git show`) or group's form: title, an Upstream box (unticked is internal-only), and the message, ending with the internal cutoff line. A new group starts from its first commit's subject and message. Enter or a double-click on a commit offers New group, Move to (or Add to) the previous or next group, and Skip; commits keep their order. ←/→ moves between the panes; text fields take Ctrl+a/Ctrl+e and Alt+←/→. Ctrl+s adopts and Ctrl+w writes the groups file and exits, each after a confirmation. The mouse selects rows, places the cursor, ticks the box and scrolls.
+The UI is a tree of groups and their commits beside the selected commit's change (`git show`) or group's form: an Upstream box (unticked is internal-only) and the message, ending with the internal cutoff line. The message's first line is the patch subject. A new group starts from its first commit's message; the cutoff is added only when the message has none. Enter or a double-click on a commit offers New group, Move to (or Add to) the previous or next group, and Skip; commits keep their order. ←/→ moves between the panes; text fields take Ctrl+a/Ctrl+e and Alt+←/→. Ctrl+s adopts and Ctrl+w writes the groups file and exits, each after a confirmation. The mouse selects rows, places the cursor, ticks the box and scrolls.
 
 The patches are added after the ones already in the queue. Each upstream-bound patch is applied onto `uplink/upstream`, alone and then with queued patches, and depends only on the patches it needs to apply: first the ones whose lines its hunks change or keep as context (`git blame`), else the ones found by trying them. A dependency's own dependencies are not listed again. It must then pass the export preflight (`preflight.sh`); when the script passes only with more queued patches, it depends on those too (`--no-preflight-deps` skips that search).
 
 Internal-only groups are added last, after every upstream-bound group and after the internal patches already queued, in history order. Company main is built from the queue on the branch `uplink/adopt-main`, and each internal-only patch is applied there, depends on the queued patches (upstream or internal) it needs to apply, and must pass `preflight.sh` on company main with it. A group made Internal-only during the run moves to the end with them.
 
-Each group gets a line, `<patch-id> - <sha> - <title>`, with a spinner while it is checked. A patch that passes is added to the queue in its own `uplink/state` commit right away (✓). A group whose change is queued already is skipped (−).
+Each group gets a line, `<patch-id> - <sha> - <subject>`, with a spinner while it is checked. A patch that passes is added to the queue in its own `uplink/state` commit right away (✓). A group whose change is queued already is skipped (−).
 
 A group that still fails (✗) opens a window with the `preflight.sh` output, or why it does not apply, and the choices: Ignore the preflight failure (the patch then also depends on the upstream patch queued before it), make it Internal-only, Amend it, Skip it, Stop (keep what was added), or Abort (reset `uplink/state` to where the run started). The decision is printed as a line of its own and the run goes on. Amend pauses the way `git rebase` stops on a commit: the checkout is left on `uplink/upstream` and the dependencies (company main on `uplink/adopt-main`, for an internal-only group), with the group's commits cherry-picked one by one up to the first that conflicts. The instructions list every commit of the group as applied, already applied, in conflict, or still to pick (with its `git cherry-pick` command). Resolve and `git add`; `--continue` finishes the cherry-pick, picks the rest (stopping again on the next conflict) and adopts what the checkout then holds as the group's change. `--skip`, `--abort-keep` or `--abort` takes it from there instead. Without a terminal a failing group fails the command and resets `uplink/state`.
 
@@ -171,7 +168,7 @@ The run holds a lock on `uplink/state` from its start to its end, including whil
 
 When the run ends having added patches, `uplink/preview/verify` is built: company `main` as the queue now rebuilds it (`--no-preview` skips it). A preview that fails is reported; the patches stay queued.
 
-Every decision is written to the groups file (`.git/uplink/adopt/<branch>.json` unless `--write-groups` says otherwise): full commit ids, title, intent and message, plus `ignorePreflight` and `amended` (an amended commit, kept by a ref under `refs/uplink/adopt-amended/`). `--groups` on that file adopts the same way without asking, skipping groups added before.
+Every decision is written to the groups file (`.git/uplink/adopt/<branch>.json` unless `--write-groups` says otherwise): full commit ids, message and intent, plus `ignorePreflight` and `amended` (an amended commit, kept by a ref under `refs/uplink/adopt-amended/`). `--groups` on that file adopts the same way without asking, skipping groups added before.
 
 Adopt runs locally only: it makes no network calls, so `--branch`, `uplink/upstream`, the company branch and `uplink/hooks` must already be in this clone (fetch them first). It writes one commit on local `uplink/state` per patch, never pushes, and leaves `main` alone.
 
@@ -271,7 +268,6 @@ The output of `preflight.sh` is shown as it runs. The verdict lists what the scr
 - `<id>`: Queued patch to check instead of an incoming change.
 - `--from <ref>`: Base revision, main by default (fetched from origin if missing).
 - `--head <ref>`: Head revision, HEAD by default (fetched from origin if missing).
-- `--title <text>`: Title of the incoming change.
 - `--message <text>`: Commit message of the incoming change (PR title, blank line, PR body).
 - `--message-file <path>`: Read the commit message from a file (- reads stdin).
 - `--depends-on <id>`: Patch the change depends on, on top of the message trailers (repeatable).
@@ -292,13 +288,12 @@ The PR title and body are the single commit message. Assess adds a co-author tra
 
 - `--from <ref>`: Base revision, main by default (fetched from origin if missing).
 - `--head <ref>`: Head revision, HEAD by default (fetched from origin if missing).
-- `--title <text>`: Title of the change.
 - `--message <text>`: Commit message of the change (PR title, blank line, PR body).
 - `--message-file <path>`: Read the commit message from a file (- reads stdin).
 - `--internal-only`: Assess as an internal-only change: never exported, leak scan skipped.
-- `--patch <id>`: Assess a queued patch in its layer, with its stored title and message.
+- `--patch <id>`: Assess a queued patch in its layer, with its stored message.
 
-  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. That assessment also has the `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream, and its package says in `storedExtras` whether the assessment-hook result stored with the patch is still for its content, and in `coveredBy` the approval that already covers it, if any. With them, the change between the two revisions is assessed as that patch. `--title` or `--message[-file]` override the stored ones, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
+  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. That assessment also has the `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream, and its package says in `storedExtras` whether the assessment-hook result stored with the patch is still for its content, and in `coveredBy` the approval that already covers it, if any. With them, the change between the two revisions is assessed as that patch. `--message[-file]` overrides the stored message, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
 - `--package <dir>`: Write the assessment package (assessment.json, assessment.md, change.patch) to this directory.
 - `--json`: Print assessment.json instead of the report.
 
@@ -319,7 +314,7 @@ Stored extras lead the packet while the patch content is unchanged (same stable 
 - `--extra-source <url>`: Where the stored extras came from, such as the hook run URL.
 - `--assess-result <path>`: Store this assessment instead of assessing here: `assessment.json` of `assess --patch <id> --package`.
 
-  Refused when it is not for the patch as it is now: the patch file, title, message or `uplink.toml` changed since, or the result does not match what assessing the patch gives. The company assessment hook read the same package, so this also covers --extra-dir.
+  Refused when it is not for the patch as it is now: the patch file, message or `uplink.toml` changed since, or the result does not match what assessing the patch gives. The company assessment hook read the same package, so this also covers --extra-dir.
 
 ### `status`
 
@@ -349,7 +344,7 @@ Record the to-upstream approval of a patch and write its receipt.
 - `--out <path>`: Write the receipt here instead of .uplink/reports/\<id>/approval.md.
 - `--reviewed <token>`: Review token of the packet that was reviewed.
 
-  `report` writes it to `.uplink/reports/<id>/review-token`. It names what the patch changes, the public title and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one, and its receipt is left as it is.
+  `report` writes it to `.uplink/reports/<id>/review-token`. It names what the patch changes, the patch subject and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one, and its receipt is left as it is.
 
 ### `waiting`
 
@@ -458,7 +453,6 @@ When apply, assess (`--to-upstream`), or preflight fails it prints gated branche
 - `--to-upstream`: Move the patch to the upstream queue.
 - `--to-internal`: Move the patch to the internal queue.
 - `--complete`: Finish a gated transfer after the work PR is merged.
-- `--title <text>`: New patch title.
 - `--message <text>`: New commit message, as the PR title and body.
 - `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
@@ -476,11 +470,10 @@ Amends an internal-only patch, an upstream patch not yet submitted, or a submitt
 
 Without `--complete` it replays the queue on `uplink/upstream` up to and including the patch, cuts protected `uplink/amend/<id>` there, and cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can open at once. The queue is not touched. It prints `base`, `work`, and `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the stored message, the instructions are in `commentFile`).
 
-`--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--title` / `--message[-file]` as the new title and message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. The patch becomes `queued` again, whatever review it was in (`waiting`, `approved`, `rejected`, `submitted`). A submitted one keeps its public PR: IP approves the delta, then submit force-pushes the contrib branch. That holds unless the amend adds and removes the same lines as before and leaves the public title and message as they were: then the last approval still covers the patch and it stays `submitted` or `approved`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was. The JSON output has `public` (the patch has a public PR, so submit must run again) and `readyToSubmit` (patches the amend made ready to submit).
+`--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--message[-file]` as the new message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. The patch becomes `queued` again, whatever review it was in (`waiting`, `approved`, `rejected`, `submitted`). A submitted one keeps its public PR: IP approves the delta, then submit force-pushes the contrib branch. That holds unless the amend adds and removes the same lines as before and leaves the public message as it was: then the last approval still covers the patch and it stays `submitted` or `approved`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was. The JSON output has `public` (the patch has a public PR, so submit must run again) and `readyToSubmit` (patches the amend made ready to submit).
 
 - `<id>`: Patch to amend.
 - `--complete`: Fold the merged amend PR into the patch.
-- `--title <text>`: New patch title.
 - `--message <text>`: New commit message, as the PR title and body.
 - `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
@@ -563,7 +556,6 @@ A submitted patch whose resolution adds or removes other lines than the last app
 Locally: `git switch uplink/conflict/<id>-work`, fix the files and `git add` them, run `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. `git uplink rebuild -i` fixes them inline instead.
 
 - `<id>`: Patch whose conflict was resolved.
-- `--title <text>`: New patch title.
 - `--message <text>`: New commit message, as the PR title and body.
 - `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
@@ -642,9 +634,9 @@ What preflight runs is the script `preflight.sh` at the root of `uplink/hooks`, 
 If company `main` already matches public upstream, init rebuilds `main` with the tooling patch.
 If `main` is fast-forward ahead, init leaves `main` alone and records the unique first-parent commits as patches after tooling. It adopts them the way `git uplink adopt --branch` does: one group at a time, each upstream-bound group depending on the queued patches it needs to apply onto upstream and to pass `preflight.sh`, each in its own `uplink/state` commit. Every commit must be in a group, so a failing group can be amended, made internal-only, or have its preflight failure ignored, but not skipped. A paused or interrupted adoption is taken up with `git uplink adopt --continue` (or ended with `--abort`).
 
-Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON. The UI shows the commits as a tree of groups beside the selected commit's change or group's form (title, an Upstream box, and the message, ending with the internal cutoff line). Enter or a double-click on a commit offers New group, Move/Add to previous or next group, and Skip; commits keep their order. Ctrl+s adopts after a confirmation. The mouse selects, places the cursor and ticks the box. The JSON:
+Group rebase-style history in the terminal UI, or pass `--adopt-groups` JSON. The UI shows the commits as a tree of groups beside the selected commit's change or group's form (an Upstream box and the message, ending with the internal cutoff line; its first line is the subject). Enter or a double-click on a commit offers New group, Move/Add to previous or next group, and Skip; commits keep their order. Ctrl+s adopts after a confirmation. The mouse selects, places the cursor and ticks the box. The JSON:
 
-    [{ "commits": ["abc123", "def456"], "title": "...", "intent": "upstream" }]
+    [{ "commits": ["abc123", "def456"], "message": "...", "intent": "upstream" }]
 
 Adopt-group `intent` is `upstream` (the default) or `internal-only`; it is not stored on the patch. Merge commits are one row each (the merge SHA, not the hidden PR branch).
 
@@ -659,7 +651,7 @@ While an adoption runs, and while it is paused, `uplink/state` is locked: every 
 
 ## Gated PRs
 
-`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch title and whose body (`bodyFile`) is the stored message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title and body as `--title` and `--message-file`.
+`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch subject (the first line of the stored message) and whose body (`bodyFile`) is the rest of the message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title, a blank line and the PR body as `--message-file`.
 
 ## Credentials and identity
 

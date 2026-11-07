@@ -21,19 +21,20 @@ use git_uplink::{
     add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps, already_approved,
     amend_patch_with, amend_preflight, approve_patch_reviewed, assess_from_message,
     assess_patch_file, assess_patch_for_packet, change_between, command_preflight, command_tested,
-    commit_queue, count_files, depends_on_from_message, doctor, drop_patch,
-    existing_patch_preflight, export_tested, fetch_pending_upstream, format_approval_receipt,
-    format_assess_markdown, format_contribution_packet_with_extras, format_doctor_summary,
-    format_init_summary, format_product_changes, format_status_table, from_upstream_report_paths,
-    git_ok, hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    mark_rejected, mark_waiting, newly_ready_to_submit, parse_github_repo, parse_pull_request_url,
-    patch_text, public_subject_and_body, push_queue, read_queue, rebase_onto_main, rebase_plan,
-    rebuild_inline, rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request,
-    refresh_from_origin, refuse_script_with_credentials, report_paths, reset_from_origin,
-    resolve_conflict_with, resolve_preflight, restack, resume_rebuild, review_token,
-    review_token_path, set_script_echo, status_report, status_snapshot, store_assess_result,
-    store_patch_extras, stored_commit_message, submit_patch_with, sync_with, transfer_patch_with,
-    transfer_preflight, trim_deps, upstream_pr_body, write_man_pages,
+    commit_queue, count_files, cutoff_marker, depends_on_from_message, doctor, drop_patch,
+    existing_patch_preflight, export_tested, fetch_pending_upstream, first_line,
+    format_approval_receipt, format_assess_markdown, format_contribution_packet_with_extras,
+    format_doctor_summary, format_init_summary, format_product_changes, format_status_table,
+    from_upstream_report_paths, git_ok, hooks_publish_hint, incoming_change_preflight, init,
+    load_groups_file, mark_merged, mark_rejected, mark_waiting, message_subject,
+    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text,
+    public_subject_and_body, push_queue, read_queue, rebase_onto_main, rebase_plan, rebuild_inline,
+    rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
+    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
+    resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
+    split_subject_body, status_report, status_snapshot, store_assess_result, store_patch_extras,
+    strip_html_comments, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
+    trim_deps, upstream_pr_body, write_man_pages,
 };
 
 const VERSION: &str = concat!(
@@ -42,6 +43,9 @@ const VERSION: &str = concat!(
     env!("GIT_UPLINK_COMMIT"),
     ")"
 );
+
+/// The message of a change assessed or preflighted without `--message[-file]`.
+const CANDIDATE_MESSAGE: &str = "candidate change";
 
 fn read_commit_message(
     message: Option<String>,
@@ -260,7 +264,7 @@ fn conflict_pr_create_artifact(
         return Ok(serde_json::json!({"error": "invalid patch id"}));
     };
     Ok(serde_json::json!({
-        "title": patch.title,
+        "title": patch.subject(),
         "bodyFile": body_file,
         "commentFile": comment_file,
         "head": work,
@@ -390,7 +394,7 @@ Checkout `{}`, fix the tree, mark this PR ready, and merge it into the protected
                 .ok_or_else(|| Error::msg(format!("invalid patch id {}", result.id)))?;
         value["gh"] = serde_json::json!({
             "prCreate": {
-                "title": patch.title,
+                "title": patch.subject(),
                 "bodyFile": body_file,
                 "commentFile": comment_file,
                 "head": result.work_branch,
@@ -486,21 +490,16 @@ fn resolve_artifact(
     Ok(value)
 }
 
-/// The description of a gated PR: the stored message without the subject
-/// line that is the PR title. On merge it becomes the commit message again,
-/// so it holds nothing else.
+/// The description of a gated PR: the stored message without its subject,
+/// which is the PR title. On merge the title, a blank line and the
+/// description become the commit message again.
 fn patch_body(patch: &Patch) -> String {
-    let stored = stored_commit_message(patch);
-    let body = match stored.split_once('\n') {
-        Some((subject, rest)) if subject.trim() == patch.title.trim() => rest.trim(),
-        None if stored.trim() == patch.title.trim() => "",
-        _ => stored.trim(),
-    };
+    let (_, body) = split_subject_body(&patch.commit_message);
     format!("{body}\n")
 }
 
 /// The closing part of every gated PR comment.
-const MESSAGE_NOTE: &str = "On merge, the PR title and description become the patch title and commit message. Text below the internal cutoff line stays internal.\n";
+const MESSAGE_NOTE: &str = "On merge, the PR title becomes the subject of the commit message and the description its body. Text below the internal cutoff line stays internal.\n";
 
 /// The comment on the amend PR: what to do with it.
 fn amend_comment(id: &str, work: &str, base: &str) -> String {
@@ -562,7 +561,7 @@ fn print_amend_artifact(repo: &Path, result: &AmendResult) -> Result<(), Error> 
         "onto": result.onto,
         "gh": {
             "prCreate": {
-                "title": patch.title,
+                "title": patch.subject(),
                 "bodyFile": body_file,
                 "commentFile": comment_file,
                 "head": work,
@@ -1010,7 +1009,7 @@ fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool, gate: bool) -> Result<()
             "id": patch.id,
             "queue": layer(queue, &patch.id),
             "status": patch.status,
-            "title": patch.title,
+            "title": patch.subject(),
             "readyToSubmit": newly_ready_to_submit(&before, queue),
         })
     };
@@ -1081,7 +1080,7 @@ fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool, gate: bool) -> Result<()
             patch.id,
             layer(&queue, &patch.id),
             patch.status,
-            patch.title
+            patch.subject()
         );
     }
     Ok(())
@@ -1185,7 +1184,6 @@ enum AssessTarget {
     Change {
         from: Option<String>,
         head: Option<String>,
-        title: String,
         message: String,
         internal_only: bool,
         /// The queued patch the change is assessed as, if any.
@@ -1202,11 +1200,10 @@ fn cmd_assess(
     json: bool,
 ) -> Result<(), Error> {
     let queue = read_queue(repo)?;
-    let (report, title, patch, change) = match target {
+    let (report, internal, patch, change) = match target {
         AssessTarget::Change {
             from,
             head,
-            title,
             message,
             internal_only,
             patch,
@@ -1219,11 +1216,10 @@ fn cmd_assess(
                 from,
                 head,
                 &message,
-                Some(&title),
                 PatchIntent::from_internal_only(internal_only),
             )?;
             let change = change_between(repo, from, head)?;
-            (report, title, patch, change)
+            (report, strip_html_comments(&message), patch, change)
         }
         AssessTarget::PatchFile {
             patch,
@@ -1232,11 +1228,11 @@ fn cmd_assess(
             let text = patch_text(repo, &patch.id)?;
             let intent = PatchIntent::from_internal_only(internal_only);
             let report = assess_patch_file(&queue, &patch, &text, intent);
-            (report, patch.title.clone(), Some(patch), text)
+            (report, patch.commit_message.clone(), Some(patch), text)
         }
     };
     let markdown = format_assess_markdown(&report);
-    let package = AssessPackage::new(repo, &queue, &report, &title, &change, patch.as_ref())?;
+    let package = AssessPackage::new(repo, &queue, &report, &internal, &change, patch.as_ref())?;
     let package_json = serde_json::to_string_pretty(&package)
         .map_err(|err| Error::msg(format!("could not write the assessment as JSON: {err}")))?;
     if let Some(dir) = package_dir {
@@ -1414,7 +1410,7 @@ fn cmd_preflight(
                 (
                     result,
                     patch.depends_on.clone(),
-                    Some(format!("`{id}` {}", patch.title)),
+                    Some(format!("`{id}` {}", patch.subject())),
                 )
             }
             _ => (result, Vec::new(), None),
@@ -1422,11 +1418,9 @@ fn cmd_preflight(
     } else if incoming.internal_only {
         (incoming_change_preflight(repo, incoming), Vec::new(), None)
     } else {
-        let depends_on = depends_on_from_message(
-            incoming.message.as_deref().unwrap_or(""),
-            &incoming.depends_on,
-        );
-        let (title, head) = (incoming.title.clone(), incoming.head_ref.clone());
+        let depends_on = depends_on_from_message(&incoming.message, &incoming.depends_on);
+        let title = first_line(&strip_html_comments(&incoming.message)).to_string();
+        let head = incoming.head_ref.clone();
         let result = incoming_change_preflight(repo, incoming);
         // After the run, which fetches a head this clone did not have.
         let subject = match git_ok(
@@ -1852,21 +1846,16 @@ fn cmd_resolve(
     }
 }
 
-/// The new title and message from `--title` and `--message[-file]`.
+/// The new message from `--message[-file]`, if either is set.
 fn patch_message(
-    title: Option<String>,
     message: Option<String>,
     message_file: Option<PathBuf>,
 ) -> Result<Option<PatchMessage>, Error> {
-    let Some(title) = title else {
+    if message.is_none() && message_file.is_none() {
         return Ok(None);
-    };
-    let message = if message.is_some() || message_file.is_some() {
-        Some(read_commit_message(message, message_file, &title)?)
-    } else {
-        None
-    };
-    Ok(Some(PatchMessage { title, message }))
+    }
+    let message = read_commit_message(message, message_file, "")?;
+    Ok(Some(PatchMessage { message }))
 }
 
 fn cmd_amend(
@@ -2004,7 +1993,6 @@ fn run() -> Result<(), Error> {
         ),
         Commands::Doctor { json } => cmd_doctor(&repo, json),
         Commands::Add {
-            title,
             message,
             message_file,
             from,
@@ -2018,12 +2006,11 @@ fn run() -> Result<(), Error> {
             json,
             gate,
         } => {
-            let message = read_commit_message(message, message_file, &title)?;
+            let message = read_commit_message(message, message_file, "")?;
             cmd_add(
                 &repo,
                 AddPatchOpts {
-                    title,
-                    message: Some(message),
+                    message,
                     internal_only,
                     from_ref: from,
                     head_ref: head,
@@ -2110,7 +2097,6 @@ fn run() -> Result<(), Error> {
         Commands::Assess {
             from,
             head,
-            title,
             message,
             message_file,
             internal_only,
@@ -2125,16 +2111,15 @@ fn run() -> Result<(), Error> {
                     .find(|p| p.id == id)
                     .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?
                     .clone();
-                let title = title.unwrap_or_else(|| stored.title.clone());
                 let message = if message.is_some() || message_file.is_some() {
-                    read_commit_message(message, message_file, &title)?
+                    read_commit_message(message, message_file, "")?
                 } else {
-                    stored_commit_message(&stored)
+                    stored.commit_message.clone()
                 };
                 let internal_only = !queue.is_upstream(&id);
                 if from.is_none() && head.is_none() {
-                    stored.title = title;
-                    stored.commit_message = message;
+                    message_subject(&message, &cutoff_marker(&queue))?;
+                    stored.commit_message = strip_html_comments(&message);
                     AssessTarget::PatchFile {
                         patch: stored,
                         internal_only,
@@ -2143,19 +2128,16 @@ fn run() -> Result<(), Error> {
                     AssessTarget::Change {
                         from,
                         head,
-                        title,
                         message,
                         internal_only,
                         patch: Some(stored),
                     }
                 }
             } else {
-                let title = title.unwrap_or_else(|| "candidate change".into());
-                let message = read_commit_message(message, message_file, &title)?;
+                let message = read_commit_message(message, message_file, CANDIDATE_MESSAGE)?;
                 AssessTarget::Change {
                     from,
                     head,
-                    title,
                     message,
                     internal_only,
                     patch: None,
@@ -2183,7 +2165,6 @@ fn run() -> Result<(), Error> {
             id,
             from,
             head,
-            title,
             message,
             message_file,
             depends_on,
@@ -2195,17 +2176,15 @@ fn run() -> Result<(), Error> {
             if command_only {
                 return cmd_preflight_command(&repo, hooks.as_deref(), json);
             }
-            let title = title.unwrap_or_else(|| "candidate change".into());
-            let message = read_commit_message(message, message_file, &title)?;
+            let message = read_commit_message(message, message_file, CANDIDATE_MESSAGE)?;
             cmd_preflight(
                 &repo,
                 id,
                 IncomingPreflight {
-                    title,
                     from_ref: from.unwrap_or_else(|| "main".into()),
                     head_ref: head.unwrap_or_else(|| "HEAD".into()),
                     depends_on,
-                    message: Some(message),
+                    message,
                     hooks_ref: hooks,
                     internal_only,
                 },
@@ -2327,13 +2306,12 @@ fn run() -> Result<(), Error> {
         }
         Commands::Resolve {
             id,
-            title,
             message,
             message_file,
             preflight_result,
             preflight_only,
         } => {
-            let change = patch_message(title, message, message_file)?;
+            let change = patch_message(message, message_file)?;
             if preflight_only {
                 return finish_preflight_report(resolve_preflight(&repo, &id, change)?, None);
             }
@@ -2344,13 +2322,12 @@ fn run() -> Result<(), Error> {
             to_upstream,
             to_internal: _,
             complete,
-            title,
             message,
             message_file,
             preflight_result,
             preflight_only,
         } => {
-            let change = patch_message(title, message, message_file)?;
+            let change = patch_message(message, message_file)?;
             // clap requires exactly one of --to-upstream / --to-internal.
             let direction = if to_upstream {
                 TransferDirection::ToUpstream
@@ -2374,13 +2351,12 @@ fn run() -> Result<(), Error> {
         Commands::Amend {
             id,
             complete,
-            title,
             message,
             message_file,
             preflight_result,
             preflight_only,
         } => {
-            let change = patch_message(title, message, message_file)?;
+            let change = patch_message(message, message_file)?;
             if preflight_only {
                 refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
                 let report = amend_preflight(&repo, &id, change)?;
@@ -2453,10 +2429,29 @@ mod tests {
     }
 
     #[test]
+    fn gated_pr_body_is_the_message_without_its_subject() {
+        let patch: Patch = serde_json::from_value(serde_json::json!({
+            "id": "upl_x",
+            "commitMessage": "Use SHA-256\n\nWhy.\n\n----- Uplink: internal below this line -----\nPROJ-1",
+            "status": "queued",
+            "dependsOn": [],
+            "createdAt": "t",
+            "updatedAt": "t",
+            "source": {},
+            "events": [],
+        }))
+        .unwrap();
+        assert_eq!(
+            patch_body(&patch),
+            "Why.\n\n----- Uplink: internal below this line -----\nPROJ-1\n"
+        );
+    }
+
+    #[test]
     fn conflict_json_keeps_camel_case_keys() {
         let patch: Patch = serde_json::from_value(serde_json::json!({
             "id": "upl_x",
-            "title": "x",
+            "commitMessage": "x",
             "status": "conflict",
             "dependsOn": [],
             "createdAt": "t",
@@ -2509,26 +2504,18 @@ mod tests {
     }
 
     #[test]
-    fn amend_message_flags_need_complete_and_title() {
+    fn amend_message_flags_need_complete() {
         let parse = |args: &[&str]| {
             let argv = ["git-uplink", "amend", "upl_x"].iter().chain(args);
             Cli::try_parse_from(argv).is_ok()
         };
         assert!(parse(&[]));
         assert!(parse(&["--complete"]));
-        assert!(parse(&[
-            "--complete",
-            "--title",
-            "T",
-            "--message-file",
-            "m.txt"
-        ]));
-        assert!(!parse(&["--title", "T"]));
-        assert!(!parse(&["--complete", "--message-file", "m.txt"]));
+        assert!(parse(&["--complete", "--message-file", "m.txt"]));
+        assert!(!parse(&["--message-file", "m.txt"]));
+        assert!(!parse(&["--complete", "--title", "T"]));
         assert!(!parse(&[
             "--complete",
-            "--title",
-            "T",
             "--message",
             "m",
             "--message-file",
@@ -2543,21 +2530,23 @@ mod tests {
             Cli::try_parse_from(argv).is_ok()
         };
         let resolve = ["resolve", "upl_x"];
-        assert!(parse(
-            &resolve,
-            &["--title", "T", "--message-file", "m.txt"]
-        ));
-        assert!(!parse(&resolve, &["--message-file", "m.txt"]));
+        assert!(parse(&resolve, &["--message-file", "m.txt"]));
+        assert!(!parse(&resolve, &["--title", "T"]));
         let transfer = ["transfer", "upl_x", "--to-upstream"];
-        assert!(parse(
-            &transfer,
-            &["--complete", "--title", "T", "--message-file", "m.txt"]
-        ));
-        assert!(!parse(&transfer, &["--title", "T"]));
-        assert!(!parse(
-            &transfer,
-            &["--complete", "--message-file", "m.txt"]
-        ));
+        assert!(parse(&transfer, &["--complete", "--message-file", "m.txt"]));
+        assert!(!parse(&transfer, &["--message-file", "m.txt"]));
+    }
+
+    #[test]
+    fn add_needs_a_message() {
+        let parse = |args: &[&str]| {
+            let argv = ["git-uplink", "add"].iter().chain(args);
+            Cli::try_parse_from(argv).is_ok()
+        };
+        assert!(!parse(&[]));
+        assert!(!parse(&["--title", "T"]));
+        assert!(parse(&["--message", "Subject"]));
+        assert!(parse(&["--message-file", "m.txt"]));
     }
 
     #[test]
@@ -2568,7 +2557,7 @@ mod tests {
                 .chain(args);
             Cli::try_parse_from(argv).is_ok()
         };
-        assert!(parse(&["--title", "T", "--message-file", "m.txt"]));
+        assert!(parse(&["--message-file", "m.txt"]));
         assert!(!parse(&["--internal-only"]));
     }
 

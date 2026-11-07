@@ -205,7 +205,7 @@ fn complete_amend(
 
     let original_authors = patch.source.authors.clone();
     merge_authors(&mut patch.source.authors, resolution_authors(repo, &onto)?);
-    let (mut updated, raw_message) = with_message(&patch, new_message)?;
+    let (updated, raw_message) = with_message(&patch, new_message)?;
 
     let before = rev_parse(repo, "HEAD")?;
     commit_resolution(repo, &onto, &company_commit_message(&queue, &patch))?;
@@ -218,19 +218,11 @@ fn complete_amend(
 
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
     let checked = (|| -> Result<AssessReport> {
-        let report = assess_from_message(
-            repo,
-            &queue,
-            &onto,
-            "HEAD",
-            &raw_message,
-            Some(&updated.title),
-            intent,
-        )?;
+        let report = assess_from_message(repo, &queue, &onto, "HEAD", &raw_message, intent)?;
         if !intent.is_internal_only() {
-            assert_assess_ok(&report, &updated.title)?;
+            assert_assess_ok(&report, updated.subject())?;
         }
-        commit_message_change(repo, &queue, &mut updated, new_message, &report)?;
+        commit_message_change(repo, &queue, &updated, new_message)?;
         Ok(report)
     })();
     let report = match checked {
@@ -242,8 +234,7 @@ fn complete_amend(
     };
 
     let unchanged = tree_of(repo, "HEAD")? == tree_of(repo, &original)?
-        && updated.title == patch.title
-        && stored_commit_message(&updated) == stored_commit_message(&patch)
+        && updated.commit_message.clone() == patch.commit_message.clone()
         && updated.source.authors == original_authors;
     if unchanged {
         git(
@@ -278,7 +269,6 @@ fn complete_amend(
     fs::write(&patch_abs, format_patch_at_head(repo)?)?;
     {
         let current = get_patch_mut(&mut queue, id)?;
-        current.title = updated.title.clone();
         current.commit_message = updated.commit_message.clone();
         current.source.authors = updated.source.authors.clone();
     }

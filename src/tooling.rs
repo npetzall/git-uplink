@@ -137,14 +137,14 @@ pub fn commit_tooling_refresh(
         &from_sha,
         &head_sha,
         &message,
-        Some(TOOLING_PATCH_TITLE),
         PatchIntent::InternalOnly,
     )?;
 
+    let message = strip_html_comments(&message);
     if created {
-        queue.tooling = Some(new_tooling_patch(&id, forge, new_stable, assess));
+        queue.tooling = Some(new_tooling_patch(&id, forge, new_stable, message, assess));
     } else {
-        upgrade_tooling_patch(&mut queue, &id, forge, new_stable, assess);
+        upgrade_tooling_patch(&mut queue, &id, forge, new_stable, message, assess);
     }
     also(&mut queue)?;
     write_queue_file(repo, &queue)?;
@@ -160,12 +160,17 @@ pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
     Ok(ToolingRefresh { changed: true })
 }
 
-fn new_tooling_patch(id: &str, forge: Forge, stable: String, assess: AssessReport) -> Patch {
+fn new_tooling_patch(
+    id: &str,
+    forge: Forge,
+    stable: String,
+    message: String,
+    assess: AssessReport,
+) -> Patch {
     let created_at = stamp();
     let mut patch = Patch {
         id: id.to_string(),
-        title: TOOLING_PATCH_TITLE.into(),
-        commit_message: assess.commit_message.clone(),
+        commit_message: message,
         status: PatchStatus::Queued,
         depends_on: Vec::new(),
         created_at: created_at.clone(),
@@ -198,6 +203,7 @@ fn upgrade_tooling_patch(
     id: &str,
     forge: Forge,
     stable: String,
+    message: String,
     assess: AssessReport,
 ) {
     if queue.tooling.as_ref().map(|p| p.id.as_str()) != Some(id) {
@@ -212,7 +218,7 @@ fn upgrade_tooling_patch(
         patch.status = PatchStatus::Queued;
         patch.conflict = None;
         patch.patch_id_stable = Some(stable);
-        patch.commit_message = assess.commit_message.clone();
+        patch.commit_message = message;
         patch.assess = Some(assess);
         add_event(
             patch,
@@ -310,7 +316,7 @@ fn find_tooling_patch(queue: &QueueState, repo: &Path) -> Result<Option<String>>
     for patch in queue
         .internal
         .iter()
-        .filter(|p| p.title == TOOLING_PATCH_TITLE)
+        .filter(|p| p.subject() == TOOLING_PATCH_TITLE)
     {
         let Ok(rel) = patch_path(&patch.id) else {
             continue;
@@ -376,7 +382,7 @@ mod find_tooling_tests {
     fn patch(id: &str, title: &str) -> Patch {
         serde_json::from_value(serde_json::json!({
             "id": id,
-            "title": title,
+            "commitMessage": title,
             "status": "queued",
             "dependsOn": [],
             "createdAt": "",

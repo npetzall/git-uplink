@@ -135,16 +135,28 @@ fn resolve_co_author(internal_text: &str) -> Option<(String, String)> {
     parse_person(Some(&caps[1]))
 }
 
-fn subject_and_body(public_text: &str, fallback: &str) -> (String, String) {
-    let mut lines = public_text.lines();
-    let subject = lines.next().unwrap_or(fallback).trim().to_string();
-    let subject = if subject.is_empty() {
-        fallback.to_string()
-    } else {
-        subject
-    };
-    let body = lines.collect::<Vec<_>>().join("\n").trim().to_string();
-    (subject, body)
+/// The first line of `message` and the rest, both trimmed: the subject and
+/// body of a commit or pull request.
+pub fn split_subject_body(message: &str) -> (String, String) {
+    let message = message.trim();
+    match message.split_once('\n') {
+        Some((subject, body)) => (subject.trim().to_string(), body.trim().to_string()),
+        None => (message.to_string(), String::new()),
+    }
+}
+
+/// The subject of the internal `message`: its first line once HTML comments
+/// are stripped. Fails when there is none, or the message starts with the
+/// cutoff, so nothing would be public.
+pub fn message_subject(message: &str, marker: &str) -> Result<String> {
+    let internal = strip_html_comments(message);
+    let subject = crate::types::first_line(&internal);
+    if subject.is_empty() || subject.contains(marker) {
+        return Err(Error::msg(
+            "The message needs a subject line before the internal cutoff",
+        ));
+    }
+    Ok(subject.to_string())
 }
 
 /// The banned words in `haystack`, ignoring case and matched anywhere.
@@ -177,40 +189,16 @@ fn with_trailers(message: &str, patch: &Patch) -> String {
 }
 
 /// The assessed public subject and body of `patch`: what may leave the
-/// company. Never the stored or internal commit message.
+/// company. Never the internal commit message.
 pub fn public_subject_and_body(patch: &Patch) -> (String, String) {
-    if let Some(assess) = &patch.assess {
-        let subject = if assess.public_subject.is_empty() {
-            patch.title.clone()
-        } else {
-            assess.public_subject.clone()
-        };
-        return (subject, assess.public_body.trim().to_string());
-    }
-    // Without a report no text was scanned and the cutoff is not known, so
-    // nothing of the stored message is exported.
-    (patch.title.clone(), String::new())
-}
-
-pub fn stored_commit_message(patch: &Patch) -> String {
-    if !patch.commit_message.trim().is_empty() {
-        return patch.commit_message.trim().to_string();
-    }
-    if let Some(assess) = &patch.assess {
-        if !assess.commit_message.trim().is_empty() {
-            return assess.commit_message.trim().to_string();
+    match &patch.assess {
+        Some(assess) if !assess.public_message.trim().is_empty() => {
+            split_subject_body(&assess.public_message)
         }
-        let mut parts = vec![assess.public_subject.clone()];
-        if !assess.public_body.trim().is_empty() {
-            parts.push(String::new());
-            parts.push(assess.public_body.trim().to_string());
-        }
-        let joined = parts.join("\n");
-        if !joined.trim().is_empty() {
-            return joined.trim().to_string();
-        }
+        // Without a report no text was scanned and the cutoff is not known,
+        // so only the subject is exported.
+        _ => (patch.subject().to_string(), String::new()),
     }
-    patch.title.clone()
 }
 
 /// The message of `patch` on company main: the stored message, the
@@ -219,7 +207,7 @@ pub fn stored_commit_message(patch: &Patch) -> String {
 /// is added when the stored message has none. An author the stored message
 /// already names as co-author is not repeated.
 pub fn company_commit_message(queue: &QueueState, patch: &Patch) -> String {
-    let stored = stored_commit_message(patch);
+    let stored = patch.commit_message.trim().to_string();
     let authors: Vec<&String> = patch
         .source
         .authors
@@ -455,7 +443,7 @@ fn hash_text(repo: &Path, content: &str) -> Result<String> {
 }
 
 /// Identifies what leaves the company for `patch`: the lines it adds and
-/// removes ([`changed_lines`]), the public PR title, and the public commit
+/// removes ([`changed_lines`]), the patch subject, and the public commit
 /// message.
 /// An approval records the token it was given for, and `submit` exports only
 /// content with that approval.
@@ -471,7 +459,7 @@ pub fn review_token_for(repo: &Path, patch: &Patch, text: &str) -> Result<String
         repo,
         &format!(
             "{changes}\n{}\n{}",
-            patch.title.trim(),
+            patch.subject(),
             export_commit_message(patch)
         ),
     )
@@ -485,7 +473,7 @@ fn stable_review_token(repo: &Path, patch: &Patch) -> Option<String> {
         repo,
         &format!(
             "{stable}\n{}\n{}",
-            patch.title.trim(),
+            patch.subject(),
             export_commit_message(patch)
         ),
     )
@@ -610,10 +598,11 @@ fn format_checks_table(report: &AssessReport) -> String {
 /// leave the company, then one row per check. The company commit message is
 /// deliberately left out.
 pub fn format_assess_markdown(report: &AssessReport) -> String {
-    let body = if report.public_body.trim().is_empty() {
+    let (subject, body) = split_subject_body(&report.public_message);
+    let body = if body.is_empty() {
         "_empty_".to_string()
     } else {
-        format_fenced(&report.public_body)
+        format_fenced(&body)
     };
     format!(
         "{heading}\n\n\
@@ -624,7 +613,7 @@ pub fn format_assess_markdown(report: &AssessReport) -> String {
 {body}\n\n\
 {checks}",
         heading = assessment_heading(report.ok),
-        title = format_fenced(&report.public_subject),
+        title = format_fenced(&subject),
         checks = format_checks_table(report),
     )
 }
@@ -713,7 +702,7 @@ fn format_message_table(patch: &Patch) -> String {
 <tr><th>Internal</th><th>Upstream</th></tr>\n\
 <tr valign=\"top\"><td><pre>{internal}</pre></td><td><pre>{upstream}</pre></td></tr>\n\
 </table>\n",
-        internal = cell(&stored_commit_message(patch)),
+        internal = cell(&patch.commit_message),
         upstream = cell(&export_commit_message(patch)),
     )
 }
@@ -1040,18 +1029,18 @@ fn covered_packet(
         .unwrap_or_default();
     format!(
         "# Contribution packet — {id}\n\n\
-> **Already approved. Nothing new leaves the company.** Approval {version} ({at}) covers this patch as it is now: it adds and removes the same lines under the same title and commit message.{run} [approval.md](approval.md)\n\n\
+> **Already approved. Nothing new leaves the company.** Approval {version} ({at}) covers this patch as it is now: it adds and removes the same lines under the same subject and commit message.{run} [approval.md](approval.md)\n\n\
 | Field | Value |\n\
 | --- | --- |\n\
 | Patch | {link} |\n\
-| Title | {title} |\n\
+| Subject | {title} |\n\
 {token}\n\
 ## What happens when you approve the {env} environment\n\n\
 No new approval is recorded. The click only releases the credentials that export the patch again onto the current upstream. If the patch changed since this packet, approve stops and nothing is exported.\n",
         id = patch.id,
         version = approval.version,
         at = approval.at,
-        title = plain_cell(&patch.title),
+        title = plain_cell(patch.subject()),
         token = review_token_row(token),
         env = TO_UPSTREAM_ENVIRONMENT,
     )
@@ -1082,7 +1071,7 @@ fn approver_packet(patch: &Patch, token: Option<&str>, link: &str, additions: &s
 | Field | Value |\n\
 | --- | --- |\n\
 | Patch | {link} |\n\
-| Title | {title} |\n\
+| Subject | {title} |\n\
 | Depends on | {depends} |\n\
 | Internal PR | {pr} |\n\
 {token}\n\
@@ -1097,7 +1086,7 @@ fn approver_packet(patch: &Patch, token: Option<&str>, link: &str, additions: &s
         token = review_token_row(token),
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
-        title = plain_cell(&patch.title),
+        title = plain_cell(patch.subject()),
         messages = format_message_table(patch),
     )
 }
@@ -1265,7 +1254,7 @@ This contribution was **already IP-approved** and submitted. Review **only the d
 | Field | Value |\n\
 | --- | --- |\n\
 | Patch | {link} |\n\
-| Title | {title} |\n\
+| Subject | {title} |\n\
 | Amendment | {amendment} |\n\
 | Public PR | {pr} |\n\
 | Last approved at | {last_at} |\n\
@@ -1285,7 +1274,7 @@ This contribution was **already IP-approved** and submitted. Review **only the d
         token = review_token_row(review_token(repo, patch).ok().as_deref()),
         id = patch.id,
         env = TO_UPSTREAM_ENVIRONMENT,
-        title = plain_cell(&patch.title),
+        title = plain_cell(patch.subject()),
         link = patch_link(repo, &patch.id),
         messages = format_message_table(patch),
         assessment = packet_assessment(patch),
@@ -1780,9 +1769,9 @@ pub fn assess_from_message(
     from_ref: &str,
     head_ref: &str,
     message: &str,
-    title: Option<&str>,
     intent: PatchIntent,
 ) -> Result<AssessReport> {
+    message_subject(message, &cutoff_marker(queue))?;
     let shas = ensure_revs(repo, &[from_ref, head_ref])?;
     let from_ref = shas[0].as_str();
     let head_ref = shas[1].as_str();
@@ -1808,7 +1797,6 @@ pub fn assess_from_message(
     Ok(assess_export(
         queue,
         message,
-        title,
         head_author(repo, head_ref)?,
         export,
     ))
@@ -1817,7 +1805,7 @@ pub fn assess_from_message(
 /// Assesses an upstream-bound `patch` from its patch file `patch_text` as it
 /// is in the queue. Nothing is applied or built, so it needs no
 /// `uplink/upstream` and says nothing about whether the patch still applies
-/// (preflight does). Message, title and author are the ones stored with the
+/// (preflight does). Message and author are the ones stored with the
 /// patch; the settings are today's. A patch in the queue can also be judged
 /// by what it depends on, so this adds the `dependencies` check.
 pub fn assess_patch_file(
@@ -1838,8 +1826,7 @@ pub fn assess_patch_file(
         .unwrap_or_default();
     let mut report = assess_export(
         queue,
-        &stored_commit_message(patch),
-        Some(&patch.title),
+        &patch.commit_message,
         author,
         (!intent.is_internal_only()).then(|| export_diff(patch_text)),
     );
@@ -1920,9 +1907,10 @@ pub enum PackageKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageMessage {
-    pub stored: String,
-    pub subject: String,
-    pub body: String,
+    /// The whole internal commit message.
+    pub internal: String,
+    /// What leaves the company: the subject, a blank line, the body.
+    pub public: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub co_author: Option<String>,
 }
@@ -1952,7 +1940,6 @@ pub struct AssessPackage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
     pub at: String,
-    pub title: String,
     pub message: PackageMessage,
     pub ok: bool,
     pub checks: Vec<AssessCheck>,
@@ -1977,13 +1964,14 @@ pub struct AssessPackage {
 }
 
 impl AssessPackage {
-    /// Describes `report`, the assessment of `change` (the text written as
-    /// `change.patch`). `patch` is the queue entry when a patch was assessed.
+    /// Describes `report`, the assessment of the internal message `internal`
+    /// and `change` (the text written as `change.patch`). `patch` is the
+    /// queue entry when a patch was assessed.
     pub fn new(
         repo: &Path,
         queue: &QueueState,
         report: &AssessReport,
-        title: &str,
+        internal: &str,
         change: &str,
         patch: Option<&Patch>,
     ) -> Result<Self> {
@@ -2000,11 +1988,9 @@ impl AssessPackage {
             patch: patch.map(|patch| patch.id.clone()),
             state,
             at: report.at.clone(),
-            title: title.to_string(),
             message: PackageMessage {
-                stored: report.commit_message.clone(),
-                subject: report.public_subject.clone(),
-                body: report.public_body.clone(),
+                internal: internal.to_string(),
+                public: report.public_message.clone(),
                 co_author: report.co_author.clone(),
             },
             ok: report.ok,
@@ -2034,9 +2020,7 @@ impl AssessPackage {
         AssessReport {
             at: self.at.clone(),
             ok: self.ok,
-            commit_message: self.message.stored.clone(),
-            public_subject: self.message.subject.clone(),
-            public_body: self.message.body.clone(),
+            public_message: self.message.public.clone(),
             co_author: self.message.co_author.clone(),
             original_author: self.original_author.clone(),
             original_email: self.original_email.clone(),
@@ -2047,7 +2031,7 @@ impl AssessPackage {
 
     /// Why this package does not describe `patch` (with `patch_text` as its
     /// patch file) assessed now, or None when it does. `fresh` is that
-    /// assessment: the same change, title, message and settings give the
+    /// assessment: the same change, message and settings give the
     /// same checks.
     pub fn stale_for(
         &self,
@@ -2066,8 +2050,10 @@ impl AssessPackage {
             Some("it is for another patch")
         } else if self.change_blob != hash_text(repo, patch_text)? {
             Some("the patch changed since")
-        } else if self.title != patch.title || self.message.stored != fresh.commit_message {
-            Some("the title or message changed since")
+        } else if self.message.internal != strip_html_comments(&patch.commit_message)
+            || self.message.public != fresh.public_message
+        {
+            Some("the message changed since")
         } else if self.ok != fresh.ok || !same_checks {
             Some("uplink.toml changed since, or the result was edited")
         } else {
@@ -2132,24 +2118,17 @@ fn export_diff(patch_text: &str) -> ExportDiff {
 fn assess_export(
     queue: &QueueState,
     message: &str,
-    title: Option<&str>,
     (original_author, original_email): (Option<String>, Option<String>),
     export: Option<ExportDiff>,
 ) -> AssessReport {
     let marker = cutoff_marker(queue);
-    let fallback = title.unwrap_or("Contribution");
-    let mut stored = strip_html_comments(message);
-    if stored.is_empty() {
-        stored = fallback.to_string();
-    }
-    let (public_text, internal_text) = split_internal_message(&stored, &marker);
-    let public_text = strip_depends_on(&public_text);
-    let (subject, body) = subject_and_body(&public_text, fallback);
+    let internal = strip_html_comments(message);
+    let (public_message, internal_text) = public_and_internal(&internal, &marker);
     let co_author = resolve_co_author(&internal_text);
 
     let mut checks = message_checks(
         &marker,
-        &public_text,
+        &public_message,
         &internal_text,
         co_author.as_ref(),
         (original_author.as_deref(), original_email.as_deref()),
@@ -2166,29 +2145,33 @@ fn assess_export(
                 .as_ref()
                 .map(|(name, email)| format!("{name} <{email}>\n"))
                 .unwrap_or_default();
-            // The title is the public PR title; it can differ from the subject.
-            let title = title.unwrap_or_default();
             let diff = export_surface_lines(&export.diff);
-            let export_surface = format!("{trailer}{title}\n{subject}\n{body}\n{diff}");
+            let export_surface = format!("{trailer}{public_message}\n{diff}");
             checks.push(affiliation_check(queue, &export_surface));
             checks.extend(binary_files_check(&export.binaries));
         }
     }
 
     let ok = checks.iter().all(|c| c.status != CheckStatus::Fail);
-    let cutoff_found = !internal_text.is_empty() || stored.contains(&marker);
+    let cutoff_found = !internal_text.is_empty() || internal.contains(&marker);
     AssessReport {
         at: now_iso(),
         ok,
-        commit_message: stored,
-        public_subject: subject,
-        public_body: body,
+        public_message,
         co_author: co_author.map(|(name, email)| format!("{name} <{email}>")),
         original_author,
         original_email,
         cutoff_found,
         checks,
     }
+}
+
+/// The public message of the internal `message` (HTML comments already
+/// stripped): the text before the cutoff without `Uplink-Depends-On` lines,
+/// and the internal text after the cutoff.
+fn public_and_internal(message: &str, marker: &str) -> (String, String) {
+    let (public_text, internal_text) = split_internal_message(message, marker);
+    (strip_depends_on(&public_text), internal_text)
 }
 
 /// Author name and email of `head_ref`, when git has them.
@@ -2366,9 +2349,7 @@ mod tests {
         AssessReport {
             at: "2026-10-01T00:00:00.000Z".into(),
             ok,
-            commit_message: "Use SHA-256\n\nPublic reason.\n\n----- Uplink: internal below this line -----\n\nTicket: PROJ-1\n".into(),
-            public_subject: "Use SHA-256".into(),
-            public_body: "Public reason.".into(),
+            public_message: "Use SHA-256\n\nPublic reason.".into(),
             co_author: None,
             original_author: None,
             original_email: None,
@@ -2420,7 +2401,6 @@ HcmV?d00001
     fn authored_patch(message: &str, authors: &[&str]) -> Patch {
         let mut patch: Patch = serde_json::from_value(serde_json::json!({
             "id": "upl_0123456789",
-            "title": "Use SHA-256",
             "commitMessage": message,
             "status": "queued",
             "dependsOn": [],
@@ -2450,20 +2430,41 @@ HcmV?d00001
         assert!(internal.contains(DEFAULT_CUTOFF), "{internal}");
         assert!(internal.contains("PROJ-2"), "{internal}");
 
-        let report = assess_export(
-            &empty_queue(),
-            &message,
-            Some("Use SHA-256"),
-            (None, None),
-            None,
-        );
-        assert_eq!(report.public_subject, "Use SHA-256");
-        assert_eq!(report.public_body, "Public reason.");
+        let report = assess_export(&empty_queue(), &message, (None, None), None);
+        assert_eq!(report.public_message, "Use SHA-256\n\nPublic reason.");
         let mut patch = authored_patch(&message, &[]);
         patch.assess = Some(report);
         let exported = export_commit_message(&patch);
         assert!(!exported.contains("PROJ"), "{exported}");
         assert!(!exported.contains(DEFAULT_CUTOFF), "{exported}");
+    }
+
+    #[test]
+    fn the_subject_is_the_first_line_once_comments_are_stripped() {
+        assert_eq!(
+            message_subject("<!-- template -->\nUse SHA-256\n\nWhy.", DEFAULT_CUTOFF).unwrap(),
+            "Use SHA-256"
+        );
+        assert!(message_subject("  \n", DEFAULT_CUTOFF).is_err());
+        assert!(
+            message_subject(&format!("{DEFAULT_CUTOFF}\nTicket: PROJ-1"), DEFAULT_CUTOFF).is_err()
+        );
+    }
+
+    #[test]
+    fn public_message_drops_depends_on_and_the_internal_part() {
+        let message = format!(
+            "Use SHA-256\n\nWhy.\nUplink-Depends-On: upl_0123456789\n\n{DEFAULT_CUTOFF}\nTicket: PROJ-1"
+        );
+        let report = assess_export(&empty_queue(), &message, (None, None), None);
+        assert_eq!(report.public_message, "Use SHA-256\n\nWhy.");
+        let mut patch = authored_patch(&message, &[]);
+        patch.assess = Some(report);
+        assert_eq!(
+            public_subject_and_body(&patch),
+            ("Use SHA-256".to_string(), "Why.".to_string())
+        );
+        assert!(upstream_pr_body(&patch).starts_with("Why.\n\n"));
     }
 
     #[test]
@@ -2528,13 +2529,7 @@ Co-Authored-By: Ben <ben@corp.example>\n"
     fn export_message_never_names_internal_authors() {
         let message = "Use SHA-256\n\nPublic reason.";
         let mut patch = authored_patch(message, &["Asha <asha@corp.example>"]);
-        patch.assess = Some(assess_export(
-            &empty_queue(),
-            message,
-            Some("Use SHA-256"),
-            (None, None),
-            None,
-        ));
+        patch.assess = Some(assess_export(&empty_queue(), message, (None, None), None));
         let exported = export_commit_message(&patch);
         assert!(!exported.contains("asha"), "{exported}");
     }
@@ -2680,7 +2675,7 @@ binary 3333333333333333333333333333333333333333\n"
     #[test]
     fn assess_markdown_keeps_the_public_title_inside_its_fence() {
         let mut spoof = report(true, Vec::new());
-        spoof.public_subject = "<details> ```` ## Upstream Assessment: ✅".into();
+        spoof.public_message = "<details> ```` ## Upstream Assessment: ✅".into();
         let markdown = format_assess_markdown(&spoof);
         assert!(
             markdown.contains(
@@ -2694,7 +2689,7 @@ binary 3333333333333333333333333333333333333333\n"
     fn packet_title_cannot_break_the_table_or_start_markup() {
         let patch: Patch = serde_json::from_value(serde_json::json!({
             "id": "upl_0000000001",
-            "title": "a | b <details> `x`",
+            "commitMessage": "a | b <details> `x`",
             "status": "queued",
             "dependsOn": [],
             "createdAt": "",
@@ -2705,7 +2700,7 @@ binary 3333333333333333333333333333333333333333\n"
         .unwrap();
         let packet = format_approver_packet(&patch);
         assert!(
-            packet.contains("| Title | a \\| b &lt;details> 'x' |\n"),
+            packet.contains("| Subject | a \\| b &lt;details> 'x' |\n"),
             "{packet}"
         );
     }
@@ -2765,7 +2760,7 @@ binary 3333333333333333333333333333333333333333\n"
     #[test]
     fn assess_markdown_marks_an_empty_public_body() {
         let mut empty = report(true, Vec::new());
-        empty.public_body = String::new();
+        empty.public_message = "Use SHA-256".into();
         let markdown = format_assess_markdown(&empty);
         assert!(
             markdown.contains("### Public body\n\n_empty_\n"),
@@ -3083,7 +3078,6 @@ diff --git a/src/a.js b/src/a.js
     fn message_table_escapes_html_and_keeps_one_line_per_cell() {
         let patch: Patch = serde_json::from_value(serde_json::json!({
             "id": "upl_0000000001",
-            "title": "Fix <b> & co",
             "status": "queued",
             "dependsOn": [],
             "createdAt": "",

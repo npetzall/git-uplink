@@ -22,8 +22,9 @@
 #
 # On apply failure, or for the patch preflight.sh fails on, it records the
 # patch as conflict on uplink/state, pushes uplink/conflict/<id> (protected
-# base) and <id>-work, and opens a draft gated PR with the patch title and
-# message; the instructions are a comment on it. Do not push the protected
+# base) and <id>-work, and opens a draft gated PR whose title is the patch
+# subject and whose description is the rest of the message; the
+# instructions are a comment on it. Do not push the protected
 # base directly.
 #
 # With repository variable UPLINK_AUTO_SUBMIT set to `true`, a queued patch

@@ -213,7 +213,7 @@ export function SecurityPage() {
           <li>
             <strong>The approval is bound to content.</strong> The packet
             carries a review token over the lines the patch adds and removes,
-            its public title and its public message.{" "}
+            and its public message (subject and body).{" "}
             <code>approve --reviewed</code> stops when the patch is no longer
             what was reviewed.
           </li>

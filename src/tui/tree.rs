@@ -5,16 +5,23 @@
 use std::collections::BTreeMap;
 
 use crate::adopt::{AdoptCommit, AdoptGroup};
+use crate::assess::strip_html_comments;
 use crate::edit::TextEdit;
-use crate::types::PatchIntent;
+use crate::types::{PatchIntent, first_line};
 
 pub type GroupId = usize;
 
 /// What a group says about its patch.
 pub struct GroupForm {
-    pub title: TextEdit,
     pub upstream: bool,
     pub message: TextEdit,
+}
+
+impl GroupForm {
+    /// The first line of the message, to name the group.
+    pub fn subject(&self) -> &str {
+        first_line(self.message.text())
+    }
 }
 
 /// One row of the tree, in history order.
@@ -243,13 +250,12 @@ impl AdoptTree {
                         .into_iter()
                         .map(|i| self.commits[i].sha.clone())
                         .collect(),
-                    title: form.title.text().trim().to_string(),
                     intent: if form.upstream {
                         PatchIntent::Upstream
                     } else {
                         PatchIntent::InternalOnly
                     },
-                    message: Some(self.message_of(form.message.text())),
+                    message: self.message_of(form.message.text()),
                     ..Default::default()
                 }
             })
@@ -292,13 +298,15 @@ impl AdoptTree {
             message.push_str("\n\n");
             message.push_str(&c.body);
         }
-        message.push_str("\n\n");
-        message.push_str(&self.marker);
-        message.push('\n');
+        // A body that already has the cutoff keeps it; it is not added twice.
+        if !strip_html_comments(&message).contains(&self.marker) {
+            message.push_str("\n\n");
+            message.push_str(&self.marker);
+            message.push('\n');
+        }
         self.groups.insert(
             id,
             GroupForm {
-                title: TextEdit::new(c.subject.as_str()),
                 upstream: true,
                 message: TextEdit::multiline(message),
             },
@@ -379,17 +387,39 @@ mod tests {
     fn new_groups_are_filled_from_the_commit() {
         let t = tree(2, true);
         let form = t.form(t.owner(1).unwrap());
-        assert_eq!(form.title.text(), "subject 1");
+        assert_eq!(form.subject(), "subject 1");
         assert!(form.upstream);
         assert_eq!(
             form.message.text(),
             format!("subject 1\n\nbody 1\n\n{MARKER}\n")
         );
         // The empty internal part is left out.
+        assert_eq!(t.to_groups()[1].message, "subject 1\n\nbody 1");
+    }
+
+    #[test]
+    fn a_body_with_the_cutoff_keeps_one_cutoff() {
+        let mut c = commit(0, false);
+        c.body = format!("Public.\n\n{MARKER}\nTicket: PROJ-1");
+        let t = AdoptTree::new(vec![c], false, MARKER);
+        let form = t.form(t.owner(0).unwrap());
         assert_eq!(
-            t.to_groups()[1].message.as_deref(),
-            Some("subject 1\n\nbody 1")
+            form.message.text(),
+            format!("subject 0\n\nPublic.\n\n{MARKER}\nTicket: PROJ-1")
         );
+        assert_eq!(
+            t.to_groups()[0].message,
+            format!("subject 0\n\nPublic.\n\n{MARKER}\nTicket: PROJ-1")
+        );
+    }
+
+    #[test]
+    fn a_cutoff_in_an_html_comment_does_not_count() {
+        let mut c = commit(0, false);
+        c.body = format!("<!-- {MARKER} -->");
+        let t = AdoptTree::new(vec![c], false, MARKER);
+        let text = t.form(t.owner(0).unwrap()).message.text().to_string();
+        assert!(text.ends_with(&format!("-->\n\n{MARKER}\n")), "{text}");
     }
 
     #[test]
@@ -414,12 +444,12 @@ mod tests {
         }
         assert_eq!(shape(&t), [1, 1, 1, 1, 1]);
         let first = t.owner(0).unwrap();
-        t.form_mut(first).title = TextEdit::new("kept");
+        t.form_mut(first).message = TextEdit::multiline("kept\n\nbody");
 
         t.apply(2, Action::NewGroup).unwrap();
         assert_eq!(shape(&t), [1, 1, 2, 3, 3]);
-        assert_eq!(t.form(t.owner(0).unwrap()).title.text(), "kept");
-        assert_eq!(t.form(t.owner(3).unwrap()).title.text(), "subject 3");
+        assert_eq!(t.form(t.owner(0).unwrap()).subject(), "kept");
+        assert_eq!(t.form(t.owner(3).unwrap()).subject(), "subject 3");
 
         t.apply(3, Action::Skip).unwrap();
         assert_eq!(shape(&t), [1, 1, 2, 0, 3]);

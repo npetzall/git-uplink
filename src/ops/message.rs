@@ -1,52 +1,41 @@
 use super::*;
 
-/// A new title and raw message for a patch, as from a merged gated PR
-/// (amend, conflict or transfer).
+/// A new commit message for a patch, as from a merged gated PR (amend,
+/// conflict or transfer): the PR title, a blank line, and the PR body.
 #[derive(Debug, Clone)]
 pub struct PatchMessage {
-    pub title: String,
-    pub message: Option<String>,
+    pub message: String,
 }
 
-/// `patch` with the title of `change`, and the raw message to assess: the
-/// new message (the title when it is empty), or the stored one without a
-/// change.
+/// `patch` with the message of `change`, and the raw message to assess: the
+/// new message, or the stored one without a change.
 pub(super) fn with_message(
     patch: &Patch,
     change: Option<&PatchMessage>,
 ) -> Result<(Patch, String)> {
     let mut updated = patch.clone();
     let Some(change) = change else {
-        return Ok((updated, stored_commit_message(patch)));
+        return Ok((updated, patch.commit_message.clone()));
     };
-    let title = change.title.trim();
-    if title.is_empty() {
-        return Err(Error::msg("The patch title cannot be empty"));
+    let raw = change.message.trim().to_string();
+    if first_line(&strip_html_comments(&raw)).is_empty() {
+        return Err(Error::msg("The patch message cannot be empty"));
     }
-    updated.title = title.to_string();
-    let raw = change
-        .message
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(title)
-        .to_string();
+    updated.commit_message = strip_html_comments(&raw);
     Ok((updated, raw))
 }
 
-/// With a change, records the assessed message on `updated` and rewrites
-/// HEAD's message to match. Without one, HEAD already has it.
+/// With a change, rewrites HEAD's message to the new message of `updated`.
+/// Without one, HEAD already has it.
 pub(super) fn commit_message_change(
     repo: &Path,
     queue: &QueueState,
-    updated: &mut Patch,
+    updated: &Patch,
     change: Option<&PatchMessage>,
-    report: &AssessReport,
 ) -> Result<()> {
     if change.is_none() {
         return Ok(());
     }
-    updated.commit_message = report.commit_message.clone();
     git(
         repo,
         &[

@@ -326,7 +326,7 @@ fn residual(
             continue;
         }
         let file = repo.join(patch_path(&patch.id)?);
-        if apply_abs(dir, &file, &patch.title)? == ApplyOutcome::Conflict {
+        if apply_abs(dir, &file, patch.subject())? == ApplyOutcome::Conflict {
             git(dir, &["reset", "--hard", "--quiet"], GitOpts::default())?;
             git(dir, &["clean", "-fdq"], GitOpts::default())?;
         }
@@ -351,7 +351,7 @@ pub(super) fn write_incoming_packet(
         queue
             .all_patches()
             .find(|p| p.id == id)
-            .map(|p| p.title.clone())
+            .map(|p| p.subject().to_string())
             .unwrap_or_default()
     };
     let merges: Vec<IncomingMergeRow> = reconciliation
@@ -449,7 +449,8 @@ pub(super) fn persist_conflict(
             )?;
             let message = format!(
                 "Patch {} (\"{}\") does not apply onto the current upstream prefix.",
-                patch.id, patch.title
+                patch.id,
+                patch.subject()
             );
             let detail = if files.is_empty() {
                 "untracked conflict".into()
@@ -476,7 +477,8 @@ pub(super) fn persist_conflict(
             git(repo, &["branch", "-f", &work, &sha], GitOpts::default())?;
             let message = format!(
                 "Patch {} (\"{}\") applies, but preflight.sh fails once it is applied.",
-                patch.id, patch.title
+                patch.id,
+                patch.subject()
             );
             (
                 onto,

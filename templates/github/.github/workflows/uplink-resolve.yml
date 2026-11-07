@@ -4,7 +4,8 @@
 #
 # Runs when the gated conflict PR is merged into uplink/conflict/<id>.
 # YAML is loaded from the default branch so *-work cannot replace this sidecar.
-# The PR title and description become the patch title and message.
+# The PR title becomes the subject of the patch message and the
+# description its body.
 # git uplink resolve amends the patch, rebuilds company main, and
 # deletes the protected base plus -work branch. If the patch was already
 # submitted, this job dispatches Uplink submit to export it onto the new
@@ -88,7 +89,7 @@ jobs:
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > "$RUNNER_TEMP/uplink-pr-msg.txt"
-          report=$(git uplink resolve "$id" --title "$TITLE" \
+          report=$(git uplink resolve "$id" \
             --message-file "$RUNNER_TEMP/uplink-pr-msg.txt" --preflight-only) || true
           if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
             echo "git uplink printed no preflight result"
@@ -213,7 +214,7 @@ jobs:
 
           main_before=$(git rev-parse origin/main)
 
-          resolve_json=$(git uplink resolve "$id" --title "$TITLE" \
+          resolve_json=$(git uplink resolve "$id" \
             --message-file "$RUNNER_TEMP/uplink-pr-msg.txt" \
             --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 

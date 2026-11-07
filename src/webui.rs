@@ -488,7 +488,7 @@ fn build_submit_stream(repo: &Path, source: QueueSource) -> SubmitStreamResponse
                 .into_iter()
                 .map(|node| StreamNodeBody {
                     id: node.patch.id.clone(),
-                    title: node.patch.title.clone(),
+                    title: node.patch.subject().to_string(),
                     status: node.patch.status.as_str().into(),
                     depends_on: node.patch.depends_on.clone(),
                     missing: node.missing,

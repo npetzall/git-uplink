@@ -95,7 +95,6 @@ jobs:
           out="$RUNNER_TEMP/uplink-assessment"
           code=0
           git uplink assess \
-            --title "$TITLE" \
             --message-file "$RUNNER_TEMP/uplink-msg.txt" \
             --from "$FROM_SHA" \
             --head "$HEAD_SHA" \
@@ -223,7 +222,6 @@ jobs:
             printf '%s\n' "${BODY:-}"
           } > "$RUNNER_TEMP/uplink-msg.txt"
           report=$(git uplink preflight --json \
-            --title "$TITLE" \
             --message-file "$RUNNER_TEMP/uplink-msg.txt" \
             --from "$FROM_SHA" \
             --head "$HEAD_SHA") || true

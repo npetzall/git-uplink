@@ -46,7 +46,7 @@ export const STATUS_INFO: Record<string, { meaning: string; next: string }> = {
   },
   "needs approval": {
     meaning:
-      "The lines the patch adds or removes, its public title or its public message changed since its last approval. Submit refuses it as it is.",
+      "The lines the patch adds or removes, its subject or its public message changed since its last approval. Submit refuses it as it is.",
     next: "Dispatch Uplink submit: IP reviews a new packet, and the approval covers the current content.",
   },
   tooling: {
