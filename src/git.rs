@@ -5,7 +5,26 @@ use std::process::{Command, Stdio};
 use crate::error::{Error, Result};
 
 const BOT_NAME: &str = "Uplink Bot";
-const BOT_EMAIL: &str = "uplink@company.example";
+pub(crate) const BOT_EMAIL: &str = "uplink@company.example";
+
+/// The operator's `user.name` and `user.email` as git resolves them in
+/// `cwd`. Every [`git`] call forces the bot identity, so this reads the
+/// config with a plain local `git config`. None when either is unset.
+pub(crate) fn operator_identity(cwd: &Path) -> Option<(String, String)> {
+    let read = |key: &str| -> Option<String> {
+        let output = Command::new("git")
+            .current_dir(cwd)
+            .args(["config", "--get", key])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (output.status.success() && !value.is_empty()).then_some(value)
+    };
+    Some((read("user.name")?, read("user.email")?))
+}
 
 /// Settings forced on every call: the bot identity, no signing, and output
 /// that uplink parses (diffs, patches) free of the operator's colors,

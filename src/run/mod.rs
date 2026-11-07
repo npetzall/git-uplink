@@ -26,7 +26,7 @@ use crate::adopt::{
     ADOPT_TEST_BRANCH_PREFIX, AdoptGroup, AheadAnalysis, adopted_patch, clear_adopt_from,
     remove_patch_files, resolve_group,
 };
-use crate::assess::{company_commit_message, report_paths};
+use crate::assess::{company_commit_message, merge_authors, patch_authors, report_paths};
 use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::preflight::{
@@ -753,7 +753,7 @@ fn candidate(ctx: &Ctx<'_>, run: &BranchRun, queue: &QueueState) -> Result<Candi
                 repo,
                 &patch.id,
                 &resolved.from_sha,
-                &company_commit_message(&patch),
+                &company_commit_message(queue, &patch),
                 &resolved.head_sha,
             )?;
             Ok(Candidate {
@@ -769,11 +769,15 @@ fn candidate(ctx: &Ctx<'_>, run: &BranchRun, queue: &QueueState) -> Result<Candi
             let rel = patch_path(&patch.id)?;
             match &item.amended {
                 Some(sha) => {
+                    merge_authors(
+                        &mut patch.source.authors,
+                        patch_authors(repo, &format!("{sha}^"), sha)?,
+                    );
                     write_product_patch(
                         repo,
                         &patch.id,
                         &format!("{sha}^"),
-                        &company_commit_message(&patch),
+                        &company_commit_message(queue, &patch),
                         sha,
                     )?;
                 }

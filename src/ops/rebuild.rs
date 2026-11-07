@@ -168,7 +168,7 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
                 )));
             }
             let patch_file = snapshot.join(patch_path(&patch.id)?);
-            let result = apply_patch_file(repo, &patch, &patch_file, false)?;
+            let result = apply_patch_file(repo, &queue, &patch, &patch_file, false)?;
             if result == ApplyOutcome::Empty {
                 continue;
             }
@@ -237,7 +237,7 @@ fn replay_queue(
             return Ok(Replayed::Blocked(patch));
         }
         let patch_file = snapshot.join(patch_path(&patch.id)?);
-        let result = apply_patch_file(repo, &patch, &patch_file, false)?;
+        let result = apply_patch_file(repo, queue, &patch, &patch_file, false)?;
         if result == ApplyOutcome::Empty {
             if queue.is_upstream(&patch.id) {
                 mark_merged_by_empty_rebase(repo, queue, &patch.id, upstream_ref)?;
@@ -543,6 +543,9 @@ pub(super) fn rebuild_once(
 pub(super) struct Inline<'a> {
     /// Patch files (id, contents) replayed in place of the stored ones.
     pub replace: &'a [(String, String)],
+    /// Patch authors (id, authors) to replay with, so the replayed commits
+    /// already name the people who resolved them.
+    pub authors: &'a [(String, Vec<String>)],
     /// Runs on the queue before the rebuild is published, once `.uplink`
     /// holds the patch files as replayed.
     pub before_publish: &'a mut dyn FnMut(&mut QueueState) -> Result<()>,
@@ -585,6 +588,9 @@ pub(super) fn rebuild_replay(
         if let Some(inline) = &inline {
             for (id, contents) in inline.replace {
                 fs::write(snapshot.join(patch_path(id)?), contents)?;
+            }
+            for (id, authors) in inline.authors {
+                get_patch_mut(&mut queue, id)?.source.authors = authors.clone();
             }
         }
         git(
@@ -863,7 +869,7 @@ fn resolve_once(
     }
     restore_uplink_from_state(repo)?;
     let mut queue = read_queue_file(repo)?;
-    let patch = get_patch(&queue, id)?.clone();
+    let mut patch = get_patch(&queue, id)?.clone();
     if patch.status != PatchStatus::Conflict {
         return Err(Error::msg(format!("{id} is not in conflict")));
     }
@@ -873,9 +879,10 @@ fn resolve_once(
         .as_ref()
         .and_then(|c| c.onto.clone())
         .unwrap_or(recover_onto(repo, GateKind::Conflict, id, &head)?);
+    merge_authors(&mut patch.source.authors, resolution_authors(repo, &onto)?);
     let (mut updated, raw_message) = with_message(&patch, change)?;
     let before = rev_parse(repo, "HEAD")?;
-    commit_resolution(repo, &onto, &company_commit_message(&patch))?;
+    commit_resolution(repo, &onto, &company_commit_message(&queue, &patch))?;
     // The resolution is new code, so the stored assessment no longer
     // describes it. An upstream-bound resolution must pass; otherwise the
     // branch is put back as it was so the resolution can be fixed.
@@ -893,7 +900,7 @@ fn resolve_once(
         if !intent.is_internal_only() {
             assert_assess_ok(&report, &updated.title)?;
         }
-        commit_message_change(repo, &mut updated, change, &report)?;
+        commit_message_change(repo, &queue, &mut updated, change, &report)?;
         Ok(report)
     })();
     let report = match checked {
@@ -909,6 +916,7 @@ fn resolve_once(
         let patch = get_patch_mut(&mut queue, id)?;
         patch.title = updated.title;
         patch.commit_message = updated.commit_message;
+        patch.source.authors = updated.source.authors;
         patch.assess = Some(report);
         patch.conflict = None;
         let rel = patch_path(id)?.to_string_lossy().into_owned();

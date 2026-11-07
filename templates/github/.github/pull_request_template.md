@@ -23,4 +23,7 @@ Uplink-Export-Author: Jane Public <jane@users.noreply.github.com>
 
 Uplink-Export-Author adds a Co-Authored-By trailer to the public commit.
 The commit author is the contribution account.
+
+The authors of this PR's commits are added as Co-Authored-By below the
+cutoff on company main only. They are never exported.
 -->

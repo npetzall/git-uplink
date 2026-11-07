@@ -356,7 +356,7 @@ pub(super) fn apply_queue_preview(
         }
         let onto_here = rev_parse(repo, "HEAD")?;
         let patch_file = snapshot.join(patch_path(&item.id)?);
-        let result = apply_patch_file(repo, &item, &patch_file, false)?;
+        let result = apply_patch_file(repo, preview, &item, &patch_file, false)?;
         if result == ApplyOutcome::Conflict {
             if item.id != id {
                 let why = if stop_after_target {
@@ -555,10 +555,11 @@ pub(super) fn complete_transfer(
     }
     restore_uplink_from_state(repo)?;
     let queue = read_queue_file(repo)?;
-    let patch = validate_transfer(&queue, id, direction)?;
+    let mut patch = validate_transfer(&queue, id, direction)?;
     assert_resolution_clean(repo)?;
     let onto = recover_onto(repo, kind, id, &head)?;
-    let message = company_commit_message(&patch);
+    merge_authors(&mut patch.source.authors, resolution_authors(repo, &onto)?);
+    let message = company_commit_message(&queue, &patch);
     let before = rev_parse(repo, "HEAD")?;
     commit_resolution(repo, &onto, &message)?;
     let (updated, message_report) =
@@ -578,6 +579,7 @@ pub(super) fn complete_transfer(
         let current = get_patch_mut(&mut preview, id)?;
         current.title = updated.title.clone();
         current.commit_message = updated.commit_message.clone();
+        current.source.authors = updated.source.authors.clone();
     }
     let checked = transfer_checks(
         repo,
@@ -613,6 +615,7 @@ pub(super) fn complete_transfer(
         let current = get_patch_mut(&mut queue, id)?;
         current.title = updated.title;
         current.commit_message = updated.commit_message;
+        current.source.authors = updated.source.authors;
     }
     write_queue_file(repo, &queue)?;
     commit_queue(
@@ -661,7 +664,7 @@ fn change_message(
         Some(&updated.title),
         PatchIntent::from_internal_only(direction.to_internal()),
     )?;
-    commit_message_change(repo, &mut updated, change, &report)?;
+    commit_message_change(repo, queue, &mut updated, change, &report)?;
     Ok((updated, Some(report)))
 }
 

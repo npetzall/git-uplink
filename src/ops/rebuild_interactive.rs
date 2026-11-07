@@ -53,6 +53,9 @@ struct ResolvedPatch {
     id: String,
     contents: String,
     assess: AssessReport,
+    /// The patch's authors with the people who resolved it.
+    #[serde(default)]
+    authors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,10 +267,14 @@ pub fn resume_rebuild(repo: &Path, resume: RebuildResume) -> Result<Option<Inlin
 /// assessment; otherwise the checkout is put back as it was.
 fn resolve_stop(repo: &Path, stop: &Stop) -> Result<ResolvedPatch> {
     let queue = read_queue_file(repo)?;
-    let patch = get_patch(&queue, &stop.id)?.clone();
+    let mut patch = get_patch(&queue, &stop.id)?.clone();
     assert_resolution_clean(repo)?;
+    merge_authors(
+        &mut patch.source.authors,
+        resolution_authors(repo, &stop.onto)?,
+    );
     let before = rev_parse(repo, "HEAD")?;
-    commit_resolution(repo, &stop.onto, &company_commit_message(&patch))?;
+    commit_resolution(repo, &stop.onto, &company_commit_message(&queue, &patch))?;
     if rev_parse(repo, "HEAD")? == stop.onto {
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
         return Err(Error::msg(format!(
@@ -296,6 +303,7 @@ git uplink rebuild --abort, then git uplink drop {} (or git uplink merged {} whe
         id: stop.id.clone(),
         contents: format_patch_at_head(repo)?,
         assess: report,
+        authors: patch.source.authors,
     })
 }
 
@@ -319,6 +327,11 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
         .iter()
         .map(|r| (r.id.clone(), r.contents.clone()))
         .collect();
+    let authors: Vec<(String, Vec<String>)> = paused
+        .resolved
+        .iter()
+        .map(|r| (r.id.clone(), r.authors.clone()))
+        .collect();
     let resolved = paused.resolved.clone();
     let mut record = |queue: &mut QueueState| record_resolved(repo, queue, &resolved);
     let outcome = rebuild_replay(
@@ -327,6 +340,7 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
         paused.verify,
         Some(Inline {
             replace: &replace,
+            authors: &authors,
             before_publish: &mut record,
         }),
     );
@@ -412,6 +426,7 @@ fn record_resolved(repo: &Path, queue: &mut QueueState, resolved: &[ResolvedPatc
             continue;
         }
         patch.assess = Some(resolution.assess.clone());
+        patch.source.authors = resolution.authors.clone();
         patch.conflict = None;
         let rel = patch_path(&resolution.id)?.to_string_lossy().into_owned();
         patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
