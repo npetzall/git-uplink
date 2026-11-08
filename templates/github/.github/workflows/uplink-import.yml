@@ -203,6 +203,8 @@ jobs:
             local id queue
             id=$(jq -r '.id' /tmp/uplink-add.out)
             queue=$(jq -r '.queue' /tmp/uplink-add.out)
+            # The backticks are Markdown, not command substitution.
+            # shellcheck disable=SC2016
             printf 'Recorded as `%s` (%s queue). To build on this change, add this line to your PR body below the cutoff:\n\n```text\nUplink-Depends-On: %s\n```\n' \
               "$id" "$queue" "$id" > "$RUNNER_TEMP/uplink-recorded.md"
             gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/uplink-recorded.md" \
