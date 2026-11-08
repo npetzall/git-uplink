@@ -1,6 +1,6 @@
 # Story 6 — Internal-only telemetry
 
-A company-only change must never pass the IP gate. `companyTelemetry` is in `redact_keywords` in `uplink.toml` on `uplink/hooks`. Developer view: [Day to day — make a company-only change](https://npetzall.github.io/git-uplink/day-to-day#internal-only).
+A company-only change must never pass the IP gate. `companyTelemetry` is in `redact_keywords` in `uplink.toml` on `uplink/hooks`. Developer view: [Developer — make a company-only change](https://npetzall.github.io/git-uplink/developer#internal-only).
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github

@@ -10,6 +10,10 @@ Rust Git subcommand. The binary is `git-uplink`, so Git treats it as `git uplink
 - **Public site:** `site/` is the same frontend stack plus Vitest, Marked, and Mermaid. GitHub Pages via `.github/workflows/publish-site.yml`. Do not commit `site/dist`.
 - **Toolchain:** Node.js 22 and pnpm (version pinned by `packageManager` in the root `package.json`). `web/` and `site/` are one pnpm workspace (`pnpm-workspace.yaml`, one `pnpm-lock.yaml` at the root); a dependency both use goes in the workspace `catalog:` and is referenced as `"catalog:"`. Tests are `cargo test` (real git temp repos) and `pnpm -r test`. Lint with `pnpm -r run lint`. Supply-chain checks include `cargo deny`, pnpm audit, Socket Security, and Syft SBOMs.
 
+## Roles
+
+Docs, CLI help, and PR comments address three roles: the **operator** (setup, `init --upgrade`, adopt, troubleshooting, repairs by hand), the **forge** (the workflows in `templates/`), and the **developer** (PRs, labels, the PR body, gated PRs, and dispatching amend, transfer and submit). Developers never run `git uplink`; do not tell them to. Put a new command in the Operator or Forge group of `GROUPS`, and its page on the site (`site/src/pages/operator.tsx`, `forge.tsx`, `developer.tsx`).
+
 ## Pack and binary versions
 
 The forge pack (`templates/`) and the binary are released and upgraded together. Assume a workflow always runs the binary of its own release: change CLI flags, output and the workflows that use them in the same commit, and do not add compatibility for an older pack or an older binary. This is stated for operators in `templates/github/README.md`.
