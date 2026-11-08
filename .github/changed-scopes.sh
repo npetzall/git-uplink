@@ -18,12 +18,12 @@ product_patterns=(
   'pnpm-(lock|workspace)\.yaml$'
   'ruff\.toml$'
   '\.pre-commit-config\.yaml$'
-  '\.github/calculate-version\.sh$'
-  '\.github/changed-scopes\.sh$'
-  '\.github/[^/]+\.py$'
-  '\.github/workflows/(pr|product|version|codeql|zizmor|actionlint|socket)\.yml$'
-  '\.github/actionlint(\.yaml|-sarif\.tpl)$'
-  '\.github/codeql/(web|templates|github-scripts)\.yml$'
+  # Everything under .github/, and the shell scripts outside the scopes:
+  # product.yml runs pre-commit (actionlint, ShellCheck, zizmor) on them.
+  '\.github/'
+  'scripts/'
+  'examples/github/reset/'
+  'tui-demo/'
 )
 
 site_patterns=(
@@ -83,7 +83,13 @@ self_check() {
   expect_scopes true false "templates/github/.github/workflows/uplink-pr.yml"
   expect_scopes false true "site/src/main.tsx"
   expect_scopes false true "docs/design.md"
-  expect_scopes false true ".github/workflows/publish-site.yml"
+  expect_scopes true true ".github/workflows/publish-site.yml"
+  expect_scopes true false ".github/workflows/release.yml"
+  expect_scopes true false ".github/dependabot.yml"
+  expect_scopes true false "scripts/man.sh"
+  expect_scopes true false "examples/github/reset/upstream.sh"
+  expect_scopes true false "tui-demo/adopt/run-demo.sh"
+  expect_scopes false true "examples/github/stories/01-solo-fix.md"
   expect_scopes true true "docs/cli.md"
   expect_scopes true true "templates/github/README.md"
   expect_scopes true true "pnpm-lock.yaml"
