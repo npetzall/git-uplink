@@ -49,6 +49,7 @@ cosign verify-blob "git-uplink-$target" --bundle "git-uplink-$target.sigstore.js
   --certificate-identity https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main \\
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 gh release verify-asset --repo npetzall/git-uplink "git-uplink-$target"
+gh attestation verify "git-uplink-$target" --repo npetzall/git-uplink
 chmod +x "git-uplink-$target"
 mkdir -p ~/.local/bin && mv "git-uplink-$target" ~/.local/bin/git-uplink
 git uplink version`}</pre>

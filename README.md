@@ -42,12 +42,13 @@ cosign verify-blob "git-uplink-$target" --bundle "git-uplink-$target.sigstore.js
   --certificate-identity https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 gh release verify-asset --repo npetzall/git-uplink "git-uplink-$target"
+gh attestation verify "git-uplink-$target" --repo npetzall/git-uplink
 chmod +x "git-uplink-$target"
 mkdir -p ~/.local/bin && mv "git-uplink-$target" ~/.local/bin/git-uplink
 git uplink version
 ```
 
-Every release asset is signed with [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) by the release workflow; the `cosign verify-blob` line checks that. Releases are [immutable](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases): the tag cannot move and assets cannot be replaced, and the `gh release verify-asset` line checks that the file matches GitHub's attestation for the latest release. Make sure `~/.local/bin` is on your `PATH`. On Windows, download `git-uplink-x86_64-pc-windows-msvc.exe`, rename it to `git-uplink.exe`, and place it in a directory on `PATH`.
+Every release asset is signed with [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) by the release workflow; the `cosign verify-blob` line checks that. Releases are [immutable](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases): the tag cannot move and assets cannot be replaced, and the `gh release verify-asset` line checks that the file matches GitHub's attestation for the latest release. The `gh attestation verify` line checks the build provenance: the binary was built by this repository's release workflow, from the commit the release names. Releases published before build attestations were added have none, and that line fails for them. Make sure `~/.local/bin` is on your `PATH`. On Windows, download `git-uplink-x86_64-pc-windows-msvc.exe`, rename it to `git-uplink.exe`, and place it in a directory on `PATH`.
 
 The man pages are in the binary. To make `git uplink --help` and `man git-uplink` work, write them to a `man1` directory on your man path:
 

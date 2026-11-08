@@ -335,6 +335,13 @@ export function SecurityPage() {
             fixed by the next version.
           </li>
           <li>
+            Each release&apos;s binaries carry a build provenance attestation
+            and an SBOM attestation, made by the release workflow with{" "}
+            <code>actions/attest</code>. <code>gh attestation verify</code>{" "}
+            checks that a binary was built by that workflow in this repository,
+            from the commit the release names.
+          </li>
+          <li>
             Dependencies are checked with <code>cargo deny</code>, pnpm audit
             and Socket on every change.
           </li>
