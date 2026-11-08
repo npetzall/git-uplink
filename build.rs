@@ -125,8 +125,9 @@ fn main_page(command: clap::Command) -> Vec<u8> {
     man.render_options_section(&mut page).unwrap();
     let mut commands = roff::Roff::new();
     commands.control("SH", ["SUBCOMMANDS"]);
-    for (heading, names) in cli::GROUPS {
+    for (heading, blurb, names) in cli::GROUPS {
         commands.control("SS", [*heading]);
+        commands.text([roff::roman(*blurb)]);
         for name in *names {
             let about = man_command.find_subcommand(name).unwrap().get_about();
             commands.control("TP", []);

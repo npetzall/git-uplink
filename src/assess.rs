@@ -551,7 +551,7 @@ fn format_fenced(message: &str) -> String {
 }
 
 /// Explains the report's checks and how to fix a failure.
-pub const ASSESS_DOCS_URL: &str = "https://npetzall.github.io/git-uplink/day-to-day#assess-fails";
+pub const ASSESS_DOCS_URL: &str = "https://npetzall.github.io/git-uplink/developer#assess-fails";
 
 fn assessment_heading(ok: bool) -> String {
     format!("## Upstream Assessment: {}", if ok { "✅" } else { "❌" })
@@ -1705,7 +1705,7 @@ pub fn format_incoming_packet(packet: &IncomingPacket<'_>) -> String {
             .iter()
             .map(|claim| {
                 format!(
-                    "- `{sha}` carries `{key}: {id}`, but its diff is not that patch. Approving does **not** mark `{id}` merged; it is applied again on the new upstream. If upstream did take it in another form, run `git uplink merged {id} --sha {sha}`.\n",
+                    "- `{sha}` carries `{key}: {id}`, but its diff is not that patch. Approving does **not** mark `{id}` merged; it is applied again on the new upstream. If upstream did take it in another form, ask the operator to run `git uplink merged {id} --sha {sha}`.\n",
                     sha = claim.sha,
                     key = packet.trailer_key,
                     id = claim.id,

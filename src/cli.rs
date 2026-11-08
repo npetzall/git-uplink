@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 const OVERVIEW: &str = "\
-Developers open PRs and merge them; they never push main. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message (its first line is the patch subject), adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
+Three roles meet in a repository git uplink manages. The operator sets it up and keeps it healthy: `init`, `init --upgrade`, adopting existing history, troubleshooting, and repairs by hand. The forge, the workflows of the pack `init` installs, runs the rest: it imports merged PRs, syncs upstream, submits contributions, rebases PRs, and opens gated PRs for conflicts, amends and transfers. Developers do not run git uplink: they branch from company `main`, open PRs, merge them, and work in the gated PRs the forge opens. They start the amend, transfer and submit workflows; they never push main.
+
+`add` records a merged PR as a queued patch on `uplink/state`. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message (its first line is the patch subject), adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
 
 On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment; `approve` and `submit` run after that review. git uplink talks to git only; workflows use gh for GitHub and follow-up commands (`submitted`, `gated`) to record results.
 
@@ -104,38 +106,53 @@ SSH upstream, origin, and contrib without the matching role's creds fail instead
     ),
 ];
 
-/// Command groups, as (heading, command names), in the order they are listed in
-/// `-h`, the man page, and `docs/cli.md`. Every command is in exactly one.
-pub const GROUPS: &[(&str, &[&str])] = &[
-    ("Setup", &["init"]),
+/// Command groups, as (heading, who they are for, command names), in the
+/// order they are listed in `-h`, the man page, and `docs/cli.md`. Every
+/// command is in exactly one. Developers have no group: they do not run git
+/// uplink.
+pub const GROUPS: &[(&str, &str, &[&str])] = &[
     (
-        "Recording changes",
+        "Operator",
+        "Run by hand to set up, upgrade, adopt, inspect and repair.",
         &[
-            "add", "adopt", "push", "restack", "refresh", "reset", "rebase",
+            "init",
+            "adopt",
+            "status",
+            "doctor",
+            "refresh",
+            "reset",
+            "restack",
+            "push",
+            "rebuild",
+            "drop",
+            "merged",
+            "trim-deps",
+            "web-ui",
         ],
     ),
     (
-        "Checks",
-        &["preflight", "assess", "report", "status", "doctor"],
-    ),
-    (
-        "Contributing upstream",
-        &["approve", "waiting", "rejected", "submit", "submitted"],
-    ),
-    ("Ingesting upstream", &["sync", "accept-upstream", "merged"]),
-    (
-        "Edit",
+        "Forge",
+        "Run by the workflows of the forge pack.",
         &[
-            "transfer",
-            "amend",
-            "drop",
-            "trim-deps",
-            "rebuild",
+            "add",
+            "preflight",
+            "assess",
+            "report",
+            "approve",
+            "waiting",
+            "rejected",
+            "submit",
+            "submitted",
+            "sync",
+            "accept-upstream",
             "gated",
             "resolve",
+            "transfer",
+            "amend",
+            "rebase",
         ],
     ),
-    ("Tools", &["web-ui", "man", "version"]),
+    ("Tools", "For anyone.", &["man", "version"]),
 ];
 
 // clap's own heading style, for the headings the template writes itself. clap
@@ -164,14 +181,14 @@ pub fn command(version: &'static str) -> clap::Command {
 fn help_template(command: &clap::Command) -> String {
     let width = GROUPS
         .iter()
-        .flat_map(|(_, names)| names.iter())
+        .flat_map(|(_, _, names)| names.iter())
         .map(|name| name.len())
         .max()
         .unwrap_or(0);
     let row = |name: &str, about: &str| format!("  {name:width$}  {about}\n");
     let mut groups = Vec::new();
-    for (heading, names) in GROUPS {
-        let mut group = format!("{HEADING}{heading}:{RESET}\n");
+    for (heading, blurb, names) in GROUPS {
+        let mut group = format!("{HEADING}{heading}:{RESET} {blurb}\n");
         for name in *names {
             let about = command
                 .find_subcommand(name)
@@ -565,6 +582,9 @@ pub enum Commands {
     /// that is new or ahead of origin, never with force. A refused hooks push
     /// (for example by the hooks ruleset, or a token without workflows scope)
     /// is a warning; open a pull request against `uplink/hooks` instead.
+    ///
+    /// The forge runs it after import and submit; the operator after `init`,
+    /// `adopt`, `restack` or a repair.
     Push {
         /// Remote to push to, origin by default.
         #[arg(long = "push-remote", value_name = "remote")]
@@ -674,10 +694,12 @@ pub enum Commands {
     /// commit in the branch has anything else under it, `rebase` refuses
     /// rather than drop it.
     ///
-    /// The forge pack comments the command on a pull request whose `main`
-    /// was replaced. With the repository variable `UPLINK_AUTO_REBASE` set
-    /// to `true`, or the label `uplink:rebase` on the pull request, Uplink
-    /// rebase does it and pushes the branch.
+    /// The forge runs it: Uplink rebase plans it for every pull request whose
+    /// `main` was replaced and comments how to rebase. With the repository
+    /// variable `UPLINK_AUTO_REBASE` set to `true`, or the label
+    /// `uplink:rebase` on the pull request, Uplink rebase does it and pushes
+    /// the branch. A developer uses the label, or the plain `git rebase
+    /// --onto` the comment gives; they need no git uplink.
     Rebase {
         /// Print what the rebase would do and change nothing.
         #[arg(long)]
@@ -1128,7 +1150,10 @@ pub enum Commands {
     /// that needs no approval, where upstream moved only by our own
     /// patches. `rebuild --verify` tests `main` after those.
     ///
-    /// Locally, a gated patch is fixed on its branches without a PR: `git
+    /// The forge runs `rebuild --verify`. The rest is the operator's fallback
+    /// when the forge cannot do it.
+    ///
+    /// Operator fallback: a gated patch is fixed on its branches without a PR: `git
     /// switch uplink/conflict/<id>-work` (the conflict markers are committed
     /// there), fix the files, `git add` them, `git uplink resolve <id>`, then
     /// `git uplink push` and `git uplink rebuild --push`. Each resolve
@@ -1236,7 +1261,8 @@ pub enum Commands {
     /// is true when the resolved patch has a public PR: submit must then run
     /// again.
     ///
-    /// Locally: `git switch uplink/conflict/<id>-work`, fix the files and
+    /// The forge runs it when the gated conflict PR merges. Operator
+    /// fallback, when the forge cannot: `git switch uplink/conflict/<id>-work`, fix the files and
     /// `git add` them, run `git uplink resolve <id>`, then `git uplink push`
     /// and `git uplink rebuild --push`. `git uplink rebuild -i` fixes them
     /// inline instead.
@@ -1270,6 +1296,9 @@ pub enum Commands {
     ///
     /// When apply, assess (`--to-upstream`), or preflight fails it prints
     /// gated branches for a transfer PR instead, and exits 0.
+    ///
+    /// The forge runs it when a developer dispatches Uplink transfer, and
+    /// with `--complete` when the transfer PR merges.
     ///
     /// `--to-internal` refuses while an active upstream patch still depends
     /// on this id. A successful `--to-internal` of a submitted patch prints
@@ -1333,6 +1362,10 @@ pub enum Commands {
     /// Amends an internal-only patch, an upstream patch not yet submitted, or
     /// a submitted one a maintainer asked to change. Conflicted, merged,
     /// dropped, and tooling patches cannot be amended.
+    ///
+    /// The forge runs it when a developer dispatches Uplink amend; the
+    /// developer pushes the revision to `uplink/amend/<id>-work` and merges
+    /// the amend PR, which runs `--complete`.
     ///
     /// Without `--complete` it replays the queue on `uplink/upstream` up to
     /// and including the patch, cuts protected `uplink/amend/<id>` there, and
