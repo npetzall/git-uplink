@@ -7,6 +7,10 @@ on:
         description: Build for GitHub Pages and upload the Pages artifact
         type: boolean
         default: false
+      scans:
+        description: Run the repository-wide scans (Socket, zizmor, actionlint, pnpm audit); off when product.yml runs them in the same pull request
+        type: boolean
+        default: true
     secrets:
       SOCKET_SECURITY_API_KEY:
         required: false
@@ -33,7 +37,8 @@ jobs:
         with:
           mode: firewall-free
           job-summary: errors
-      - run: sfw pnpm audit
+      - if: inputs.scans
+        run: sfw pnpm audit
       - run: sfw pnpm install --frozen-lockfile --filter git-uplink-site...
       - run: sfw pnpm run lint
       - run: sfw pnpm run typecheck
@@ -50,6 +55,7 @@ jobs:
       contents: read
 
   socket:
+    if: inputs.scans
     uses: $/.github/workflows/socket.yml
     secrets:
       SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
@@ -59,6 +65,7 @@ jobs:
       pull-requests: write
 
   zizmor:
+    if: inputs.scans
     uses: $/.github/workflows/zizmor.yml
     permissions:
       security-events: write
@@ -66,6 +73,7 @@ jobs:
       actions: read
 
   actionlint:
+    if: inputs.scans
     uses: $/.github/workflows/actionlint.yml
     permissions:
       security-events: write
