@@ -48,6 +48,14 @@ export function OperatorPage() {
             and works in the pull request the forge opens. Don&apos;t rewrite a
             patch for them.
           </li>
+          <li id="forge-failed" className="scroll-mt-20">
+            <strong>When a forge workflow fails,</strong> developers come to you
+            with the link to the run. Read its log and summary, check the setup
+            with <code>git uplink doctor</code>, and fix the cause (credentials,
+            a ruleset, <code>uplink/hooks</code>). Then run the workflow again.
+            Repair by hand only when the forge cannot do it (
+            <a href="#fallbacks">below</a>).
+          </li>
         </ul>
         <nav
           aria-label="Tasks"
