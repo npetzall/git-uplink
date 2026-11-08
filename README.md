@@ -22,6 +22,14 @@ public upstream/main  +  tooling  +  active upstream[]  +  active internal[]
 
 Company-only changes take the `uplink:internal-only` path and never reach the second gate.
 
+## Who does what
+
+| Role | Does | Never | Guide |
+| --- | --- | --- | --- |
+| **Developer** | Branches from company `main`, opens and merges PRs, works in the gated PRs the forge opens, dispatches amend, transfer and submit. | Runs `git uplink`, pushes `main`, rewrites a patch by hand. | [Developer](https://npetzall.github.io/git-uplink/developer) |
+| **Forge** | The workflows of the pack: import, sync, submit, rebase, resolve, transfer, amend. | Touches a developer's branch unless asked. | [Forge](https://npetzall.github.io/git-uplink/forge) |
+| **Operator** | Sets up the repositories, runs `init` and `init --upgrade`, adopts history, troubleshoots, repairs by hand. | Stands in for the forge or rewrites a developer's patch. | [Operator](https://npetzall.github.io/git-uplink/operator) |
+
 ## Install
 
 Download the binary for your platform from [Releases](https://github.com/npetzall/git-uplink/releases) and put it on `PATH` as `git-uplink`. With the GitHub CLI on macOS or Linux:
@@ -47,7 +55,7 @@ The man pages are in the binary. To make `git uplink --help` and `man git-uplink
 git uplink man ~/.local/share/man/man1
 ```
 
-Installing only adds the command. Using it needs a set of repositories wired together — pick one of the paths below. To build from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Only the operator installs it; the forge installs its own copy in every job, and developers need none. Installing only adds the command. Using it needs a set of repositories wired together — pick one of the paths below. To build from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Try it for yourself
 
@@ -65,7 +73,9 @@ No GitHub account handy? The [live lab](https://npetzall.github.io/git-uplink/la
 | --- | --- | --- |
 | Why it exists | [Why](https://npetzall.github.io/git-uplink/why) | `site/` |
 | How it works | [How](https://npetzall.github.io/git-uplink/how) | `site/` |
-| What developers do | [Day to day](https://npetzall.github.io/git-uplink/day-to-day) | `site/` |
+| What developers do | [Developer](https://npetzall.github.io/git-uplink/developer) | `site/` |
+| Setup, upgrade, adopt, repairs | [Operator](https://npetzall.github.io/git-uplink/operator) | `site/` |
+| What each workflow does and what starts it | [Forge](https://npetzall.github.io/git-uplink/forge) | `site/` |
 | Every command and flag, credentials | [CLI](https://npetzall.github.io/git-uplink/cli) | [docs/cli.md](docs/cli.md) |
 | Try it on three GitHub repos | [Try it yourself](https://npetzall.github.io/git-uplink/examples) | [examples/github/](examples/github/) |
 | Step-by-step setup; what each workflow does and needs | [Production setup](https://npetzall.github.io/git-uplink/setup) | [templates/github/README.md](templates/github/README.md) (workflows) |

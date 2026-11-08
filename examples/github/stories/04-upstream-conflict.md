@@ -1,6 +1,6 @@
 # Story 4 — Upstream conflicts with a queued patch
 
-Ben’s TTL patch is queued. Upstream then changes the same lines. Sync stops; Ben is `conflict`. The sync workflow opens a gated pull request from `uplink/conflict/<id>-work` into `uplink/conflict/<id>`. You fix the change on the `-work` branch, and merging that PR resolves it. Developer view: [Day to day — my change conflicts with upstream](https://npetzall.github.io/git-uplink/day-to-day#conflict).
+Ben’s TTL patch is queued. Upstream then changes the same lines. Sync stops; Ben is `conflict`. The sync workflow opens a gated pull request from `uplink/conflict/<id>-work` into `uplink/conflict/<id>`. You fix the change on the `-work` branch, and merging that PR resolves it. Developer view: [Developer — my change conflicts with upstream](https://npetzall.github.io/git-uplink/developer#conflict).
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github

@@ -2,7 +2,9 @@
 
 A walkthrough of the Uplink operating model on three GitHub repositories. You `git apply` the patches in [`patches/`](patches/), push a branch, and open the PR in the GitHub UI. Actions import, submit, and sync.
 
-How it works: [How](https://npetzall.github.io/git-uplink/how). What developers do: [Day to day](https://npetzall.github.io/git-uplink/day-to-day). Set it up step by step: [Try it yourself → Setup](https://npetzall.github.io/git-uplink/examples?view=setup). Kit files and resets: [`SETUP.md`](SETUP.md).
+You play both people: the developer who opens, merges and dispatches, and the operator who runs `git uplink reset` and `status`. In a real repository they are separate; see [Operator](https://npetzall.github.io/git-uplink/operator) and [Forge](https://npetzall.github.io/git-uplink/forge).
+
+How it works: [How](https://npetzall.github.io/git-uplink/how). What developers do: [Developer](https://npetzall.github.io/git-uplink/developer). Set it up step by step: [Try it yourself → Setup](https://npetzall.github.io/git-uplink/examples?view=setup). Kit files and resets: [`SETUP.md`](SETUP.md).
 
 ## Repositories
 

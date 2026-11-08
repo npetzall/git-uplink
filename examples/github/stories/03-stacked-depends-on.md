@@ -1,6 +1,6 @@
 # Story 3 — Ben builds on Asha (depends-on)
 
-Asha is queued but not submitted. Ben’s log line needs `sha256`. Developer view: [Day to day — build on someone else's change](https://npetzall.github.io/git-uplink/day-to-day#depends-on).
+Asha is queued but not submitted. Ben’s log line needs `sha256`. Developer view: [Developer — build on someone else's change](https://npetzall.github.io/git-uplink/developer#depends-on).
 
 ```bash
 export KIT=/path/to/git-uplink/examples/github
