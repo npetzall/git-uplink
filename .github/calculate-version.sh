@@ -141,7 +141,7 @@ self_check() {
 }
 
 semver_tag() {
-  git tag --sort=-v:refname "$@" | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }'
+  git tag --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }'
 }
 
 apply_log() {

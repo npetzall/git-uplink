@@ -16,6 +16,9 @@ on:
       - .github/workflows/codeql.yml
       - .github/workflows/socket.yml
       - .github/workflows/zizmor.yml
+      - .github/workflows/actionlint.yml
+      - .github/actionlint.yaml
+      - .github/actionlint-sarif.tpl
       - .github/codeql/site.yml
   workflow_dispatch:
 

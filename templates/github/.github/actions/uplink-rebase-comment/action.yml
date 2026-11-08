@@ -46,6 +46,9 @@ runs:
         NOTE: ${{ inputs.note }}
         REBASED_FROM: ${{ inputs.rebased-from }}
       run: |
+        # The backticks in the comments echoed below are Markdown, not
+        # command substitution.
+        # shellcheck disable=SC2016
         set -euo pipefail
         body="$RUNNER_TEMP/uplink-rebase-comment.md"
         fetch_origin() {

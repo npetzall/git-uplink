@@ -1,0 +1,13 @@
+# actionlint settings for this repository's workflows and the forge pack's
+# (templates/*/.github/workflows). Pass it with -config-file: actionlint
+# would treat templates/github/.github as a project of its own.
+paths:
+  "**/*.{yml,yaml}":
+    ignore:
+      # `uses: $/...` calls a workflow or action of the same repository at the
+      # same ref. It works on github.com and GHEC and is intentional; this
+      # actionlint release does not know the form.
+      - 'is not following the format "owner/repo/path/to/workflow\.yml@ref"'
+      - 'specifying action "\$/'
+      # `concurrency.queue` is newer than this actionlint release.
+      - 'unexpected key "queue" for "concurrency" section'
