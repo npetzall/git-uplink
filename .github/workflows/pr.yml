@@ -60,6 +60,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.site == 'true'
     uses: $/.github/workflows/site.yml
+    with:
+      # The scans cover the whole repository; product.yml runs them when
+      # both scopes changed.
+      scans: ${{ needs.changes.outputs.product != 'true' }}
     secrets:
       SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
     permissions:

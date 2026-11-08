@@ -266,28 +266,25 @@ jobs:
         with:
           toolchain: 1.98.1
           components: rustfmt, clippy
-      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
-        with:
-          install: false
-          cache: true
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
           job-summary: errors
-      # Biome for the lint hooks; vuln-check audited both lockfiles.
-      - run: sfw pnpm install --frozen-lockfile
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-3.12-${{ hashFiles('.pre-commit-config.yaml') }}
       - name: Apply version
         run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
+      # The skipped hooks run in other jobs: pnpm-audit and cargo-deny in
+      # vuln-check, biome-web in web-dist, biome-site in site.yml, and
+      # cli-docs as the cli_docs test. Under sfw, pre-commit installs the
+      # Python hook environments through the firewall.
       - name: pre-commit
         env:
           GIT_UPLINK_SKIP_WEB_BUILD: "1"
+          SKIP: pnpm-audit,cargo-deny,biome-web,biome-site,cli-docs
         run: |
           set -euo pipefail
           test -f web/dist/index.html
-          uvx --with pre-commit-uv pre-commit run --all-files --show-diff-on-failure
+          sfw uv tool run --with pre-commit-uv pre-commit run --all-files --show-diff-on-failure

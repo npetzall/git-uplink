@@ -92,7 +92,7 @@ For the product scope, `pr.yml` calculates the next version and calls `product.y
 
 1. `cargo deny` and `pnpm audit` of the workspace lockfile run first.
 2. Then `web/` is built once (`sfw pnpm install`, lint, typecheck, vitest, production build) and CycloneDX and SPDX SBOMs are generated.
-3. Test, the musl Linux binary, and pre-commit (rustfmt, clippy, cargo deny, zizmor, actionlint, ShellCheck) run in parallel with `GIT_UPLINK_SKIP_WEB_BUILD=1`.
+3. Test, the musl Linux binary, and pre-commit run in parallel with `GIT_UPLINK_SKIP_WEB_BUILD=1`. CI's pre-commit skips the hooks other jobs already run: pnpm audit and cargo deny (step 1), Biome (the `web/` and site jobs), and `docs/cli.md` (the `cli_docs` test).
 
 CodeQL for Rust and `web/`, zizmor, actionlint, and Socket start immediately and do not gate the build. Each job that compiles or scans the crate writes the version into `Cargo.toml` and `Cargo.lock`. SBOMs are always uploaded as an artifact.
 
@@ -101,6 +101,7 @@ CodeQL for Rust and `web/`, zizmor, actionlint, and Socket start immediately and
 Called by `pr.yml` for the site scope, and by `publish-site.yml`.
 
 - `sfw pnpm audit`, lint, typecheck, and vitest run in parallel with site CodeQL, zizmor, actionlint, and Socket, then a separate build job.
+- pnpm audit, zizmor, actionlint, and Socket cover the whole repository. When a PR changes both scopes, `pr.yml` passes `scans: false`, so they run once, in `product.yml`.
 - The build uses the Pages base path and uploads the Pages artifact only when the caller sets `pages: true`.
 
 ### GitHub Pages (`publish-site.yml`)
