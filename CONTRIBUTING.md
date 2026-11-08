@@ -126,6 +126,7 @@ Pushes to `main` that match the product path filter run the release.
 - Releases are immutable (repository setting): once published, the tag cannot move and assets cannot be added, replaced, or deleted. GitHub creates a release attestation for each one. A broken release is fixed by the next version, not in place.
 - Assets: Apple Silicon, Linux musl (amd64 and arm64), and Windows binaries, `SHA256SUMS`, and `git-uplink-<version>.cdx.json` / `git-uplink-<version>.spdx.json`.
 - Every asset is signed with cosign (keyless) in the publish job and gets a `<asset>.sigstore.json` bundle. The signer is `https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main`, issuer `https://token.actions.githubusercontent.com`. The pack's install action pins that identity, so renaming `release.yml` or releasing from another branch breaks installs.
+- The publish job also attests the binaries with `actions/attest`: SLSA build provenance, and the SPDX SBOM bound to them. Both list the binaries by `SHA256SUMS`. Verify with `gh attestation verify git-uplink-<target> --repo npetzall/git-uplink`.
 
 ## SBOMs
 
