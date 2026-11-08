@@ -2,7 +2,9 @@
 
 # CLI reference
 
-Developers open PRs and merge them; they never push main. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message (its first line is the patch subject), adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
+Three roles meet in a repository git uplink manages. The operator sets it up and keeps it healthy: `init`, `init --upgrade`, adopting existing history, troubleshooting, and repairs by hand. The forge, the workflows of the pack `init` installs, runs the rest: it imports merged PRs, syncs upstream, submits contributions, rebases PRs, and opens gated PRs for conflicts, amends and transfers. Developers do not run git uplink: they branch from company `main`, open PRs, merge them, and work in the gated PRs the forge opens. They start the amend, transfer and submit workflows; they never push main.
+
+`add` records a merged PR as a queued patch on `uplink/state`. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message (its first line is the patch subject), adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
 
 On GitHub Enterprise Cloud, contribution approval is the to-upstream Environment; `approve` and `submit` run after that review. git uplink talks to git only; workflows use gh for GitHub and follow-up commands (`submitted`, `gated`) to record results.
 
@@ -66,7 +68,9 @@ git uplink man <dir>
 git uplink version
 ```
 
-## Setup
+## Operator
+
+Run by hand to set up, upgrade, adopt, inspect and repair.
 
 ### `init`
 
@@ -113,41 +117,6 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
 - `--preflight <cmd>`: Command a new preflight.sh on uplink/hooks starts with (asked in a terminal when omitted).
 - `--banned-word <word>`: uplink.toml: word that must not appear in a contribution, such as a company name or internal domain (repeatable, or comma-separated).
 
-## Recording changes
-
-### `add`
-
-Record a merged change as a queued patch on local uplink/state.
-
-`add` is the internal product gate. It records the patch with status `queued` on local `uplink/state` only.
-
-Merge lands the change on `main`; import records the patch on `uplink/state` (`upstream[]` by default, `internal[]` with `uplink:internal-only`). Upstream import rebuilds when an active internal patch must stay on top, and publishes that replay with a plain force push of `main`. An upstream import with an empty internal queue, and every internal-only import, only records the patch.
-
-- `--message <text>`: The single commit message stored on the patch (PR title, blank line, PR body).
-
-  Its first line is the patch subject. HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. `Uplink-Depends-On: upl_...` lines in the message become `dependsOn` and are left out of the public message.
-- `--message-file <path>`: Read the commit message from a file (- reads stdin).
-- `--from <ref>`: Base revision, the company branch by default (fetched from origin if missing).
-- `--head <ref>`: Head revision, HEAD by default (fetched from origin if missing).
-- `--internal-only`: Record on the internal queue: never exported, leak scan skipped.
-- `--pr <n>`: Number of the company PR that merged the change.
-- `--pr-url <url>`: URL of the company PR that merged the change.
-- `--base-branch <branch>`: Branch the company PR merged into.
-
-  Refused unless it is the company branch: a change merged into any other branch has not passed the company branch's review. Import passes the PR's base branch.
-- `--depends-on <id>`: Patch this one depends on, on top of the message trailers (repeatable).
-
-  Name only the direct dependencies: the patches they depend on are applied before them too.
-- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
-
-  The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
-- `--gate`: Record a change that fails the upstream checks internal-only and start a gated transfer to upstream.
-
-  For a change that is already merged into `main`, which import has to record whatever it fails. When an upstream-bound change fails its assessment or its export preflight, it is added internal-only, where it sits on `main`, and `transfer --to-upstream` is started for it: that gates on the same failure, so the fix goes through a transfer PR. The output has `fallback` with the reason and the transfer, and the command exits 0. A stale preflight result still fails the command.
-- `--json`: Print the patch as JSON, with `readyToSubmit`.
-
-  `readyToSubmit` lists the patches this import made ready to submit: upstream-bound, queued, and every upstream dependency merged. Import dispatches Uplink submit for them when the repository variable `UPLINK_AUTO_SUBMIT` is `true`. When the rebuild after the import stops on a patch that no longer applies, the change is still recorded: the output has `conflict` and `gh.prCreate` for the gated PR, and the command exits 0.
-
 ### `adopt`
 
 Pick commits from another local branch and queue them as patches.
@@ -190,13 +159,33 @@ Adopt runs locally only: it makes no network calls, so `--branch`, `uplink/upstr
 - `--no-preview`: Do not build `uplink/preview/verify` when the run ends.
 - `--json`: Print the adopted patches as JSON.
 
-### `push`
+### `status`
 
-Publish local uplink/state, restacking unique patches if origin moved.
+Show the queue.
 
-If origin moved, it appends local-only patches onto the remote tip and carries those patch files. Then it publishes a local `uplink/hooks` that is new or ahead of origin, never with force. A refused hooks push (for example by the hooks ruleset, or a token without workflows scope) is a warning; open a pull request against `uplink/hooks` instead.
+- `--json`: Print the queue status as JSON, for machines.
 
-- `--push-remote <remote>`: Remote to push to, origin by default.
+### `doctor`
+
+Check the setup of this clone.
+
+Checks the queue and recorded URLs, remotes and whether upstream and contrib are reachable, `origin/uplink/state`, the forge tooling patch and workflows on the company branch, `uplink/hooks` (present locally, has the toolchain hook and a valid `uplink.toml`, pushed to origin), `UPLINK_*` credentials, pending adoption, and the company branch against `uplink/upstream`.
+
+Credential checks fail on a machine without the `UPLINK_*` variables; that is expected outside CI.
+
+- `--json`: Print the doctor report as JSON.
+
+### `refresh`
+
+Fetch origin tracking refs without moving local branches.
+
+The refs are `uplink/state`, `uplink/upstream`, company main, and `uplink/hooks` when origin has it.
+
+### `reset`
+
+Fetch origin and hard-reset company main, uplink/state, uplink/upstream, and uplink/hooks.
+
+Afterwards the clone matches origin and `.uplink/` is restored. A local `uplink/hooks` that origin does not have yet is kept. Untracked files in the checkout are left alone.
 
 ### `restack`
 
@@ -224,36 +213,129 @@ Like `adopt`, the run locks `uplink/state` until it ends, and builds `uplink/pre
 - `--keep-branch`: Leave the `uplink/restack` branch when the run ends.
 - `--json`: Print the result as JSON.
 
-### `refresh`
+### `push`
 
-Fetch origin tracking refs without moving local branches.
+Publish local uplink/state, restacking unique patches if origin moved.
 
-The refs are `uplink/state`, `uplink/upstream`, company main, and `uplink/hooks` when origin has it.
+If origin moved, it appends local-only patches onto the remote tip and carries those patch files. Then it publishes a local `uplink/hooks` that is new or ahead of origin, never with force. A refused hooks push (for example by the hooks ruleset, or a token without workflows scope) is a warning; open a pull request against `uplink/hooks` instead.
 
-### `reset`
+The forge runs it after import and submit; the operator after `init`, `adopt`, `restack` or a repair.
 
-Fetch origin and hard-reset company main, uplink/state, uplink/upstream, and uplink/hooks.
+- `--push-remote <remote>`: Remote to push to, origin by default.
 
-Afterwards the clone matches origin and `.uplink/` is restored. A local `uplink/hooks` that origin does not have yet is kept. Untracked files in the checkout are left alone.
+### `rebuild`
 
-### `rebase`
+Replay main from the queue.
 
-Rebase the current branch onto company main after a rebuild replaced it.
+Applies the active patches in order onto `uplink/upstream`, one commit each. A patch that does not apply goes to the conflict gate.
 
-A rebuild writes every commit of `main` again, so a branch cut from the old `main` shares only public upstream with the new one and its pull request lists the old patches as its own. `rebase` finds the commit of the old `main` the branch started from and runs `git rebase --onto origin/main <that commit>`. A branch that is only behind gets a plain `git rebase origin/main`. A conflict stops as `git rebase` does; continue with `git rebase --continue`.
+When every patch applies and the result is not the tree `main` already has, `preflight.sh` runs on it. If it fails, `git bisect` runs the script between `uplink/upstream` (known good) and the rebuilt tree (known bad), and the first patch it fails on goes to the conflict gate: `uplink/conflict/<id>` is the queue before the patch and `uplink/conflict/<id>-work` has the patch applied, for the fix. `main` stays at the last build that passed. When `uplink/upstream` is not known to pass with the current `preflight.sh`, it is tested first; if it fails too, the command fails and no patch is blamed.
 
-It runs in any clone of the company repository and needs no `git uplink init`. It fetches `main`, `uplink/state` and `uplink/upstream` from origin, which needs `UPLINK_INTERNAL_TOKEN` or `UPLINK_INTERNAL_KEY` as every git-uplink fetch does; after a `git fetch origin` of your own, `--no-fetch` needs neither. The rebase itself is plain `git rebase` with your identity, signing and hooks.
+`accept-upstream`, `resolve`, `amend --complete`, `transfer`, `drop` and `merged` do this too. Two rebuilds are not tested, since they only reorder what was tested already: the one of `add`, whose change a reviewed pull request merged into `main`, and the one of a `sync` that needs no approval, where upstream moved only by our own patches. `rebuild --verify` tests `main` after those.
 
-The commits a rebuild writes carry an `Uplink-Patch-Id` trailer, and each rebuild lists the other commits of the `main` it replaced in `.uplink/previous-main.json` on `uplink/state`. When the newest such commit in the branch has anything else under it, `rebase` refuses rather than drop it.
+The forge runs `rebuild --verify`. The rest is the operator's fallback when the forge cannot do it.
 
-The forge pack comments the command on a pull request whose `main` was replaced. With the repository variable `UPLINK_AUTO_REBASE` set to `true`, or the label `uplink:rebase` on the pull request, Uplink rebase does it and pushes the branch.
+Operator fallback: a gated patch is fixed on its branches without a PR: `git switch uplink/conflict/<id>-work` (the conflict markers are committed there), fix the files, `git add` them, `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. Each resolve rebuilds again and may gate the next patch.
 
-- `--plan`: Print what the rebase would do and change nothing.
-- `--head <rev>`: Plan for this commit instead of the checked-out branch.
-- `--json`: Print the plan as JSON: `state` (`current`, `behind`, `replaced`, `unknown`), `forkPoint`, `command`.
-- `--no-fetch`: Use origin's branches as last fetched instead of fetching them.
+`-i` fixes them inline instead, the way `git rebase` stops on a commit. A patch that does not apply is left in the checkout as its failed 3-way apply, on the patches before it. A patch `preflight.sh` is blamed on is left applied, for the fix to go on top. Resolve, `git add`, and `--continue` takes what the checkout holds as the patch, re-assesses it as `resolve` does, and replays again, stopping on the next patch to fix. Nothing is gated and nothing is written to `uplink/state` until the rebuild is published; until then every other command that changes it refuses. `--abort` puts the checkout back, changing nothing. To leave a patch out, abort and `drop` it. A patch gated already is fixed on its branches.
 
-## Checks
+- `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
+- `--push`: Push uplink/state and the rebuilt branch after rebuild.
+- `--push-remote <remote>`: Remote for --push, origin by default.
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the trees this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. Exits 0 also when a patch fails: the command then gates that patch.
+- `--verify`: Run preflight.sh on the rebuilt tree also when main already has that tree.
+
+  For a `main` that turned out broken without a rebuild noticing, for example after an import, whose rebuild is not tested. The first patch the script fails on goes to the conflict gate.
+- `--json`: Print the result as JSON; a patch that goes to the conflict gate prints `gh.prCreate` and exits 0.
+- `--interactive`: Stop on a patch to fix inline instead of gating it; see above.
+- `--continue`: Take what the checkout holds as the patch the rebuild paused on, and go on.
+
+  `--push` and `--verify` are kept from `rebuild -i`.
+- `--abort`: Put the checkout back and end the paused rebuild, changing nothing.
+
+### `drop`
+
+Remove a patch from the queue.
+
+- `<id>`: Patch to drop.
+- `--reason <text>`: Why it was dropped; "dropped by operator" when omitted.
+
+### `merged`
+
+Record that upstream merged a patch.
+
+`merged` records it explicitly with `--via`. Otherwise `sync` detects a merge from a commit with the patch's `git patch-id --stable`, from the recorded public PR reported with `sync --merged-pr`, or from an empty apply. An `Uplink-Patch-Id` trailer alone does not count: use `merged` when upstream took the patch in another form.
+
+- `<id>`: Patch that was merged.
+- `--via <how>`: How the merge was detected. Default: `manual`.
+  - `pr`: The GitHub PR recorded on the queue was merged; needs a recorded PR.
+  - `trailer`: An upstream commit carries the `Uplink-Patch-Id` trailer and its `git patch-id --stable` matches; needs `--sha`.
+  - `stable-patch-id`: `git patch-id --stable` of an upstream commit matches; needs `--sha`.
+  - `empty-rebase`: The patch is already contained in upstream (`--sha`, else uplink/upstream).
+  - `manual`: Recorded by an operator.
+- `--sha <sha>`: Upstream commit that carries the patch.
+
+### `trim-deps`
+
+Shorten every depends-on list to direct dependencies.
+
+A dependency brings in its own dependencies: when B depends on A, a patch that depends on B gets A applied before it too. Lists written before that held the whole chain. This takes out every id another dependency in the same list brings in already, with a `dependency` event on the patch. What applies before each patch stays the same, so nothing is rebuilt or preflighted.
+
+Commits `uplink/state` when a list changed; `git uplink push` sends it. `Uplink-Depends-On` trailers in old commit messages are left as they are.
+
+- `--dry-run`: Print what would change, write nothing.
+- `--json`: Print the trimmed patches as JSON.
+
+### `web-ui`
+
+Start the embedded operator dashboard on 127.0.0.1 and open a browser.
+
+Serves the local operator UI for this checkout. It reads `.uplink/queue.json` from `uplink/state` in the directory you started in, and can also inspect `origin/uplink/state` after a fetch. The UI is embedded in the binary.
+
+- `--port <port>`: Port to listen on. Default: `43721`.
+- `--no-open`: Do not launch a browser.
+
+## Forge
+
+Run by the workflows of the forge pack.
+
+### `add`
+
+Record a merged change as a queued patch on local uplink/state.
+
+`add` is the internal product gate. It records the patch with status `queued` on local `uplink/state` only.
+
+Merge lands the change on `main`; import records the patch on `uplink/state` (`upstream[]` by default, `internal[]` with `uplink:internal-only`). Upstream import rebuilds when an active internal patch must stay on top, and publishes that replay with a plain force push of `main`. An upstream import with an empty internal queue, and every internal-only import, only records the patch.
+
+- `--message <text>`: The single commit message stored on the patch (PR title, blank line, PR body).
+
+  Its first line is the patch subject. HTML comments are stripped. Company `main` keeps the cutoff; contrib export removes it. `Uplink-Depends-On: upl_...` lines in the message become `dependsOn` and are left out of the public message.
+- `--message-file <path>`: Read the commit message from a file (- reads stdin).
+- `--from <ref>`: Base revision, the company branch by default (fetched from origin if missing).
+- `--head <ref>`: Head revision, HEAD by default (fetched from origin if missing).
+- `--internal-only`: Record on the internal queue: never exported, leak scan skipped.
+- `--pr <n>`: Number of the company PR that merged the change.
+- `--pr-url <url>`: URL of the company PR that merged the change.
+- `--base-branch <branch>`: Branch the company PR merged into.
+
+  Refused unless it is the company branch: a change merged into any other branch has not passed the company branch's review. Import passes the PR's base branch.
+- `--depends-on <id>`: Patch this one depends on, on top of the message trailers (repeatable).
+
+  Name only the direct dependencies: the patches they depend on are applied before them too.
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of `git uplink preflight --json` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
+- `--gate`: Record a change that fails the upstream checks internal-only and start a gated transfer to upstream.
+
+  For a change that is already merged into `main`, which import has to record whatever it fails. When an upstream-bound change fails its assessment or its export preflight, it is added internal-only, where it sits on `main`, and `transfer --to-upstream` is started for it: that gates on the same failure, so the fix goes through a transfer PR. The output has `fallback` with the reason and the transfer, and the command exits 0. A stale preflight result still fails the command.
+- `--json`: Print the patch as JSON, with `readyToSubmit`.
+
+  `readyToSubmit` lists the patches this import made ready to submit: upstream-bound, queued, and every upstream dependency merged. Import dispatches Uplink submit for them when the repository variable `UPLINK_AUTO_SUBMIT` is `true`. When the rebuild after the import stops on a patch that no longer applies, the change is still recorded: the output has `conflict` and `gh.prCreate` for the gated PR, and the command exits 0.
 
 ### `preflight`
 
@@ -316,24 +398,6 @@ Stored extras lead the packet while the patch content is unchanged (same stable 
 
   Refused when it is not for the patch as it is now: the patch file, message or `uplink.toml` changed since, or the result does not match what assessing the patch gives. The company assessment hook read the same package, so this also covers --extra-dir.
 
-### `status`
-
-Show the queue.
-
-- `--json`: Print the queue status as JSON, for machines.
-
-### `doctor`
-
-Check the setup of this clone.
-
-Checks the queue and recorded URLs, remotes and whether upstream and contrib are reachable, `origin/uplink/state`, the forge tooling patch and workflows on the company branch, `uplink/hooks` (present locally, has the toolchain hook and a valid `uplink.toml`, pushed to origin), `UPLINK_*` credentials, pending adoption, and the company branch against `uplink/upstream`.
-
-Credential checks fail on a machine without the `UPLINK_*` variables; that is expected outside CI.
-
-- `--json`: Print the doctor report as JSON.
-
-## Contributing upstream
-
 ### `approve`
 
 Record the to-upstream approval of a patch and write its receipt.
@@ -391,8 +455,6 @@ Records the PR URL, commits the queue, and pushes company `uplink/state`. Refuse
 - `--pr <n>`: Pull request number, read from the URL when omitted.
 - `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
 
-## Ingesting upstream
-
 ### `sync`
 
 Account for new public commits and rebuild main when upstream moved.
@@ -424,28 +486,44 @@ The pending upstream brings changes that are not ours, so it is promoted only wh
 
   For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the pending upstream fails.
 
-### `merged`
+### `gated`
 
-Record that upstream merged a patch.
+Record the company PR that gates a conflict.
 
-`merged` records it explicitly with `--via`. Otherwise `sync` detects a merge from a commit with the patch's `git patch-id --stable`, from the recorded public PR reported with `sync --merged-pr`, or from an empty apply. An `Uplink-Patch-Id` trailer alone does not count: use `merged` when upstream took the patch in another form.
+- `<id>`: Patch the PR gates.
+- `--pr-url <url>`: URL of the company pull request.
+- `--pr <n>`: Pull request number, read from the URL when omitted.
+- `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
 
-- `<id>`: Patch that was merged.
-- `--via <how>`: How the merge was detected. Default: `manual`.
-  - `pr`: The GitHub PR recorded on the queue was merged; needs a recorded PR.
-  - `trailer`: An upstream commit carries the `Uplink-Patch-Id` trailer and its `git patch-id --stable` matches; needs `--sha`.
-  - `stable-patch-id`: `git patch-id --stable` of an upstream commit matches; needs `--sha`.
-  - `empty-rebase`: The patch is already contained in upstream (`--sha`, else uplink/upstream).
-  - `manual`: Recorded by an operator.
-- `--sha <sha>`: Upstream commit that carries the patch.
+### `resolve`
 
-## Edit
+Finish a conflict resolution and put the patch back in the queue.
+
+Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`).
+
+A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `queued` again, and the next submit asks IP to approve the delta; the public PR keeps the approved lines until then. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0. That includes a patch `preflight.sh` fails on in the rebuild, which can be the resolved patch again; see `rebuild`.
+
+`readyToSubmit` in the output lists the resolved patch when it is `queued` again and has no public PR, and the queued patches whose last unmerged upstream dependency the rebuild marked merged. `public` is true when the resolved patch has a public PR: submit must then run again.
+
+The forge runs it when the gated conflict PR merges. Operator fallback, when the forge cannot: `git switch uplink/conflict/<id>-work`, fix the files and `git add` them, run `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. `git uplink rebuild -i` fixes them inline instead.
+
+- `<id>`: Patch whose conflict was resolved.
+- `--message <text>`: New commit message, as the PR title and body.
+- `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the trees this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. The checkout is left on the squashed resolution, so use a clone made for it.
 
 ### `transfer`
 
 Move a patch between the internal and upstream queues.
 
 When apply, assess (`--to-upstream`), or preflight fails it prints gated branches for a transfer PR instead, and exits 0.
+
+The forge runs it when a developer dispatches Uplink transfer, and with `--complete` when the transfer PR merges.
 
 `--to-internal` refuses while an active upstream patch still depends on this id. A successful `--to-internal` of a submitted patch prints `gh.prClose` (`url`, `contribBranch`) so Actions can dispatch Uplink abandon contrib. `readyToSubmit` lists the patch after a `--to-upstream` when no upstream dependency of it is unmerged.
 
@@ -468,6 +546,8 @@ Revise a patch through a gated PR from uplink/amend/\<id>-work.
 
 Amends an internal-only patch, an upstream patch not yet submitted, or a submitted one a maintainer asked to change. Conflicted, merged, dropped, and tooling patches cannot be amended.
 
+The forge runs it when a developer dispatches Uplink amend; the developer pushes the revision to `uplink/amend/<id>-work` and merges the amend PR, which runs `--complete`.
+
 Without `--complete` it replays the queue on `uplink/upstream` up to and including the patch, cuts protected `uplink/amend/<id>` there, and cuts `uplink/amend/<id>-work` one empty commit ahead so a draft PR can open at once. The queue is not touched. It prints `base`, `work`, and `gh.prCreate` (`draft: true`, label `uplink:amend`; the body is the stored message, the instructions are in `commentFile`).
 
 `--complete` runs on the merged base (or `-work`). It squashes everything above the patch's own commit into the patch, takes `--message[-file]` as the new message, re-assesses, and runs export preflight (upstream) or the preflight script (internal). A failing upstream assessment is refused and the branch is left as it was. The patch becomes `queued` again, whatever review it was in (`waiting`, `approved`, `rejected`, `submitted`). A submitted one keeps its public PR: IP approves the delta, then submit force-pushes the contrib branch. That holds unless the amend adds and removes the same lines as before and leaves the public message as it was: then the last approval still covers the patch and it stays `submitted` or `approved`. Then `main` is rebuilt, and a follow-on conflict prints like `resolve`. A merge with no code or message change prints `changed: false` and leaves the queue as it was. The JSON output has `public` (the patch has a public PR, so submit must run again) and `readyToSubmit` (patches the amend made ready to submit).
@@ -483,98 +563,26 @@ Without `--complete` it replays the queue on `uplink/upstream` up to and includi
 
   For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the result is not a pass. The checkout is left on the squashed work, so use a clone made for it.
 
-### `drop`
+### `rebase`
 
-Remove a patch from the queue.
+Rebase the current branch onto company main after a rebuild replaced it.
 
-- `<id>`: Patch to drop.
-- `--reason <text>`: Why it was dropped; "dropped by operator" when omitted.
+A rebuild writes every commit of `main` again, so a branch cut from the old `main` shares only public upstream with the new one and its pull request lists the old patches as its own. `rebase` finds the commit of the old `main` the branch started from and runs `git rebase --onto origin/main <that commit>`. A branch that is only behind gets a plain `git rebase origin/main`. A conflict stops as `git rebase` does; continue with `git rebase --continue`.
 
-### `trim-deps`
+It runs in any clone of the company repository and needs no `git uplink init`. It fetches `main`, `uplink/state` and `uplink/upstream` from origin, which needs `UPLINK_INTERNAL_TOKEN` or `UPLINK_INTERNAL_KEY` as every git-uplink fetch does; after a `git fetch origin` of your own, `--no-fetch` needs neither. The rebase itself is plain `git rebase` with your identity, signing and hooks.
 
-Shorten every depends-on list to direct dependencies.
+The commits a rebuild writes carry an `Uplink-Patch-Id` trailer, and each rebuild lists the other commits of the `main` it replaced in `.uplink/previous-main.json` on `uplink/state`. When the newest such commit in the branch has anything else under it, `rebase` refuses rather than drop it.
 
-A dependency brings in its own dependencies: when B depends on A, a patch that depends on B gets A applied before it too. Lists written before that held the whole chain. This takes out every id another dependency in the same list brings in already, with a `dependency` event on the patch. What applies before each patch stays the same, so nothing is rebuilt or preflighted.
+The forge runs it: Uplink rebase plans it for every pull request whose `main` was replaced and comments how to rebase. With the repository variable `UPLINK_AUTO_REBASE` set to `true`, or the label `uplink:rebase` on the pull request, Uplink rebase does it and pushes the branch. A developer uses the label, or the plain `git rebase --onto` the comment gives; they need no git uplink.
 
-Commits `uplink/state` when a list changed; `git uplink push` sends it. `Uplink-Depends-On` trailers in old commit messages are left as they are.
-
-- `--dry-run`: Print what would change, write nothing.
-- `--json`: Print the trimmed patches as JSON.
-
-### `rebuild`
-
-Replay main from the queue.
-
-Applies the active patches in order onto `uplink/upstream`, one commit each. A patch that does not apply goes to the conflict gate.
-
-When every patch applies and the result is not the tree `main` already has, `preflight.sh` runs on it. If it fails, `git bisect` runs the script between `uplink/upstream` (known good) and the rebuilt tree (known bad), and the first patch it fails on goes to the conflict gate: `uplink/conflict/<id>` is the queue before the patch and `uplink/conflict/<id>-work` has the patch applied, for the fix. `main` stays at the last build that passed. When `uplink/upstream` is not known to pass with the current `preflight.sh`, it is tested first; if it fails too, the command fails and no patch is blamed.
-
-`accept-upstream`, `resolve`, `amend --complete`, `transfer`, `drop` and `merged` do this too. Two rebuilds are not tested, since they only reorder what was tested already: the one of `add`, whose change a reviewed pull request merged into `main`, and the one of a `sync` that needs no approval, where upstream moved only by our own patches. `rebuild --verify` tests `main` after those.
-
-Locally, a gated patch is fixed on its branches without a PR: `git switch uplink/conflict/<id>-work` (the conflict markers are committed there), fix the files, `git add` them, `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. Each resolve rebuilds again and may gate the next patch.
-
-`-i` fixes them inline instead, the way `git rebase` stops on a commit. A patch that does not apply is left in the checkout as its failed 3-way apply, on the patches before it. A patch `preflight.sh` is blamed on is left applied, for the fix to go on top. Resolve, `git add`, and `--continue` takes what the checkout holds as the patch, re-assesses it as `resolve` does, and replays again, stopping on the next patch to fix. Nothing is gated and nothing is written to `uplink/state` until the rebuild is published; until then every other command that changes it refuses. `--abort` puts the checkout back, changing nothing. To leave a patch out, abort and `drop` it. A patch gated already is fixed on its branches.
-
-- `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
-- `--push`: Push uplink/state and the rebuilt branch after rebuild.
-- `--push-remote <remote>`: Remote for --push, origin by default.
-- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
-
-  The file is the output of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the trees this command builds; otherwise the command fails and preflight has to run again.
-- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
-
-  For a job without credentials; pass the output to the same command with `--preflight-result`. Exits 0 also when a patch fails: the command then gates that patch.
-- `--verify`: Run preflight.sh on the rebuilt tree also when main already has that tree.
-
-  For a `main` that turned out broken without a rebuild noticing, for example after an import, whose rebuild is not tested. The first patch the script fails on goes to the conflict gate.
-- `--json`: Print the result as JSON; a patch that goes to the conflict gate prints `gh.prCreate` and exits 0.
-- `--interactive`: Stop on a patch to fix inline instead of gating it; see above.
-- `--continue`: Take what the checkout holds as the patch the rebuild paused on, and go on.
-
-  `--push` and `--verify` are kept from `rebuild -i`.
-- `--abort`: Put the checkout back and end the paused rebuild, changing nothing.
-
-### `gated`
-
-Record the company PR that gates a conflict.
-
-- `<id>`: Patch the PR gates.
-- `--pr-url <url>`: URL of the company pull request.
-- `--pr <n>`: Pull request number, read from the URL when omitted.
-- `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
-
-### `resolve`
-
-Finish a conflict resolution and put the patch back in the queue.
-
-Resolve re-runs the upstream assessment on the resolution and refuses an upstream-bound resolution that fails it, leaving the branch and staged files as they were. The gate check runs the same assessment on the conflict PR, so a failing resolution cannot merge. For internal-only patches the gate skips the assessment on conflict and amend PRs and runs only the preflight script (`git uplink preflight --command-only`).
-
-A submitted patch whose resolution adds or removes other lines than the last approval covered becomes `queued` again, and the next submit asks IP to approve the delta; the public PR keeps the approved lines until then. That includes keeping the patch's line over an upstream change of the same line: the patch then removes upstream's new line. A resolution that only follows upstream changes next to the patch's lines changes nothing that was approved: the patch stays `submitted` (or `approved`) and needs no other approval. Resolve of a submitted patch dispatches a new submit for you either way, so the public PR gets the patch on the new upstream. A follow-on conflict prints `gh.prCreate` JSON for the next gated PR and exits 0. That includes a patch `preflight.sh` fails on in the rebuild, which can be the resolved patch again; see `rebuild`.
-
-`readyToSubmit` in the output lists the resolved patch when it is `queued` again and has no public PR, and the queued patches whose last unmerged upstream dependency the rebuild marked merged. `public` is true when the resolved patch has a public PR: submit must then run again.
-
-Locally: `git switch uplink/conflict/<id>-work`, fix the files and `git add` them, run `git uplink resolve <id>`, then `git uplink push` and `git uplink rebuild --push`. `git uplink rebuild -i` fixes them inline instead.
-
-- `<id>`: Patch whose conflict was resolved.
-- `--message <text>`: New commit message, as the PR title and body.
-- `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
-- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
-
-  The file is the output of this command with `--preflight-only`, from a job without credentials. It is used only when it is for the trees this command builds; otherwise the command fails and preflight has to run again.
-- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
-
-  For a job without credentials; pass the output to the same command with `--preflight-result`. The checkout is left on the squashed resolution, so use a clone made for it.
+- `--plan`: Print what the rebase would do and change nothing.
+- `--head <rev>`: Plan for this commit instead of the checked-out branch.
+- `--json`: Print the plan as JSON: `state` (`current`, `behind`, `replaced`, `unknown`), `forkPoint`, `command`.
+- `--no-fetch`: Use origin's branches as last fetched instead of fetching them.
 
 ## Tools
 
-### `web-ui`
-
-Start the embedded operator dashboard on 127.0.0.1 and open a browser.
-
-Serves the local operator UI for this checkout. It reads `.uplink/queue.json` from `uplink/state` in the directory you started in, and can also inspect `origin/uplink/state` after a fetch. The UI is embedded in the binary.
-
-- `--port <port>`: Port to listen on. Default: `43721`.
-- `--no-open`: Do not launch a browser.
+For anyone.
 
 ### `man`
 

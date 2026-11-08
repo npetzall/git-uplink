@@ -174,8 +174,8 @@ fn render() -> String {
     }
     writeln!(out, "```").unwrap();
 
-    for (heading, names) in cli::GROUPS {
-        writeln!(out, "\n## {heading}").unwrap();
+    for (heading, blurb, names) in cli::GROUPS {
+        writeln!(out, "\n## {heading}\n\n{blurb}").unwrap();
         for name in *names {
             let sub = root.find_subcommand(name).unwrap();
             writeln!(out, "\n### `{name}`\n").unwrap();
@@ -215,7 +215,7 @@ fn render() -> String {
 fn every_command_is_in_exactly_one_group() {
     let mut grouped: Vec<&str> = cli::GROUPS
         .iter()
-        .flat_map(|(_, names)| names.iter().copied())
+        .flat_map(|(_, _, names)| names.iter().copied())
         .collect();
     let mut commands: Vec<&str> = Vec::new();
     let root = cli::command("");
