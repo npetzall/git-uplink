@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
+import { RolesSection } from "../components/roles";
 import { Button } from "../components/ui/button";
 import {
   Card,
@@ -59,7 +60,7 @@ export function HomePage() {
             <Link to="/how">How it works</Link>
           </Button>
           <Button asChild variant="outline">
-            <Link to="/day-to-day">Day to day</Link>
+            <Link to="/developer">Developer</Link>
           </Button>
           <Button asChild variant="outline">
             <Link to="/install">Install</Link>
@@ -98,11 +99,13 @@ export function HomePage() {
           <strong className="text-foreground">sync workflow</strong>.
         </p>
         <Button asChild variant="outline" size="sm">
-          <Link to="/day-to-day">
-            What developers do day to day <ArrowRight />
+          <Link to="/developer">
+            What developers do <ArrowRight />
           </Link>
         </Button>
       </section>
+
+      <RolesSection className="mt-12" />
 
       <section className="mt-12 space-y-4">
         <h2 className="text-xl font-semibold">

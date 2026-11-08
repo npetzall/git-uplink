@@ -9,7 +9,9 @@ const LINKS = [
   { href: "/", label: "Overview" },
   { href: "/why", label: "Why" },
   { href: "/how", label: "How" },
-  { href: "/day-to-day", label: "Day to day" },
+  { href: "/developer", label: "Developer" },
+  { href: "/operator", label: "Operator" },
+  { href: "/forge", label: "Forge" },
   { href: "/internals", label: "Internals" },
   { href: "/security", label: "Security" },
   { href: "/lab", label: "Lab" },
@@ -46,7 +48,7 @@ function NavLinks({ onClick }: { onClick?: () => void }) {
 
 /**
  * Scrolls to `#fragment` once the page has rendered it. Links such as the
- * assess report's `/day-to-day#assess-fails` load before the section exists,
+ * assess report's `/developer#assess-fails` load before the section exists,
  * so the browser's own fragment scroll misses it.
  */
 function useScrollToHash() {
@@ -127,11 +129,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             GitHub <ExternalLink className="size-3" />
           </a>
-          <NavLink to="/day-to-day" className="hover:text-foreground">
-            Day to day
+          <NavLink to="/developer" className="hover:text-foreground">
+            Developer
+          </NavLink>
+          <NavLink to="/operator" className="hover:text-foreground">
+            Operator
+          </NavLink>
+          <NavLink to="/forge" className="hover:text-foreground">
+            Forge
           </NavLink>
           <span>
-            Local queue UI:{" "}
+            Operator dashboard:{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">
               git uplink web-ui
             </code>

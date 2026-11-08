@@ -16,8 +16,10 @@ export function InstallPage() {
       lead={
         <>
           The binary is <code>git-uplink</code>, so Git treats it as{" "}
-          <code>git uplink</code>. Download a release binary for your platform
-          and put it on <code>PATH</code>.
+          <code>git uplink</code>. The <Link to="/operator">operator</Link>{" "}
+          installs it, and the forge installs its own copy in every job.
+          Developers don&apos;t need it. Download a release binary for your
+          platform and put it on <code>PATH</code>.
         </>
       }
     >

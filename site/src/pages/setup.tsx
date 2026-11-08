@@ -125,7 +125,7 @@ export function SetupPage() {
     <DocPage
       eyebrow="Production setup"
       title="Set up Uplink for a product repository"
-      lead="Choose your forge. Steps walks you through the setup; Workflows describes what each installed workflow does and needs; Hooks covers the company-owned branch they call."
+      lead="Setting up is the operator's job; developers need none of it. Choose your forge. Steps walks you through the setup; Workflows describes what each installed workflow does and needs; Hooks covers the company-owned branch they call."
     >
       <Tabs
         label="Forge"

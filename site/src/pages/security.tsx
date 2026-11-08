@@ -358,11 +358,13 @@ export function SecurityPage() {
         </Table>
       </Section>
 
-      <Section id="local" title="Your part: running git uplink locally">
+      <Section id="local" title="Operator: running git uplink locally">
         <p>
-          Locally there is no Environment and no job boundary. The only limit on
-          what a command can do is the credential you hand it, so hand it a
-          small one.
+          Only the <Link to="/operator">operator</Link> runs{" "}
+          <code>git uplink</code> by hand; developers need neither the binary
+          nor an Uplink token. Locally there is no Environment and no job
+          boundary. The only limit on what a command can do is the credential
+          you hand it, so hand it a small one.
         </p>
         <ul>
           <li>
@@ -377,7 +379,7 @@ export function SecurityPage() {
           <li>
             <strong>Give it only what the command needs.</strong>{" "}
             <em>Contents: read</em> is enough for <code>status</code>,{" "}
-            <code>rebase</code>, <code>preflight</code> and <code>web-ui</code>.
+            <code>doctor</code>, <code>refresh</code> and <code>web-ui</code>.
             Pushing (<code>push</code>, <code>rebuild --push</code>) needs{" "}
             <em>Contents: write</em>, and <em>Workflows: write</em> when the
             push carries the pack (<code>init</code>,{" "}
@@ -411,9 +413,13 @@ export function SecurityPage() {
             on that one repository, read-only unless you push.
           </li>
           <li>
-            <strong>Treat local preflight like any local build.</strong> It runs
-            the product and public upstream as you. For a tree you do not trust,
-            let CI run it or use a container.
+            <strong>
+              Treat a local run of <code>preflight.sh</code> like any local
+              build.
+            </strong>{" "}
+            <code>adopt</code>, <code>restack</code> and <code>rebuild</code>{" "}
+            run it, and it runs the product and public upstream as you. For a
+            tree you do not trust, let CI run it or use a container.
           </li>
           <li>
             <strong>
@@ -425,7 +431,7 @@ export function SecurityPage() {
         </ul>
       </Section>
 
-      <Section id="forge" title="Your part: the forge">
+      <Section id="forge" title="Operator: setting up the forge">
         <p>
           The pack assumes the settings from{" "}
           <Link to="/setup">Production setup</Link>. These are the ones the
