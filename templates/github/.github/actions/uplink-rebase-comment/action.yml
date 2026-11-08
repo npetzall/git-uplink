@@ -176,21 +176,13 @@ runs:
                 echo "<!-- uplink:rebase needs ${fork} -->"
                 echo '**This branch was cut from a `main` that a rebuild has since replaced.** Until it is rebased, the pull request lists commits of the old `main` as its own.'
                 echo
-                echo 'With git-uplink:'
-                echo
-                echo '```bash'
-                echo 'git fetch origin'
-                echo 'git uplink rebase --no-fetch'
-                echo '```'
-                echo
-                echo 'With git alone:'
+                echo 'Add the label `uplink:rebase` and Uplink rebase does it. Or rebase it yourself:'
                 echo
                 echo '```bash'
                 echo 'git fetch origin'
                 echo "$command"
+                echo 'git push --force-with-lease'
                 echo '```'
-                echo
-                echo 'Then `git push --force-with-lease`. Or add the label `uplink:rebase` and Uplink rebase does it.'
                 if [ -n "$NOTE" ]; then
                   echo
                   echo "$NOTE"

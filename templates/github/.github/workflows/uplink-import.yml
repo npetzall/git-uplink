@@ -196,6 +196,19 @@ jobs:
             exit "$code"
           fi
 
+          # Tell the merged pull request its patch id, so a developer can
+          # build on it with Uplink-Depends-On without running git uplink.
+          # Called once uplink/state is pushed; a failed comment is a warning.
+          comment_recorded() {
+            local id queue
+            id=$(jq -r '.id' /tmp/uplink-add.out)
+            queue=$(jq -r '.queue' /tmp/uplink-add.out)
+            printf 'Recorded as `%s` (%s queue). To build on this change, add this line to your PR body below the cutoff:\n\n```text\nUplink-Depends-On: %s\n```\n' \
+              "$id" "$queue" "$id" > "$RUNNER_TEMP/uplink-recorded.md"
+            gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/uplink-recorded.md" \
+              || echo "::warning title=Uplink import::could not comment the patch id on #${PR_NUMBER}"
+          }
+
           # The change fails what an upstream-bound patch has to pass. It is
           # recorded internal-only, where it sits on main, and a transfer to
           # upstream is open for it: publish that as the gated transfer PR.
@@ -205,6 +218,7 @@ jobs:
             add_json=$(cat /tmp/uplink-add.out)
             patch_id=$(jq -r '.id' <<<"$add_json")
             git uplink push
+            comment_recorded
             {
               echo "#${PR_NUMBER} was recorded internal-only as \`${patch_id}\`: it fails what an upstream-bound patch has to pass."
               echo
@@ -244,6 +258,7 @@ jobs:
           if jq -e '.conflict != null' /tmp/uplink-add.out >/dev/null; then
             add_json=$(cat /tmp/uplink-add.out)
             git uplink push
+            comment_recorded
             conflict_id=$(jq -r '.conflict.id // empty' <<<"$add_json")
             conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$add_json")
             work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$add_json")
@@ -286,6 +301,7 @@ jobs:
           if [ -n "$main_after" ] && [ "$main_after" != "$main_before" ]; then
             git push origin main --force
           fi
+          comment_recorded
 
       - name: Dispatch Uplink submit for patches that became ready
         if: ${{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.add.outputs.ready_to_submit != '' && steps.add.outputs.ready_to_submit != '[]' }}
