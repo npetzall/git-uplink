@@ -7,6 +7,9 @@ Conventions (commit style, required checks) are in [AGENTS.md](AGENTS.md). This 
 - **Rust 1.98+** (`rust-toolchain.toml` pins 1.98.1)
 - **Node.js 22** and **pnpm** (for the embedded operator UI and the site). Install the standalone pnpm from [pnpm.io](https://pnpm.io/installation); it switches to the version in the root `package.json` `packageManager` field on first use.
 
+- **Docker**, for the shellcheck and actionlint pre-commit hooks.
+- **[pre-commit](https://pre-commit.com/)**: `sfw uv tool install pre-commit --with pre-commit-uv`, then `pre-commit install` in the clone.
+
 Prefix every `pnpm` and `cargo` command with `sfw` ([Socket Firewall Free](https://docs.socket.dev/docs/socket-firewall-free)).
 
 ## Layout
@@ -58,6 +61,20 @@ sfw cargo clippy --locked --all-targets -- -D warnings
 - **Typecheck**: `sfw pnpm -r run typecheck`.
 - **Lint**: `sfw pnpm -r run lint` checks, `sfw pnpm -r run format` applies the fixes.
 
+## Pre-commit
+
+`.pre-commit-config.yaml` runs the checks CI runs: rustfmt, clippy, `docs/cli.md`, cargo deny, pnpm audit, Biome, ruff, [zizmor](https://zizmor.sh/), [actionlint](https://github.com/rhysd/actionlint) and [ShellCheck](https://www.shellcheck.net/). Run every hook on every file with:
+
+```bash
+sfw uv tool run --with pre-commit-uv pre-commit run --all-files
+```
+
+Running it under `sfw` installs the Python hook environments (ruff, zizmor, PyYAML) through the firewall.
+
+- **actionlint** checks this repository's workflows and the forge pack's (`templates/*/.github/workflows/`), with the settings in `.github/actionlint.yaml`. It runs ShellCheck on their `run:` steps.
+- **ShellCheck** checks the shell scripts, and `.github/shellcheck_actions.py` checks the `run:` steps of composite actions (`action.yml`), which actionlint does not.
+- Both run in Docker images pinned by digest, because `sfw` does not cover image pulls. To upgrade one, bump `rev`, then take the digest of the new tag (`docker buildx imagetools inspect docker.io/koalaman/shellcheck:<tag>`) and replace every reference to the image: `.pre-commit-config.yaml` (both ShellCheck hooks) and, for actionlint, `.github/workflows/actionlint.yml`.
+
 ## CI
 
 ### Pull requests (`pr.yml`)
@@ -75,15 +92,15 @@ For the product scope, `pr.yml` calculates the next version and calls `product.y
 
 1. `cargo deny` and `pnpm audit` of the workspace lockfile run first.
 2. Then `web/` is built once (`sfw pnpm install`, lint, typecheck, vitest, production build) and CycloneDX and SPDX SBOMs are generated.
-3. Test, the musl Linux binary, and pre-commit (rustfmt, clippy, cargo deny, [zizmor](https://zizmor.sh/)) run in parallel with `GIT_UPLINK_SKIP_WEB_BUILD=1`.
+3. Test, the musl Linux binary, and pre-commit (rustfmt, clippy, cargo deny, zizmor, actionlint, ShellCheck) run in parallel with `GIT_UPLINK_SKIP_WEB_BUILD=1`.
 
-CodeQL for Rust and `web/`, zizmor, and Socket start immediately and do not gate the build. Each job that compiles or scans the crate writes the version into `Cargo.toml` and `Cargo.lock`. SBOMs are always uploaded as an artifact.
+CodeQL for Rust and `web/`, zizmor, actionlint, and Socket start immediately and do not gate the build. Each job that compiles or scans the crate writes the version into `Cargo.toml` and `Cargo.lock`. SBOMs are always uploaded as an artifact.
 
 ### Site (`site.yml`)
 
 Called by `pr.yml` for the site scope, and by `publish-site.yml`.
 
-- `sfw pnpm audit`, lint, typecheck, and vitest run in parallel with site CodeQL, zizmor, and Socket, then a separate build job.
+- `sfw pnpm audit`, lint, typecheck, and vitest run in parallel with site CodeQL, zizmor, actionlint, and Socket, then a separate build job.
 - The build uses the Pages base path and uploads the Pages artifact only when the caller sets `pages: true`.
 
 ### GitHub Pages (`publish-site.yml`)
@@ -96,7 +113,7 @@ Runs on push to `main` when `site/`, the markdown it renders, the pnpm workspace
 
 ### Scheduled
 
-A Monday schedule runs CodeQL for Rust, `web/`, and `site/`, plus zizmor and Socket.
+A Monday schedule runs CodeQL for Rust, `web/`, and `site/`, plus zizmor, actionlint, and Socket. zizmor and actionlint upload their findings to code scanning and do not fail the job; their pre-commit hooks are the gate.
 
 ## Release (`release.yml`)
 

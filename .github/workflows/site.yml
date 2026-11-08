@@ -65,6 +65,13 @@ jobs:
       contents: read
       actions: read
 
+  actionlint:
+    uses: $/.github/workflows/actionlint.yml
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
   build:
     needs: [check]
     runs-on: ubuntu-latest

@@ -21,7 +21,8 @@ product_patterns=(
   '\.github/calculate-version\.sh$'
   '\.github/changed-scopes\.sh$'
   '\.github/[^/]+\.py$'
-  '\.github/workflows/(pr|product|version|codeql|zizmor|socket)\.yml$'
+  '\.github/workflows/(pr|product|version|codeql|zizmor|actionlint|socket)\.yml$'
+  '\.github/actionlint(\.yaml|-sarif\.tpl)$'
   '\.github/codeql/(web|templates|github-scripts)\.yml$'
 )
 
@@ -33,7 +34,8 @@ site_patterns=(
   'package\.json$'
   'pnpm-(lock|workspace)\.yaml$'
   '\.github/changed-scopes\.sh$'
-  '\.github/workflows/(pr|site|publish-site|codeql|zizmor|socket)\.yml$'
+  '\.github/workflows/(pr|site|publish-site|codeql|zizmor|actionlint|socket)\.yml$'
+  '\.github/actionlint(\.yaml|-sarif\.tpl)$'
   '\.github/codeql/site\.yml$'
 )
 

@@ -1,6 +1,3 @@
-ci:
-  autofix_prs: false
-
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -17,6 +14,9 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
       - id: detect-private-key
+  # CI (product.yml, job pre-commit) runs every hook here except the ones another
+  # job already runs: pnpm-audit and cargo-deny (vuln-check), biome-web
+  # (web-dist), biome-site (site.yml check), and cli-docs (the cli_docs test).
   - repo: local
     hooks:
       - id: cargo-fmt
@@ -64,6 +64,17 @@ repos:
         language: system
         pass_filenames: false
         files: ^site/
+      # actionlint does not check composite actions; this runs shellcheck on
+      # their run: steps. Keep the image the same as the shellcheck hook's.
+      - id: shellcheck-actions
+        name: shellcheck composite actions
+        entry: python .github/shellcheck_actions.py
+        args:
+          - --image
+          - docker.io/koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+        language: python
+        additional_dependencies: [pyyaml==6.0.3]
+        files: (^|/)action\.ya?ml$
   # Check only, never rewrite: lint without fixes, format with --check.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.10
@@ -76,3 +87,18 @@ repos:
     rev: v1.30.1
     hooks:
       - id: zizmor
+  # The Docker images are pinned by digest: sfw does not cover image pulls.
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
+        entry: docker.io/koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+  # Lints this repository's workflows and the forge pack's. The image bundles
+  # shellcheck for run: steps.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint-docker
+        entry: docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        args: [-config-file=.github/actionlint.yaml]
+        files: ^(\.github/workflows/|templates/[^/]+/\.github/workflows/).*\.ya?ml$

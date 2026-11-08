@@ -1,0 +1,42 @@
+name: actionlint
+
+# Reports actionlint findings for this repository's workflows and the forge
+# pack's to code scanning. Like zizmor.yml it only reports; the actionlint
+# pre-commit hook is the gate.
+
+on:
+  workflow_call:
+  schedule:
+    - cron: "27 3 * * 1"
+
+permissions: {}
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Same image as the actionlint-docker hook in .pre-commit-config.yaml;
+      # it bundles shellcheck for run: steps.
+      - name: actionlint
+        env:
+          IMAGE: docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(.github/workflows/*.yml templates/*/.github/workflows/*.yml)
+          # Findings exit 1; they are reported, not failed on.
+          docker run --rm -v "$PWD:/src" -w /src "$IMAGE" \
+            -config-file .github/actionlint.yaml \
+            -format "$(cat .github/actionlint-sarif.tpl)" \
+            "${files[@]}" > actionlint.sarif || [ "$?" -eq 1 ]
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: actionlint.sarif
+          category: actionlint

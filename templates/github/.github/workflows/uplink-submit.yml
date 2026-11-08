@@ -111,9 +111,11 @@ jobs:
           ok=$(jq -r '.ok == true' "$out/assessment.json")
           fresh=$(jq -r '.storedExtras.fresh == true' "$out/assessment.json")
           covered=$(jq -r '.coveredBy != null' "$out/assessment.json")
-          echo "ok=${ok}" >> "$GITHUB_OUTPUT"
-          echo "fresh=${fresh}" >> "$GITHUB_OUTPUT"
-          echo "covered=${covered}" >> "$GITHUB_OUTPUT"
+          {
+            echo "ok=${ok}"
+            echo "fresh=${fresh}"
+            echo "covered=${covered}"
+          } >> "$GITHUB_OUTPUT"
           if [ "$ok" != "true" ]; then
             {
               echo "The assessment of ${PATCH_ID} has findings; the hook is not run and nobody is asked to approve."
