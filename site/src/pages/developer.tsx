@@ -66,6 +66,15 @@ export function DeveloperPage() {
             The bot rewrites <code>main</code> when upstream moves.
           </li>
           <li>
+            <strong>A forge workflow failed? Talk to your operator.</strong>{" "}
+            Send the link to the failed run. A failed check on your own pull
+            request (assess, preflight, Uplink gate) is yours to fix in the pull
+            request. A failed import, sync, submit, resolve, amend, transfer or
+            rebase run is the{" "}
+            <Link to="/operator#forge-failed">operator&apos;s</Link>. Don&apos;t
+            work around it with <code>git uplink</code> or a push.
+          </li>
+          <li>
             <strong>One branch per change.</strong> No second branch for
             upstream, and no public fork to touch.
           </li>
