@@ -172,10 +172,24 @@ export function ExamplesPage() {
                   <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">
                     git uplink reset
                   </code>{" "}
-                  in the internal clone. What each flow means for developers is
-                  in{" "}
-                  <Link to="/day-to-day" className={link}>
-                    day to day
+                  in the internal clone. In the stories you play both people:
+                  the developer who opens, merges and dispatches, and the
+                  operator who runs{" "}
+                  <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">
+                    git uplink
+                  </code>{" "}
+                  to reset and inspect. In a real repository they are separate;
+                  see{" "}
+                  <Link to="/developer" className={link}>
+                    Developer
+                  </Link>
+                  ,{" "}
+                  <Link to="/operator" className={link}>
+                    Operator
+                  </Link>{" "}
+                  and{" "}
+                  <Link to="/forge" className={link}>
+                    Forge
                   </Link>
                   .
                 </p>

@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Code, DocPage, Section } from "../components/doc-page";
 import { MermaidDiagram } from "../components/mermaid-diagram";
+import { RolesSection } from "../components/roles";
 
 const TOPOLOGY_CHART = `
 flowchart LR
@@ -33,7 +34,7 @@ const PHASES = [
   [
     "IP gate",
     "Once assess, upstream dependencies and preflight pass, IP reviews the packet in the to-upstream Environment.",
-    "Waiting, then approved (or rejected: fix and dispatch submit again by hand)",
+    "Waiting, then approved (or rejected: the developer fixes it and dispatches submit again)",
   ],
   [
     "Submit",
@@ -91,6 +92,8 @@ export function HowPage() {
           patch is amended. Nobody maintains a second copy.
         </p>
       </Section>
+
+      <RolesSection />
 
       <Section title="Three repositories">
         <MermaidDiagram

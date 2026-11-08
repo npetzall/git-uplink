@@ -186,23 +186,23 @@ sequenceDiagram
 
 const SUBMIT_CHART = `
 sequenceDiagram
-  actor Op as Operator
+  actor Dev as Developer
   participant Packet as assess + packet jobs
   participant Pre as preflight job
   participant Env as to-upstream
   participant Submit as submit job
   participant Fork as contribution fork
   participant Up as upstream
-  Op->>Packet: dispatch Uplink submit (id)
+  Dev->>Packet: dispatch Uplink submit (id), or the pack with UPLINK_AUTO_SUBMIT
   Packet->>Packet: git uplink assess --package, run the hook on it, then git uplink report
   Packet->>Submit: needs
-  Op->>Pre: same dispatch
+  Dev->>Pre: same dispatch
   Pre->>Pre: git uplink preflight id --json (preflight.sh, read-only token)
   Pre->>Submit: result
   Submit->>Submit: all checks passed, status waiting
   Submit->>Env: wait for IP reviewer
   alt rejected or cancelled
-    Env-->>Submit: rejected (status rejected, re-dispatch by hand)
+    Env-->>Submit: rejected (status rejected, the developer dispatches again)
   else approved
   Env-->>Submit: approved
   Submit->>Submit: git uplink approve
@@ -241,15 +241,15 @@ sequenceDiagram
   participant Sync as sync or resolve job
   participant Base as uplink/conflict/id
   participant Work as uplink/conflict/id-work
-  actor Owner as Patch owner
+  actor Dev as Developer
   participant Resolve as uplink-resolve.yml
   Sync->>Sync: rebuild stops on id, status conflict
   Sync->>Base: push protected base at the apply prefix
   Sync->>Work: push work branch with conflict markers
   Sync->>Sync: print gh.prCreate JSON, exit 0
   Sync->>Base: gh pr create, then git uplink gated
-  Owner->>Work: fix and push
-  Owner->>Base: merge the gated PR
+  Dev->>Work: fix and push
+  Dev->>Base: merge the gated PR
   Base->>Resolve: pull_request closed (merged)
   Resolve->>Resolve: git uplink resolve id (same id, rebuild)
   opt already submitted
@@ -259,13 +259,12 @@ sequenceDiagram
 
 const TRANSFER_CHART = `
 sequenceDiagram
-  actor Op as Operator
+  actor Dev as Developer
   participant Pre as preflight job
   participant Job as transfer job
   participant Base as uplink/transfer-to-*/id
-  actor Owner as Patch owner
   participant State as uplink/state
-  Op->>Pre: dispatch Uplink transfer (id, direction)
+  Dev->>Pre: dispatch Uplink transfer (id, direction)
   Pre->>Pre: git uplink transfer --preflight-only (read-only token)
   Pre->>Job: result
   Job->>Job: git uplink transfer
@@ -273,7 +272,7 @@ sequenceDiagram
     Job->>State: move the patch, rebuild main
   else needs changes
     Job->>Base: push protected base plus -work, open transfer PR
-    Owner->>Base: fix on -work, Uplink gate passes, merge
+    Dev->>Base: fix on -work, Uplink gate passes, merge
     Base->>Pre: pull request closed (merged)
     Pre->>Pre: git uplink transfer --complete --preflight-only
     Pre->>Job: result
@@ -286,17 +285,16 @@ sequenceDiagram
 
 const AMEND_CHART = `
 sequenceDiagram
-  actor Op as Operator
+  actor Dev as Developer
   participant Job as amend job
   participant Base as uplink/amend/id
-  actor Owner as Patch owner
   participant Pre as preflight job
   participant State as uplink/state
-  Op->>Job: dispatch Uplink amend (id)
+  Dev->>Job: dispatch Uplink amend (id)
   Job->>Job: git uplink amend (replay the queue up to and including the patch)
   Job->>Base: push protected base plus -work, open draft PR
-  Owner->>Base: push to -work, edit title and description
-  Owner->>Base: Uplink gate passes, mark ready, merge
+  Dev->>Base: push to -work, edit title and description
+  Dev->>Base: Uplink gate passes, mark ready, merge
   Base->>Pre: pull request closed (merged)
   Pre->>Pre: git uplink amend --complete --preflight-only (read-only token)
   Pre->>Job: result
@@ -357,7 +355,7 @@ sequenceDiagram
     Job->>Job: git uplink rebase --plan, then rebase in a worktree, hooks off
     Job->>PR: push --force-with-lease on the head it read
   else neither
-    PR->>PR: developer runs git uplink rebase and pushes
+    PR->>PR: developer runs the plain git rebase from the comment and pushes
   end
 `;
 
@@ -371,24 +369,24 @@ const FLOWS = [
   ["Import", "PR merged into main", "uplink-import.yml", "the merge itself"],
   [
     "Submit",
-    "dispatch, by hand or by the pack",
+    "developer dispatch, or the pack (UPLINK_AUTO_SUBMIT)",
     "uplink-submit.yml",
     "to-upstream",
   ],
   [
     "Sync",
-    "hourly, daily or weekly, or dispatch",
+    "hourly, daily or weekly, or operator dispatch",
     "uplink-sync.yml",
     "from-upstream, for foreign commits",
   ],
   ["Resolve", "conflict PR merged", "uplink-resolve.yml", "the gated PR"],
   [
     "Transfer",
-    "dispatch, or a failed import",
+    "developer dispatch, or a failed import",
     "uplink-transfer.yml",
     "transfer PR, when changes are needed",
   ],
-  ["Amend", "dispatch", "uplink-amend.yml", "the draft PR"],
+  ["Amend", "developer dispatch", "uplink-amend.yml", "the draft PR"],
   [
     "Withdraw",
     "transfer to-internal of a submitted patch",
@@ -397,7 +395,7 @@ const FLOWS = [
   ],
   [
     "Verify",
-    "dispatch",
+    "operator dispatch",
     "uplink-verify.yml",
     "none; a failing patch gets a conflict PR",
   ],
@@ -901,8 +899,9 @@ export function InternalsPage() {
           That is why command A prints JSON (<code>gh.prCreate</code>,{" "}
           <code>gh.prClose</code>) and exits 0 when it opens a gate: the
           workflow reads the JSON to open the PR or dispatch the next job. A
-          gate is a normal outcome, not a failure. Locally, you can run A and B
-          yourself. Nothing in the engine requires CI.
+          gate is a normal outcome, not a failure. Nothing in the engine
+          requires CI: when the forge cannot, the operator runs A and B by hand
+          (see <Link to="/operator#fallbacks">Operator</Link>).
         </p>
       </Section>
 
@@ -970,10 +969,11 @@ export function InternalsPage() {
         </ol>
         <p>
           Every commit of the replay is new, so a branch cut from the old{" "}
-          <code>main</code> no longer shares it. <code>git uplink rebase</code>{" "}
-          finds the newest commit of an old <code>main</code> in the branch (one
-          with the trailer, or one a revision of <code>previous-main.json</code>{" "}
-          lists) and runs <code>git rebase --onto origin/main</code> from it.
+          <code>main</code> no longer shares it. <code>git uplink rebase</code>,
+          which the forge runs, finds the newest commit of an old{" "}
+          <code>main</code> in the branch (one with the trailer, or one a
+          revision of <code>previous-main.json</code> lists) and runs{" "}
+          <code>git rebase --onto origin/main</code> from it.
         </p>
         <p>
           <code>git uplink rebuild --branch uplink/preview/verify</code> is

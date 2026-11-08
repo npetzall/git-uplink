@@ -29,15 +29,16 @@ const SCENARIOS = [
   ["where-is-it", "Where is my change?"],
 ];
 
-export function DayToDayPage() {
+export function DeveloperPage() {
   return (
     <DocPage
-      eyebrow="Day to day"
+      eyebrow="Developer"
       title="Branch, pull request, merge. That is the job."
       lead={
         <>
-          Developers work the way they already do. Uplink runs in CI around
-          them. This page answers the questions that come up.
+          Developers work the way they already do. The forge runs Uplink in CI
+          around them, and you don&apos;t need git-uplink installed. This page
+          answers the questions that come up.
         </>
       }
     >
@@ -45,9 +46,23 @@ export function DayToDayPage() {
         <ul>
           <li>
             <strong>
+              You don&apos;t run <code>git uplink</code>.
+            </strong>{" "}
+            The <Link to="/forge">forge</Link> imports, syncs, submits, rebases,
+            and opens the pull requests you work in. Setup, upgrades, and
+            repairs are the <Link to="/operator">operator&apos;s</Link>. You use
+            pull requests, labels, the PR body, and three workflows you
+            dispatch: <strong>Uplink amend</strong>,{" "}
+            <strong>Uplink transfer</strong>, and <strong>Uplink submit</strong>
+            .
+          </li>
+          <li>
+            <strong>
               Nobody pushes company <code>main</code>.
             </strong>{" "}
             Developers create branches and merge pull requests, nothing more.
+            Never push or rewrite <code>main</code>, <code>uplink/state</code>,
+            or any <code>uplink/…</code> branch the forge did not open for you.
             The bot rewrites <code>main</code> when upstream moves.
           </li>
           <li>
@@ -111,14 +126,15 @@ export function DayToDayPage() {
         <Code>{`git fetch origin
 git switch -c fix/token-hash origin/main`}</Code>
         <p>
-          Contribution happens later: an operator dispatches{" "}
-          <strong>Uplink submit</strong> (or the pack does, with{" "}
-          <code>UPLINK_AUTO_SUBMIT</code>). When its checks pass the patch is{" "}
-          <strong>waiting</strong> for IP. IP approves and the public pull
-          request opens. If IP rejects the run, or it is cancelled, the patch is{" "}
-          <strong>rejected</strong>: fix what IP asked for and dispatch submit
-          again by hand; it is never submitted automatically. If maintainers ask
-          for changes, make them in a new internal PR, as usual.
+          Import comments the patch id on your merged pull request. Contribution
+          happens later: you dispatch <strong>Uplink submit</strong> with that
+          id (or the forge does, with <code>UPLINK_AUTO_SUBMIT</code>). When its
+          checks pass the patch is <strong>waiting</strong> for IP. IP approves
+          and the public pull request opens. If IP rejects the run, or it is
+          cancelled, the patch is <strong>rejected</strong>: fix what IP asked
+          for and dispatch submit again by hand; it is never submitted
+          automatically. If maintainers ask for changes, make them in a new
+          internal PR, as usual.
         </p>
         <Lab scenario="solo-fix">Solo fix</Lab>
       </Section>
@@ -137,7 +153,10 @@ git switch -c fix/token-hash origin/main`}</Code>
             message.
           </li>
           <li>
-            Find the id with <code>git uplink status</code> or in the web UI.
+            Find the id in the comment Uplink import left on the merged pull
+            request, or in the <code>Uplink-Patch-Id</code> trailer of its
+            commit on <code>main</code> after a rebuild. When preflight fails
+            for a missing dependency, its comment suggests the line to add.
           </li>
           <li>
             If the other change is still an open PR, wait for it to merge. Or
@@ -150,9 +169,7 @@ git switch -c fix/token-hash origin/main`}</Code>
           </li>
           <li>
             Name only the change you build on, not the ones under it. If it
-            depends on another change, that one is applied before it too. An
-            older queue that lists whole chains is shortened with{" "}
-            <code>git uplink trim-deps</code>.
+            depends on another change, that one is applied before it too.
           </li>
           <li>
             Your change can be approved and submitted only after its
@@ -271,11 +288,11 @@ git switch -c fix/token-hash origin/main`}</Code>
             too.
           </li>
           <li>
-            <strong>It fails on its own.</strong> Upstream may have moved.
-            Reproduce it locally:
+            <strong>It fails on its own.</strong> Upstream may have moved. The
+            job log of <strong>Uplink upstream preflight</strong> has the
+            script&apos;s output; push a fix and it runs again.
           </li>
         </ul>
-        <Code>{`git uplink preflight --from origin/main --head HEAD`}</Code>
         <Lab scenario="stacked-depends-on">Preflight without the trailer</Lab>
       </Section>
 
@@ -285,19 +302,18 @@ git switch -c fix/token-hash origin/main`}</Code>
           upstream, a resolved conflict, an amend) writes every commit of it
           again. After a rebuild your pull request lists the old patches as if
           they were yours, and a plain <code>git rebase origin/main</code>{" "}
-          replays them. Rebase from the commit your branch started on instead;{" "}
-          <code>git uplink rebase</code> finds it:
+          replays them. The forge finds the commit your branch started on and
+          comments on the pull request. Add the label <code>uplink:rebase</code>{" "}
+          and it rebases and pushes the branch for you (it does so unasked where{" "}
+          <code>UPLINK_AUTO_REBASE</code> is set). Or run the plain{" "}
+          <code>git</code> command the comment gives:
         </p>
         <Code>{`git fetch origin
-git uplink rebase --no-fetch
+git rebase --onto origin/main <commit from the comment>
 git push --force-with-lease`}</Code>
         <p>
-          The pull request gets a comment with this, and with the same rebase as
-          a plain <code>git</code> command if you do not have git-uplink
-          installed. Or add the label <code>uplink:rebase</code> and the bot
-          rebases and pushes the branch for you (it does so unasked where{" "}
-          <code>UPLINK_AUTO_REBASE</code> is set). The comment then says how to
-          update your local copy:
+          After the forge rebased it, the comment says how to update your local
+          copy:
         </p>
         <Code>{`git fetch origin
 git reset --hard @{u}`}</Code>
@@ -344,19 +360,10 @@ git push`}</Code>
           to your lines needs no new approval.
         </p>
         <p>
-          An operator who rebuilds locally can fix a conflict without the PR. On
-          the gated branches: switch to{" "}
-          <code>uplink/conflict/&lt;id&gt;-work</code>, fix and{" "}
-          <code>git add</code> the files, run{" "}
-          <code>git uplink resolve &lt;id&gt;</code>, then push. Or inline, the
-          way <code>git rebase</code> stops: <code>rebuild -i</code> leaves the
-          failed apply (or the patch preflight blames) in the checkout and
-          writes nothing to <code>uplink/state</code> until every stop is fixed.
+          Fix it in the pull request; don&apos;t ask for a local fix. Only when
+          the forge cannot do it does the operator fix a conflict by hand (see{" "}
+          <Link to="/operator#fallbacks">Operator</Link>).
         </p>
-        <Code>{`git uplink rebuild -i --push
-# fix the files, then
-git add <files>
-git uplink rebuild --continue   # pushes when done; --abort changes nothing`}</Code>
         <Lab scenario="upstream-conflict">Upstream conflict</Lab>
       </Section>
 
@@ -367,8 +374,9 @@ git uplink rebuild --continue   # pushes when done; --abort changes nothing`}</C
         <p>
           Use this to fix a company-only patch, rework an upstream patch before
           it is submitted, or answer a maintainer who asked for changes on the
-          public PR. Dispatch <strong>Uplink amend</strong> with the patch id.
-          You get a draft PR labelled <code>uplink:amend</code> from{" "}
+          public PR. Never rewrite a patch yourself: dispatch{" "}
+          <strong>Uplink amend</strong> with the patch id and the forge sets it
+          up. You get a draft PR labelled <code>uplink:amend</code> from{" "}
           <code>uplink/amend/&lt;id&gt;-work</code>. Its base already has the
           queue applied up to and including your patch.
         </p>
@@ -424,29 +432,28 @@ git push`}</Code>
 
       <Section id="where-is-it" title="Where is my change?">
         <p>
-          Look at the queue, not <code>git log main</code>:
-        </p>
-        <Code>{`git uplink status
-git uplink web-ui`}</Code>
-        <p>
-          The web UI lists every patch, its status, and its dependencies, and
-          explains what each status means and what happens next. It reads the
-          queue with git: <strong>Local</strong> is the{" "}
-          <code>uplink/state</code> branch in your clone,{" "}
-          <strong>Remote</strong> is <code>origin/uplink/state</code> as last
-          fetched. Uncommitted edits in <code>.uplink/</code> are not shown.
+          Look at what the forge tells you, not <code>git log main</code>:
         </p>
         <ul>
           <li>
-            <strong>Ready to submit</strong> lists the queued upstream changes
-            that submit can take now: no public PR yet, and every upstream
-            change they depend on is merged.
+            The comment Uplink import left on your merged pull request names the
+            patch id and its queue.
           </li>
           <li>
-            <strong>Submit stream</strong> draws the active upstream changes as
-            a graph of columns. The first column has no open dependencies; a
-            change in a later column goes once everything it depends on is
-            merged. Read it left to right for the order to submit and merge.
+            The <strong>Uplink submit</strong> run for that id shows where the
+            contribution is: waiting for IP, rejected, or submitted with the
+            public PR link.
+          </li>
+          <li>
+            A conflict, amend, or transfer is an open pull request labelled{" "}
+            <code>uplink:conflict</code>, <code>uplink:amend</code>, or{" "}
+            <code>uplink:transfer-to-…</code>.
+          </li>
+          <li>
+            The whole queue is <code>.uplink/queue.json</code> on the{" "}
+            <code>uplink/state</code> branch; open it in the forge&apos;s web
+            view. The operator&apos;s dashboard (<code>git uplink web-ui</code>)
+            draws it with each patch&apos;s status and dependencies.
           </li>
         </ul>
       </Section>

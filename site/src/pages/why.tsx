@@ -138,12 +138,12 @@ export function WhyPage() {
         >
           how it works
         </Link>
-        , or what it means for developers{" "}
+        , or what it means for{" "}
         <Link
-          to="/day-to-day"
+          to="/developer"
           className="text-primary underline-offset-4 hover:underline"
         >
-          day to day
+          developers
         </Link>
         .
       </p>
