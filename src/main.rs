@@ -70,20 +70,51 @@ fn read_commit_message(
     Ok(message.unwrap_or_else(|| fallback.to_string()))
 }
 
+/// Writes `markdown` to `file`: a state path (`.uplink/...`) for the
+/// command's next state commit, an absolute path as is, and any other path
+/// relative to `repo`.
 fn write_markdown_file(repo: &Path, file: &Path, markdown: &str) -> Result<(), Error> {
+    let mut body = markdown.to_string();
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    if git_uplink::state::is_state_path(file) {
+        return git_uplink::state::write(repo, file, body);
+    }
     let abs = if file.is_absolute() {
         file.to_path_buf()
     } else {
         repo.join(file)
     };
-    let mut body = markdown.to_string();
-    if !body.ends_with('\n') {
-        body.push('\n');
-    }
     abs.parent()
         .map_or(Ok(()), fs::create_dir_all)
         .and_then(|()| fs::write(&abs, body))
         .map_err(|err| Error::msg(format!("could not write {}: {err}", abs.display())))
+}
+
+/// Changes to `uplink/state` are held in memory until committed, so a
+/// command that ends with some held would lose them without a word. That
+/// is a bug in the command; say so instead of exiting 0.
+fn refuse_lost_changes() -> Result<(), Error> {
+    let held = git_uplink::state::pending();
+    if held.is_empty() {
+        return Ok(());
+    }
+    let files: Vec<String> = held.into_iter().flat_map(|(_, files)| files).collect();
+    Err(Error::msg(format!(
+        "internal error: this command changed {} on {STATE_BRANCH} without committing it; \
+nothing of it was kept. Please report this.",
+        files.join(", ")
+    )))
+}
+
+/// `dest` as the operator finds it: a state path is on `uplink/state`.
+fn written_where(dest: &Path) -> String {
+    if git_uplink::state::is_state_path(dest) {
+        format!("{} on {STATE_BRANCH}", dest.display())
+    } else {
+        dest.display().to_string()
+    }
 }
 
 fn github_run_url() -> String {
@@ -509,8 +540,8 @@ fn amend_comment(id: &str, work: &str, base: &str) -> String {
 }
 
 /// Writes the description and the comment of a gated PR for `id` as
-/// `<name>.md` and `<name>-comment.md` in its report directory, and returns
-/// their paths.
+/// `<name>.md` and `<name>-comment.md` in its output directory, and returns
+/// their absolute paths.
 fn write_gated_pr_files(
     repo: &Path,
     id: &str,
@@ -518,14 +549,17 @@ fn write_gated_pr_files(
     body: &str,
     comment: &str,
 ) -> Result<Option<(String, String)>, Error> {
-    let Ok((dir, _, _)) = report_paths(id) else {
+    let Ok(dir) = git_uplink::state::out_dir(repo, id) else {
         return Ok(None);
     };
-    let body_file = format!("{dir}/{name}.md");
-    let comment_file = format!("{dir}/{name}-comment.md");
-    write_markdown_file(repo, Path::new(&body_file), body)?;
-    write_markdown_file(repo, Path::new(&comment_file), comment)?;
-    Ok(Some((body_file, comment_file)))
+    let body_file = dir.join(format!("{name}.md"));
+    let comment_file = dir.join(format!("{name}-comment.md"));
+    write_markdown_file(repo, &body_file, body)?;
+    write_markdown_file(repo, &comment_file, comment)?;
+    Ok(Some((
+        body_file.display().to_string(),
+        comment_file.display().to_string(),
+    )))
 }
 
 fn print_amend_artifact(repo: &Path, result: &AmendResult) -> Result<(), Error> {
@@ -584,10 +618,10 @@ fn submit_artifact(
     let branch = exported.branch.as_str();
     let body = upstream_pr_body(patch);
     let (title, _) = public_subject_and_body(patch);
-    let Ok((report_dir, _, _)) = report_paths(&patch.id) else {
+    let Ok(out_dir) = git_uplink::state::out_dir(repo, &patch.id) else {
         return Ok(());
     };
-    let body_file = format!("{report_dir}/pr.md");
+    let body_file = out_dir.join("pr.md").display().to_string();
     write_markdown_file(repo, Path::new(&body_file), &body)?;
     let existing = patch.upstream.as_ref().and_then(|u| {
         u.pr_url.as_ref().map(|url| {
@@ -633,7 +667,7 @@ fn submit_artifact(
         "existingPr": existing,
     });
     if !exported.pushed {
-        let message_file = format!("{report_dir}/commit-message.txt");
+        let message_file = out_dir.join("commit-message.txt").display().to_string();
         write_markdown_file(repo, Path::new(&message_file), &exported.message)?;
         value["contribCommit"] = serde_json::json!({
             "branch": branch,
@@ -664,7 +698,7 @@ fn upgrade_summary(result: &InitResult) -> String {
     }
     for (id, title) in &result.dropped {
         out.push_str(&format!(
-            "\nDropped: {id} \"{title}\" (still in .uplink/patches/{id}.patch)"
+            "\nDropped: {id} \"{title}\" (still on uplink/state as .uplink/patches/{id}.patch)"
         ));
     }
     for (id, title) in &result.amended {
@@ -1333,7 +1367,7 @@ fn cmd_report(
     }
     commit_queue(repo, &format!("uplink: contribution packet {id}"))?;
     println!("{packet}");
-    eprintln!("Wrote {}", dest.display());
+    eprintln!("Wrote {}", written_where(&dest));
     if queue.is_upstream(id) && patch.assess.as_ref().is_some_and(|report| !report.ok) {
         return Err(Error::msg(format!(
             "{id} is not ready for contribution. Fix the upstream assessment findings in the packet first."
@@ -1569,7 +1603,7 @@ fn cmd_approve(
     commit_queue(repo, &format!("uplink: to-upstream approval receipt {id}"))?;
     println!("{}", receipt.text);
     eprintln!("{} approved", patch.id);
-    eprintln!("Wrote {}", dest.display());
+    eprintln!("Wrote {}", written_where(&dest));
     Ok(())
 }
 
@@ -1969,6 +2003,7 @@ fn run() -> Result<(), Error> {
     let cli = Cli::from_arg_matches(&cli::command(VERSION).get_matches())
         .unwrap_or_else(|err| err.exit());
     let repo = repo_root(env::current_dir()?);
+    git_uplink::state::retire_worktree_mirror(&repo)?;
     // Only plain `preflight` has a stdout that is for reading.
     set_script_echo(match &cli.command {
         Commands::Preflight { json: false, .. } => ScriptEcho::Stdout,
@@ -2420,7 +2455,7 @@ fn run() -> Result<(), Error> {
 }
 
 fn main() -> ExitCode {
-    match run() {
+    match run().and_then(|()| refuse_lost_changes()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
@@ -2501,6 +2536,7 @@ mod tests {
     fn write_markdown_file_reports_errors() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
+        git_ok(repo, &["init", "--quiet"]).unwrap();
         write_markdown_file(repo, Path::new("out/report.md"), "# hi").unwrap();
         assert_eq!(
             fs::read_to_string(repo.join("out/report.md")).unwrap(),

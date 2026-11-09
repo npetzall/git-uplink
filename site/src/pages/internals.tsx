@@ -34,7 +34,7 @@ sequenceDiagram
   participant State as uplink_state
   participant Upstream as uplink_upstream
   participant Main as company_main
-  State->>State: snapshot .uplink
+  State->>State: copy the queue's files
   Main->>Upstream: detach at uplink/upstream
   loop active patches tooling then upstream then internal
     Upstream->>Upstream: git apply patch
@@ -48,7 +48,7 @@ sequenceDiagram
     end
   end
   Upstream->>Main: force company main to last_good
-  State->>Main: restore .uplink from snapshot
+  Main->>State: commit replayed patch files
 `;
 
 const RESTACK_CHART = `
@@ -578,6 +578,13 @@ export function InternalsPage() {
             names, and the forge.
           </li>
           <li>
+            Nothing of it is checked out. Each command reads the files as git
+            objects of <code>uplink/state</code>, holds what it changes in
+            memory, and commits it with a compare-and-swap on the branch. A
+            command with changes whose <code>uplink/state</code> moved under it
+            refuses instead of overwriting either side.
+          </li>
+          <li>
             The forge pack (workflows and the PR template) is itself a patch,
             the <strong>tooling</strong> slot, applied right after upstream.
           </li>
@@ -950,7 +957,7 @@ export function InternalsPage() {
         </p>
         <ol>
           <li>
-            Snapshot <code>.uplink/</code> from <code>uplink/state</code>.
+            Copy the queue's files from <code>uplink/state</code>.
           </li>
           <li>
             Detach at <code>uplink/upstream</code> (or company <code>main</code>{" "}
@@ -963,8 +970,8 @@ export function InternalsPage() {
             conflict branches are published.
           </li>
           <li>
-            Force company <code>main</code> to that HEAD, restore{" "}
-            <code>.uplink/</code> from the snapshot, and commit queue status
+            Force company <code>main</code> to that HEAD, and commit the
+            replayed patch files and queue status to <code>uplink/state</code>
             together with <code>.uplink/previous-main.json</code>: the tip of
             the <code>main</code> it replaced and the commits of it that carry
             no <code>Uplink-Patch-Id</code> trailer.

@@ -24,7 +24,6 @@ pub struct StateStatus {
     pub ahead: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub behind: Option<u32>,
-    pub uncommitted: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -85,7 +84,6 @@ pub fn state_status_at(repo: &Path, fetch: bool) -> Result<StateStatus> {
     } else {
         None
     };
-    let uncommitted = uplink_uncommitted_paths(repo, &branch)?;
     let remote = if fetch {
         fetch_state_tracking(repo, COMPANY_REMOTE, &branch)?
     } else {
@@ -119,7 +117,6 @@ pub fn state_status_at(repo: &Path, fetch: bool) -> Result<StateStatus> {
         remote_ref,
         ahead,
         behind,
-        uncommitted,
     })
 }
 
@@ -145,12 +142,6 @@ pub fn format_status_table(snapshot: &StatusSnapshot) -> String {
         _ => "no origin tracking".to_string(),
     };
     let _ = writeln!(out, "{}  {local_short}  {sync}", state.branch);
-    if !state.uncommitted.is_empty() {
-        let _ = writeln!(out, "uncommitted:");
-        for path in &state.uncommitted {
-            let _ = writeln!(out, "  {path}");
-        }
-    }
     let _ = writeln!(out);
     let _ = writeln!(
         out,

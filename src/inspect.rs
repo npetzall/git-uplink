@@ -13,7 +13,7 @@ use crate::repo::{COMPANY_REMOTE, UPSTREAM_REF, has_ref, path_exists_at, state_e
 use crate::types::{QUEUE_PATH, QueueState, STATE_BRANCH, TOOLING_PATCH_KIND};
 
 pub fn check_initialized(repo: &Path) -> StepOutcome {
-    if repo.join(QUEUE_PATH).is_file() || state_exists(repo).unwrap_or(false) {
+    if state_exists(repo).unwrap_or(false) {
         StepOutcome::pass("uplink/state and queue.json present")
     } else {
         StepOutcome::fail(
@@ -144,11 +144,11 @@ pub fn check_forge_tooling(repo: &Path, queue: &QueueState) -> StepOutcome {
     match patch {
         Some(patch) => {
             let rel = patch_path(&patch.id).unwrap_or_default();
-            if repo.join(rel).is_file() {
-                StepOutcome::pass(format!("tooling patch {} on disk", patch.id))
+            if path_exists_at(repo, STATE_BRANCH, &rel.to_string_lossy()).unwrap_or(false) {
+                StepOutcome::pass(format!("tooling patch {} on {STATE_BRANCH}", patch.id))
             } else {
                 StepOutcome::fail(format!(
-                    "tooling patch {} missing from .uplink/patches",
+                    "tooling patch {} missing from .uplink/patches on {STATE_BRANCH}",
                     patch.id
                 ))
             }
@@ -270,7 +270,7 @@ pub fn check_branch_sync(repo: &Path, queue: &QueueState) -> Result<StepOutcome>
 }
 
 pub fn read_queue_if_initialized(repo: &Path) -> Option<QueueState> {
-    if !repo.join(QUEUE_PATH).is_file() {
+    if !path_exists_at(repo, STATE_BRANCH, QUEUE_PATH).unwrap_or(false) {
         return None;
     }
     read_queue_file(repo).ok()

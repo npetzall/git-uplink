@@ -421,13 +421,9 @@ fn hunk_counts(line: &str) -> Option<(usize, usize)> {
     Some((old, new))
 }
 
-/// The patch file of `id`: the checked-out copy, or the one on `uplink/state`.
+/// The patch file of `id` on `uplink/state`, with this command's edits.
 pub fn patch_text(repo: &Path, id: &str) -> Result<String> {
-    let path = format!("{PATCH_DIR}/{id}.patch");
-    match fs::read_to_string(repo.join(&path)) {
-        Ok(text) => Ok(text),
-        Err(_) => show_at(repo, STATE_BRANCH, &path),
-    }
+    crate::state::patch_text(repo, id)
 }
 
 fn hash_text(repo: &Path, content: &str) -> Result<String> {
@@ -1117,9 +1113,9 @@ pub fn format_contribution_packet_with_extras(
         )
     };
     if extra_dir.is_none() && stored_extras_fresh(patch) {
-        let stored = repo.join(extras_dir(&patch.id)?);
-        if stored.is_dir() {
-            return prepend_report_extras(&packet, Some(&stored));
+        let stored = stored_extra_markdown(repo, &patch.id)?;
+        if let Some(extras) = stored {
+            return Ok(join_extras(&extras, &packet));
         }
     }
     prepend_report_extras(&packet, extra_dir)
@@ -1156,13 +1152,10 @@ pub fn store_extras(
         )));
     };
     let names = extra_markdown_names(src)?;
-    let dest = repo.join(extras_dir(&patch.id)?);
-    if dest.exists() {
-        fs::remove_dir_all(&dest)?;
-    }
-    fs::create_dir_all(&dest)?;
+    let dest = extras_dir(&patch.id)?;
+    crate::state::remove_dir(repo, &dest)?;
     for name in names {
-        fs::copy(src.join(&name), dest.join(&name))?;
+        crate::state::write(repo, format!("{dest}/{name}"), fs::read(src.join(&name))?)?;
     }
     patch.extras = Some(PatchExtras {
         at: now_iso(),
@@ -1195,27 +1188,50 @@ fn extra_markdown_names(dir: &Path) -> Result<Vec<String>> {
 }
 
 pub fn load_extra_markdown(dir: &Path) -> Result<String> {
-    let names = extra_markdown_names(dir)?;
-    let mut parts = Vec::new();
-    for name in names {
-        let body = fs::read_to_string(dir.join(&name))?;
-        let body = body.trim();
-        if !body.is_empty() {
-            parts.push(body.to_string());
-        }
+    let mut bodies = Vec::new();
+    for name in extra_markdown_names(dir)? {
+        bodies.push(fs::read_to_string(dir.join(&name))?);
     }
-    Ok(parts.join("\n\n"))
+    Ok(join_markdown(&bodies))
+}
+
+/// The `*.md` bodies, trimmed, empty ones left out, a blank line apart.
+fn join_markdown(bodies: &[String]) -> String {
+    bodies
+        .iter()
+        .map(|body| body.trim())
+        .filter(|body| !body.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// The stored extras of patch `id`, in name order; `None` when none are stored.
+fn stored_extra_markdown(repo: &Path, id: &str) -> Result<Option<String>> {
+    let dir = extras_dir(id)?;
+    let files = crate::state::list(repo, &dir)?;
+    if files.is_empty() {
+        return Ok(None);
+    }
+    let mut bodies = Vec::new();
+    for file in files.iter().filter(|f| f.ends_with(".md")) {
+        bodies.push(crate::state::read_string(repo, file)?.unwrap_or_default());
+    }
+    Ok(Some(join_markdown(&bodies)))
+}
+
+fn join_extras(extras: &str, packet: &str) -> String {
+    if extras.is_empty() {
+        packet.to_string()
+    } else {
+        format!("{extras}\n\n{packet}")
+    }
 }
 
 pub fn prepend_report_extras(packet: &str, extra_dir: Option<&Path>) -> Result<String> {
     let Some(dir) = extra_dir else {
         return Ok(packet.to_string());
     };
-    let extras = load_extra_markdown(dir)?;
-    if extras.is_empty() {
-        return Ok(packet.to_string());
-    }
-    Ok(format!("{extras}\n\n{packet}"))
+    Ok(join_extras(&load_extra_markdown(dir)?, packet))
 }
 
 pub fn format_delta_approver_packet(repo: &Path, patch: &Patch) -> Result<String> {
@@ -1293,8 +1309,10 @@ fn format_delta_since(repo: &Path, patch: &Patch, sha: &str) -> Result<String> {
             ));
         }
     };
-    let new_patch = fs::read_to_string(repo.join(&new_path))
-        .unwrap_or_else(|_| show_at(repo, STATE_BRANCH, &new_path).unwrap_or_default());
+    let new_patch = crate::state::read_string(repo, &new_path)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let added = delta_added_section(repo, &old_patch, &new_patch);
     if let Some(tree) = tree_diff_patches(repo, &old_patch, &new_patch) {
         return Ok(format!("{added}\n{}", delta_tree_section(&tree)));

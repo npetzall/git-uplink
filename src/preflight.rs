@@ -15,11 +15,11 @@ use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::hooks::{PREFLIGHT_SCRIPT_PATH, hooks_source};
 use crate::queue::{
     active_upstream, apply_order_active, apply_order_upstream_layer, dependency_closure,
-    direct_dependencies, get_patch, patch_path, read_queue,
+    direct_dependencies, get_patch, read_queue,
 };
 use crate::repo::{
-    TempWorktree, ensure_revs, ensure_upstream_ref, has_ref, path_exists_at, rev_parse,
-    write_product_patch,
+    TempWorktree, ensure_revs, ensure_upstream_ref, format_product_patch, has_ref, path_exists_at,
+    rev_parse,
 };
 use crate::types::{ApplyOutcome, Patch, PatchStatus, QueueState};
 
@@ -533,16 +533,9 @@ impl<'a> PreflightScript<'a> {
     }
 }
 
-pub(crate) fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<ApplyOutcome> {
-    if !git_succeeds(
-        dir,
-        &[
-            "apply",
-            "--3way",
-            "--index",
-            patch_abs.to_str().unwrap_or(""),
-        ],
-    )? {
+/// Applies patch `text` in `dir` with a 3-way merge and commits it as `message`.
+pub(crate) fn apply_text(dir: &Path, text: &str, message: &str) -> Result<ApplyOutcome> {
+    if !crate::repo::apply_succeeds(dir, &["--3way", "--index"], text)? {
         return Ok(ApplyOutcome::Conflict);
     }
     if git_succeeds(dir, &["diff", "--cached", "--quiet"])? {
@@ -575,8 +568,8 @@ fn reset_export(dir: &Path, repo: &Path) -> Result<()> {
     Ok(())
 }
 
-fn dep_patch_abs(repo: &Path, id: &str) -> Result<PathBuf> {
-    Ok(repo.join(patch_path(id)?))
+fn dep_patch(repo: &Path, id: &str) -> Result<String> {
+    crate::state::patch_text(repo, id)
 }
 
 /// Applies `dep_ids` and everything they depend on, dependencies first.
@@ -592,9 +585,9 @@ fn apply_deps(
         if dep.status == PatchStatus::Merged {
             continue;
         }
-        let result = apply_abs(
+        let result = apply_text(
             dir,
-            &dep_patch_abs(repo, id)?,
+            &dep_patch(repo, id)?,
             &format!("{} (dep)", dep.subject()),
         )?;
         if result == ApplyOutcome::Conflict {
@@ -622,12 +615,12 @@ pub fn suggest_depends_on(
     repo: &Path,
     queue: &QueueState,
     patch_id: &str,
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
 ) -> Result<Vec<String>> {
     let candidates = upstream_candidates(queue, Some(patch_id))?;
     Ok(
-        detect_depends_on_in(repo, queue, &[], &candidates, candidate_abs, title, None)?
+        detect_depends_on_in(repo, queue, &[], &candidates, candidate, title, None)?
             .unwrap_or_default(),
     )
 }
@@ -650,7 +643,7 @@ fn upstream_candidates(queue: &QueueState, exclude: Option<&str>) -> Result<Vec<
     Ok(candidates)
 }
 
-/// The active upstream patches `candidate_abs` needs to apply onto public
+/// The active upstream patches `candidate` needs to apply onto public
 /// upstream, direct dependencies only: none when it applies alone, else the
 /// patches whose lines its hunks touch (see [`blamed_depends_on`]), else
 /// the first set found by trying each patch alone, then growing prefixes.
@@ -660,29 +653,21 @@ fn upstream_candidates(queue: &QueueState, exclude: Option<&str>) -> Result<Vec<
 pub(crate) fn detect_depends_on(
     repo: &Path,
     queue: &QueueState,
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
     keep_branch: Option<&str>,
 ) -> Result<Option<Vec<String>>> {
     let candidates = upstream_candidates(queue, None)?;
-    detect_depends_on_in(
-        repo,
-        queue,
-        &[],
-        &candidates,
-        candidate_abs,
-        title,
-        keep_branch,
-    )
+    detect_depends_on_in(repo, queue, &[], &candidates, candidate, title, keep_branch)
 }
 
-/// The active patches an internal-only `candidate_abs` needs to apply on
+/// The active patches an internal-only `candidate` needs to apply on
 /// public upstream with the tooling patch: upstream and internal ones, in
 /// the order company main applies them. As [`detect_depends_on`] otherwise.
 pub(crate) fn detect_internal_depends_on(
     repo: &Path,
     queue: &QueueState,
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
 ) -> Result<Option<Vec<String>>> {
     let order = apply_order_active(queue)?;
@@ -691,17 +676,17 @@ pub(crate) fn detect_internal_depends_on(
         .into_iter()
         .map(|p| p.id)
         .partition(|id| Some(id.as_str()) == tooling);
-    detect_depends_on_in(repo, queue, &base, &candidates, candidate_abs, title, None)
+    detect_depends_on_in(repo, queue, &base, &candidates, candidate, title, None)
 }
 
 /// The smallest subset of `candidates` (kept in their order) that makes
-/// `candidate_abs` apply on public upstream with `base` applied first.
+/// `candidate` apply on public upstream with `base` applied first.
 fn detect_depends_on_in(
     repo: &Path,
     queue: &QueueState,
     base: &[String],
     candidates: &[String],
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
     keep_branch: Option<&str>,
 ) -> Result<Option<Vec<String>>> {
@@ -711,7 +696,7 @@ fn detect_depends_on_in(
             Ok(
                 apply_deps(dir, repo, queue, base)? != ApplyOutcome::Conflict
                     && apply_deps(dir, repo, queue, deps)? != ApplyOutcome::Conflict
-                    && apply_abs(dir, candidate_abs, title)? != ApplyOutcome::Conflict,
+                    && apply_text(dir, candidate, title)? != ApplyOutcome::Conflict,
             )
         };
         let mut found = None;
@@ -720,7 +705,7 @@ fn detect_depends_on_in(
         }
         if found.is_none()
             && let Some(blamed) =
-                blamed_depends_on(dir, repo, queue, base, candidates, candidate_abs, title)?
+                blamed_depends_on(dir, repo, queue, base, candidates, candidate, title)?
             && applies_with(&blamed)?
         {
             found = Some(blamed);
@@ -766,7 +751,7 @@ fn detect_depends_on_in(
     })
 }
 
-/// The patches among `candidates` whose lines `candidate_abs` changes or
+/// The patches among `candidates` whose lines `candidate` changes or
 /// keeps as context, as direct dependencies. Applies `base` and every
 /// candidate, then the candidate on top, and runs `git blame` on the lines
 /// before each hunk of the candidate: a line from a queued patch's commit
@@ -779,7 +764,7 @@ fn blamed_depends_on(
     queue: &QueueState,
     base: &[String],
     candidates: &[String],
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
 ) -> Result<Option<Vec<String>>> {
     reset_export(dir, repo)?;
@@ -793,7 +778,7 @@ fn blamed_depends_on(
         if patch.status == PatchStatus::Merged {
             continue;
         }
-        match apply_abs(dir, &dep_patch_abs(repo, id)?, patch.subject())? {
+        match apply_text(dir, &dep_patch(repo, id)?, patch.subject())? {
             ApplyOutcome::Conflict => return Ok(None),
             ApplyOutcome::Empty => {}
             ApplyOutcome::Applied => {
@@ -802,7 +787,7 @@ fn blamed_depends_on(
         }
     }
     let stack_tip = rev_parse(dir, "HEAD")?;
-    if apply_abs(dir, candidate_abs, title)? != ApplyOutcome::Applied {
+    if apply_text(dir, candidate, title)? != ApplyOutcome::Applied {
         return Ok(None);
     }
     let diff = git_ok(
@@ -952,14 +937,14 @@ pub fn assert_export_preflight(
     repo: &Path,
     queue: &QueueState,
     patch: &Patch,
-    candidate_abs: &Path,
+    candidate: &str,
     hooks_ref: Option<&str>,
 ) -> Result<()> {
     export_preflight(
         repo,
         queue,
         patch,
-        candidate_abs,
+        candidate,
         hooks_ref,
         &ScriptVerdict::Run,
     )
@@ -974,11 +959,11 @@ pub fn export_preflight(
     repo: &Path,
     queue: &QueueState,
     patch: &Patch,
-    candidate_abs: &Path,
+    candidate: &str,
     hooks_ref: Option<&str>,
     verdict: &ScriptVerdict,
 ) -> Result<Option<String>> {
-    export_preflight_with(repo, queue, patch, candidate_abs, hooks_ref, verdict, true)
+    export_preflight_with(repo, queue, patch, candidate, hooks_ref, verdict, true)
 }
 
 /// [`export_preflight`]; without `suggest_deps` a failing script is not run
@@ -987,7 +972,7 @@ pub(crate) fn export_preflight_with(
     repo: &Path,
     queue: &QueueState,
     patch: &Patch,
-    candidate_abs: &Path,
+    candidate: &str,
     hooks_ref: Option<&str>,
     verdict: &ScriptVerdict,
     suggest_deps: bool,
@@ -1004,8 +989,7 @@ pub(crate) fn export_preflight_with(
     with_upstream_worktree(repo, |dir| {
         let deps = apply_deps(dir, repo, queue, &patch.depends_on)?;
         if deps == ApplyOutcome::Conflict {
-            let suggested =
-                suggest_depends_on(repo, queue, &patch.id, candidate_abs, patch.subject())?;
+            let suggested = suggest_depends_on(repo, queue, &patch.id, candidate, patch.subject())?;
             return Err(Error::Preflight(PreflightError::new(
                 format!(
                     "Declared depends-on [{}] do not apply onto public upstream before \"{}\".{}",
@@ -1023,10 +1007,9 @@ pub(crate) fn export_preflight_with(
             )));
         }
 
-        let applied = apply_abs(dir, candidate_abs, patch.subject())?;
+        let applied = apply_text(dir, candidate, patch.subject())?;
         if applied == ApplyOutcome::Conflict {
-            let suggested =
-                suggest_depends_on(repo, queue, &patch.id, candidate_abs, patch.subject())?;
+            let suggested = suggest_depends_on(repo, queue, &patch.id, candidate, patch.subject())?;
             let extra = if patch.depends_on.is_empty() {
                 " alone".to_string()
             } else {
@@ -1058,7 +1041,7 @@ pub(crate) fn export_preflight_with(
             return Ok(Some(token));
         }
         let suggested = if suggest_deps {
-            suggest_command_deps(repo, queue, candidate_abs, patch, script, dir)?
+            suggest_command_deps(repo, queue, candidate, patch, script, dir)?
         } else {
             Vec::new()
         };
@@ -1094,7 +1077,7 @@ pub(crate) fn export_preflight_with(
 fn suggest_command_deps(
     repo: &Path,
     queue: &QueueState,
-    candidate_abs: &Path,
+    candidate: &str,
     patch: &Patch,
     script: &PreflightScript,
     dir: &Path,
@@ -1105,17 +1088,17 @@ fn suggest_command_deps(
         .filter(|id| !declared.contains(id))
         .collect();
     // Patches that change the same files are the likely ones: try them first.
-    let touched = patch_paths(candidate_abs);
+    let touched = patch_paths(candidate);
     candidates.sort_by_key(|id| {
-        let shares = dep_patch_abs(repo, id)
-            .map(|abs| !patch_paths(&abs).is_disjoint(&touched))
+        let shares = dep_patch(repo, id)
+            .map(|text| !patch_paths(&text).is_disjoint(&touched))
             .unwrap_or(false);
         !shares
     });
     let passes_with = |deps: &[String]| -> Result<Option<bool>> {
         reset_export(dir, repo)?;
         if apply_deps(dir, repo, queue, deps)? == ApplyOutcome::Conflict
-            || apply_abs(dir, candidate_abs, patch.subject())? == ApplyOutcome::Conflict
+            || apply_text(dir, candidate, patch.subject())? == ApplyOutcome::Conflict
         {
             return Ok(None);
         }
@@ -1156,11 +1139,8 @@ fn suggest_command_deps(
     Ok(deps)
 }
 
-/// Paths a patch file changes, before and after. Empty when it cannot be read.
-fn patch_paths(patch_abs: &Path) -> std::collections::HashSet<String> {
-    let Ok(text) = fs::read_to_string(patch_abs) else {
-        return Default::default();
-    };
+/// Paths a patch changes, before and after.
+fn patch_paths(text: &str) -> std::collections::HashSet<String> {
     text.lines()
         .filter_map(|line| {
             let name = line
@@ -1192,7 +1172,7 @@ pub fn existing_patch_preflight(
         repo,
         queue,
         &patch,
-        &repo.join(patch_path(id)?),
+        &crate::state::patch_text(repo, id)?,
         hooks_ref,
         &ScriptVerdict::Run,
     )
@@ -1384,7 +1364,7 @@ pub(crate) fn build_company_stack(repo: &Path, queue: &QueueState, branch: &str)
                     patch.id
                 )));
             }
-            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, patch.subject())?;
+            let result = apply_text(dir, &dep_patch(repo, &patch.id)?, patch.subject())?;
             if result == ApplyOutcome::Conflict {
                 return Err(Error::msg(format!(
                     "Queued patch {} (\"{}\") does not apply on company main; fix the queue (git uplink rebuild -i) first.",
@@ -1417,7 +1397,7 @@ fn apply_upstream_layer(
                 patch.id
             )));
         }
-        let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, patch.subject())?;
+        let result = apply_text(dir, &dep_patch(repo, &patch.id)?, patch.subject())?;
         if result == ApplyOutcome::Conflict {
             let before = before
                 .map(|title| format!(" before \"{title}\""))
@@ -1439,12 +1419,12 @@ fn apply_upstream_layer(
 pub fn assert_upstream_layer_preflight(
     repo: &Path,
     queue: &QueueState,
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
 ) -> Result<()> {
     with_upstream_worktree(repo, |dir| {
         apply_upstream_layer(dir, repo, queue, Some(title))?;
-        let applied = apply_abs(dir, candidate_abs, title)?;
+        let applied = apply_text(dir, candidate, title)?;
         if applied == ApplyOutcome::Conflict {
             return Err(Error::Preflight(PreflightError::new(
                 format!(
@@ -1497,28 +1477,23 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
     };
     let message = export_commit_message(&patch);
     let shas = ensure_revs(repo, &[&opts.from_ref, &opts.head_ref])?;
-    write_product_patch(repo, &id, &shas[0], &message, &shas[1])?;
-    let candidate_abs = repo.join(patch_path(&id)?);
-    let result = (|| {
-        let token = export_preflight(
-            repo,
-            &queue,
-            &patch,
-            &candidate_abs,
-            opts.hooks_ref.as_deref(),
-            &ScriptVerdict::Run,
-        )?;
-        // Keep the token: the script passed on that tree, whatever follows.
-        match assert_upstream_layer_preflight(repo, &queue, &candidate_abs, patch.subject()) {
-            Err(Error::Preflight(err)) => Err(Error::Preflight(match &token {
-                Some(token) => err.with_token(token),
-                None => err,
-            })),
-            other => other.map(|_| token),
-        }
-    })();
-    let _ = fs::remove_file(&candidate_abs);
-    result
+    let candidate = format_product_patch(repo, &id, &shas[0], &message, &shas[1])?;
+    let token = export_preflight(
+        repo,
+        &queue,
+        &patch,
+        &candidate,
+        opts.hooks_ref.as_deref(),
+        &ScriptVerdict::Run,
+    )?;
+    // Keep the token: the script passed on that tree, whatever follows.
+    match assert_upstream_layer_preflight(repo, &queue, &candidate, patch.subject()) {
+        Err(Error::Preflight(err)) => Err(Error::Preflight(match &token {
+            Some(token) => err.with_token(token),
+            None => err,
+        })),
+        other => other.map(|_| token),
+    }
 }
 
 #[cfg(test)]
@@ -1630,12 +1605,14 @@ diff --git a/my file b/my file
         git_ok(repo, &["commit", "-q", "-m", "init"]).unwrap();
         git_ok(repo, &["branch", "uplink/upstream"]).unwrap();
 
-        let patches = repo.join(crate::types::PATCH_DIR);
-        fs::create_dir_all(&patches).unwrap();
-        let patch = |name: &str| patches.join(format!("{name}.patch"));
+        let patch = |name: &str| out.path().join(format!("queued-{name}.patch"));
         let cand = |name: &str| out.path().join(format!("{name}.patch"));
         commit_patch(repo, "main", "upl_a", ("l2\n", "a2\n"), &patch("upl_a"));
         commit_patch(repo, "upl_a", "upl_b", ("l18\n", "b18\n"), &patch("upl_b"));
+        for name in ["upl_a", "upl_b"] {
+            let text = fs::read_to_string(patch(name)).unwrap();
+            crate::state::write(repo, crate::queue::patch_path(name).unwrap(), text).unwrap();
+        }
         // On A's line, on B's line, on both, and on upstream's lines only.
         commit_patch(repo, "upl_b", "on_a", ("a2\n", "c2\n"), &cand("on_a"));
         commit_patch(repo, "upl_b", "on_b", ("b18\n", "c18\n"), &cand("on_b"));
@@ -1653,7 +1630,8 @@ diff --git a/my file b/my file
         let blamed = |queue: &QueueState, name: &str| {
             let candidates = vec!["upl_a".to_string(), "upl_b".to_string()];
             with_upstream_worktree(repo, |dir| {
-                blamed_depends_on(dir, repo, queue, &[], &candidates, &cand(name), name)
+                let text = fs::read_to_string(cand(name)).unwrap();
+                blamed_depends_on(dir, repo, queue, &[], &candidates, &text, name)
             })
             .unwrap()
         };

@@ -233,7 +233,7 @@ jobs:
 
           public=$(jq -r '.public // empty' <<<"$resolve_json")
           if [ -z "$public" ]; then
-            queue_json=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json)
+            queue_json=$(git show uplink/state:.uplink/queue.json)
             public=$(printf '%s\n' "$queue_json" | jq -r --arg id "$id" '(.tooling, .upstream[], .internal[]) | select(. != null and .id==$id) | (.upstream != null)')
           fi
           # A public PR exists. queued: IP approves the delta. submitted: the

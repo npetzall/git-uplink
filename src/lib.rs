@@ -24,6 +24,7 @@ mod queue;
 mod repo;
 mod run;
 mod settings;
+pub mod state;
 mod tooling;
 mod tui;
 mod types;

@@ -7,17 +7,10 @@ use crate::assess::{company_commit_message, export_commit_message};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{now_iso, patch_path};
-use crate::types::{
-    ApplyOutcome, PATCH_DIR, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
-};
+use crate::types::{ApplyOutcome, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH};
 
 pub(crate) const UPSTREAM_REF: &str = "uplink/upstream";
 pub(crate) const COMPANY_REMOTE: &str = "origin";
-
-pub fn ensure_uplink_dirs(repo: &Path) -> Result<()> {
-    fs::create_dir_all(repo.join(PATCH_DIR))?;
-    Ok(())
-}
 
 pub fn rev_parse(repo: &Path, git_ref: &str) -> Result<String> {
     git_ok(repo, &["rev-parse", git_ref])
@@ -100,8 +93,11 @@ pub fn stable_patch_id_from_contents(repo: &Path, contents: &str) -> Result<Stri
         .to_string())
 }
 
+/// The stable patch id of the patch file at `patch_file`, a state path such
+/// as `.uplink/patches/<id>.patch`.
 pub fn stable_patch_id(repo: &Path, patch_file: &str) -> Result<String> {
-    let contents = fs::read_to_string(repo.join(patch_file))?;
+    let contents = crate::state::read_string(repo, patch_file)?
+        .ok_or_else(|| Error::msg(format!("{patch_file} is not on {STATE_BRANCH}")))?;
     stable_patch_id_from_contents(repo, &contents)
 }
 
@@ -144,6 +140,8 @@ impl Drop for TempWorktree<'_> {
     }
 }
 
+/// [`format_product_patch`], set as patch `id` for the command's next
+/// state commit. Returns its state path.
 pub fn write_product_patch(
     repo: &Path,
     id: &str,
@@ -151,8 +149,21 @@ pub fn write_product_patch(
     message: &str,
     head_ref: &str,
 ) -> Result<PathBuf> {
-    ensure_uplink_dirs(repo)?;
     let file = patch_path(id)?;
+    let body = format_product_patch(repo, id, from_ref, message, head_ref)?;
+    crate::state::write(repo, &file, body)?;
+    Ok(file)
+}
+
+/// The product change `from_ref..head_ref`, without `.uplink/`, as one
+/// format-patch commit with `message`.
+pub fn format_product_patch(
+    repo: &Path,
+    id: &str,
+    from_ref: &str,
+    message: &str,
+    head_ref: &str,
+) -> Result<String> {
     let diff = git_ok(
         repo,
         &[
@@ -200,49 +211,31 @@ pub fn write_product_patch(
         &["format-patch", "--full-index", "-1", "--stdout"],
     )?;
     drop(worktree);
-    fs::create_dir_all(repo.join(PATCH_DIR))?;
-    let body = if formatted.ends_with('\n') {
+    Ok(if formatted.ends_with('\n') {
         formatted
     } else {
         format!("{formatted}\n")
-    };
-    fs::write(repo.join(&file), body)?;
-    Ok(file)
+    })
 }
 
-pub fn apply_patch_file(
+/// Applies patch `text` on the checkout and commits it. With
+/// [`ApplyOutcome::Applied`] comes the patch as it applied here, when it
+/// differs from `text` in more than its mbox line and date.
+pub fn apply_patch_text(
     repo: &Path,
     queue: &QueueState,
     patch: &Patch,
-    patch_file_abs: &Path,
+    text: &str,
     export_message: bool,
-) -> Result<ApplyOutcome> {
-    if git_succeeds(
-        repo,
-        &[
-            "apply",
-            "--reverse",
-            "--check",
-            patch_file_abs.to_str().unwrap_or(""),
-        ],
-    )? {
-        return Ok(ApplyOutcome::Empty);
+) -> Result<(ApplyOutcome, Option<String>)> {
+    if apply_succeeds(repo, &["--reverse", "--check"], text)? {
+        return Ok((ApplyOutcome::Empty, None));
     }
-
-    if !git_succeeds(
-        repo,
-        &[
-            "apply",
-            "--3way",
-            "--index",
-            patch_file_abs.to_str().unwrap_or(""),
-        ],
-    )? {
-        return Ok(ApplyOutcome::Conflict);
+    if !apply_succeeds(repo, &["--3way", "--index"], text)? {
+        return Ok((ApplyOutcome::Conflict, None));
     }
-
     if git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
-        return Ok(ApplyOutcome::Empty);
+        return Ok((ApplyOutcome::Empty, None));
     }
 
     let message = if export_message {
@@ -257,14 +250,8 @@ pub fn apply_patch_file(
     } else {
         format!("{formatted}\n")
     };
-    let stored = fs::read_to_string(patch_file_abs).unwrap_or_default();
-    if patch_substance(&stored) != patch_substance(&body) {
-        if let Some(parent) = patch_file_abs.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(patch_file_abs, body)?;
-    }
-    Ok(ApplyOutcome::Applied)
+    let refreshed = (patch_substance(text) != patch_substance(&body)).then_some(body);
+    Ok((ApplyOutcome::Applied, refreshed))
 }
 
 /// Patch text with the mbox `From <sha>` line and the `Date:` header removed.
@@ -303,10 +290,26 @@ fn is_mbox_from_line(line: &str) -> bool {
     sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Whether `git apply <flags>` succeeds in `dir` on patch `text`, given on stdin.
+pub(crate) fn apply_succeeds(dir: &Path, flags: &[&str], text: &str) -> Result<bool> {
+    let mut args = vec!["apply"];
+    args.extend_from_slice(flags);
+    let applied = git(
+        dir,
+        &args,
+        GitOpts {
+            allow_fail: true,
+            input: Some(text.as_bytes()),
+            ..GitOpts::default()
+        },
+    )?;
+    Ok(applied.code == 0)
+}
+
 /// True when `git apply --reverse --check` succeeds against `git_ref`'s tree.
 /// Uses a throwaway index so HEAD and the worktree stay put.
-pub fn patch_already_applied_on(repo: &Path, git_ref: &str, patch_file_abs: &Path) -> Result<bool> {
-    let index = repo.join(format!(".git/uplink-apply-check-{}", Uuid::new_v4()));
+pub fn patch_already_applied_on(repo: &Path, git_ref: &str, text: &str) -> Result<bool> {
+    let index = crate::state::temp_root(repo)?.join(format!("apply-check-{}", Uuid::new_v4()));
     let index_s = index.to_string_lossy().into_owned();
     let index_opts = GitOpts {
         extra_env: vec![("GIT_INDEX_FILE".into(), index_s)],
@@ -324,14 +327,11 @@ pub fn patch_already_applied_on(repo: &Path, git_ref: &str, patch_file_abs: &Pat
         )?;
         let reverse = git(
             repo,
-            &[
-                "apply",
-                "--cached",
-                "--reverse",
-                "--check",
-                patch_file_abs.to_str().unwrap_or(""),
-            ],
-            index_opts,
+            &["apply", "--cached", "--reverse", "--check"],
+            GitOpts {
+                input: Some(text.as_bytes()),
+                ..index_opts
+            },
         )?;
         Ok(reverse.code == 0)
     })();
@@ -422,11 +422,11 @@ Run `git uplink init --upstream <url> --contrib <url>` to create a queue.",
     )
 }
 
-/// Replace local `uplink/state` with origin and restore `.uplink/`.
+/// Replace local `uplink/state` with origin's, dropping this command's edits.
 pub fn replace_state_from_origin(repo: &Path) -> Result<()> {
     let sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
     apply_state_sha(repo, STATE_BRANCH, &sha)?;
-    if !repo.join(QUEUE_PATH).is_file() {
+    if !path_exists_at(repo, STATE_BRANCH, QUEUE_PATH)? {
         return Err(not_initialized_error());
     }
     Ok(())
@@ -452,7 +452,7 @@ pub fn state_exists(repo: &Path) -> Result<bool> {
     if has_ref(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))? {
         return Ok(true);
     }
-    Ok(repo.join(QUEUE_PATH).is_file())
+    crate::state::has_queue(repo)
 }
 
 /// Materialize local `uplink/upstream` from the company repo (`origin`), never from
@@ -529,40 +529,8 @@ pub fn refresh_upstream_ref(repo: &Path, remote: &str) -> Result<()> {
     Ok(())
 }
 
-fn ensure_uplink_excluded(repo: &Path) -> Result<()> {
-    let info = repo.join(".git/info");
-    fs::create_dir_all(&info)?;
-    let path = info.join("exclude");
-    let current = fs::read_to_string(&path).unwrap_or_default();
-    if current
-        .lines()
-        .any(|line| matches!(line.trim(), ".uplink/" | ".uplink"))
-    {
-        return Ok(());
-    }
-    let mut body = current;
-    if !body.is_empty() && !body.ends_with('\n') {
-        body.push('\n');
-    }
-    body.push_str(".uplink/\n");
-    fs::write(path, body)?;
-    Ok(())
-}
-
-fn restore_state_worktree(repo: &Path, source: &str) -> Result<()> {
-    git(
-        repo,
-        &["restore", "--source", source, "--worktree", "--", ".uplink"],
-        GitOpts::default(),
-    )?;
-    Ok(())
-}
-
-pub fn ensure_state_worktree(repo: &Path) -> Result<()> {
-    ensure_uplink_excluded(repo)?;
-    if repo.join(QUEUE_PATH).is_file() {
-        return Ok(());
-    }
+/// Creates local `uplink/state` from origin's when only that exists.
+pub fn ensure_state_branch(repo: &Path) -> Result<()> {
     let Some(source) = state_ref_source(repo)? else {
         return Ok(());
     };
@@ -570,82 +538,13 @@ pub fn ensure_state_worktree(repo: &Path) -> Result<()> {
     if source != branch {
         git(repo, &["branch", "-f", branch, &source], GitOpts::default())?;
     }
-    restore_state_worktree(repo, branch)
-}
-
-fn uplink_worktree_tree(repo: &Path, branch: &str) -> Result<String> {
-    ensure_uplink_excluded(repo)?;
-    ensure_uplink_dirs(repo)?;
-    let index = repo.join(format!(".git/uplink-index-{}", Uuid::new_v4()));
-    let index_s = index.to_string_lossy().into_owned();
-    let index_opts = GitOpts {
-        extra_env: vec![("GIT_INDEX_FILE".into(), index_s)],
-        ..GitOpts::default()
-    };
-    let outcome = (|| -> Result<String> {
-        if has_ref(repo, branch)? {
-            git(repo, &["read-tree", branch], index_opts.clone())?;
-        } else {
-            git(repo, &["read-tree", "--empty"], index_opts.clone())?;
-        }
-        git(
-            repo,
-            &["add", "-f", "--", ".uplink", ":(exclude).uplink/*.tmp"],
-            index_opts.clone(),
-        )?;
-        Ok(git(repo, &["write-tree"], index_opts.clone())?.stdout)
-    })();
-    let _ = fs::remove_file(&index);
-    outcome
-}
-
-/// Commits `.uplink/` to uplink/state. Refused while a queue run (adopt,
-/// restack) holds uplink/state, unless this is that run.
-pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
-    crate::lock::refuse_while_running(repo)?;
-    let branch = STATE_BRANCH;
-    let tree = uplink_worktree_tree(repo, branch)?;
-    if has_ref(repo, branch)? {
-        let old_tree = git_ok(repo, &["rev-parse", &format!("{branch}^{{tree}}")])?;
-        if old_tree == tree {
-            return Ok(());
-        }
-    }
-    let parent = if has_ref(repo, branch)? {
-        Some(rev_parse(repo, branch)?)
-    } else {
-        None
-    };
-    let mut args = vec!["commit-tree", tree.as_str(), "-m", message];
-    if let Some(parent) = parent.as_deref() {
-        args.extend_from_slice(&["-p", parent]);
-    }
-    let commit = git(repo, &args, GitOpts::default())?.stdout;
-    git(
-        repo,
-        &["update-ref", &format!("refs/heads/{branch}"), &commit],
-        GitOpts::default(),
-    )?;
     Ok(())
 }
 
-/// Paths under `.uplink/` that differ from the committed `{branch}` tree.
-pub fn uplink_uncommitted_paths(repo: &Path, branch: &str) -> Result<Vec<String>> {
-    let worktree = uplink_worktree_tree(repo, branch)?;
-    let listing = if has_ref(repo, branch)? {
-        let committed = git_ok(repo, &["rev-parse", &format!("{branch}^{{tree}}")])?;
-        if committed == worktree {
-            return Ok(Vec::new());
-        }
-        git_ok(repo, &["diff", "--name-only", &committed, &worktree])?
-    } else {
-        git_ok(repo, &["ls-tree", "-r", "--name-only", &worktree])?
-    };
-    Ok(listing
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect())
+/// Commits this command's changes to uplink/state. Refused while a queue run
+/// (adopt, restack) holds uplink/state, unless this is that run.
+pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
+    crate::state::commit(repo, message)
 }
 
 pub fn ahead_behind(repo: &Path, local: &str, remote: &str) -> Result<(u32, u32)> {
@@ -692,16 +591,7 @@ pub fn point_branch_at(repo: &Path, branch: &str, sha: &str) -> Result<()> {
 }
 
 pub fn apply_state_sha(repo: &Path, branch: &str, sha: &str) -> Result<()> {
-    if branch == STATE_BRANCH {
-        crate::lock::refuse_while_running(repo)?;
-    }
-    point_branch_at(repo, branch, sha)?;
-    let dir = repo.join(".uplink");
-    if dir.exists() {
-        fs::remove_dir_all(&dir)?;
-    }
-    ensure_uplink_excluded(repo)?;
-    restore_state_worktree(repo, branch)
+    set_state_branch(repo, branch, sha)
 }
 
 /// Fetch `uplink/state` into a remote-tracking ref without moving the local branch.
@@ -759,18 +649,34 @@ pub fn set_state_branch(repo: &Path, branch: &str, sha: &str) -> Result<()> {
         &["update-ref", &format!("refs/heads/{branch}"), sha],
         GitOpts::default(),
     )?;
-    ensure_uplink_excluded(repo)?;
-    restore_state_worktree(repo, branch)
+    if branch == STATE_BRANCH {
+        crate::state::discard(repo)?;
+    }
+    Ok(())
 }
 
+/// Sets state `paths` as they are at `source`, removing the ones `source`
+/// does not have, for the command's next state commit.
 pub fn restore_paths_from(repo: &Path, source: &str, paths: &[String]) -> Result<()> {
-    if paths.is_empty() {
-        return Ok(());
+    for path in paths {
+        if path_exists_at(repo, source, path)? {
+            crate::state::write(repo, path, git_raw_blob(repo, source, path)?)?;
+        } else {
+            crate::state::remove(repo, path)?;
+        }
     }
-    let mut args = vec!["restore", "--source", source, "--worktree", "--"];
-    args.extend(paths.iter().map(String::as_str));
-    git(repo, &args, GitOpts::default())?;
     Ok(())
+}
+
+fn git_raw_blob(repo: &Path, source: &str, path: &str) -> Result<Vec<u8>> {
+    let out = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["cat-file", "blob", &format!("{source}:{path}")])
+        .output()?;
+    if !out.status.success() {
+        return Err(Error::msg(format!("could not read {source}:{path}")));
+    }
+    Ok(out.stdout)
 }
 
 pub fn path_exists_at(repo: &Path, sha: &str, path: &str) -> Result<bool> {
@@ -890,20 +796,6 @@ pub fn new_patch_id() -> String {
 
 pub fn stamp() -> String {
     now_iso()
-}
-
-pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &to)?;
-        } else {
-            fs::copy(entry.path(), to)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

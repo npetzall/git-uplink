@@ -15,7 +15,7 @@ pub struct ResetResult {
 pub type RefreshResult = ResetResult;
 
 /// Fetch origin tracking refs for company main, `uplink/state`, `uplink/upstream`,
-/// and `uplink/hooks` when origin has it. Does not move local branches or restore `.uplink/`.
+/// and `uplink/hooks` when origin has it. Does not move local branches.
 pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
     let state_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
     let upstream_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, UPSTREAM_REF)?;
@@ -34,8 +34,7 @@ pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
 
 /// Fetch origin and hard-reset company main, `uplink/state`, `uplink/upstream`,
 /// and `uplink/hooks` when origin has it. A local `uplink/hooks` origin lacks
-/// is kept. Leaves HEAD on the configured internal branch with `.uplink/`
-/// restored from origin.
+/// is kept. Leaves HEAD on the configured internal branch.
 pub fn reset_from_origin(repo: &Path) -> Result<ResetResult> {
     crate::lock::refuse_while_running(repo)?;
     let fetched = refresh_from_origin(repo)?;
@@ -377,7 +376,7 @@ pub(super) fn replace_patch(queue: &mut QueueState, patch: Patch, layer: PatchLa
 pub(super) fn assert_change_already_on_company(
     repo: &Path,
     queue: &QueueState,
-    patch_file: &Path,
+    patch_file: &str,
     title: &str,
     head_sha: &str,
 ) -> Result<()> {
@@ -458,7 +457,7 @@ pub(super) fn mark_empty_if_already_upstream(repo: &Path, id: &str) -> Result<()
     if !queue.is_upstream(id) || !has_ref(repo, "uplink/upstream")? {
         return Ok(());
     }
-    let patch_file = repo.join(patch_path(id)?);
+    let patch_file = crate::state::patch_text(repo, id)?;
     if !patch_already_applied_on(repo, "uplink/upstream", &patch_file)? {
         return Ok(());
     }

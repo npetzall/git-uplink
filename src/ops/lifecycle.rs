@@ -30,8 +30,8 @@ pub fn approval_stale(repo: &Path, queue: &QueueState, patch: &Patch) -> bool {
     needs_covering_approval(queue, patch) && covering_approval(repo, patch).is_none()
 }
 
-/// [`approval_stale`] with the patch file read from `git_ref` instead of the
-/// `.uplink/` folder.
+/// [`approval_stale`] with the patch file read from `git_ref` instead of
+/// `uplink/state` with this command's changes.
 pub fn approval_stale_at(repo: &Path, git_ref: &str, queue: &QueueState, patch: &Patch) -> bool {
     if !needs_covering_approval(queue, patch) {
         return false;
@@ -351,7 +351,7 @@ fn verify_merge_claim(
                 Some(sha) => resolve(sha)?,
                 None => "uplink/upstream".to_string(),
             };
-            if patch_already_applied_on(repo, &at, &repo.join(patch_path(id)?))? {
+            if patch_already_applied_on(repo, &at, &crate::state::patch_text(repo, id)?)? {
                 Ok(())
             } else {
                 Err(Error::msg(format!(

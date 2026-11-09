@@ -10,8 +10,8 @@ use crate::queue::{
     add_event, patch_path, read_queue as read_queue_file, write_queue as write_queue_file,
 };
 use crate::repo::{
-    TempWorktree, commit_queue, ensure_uplink_dirs, ensure_upstream_ref, has_ref, new_patch_id,
-    patch_substance, stable_patch_id_from_contents, stamp,
+    TempWorktree, commit_queue, ensure_upstream_ref, has_ref, new_patch_id, patch_substance,
+    stable_patch_id_from_contents, stamp,
 };
 use crate::types::{
     AssessReport, DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchIntent, PatchSource, PatchStatus,
@@ -93,7 +93,7 @@ pub fn plan_tooling_refresh(repo: &Path) -> Result<Option<ToolingPlan>> {
 
     if !created {
         let patch_rel = patch_path(&id)?;
-        let stored = fs::read_to_string(repo.join(&patch_rel)).unwrap_or_default();
+        let stored = crate::state::read_string(repo, &patch_rel)?.unwrap_or_default();
         if patch_substance(&stored) == patch_substance(&formatted) {
             return Ok(None);
         }
@@ -109,7 +109,7 @@ pub fn plan_tooling_refresh(repo: &Path) -> Result<Option<ToolingPlan>> {
     }))
 }
 
-/// Writes `plan` to `.uplink` and commits it on uplink/state, together with
+/// Writes `plan` as a change and commits it on uplink/state, with
 /// what `also` changes in the queue.
 pub fn commit_tooling_refresh(
     repo: &Path,
@@ -126,10 +126,9 @@ pub fn commit_tooling_refresh(
         head_sha,
     } = plan;
     let new_stable = stable_patch_id_from_contents(repo, &formatted)?;
-    ensure_uplink_dirs(repo)?;
     let mut queue = read_queue_file(repo)?;
     let patch_rel = patch_path(&id)?;
-    fs::write(repo.join(&patch_rel), &formatted)?;
+    crate::state::write(repo, &patch_rel, &formatted)?;
 
     let assess = assess_from_message(
         repo,
@@ -321,11 +320,9 @@ fn find_tooling_patch(queue: &QueueState, repo: &Path) -> Result<Option<String>>
         let Ok(rel) = patch_path(&patch.id) else {
             continue;
         };
-        let path = repo.join(rel);
-        if !path.is_file() {
+        let Some(contents) = crate::state::read_string(repo, rel)? else {
             continue;
-        }
-        let contents = fs::read_to_string(&path)?;
+        };
         if contents.contains(".github/workflows/uplink-") {
             return Ok(Some(patch.id.clone()));
         }
@@ -397,10 +394,11 @@ mod find_tooling_tests {
     fn only_the_legacy_tooling_patch_is_found_by_content() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
-        fs::create_dir_all(repo.join(".uplink/patches")).unwrap();
+        crate::git::git_ok(repo, &["init", "--quiet"]).unwrap();
         for id in ["upl_aaaaaaaaaa", "upl_bbbbbbbbbb", "upl_cccccccccc"] {
-            fs::write(
-                repo.join(format!(".uplink/patches/{id}.patch")),
+            crate::state::write(
+                repo,
+                format!(".uplink/patches/{id}.patch"),
                 "diff --git a/.github/workflows/uplink-pr.yml b/.github/workflows/uplink-pr.yml\n",
             )
             .unwrap();

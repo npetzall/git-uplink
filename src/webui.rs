@@ -346,8 +346,8 @@ fn maybe_fetch(repo: &Path, fetch: bool) {
     }
 }
 
-/// The queue on the source branch, read with git. The `.uplink/` folder and
-/// its uncommitted edits are never read, and no branch is created or moved.
+/// The queue on the source branch, read with git. No branch is created or
+/// moved.
 fn queue_for_source(repo: &Path, source: QueueSource) -> crate::error::Result<QueueState> {
     let git_ref = source_ref(source);
     if !has_ref(repo, &git_ref)? {

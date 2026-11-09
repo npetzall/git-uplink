@@ -147,7 +147,7 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
     };
     ensure_clean_worktree(repo, "a preview rebuild")?;
     let (original, original_sha) = checkout_identity(repo)?;
-    let snapshot = snapshot_uplink(repo)?;
+    let mut patches = PatchSet::new();
     let outcome = (|| -> Result<QueueState> {
         git(
             repo,
@@ -167,8 +167,8 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
                     patch.id
                 )));
             }
-            let patch_file = snapshot.join(patch_path(&patch.id)?);
-            let result = apply_patch_file(repo, &queue, &patch, &patch_file, false)?;
+            let text = patches.get(repo, &patch.id)?;
+            let (result, _) = apply_patch_text(repo, &queue, &patch, &text, false)?;
             if result == ApplyOutcome::Empty {
                 continue;
             }
@@ -204,9 +204,8 @@ pub(super) fn rebuild_preview(repo: &Path, branch: &str) -> Result<QueueState> {
         }
         Ok(queue)
     })();
-    let _ = fs::remove_dir_all(&snapshot);
     restore_checkout(repo, &original, &original_sha)?;
-    crate::repo::ensure_state_worktree(repo)?;
+    crate::repo::ensure_state_branch(repo)?;
     outcome
 }
 
@@ -228,7 +227,7 @@ enum Replayed {
 fn replay_queue(
     repo: &Path,
     queue: &mut QueueState,
-    snapshot: &Path,
+    patches: &mut PatchSet,
     upstream_ref: &str,
 ) -> Result<Replayed> {
     let mut applied = Vec::new();
@@ -237,8 +236,11 @@ fn replay_queue(
         if patch.status == PatchStatus::Conflict {
             return Ok(Replayed::Blocked(patch));
         }
-        let patch_file = snapshot.join(patch_path(&patch.id)?);
-        let result = apply_patch_file(repo, queue, &patch, &patch_file, false)?;
+        let text = patches.get(repo, &patch.id)?;
+        let (result, refreshed) = apply_patch_text(repo, queue, &patch, &text, false)?;
+        if let Some(refreshed) = refreshed {
+            patches.set(&patch.id, refreshed);
+        }
         if result == ApplyOutcome::Empty {
             if queue.is_upstream(&patch.id) {
                 mark_merged_by_empty_rebase(repo, queue, &patch.id, upstream_ref)?;
@@ -249,7 +251,7 @@ fn replay_queue(
         if result == ApplyOutcome::Conflict {
             return Ok(Replayed::Conflict(patch, conflicted_files(repo)?));
         }
-        refresh_patch_id(repo, queue, &patch.id, &patch_file)?;
+        refresh_patch_id(repo, queue, &patch.id, &patches.get(repo, &patch.id)?)?;
         applied.push((patch.id, rev_parse(repo, "HEAD")?));
     }
     Ok(Replayed::Applied { applied, empty })
@@ -266,7 +268,7 @@ pub(super) struct Trial {
 /// Replays the queue onto `upstream_ref` with the patch files in `replace`
 /// (id and contents) instead of the stored ones. `on_conflict` runs while
 /// the checkout holds the failed apply of the patch the replay stops on,
-/// and says whether to leave it there. The queue, `.uplink` and the company
+/// and says whether to leave it there. The queue, its changes and the company
 /// branch are left as they were, and the checkout is put back otherwise.
 pub(super) fn trial_replay(
     repo: &Path,
@@ -277,10 +279,10 @@ pub(super) fn trial_replay(
 ) -> Result<Trial> {
     let mut hold = false;
     let (original, original_sha) = checkout_identity(repo)?;
-    let snapshot = snapshot_uplink(repo)?;
+    let mut patches = PatchSet::new();
     let outcome = (|| -> Result<Trial> {
         for (id, contents) in replace {
-            fs::write(snapshot.join(patch_path(id)?), contents)?;
+            patches.set(id, contents.clone());
         }
         git(
             repo,
@@ -289,7 +291,7 @@ pub(super) fn trial_replay(
         )?;
         let mut queue = queue.clone();
         Ok(
-            match replay_queue(repo, &mut queue, &snapshot, upstream_ref)? {
+            match replay_queue(repo, &mut queue, &mut patches, upstream_ref)? {
                 Replayed::Applied { applied, empty } => Trial {
                     applied: applied.into_iter().map(|(id, _)| id).collect(),
                     empty,
@@ -308,11 +310,10 @@ pub(super) fn trial_replay(
             },
         )
     })();
-    let _ = fs::remove_dir_all(&snapshot);
     if !hold {
         restore_checkout(repo, &original, &original_sha)?;
     }
-    crate::repo::ensure_state_worktree(repo)?;
+    crate::repo::ensure_state_branch(repo)?;
     outcome
 }
 
@@ -441,11 +442,11 @@ fn check_rebuilt(
 }
 
 /// What `preflight.sh` says about the rebuild of `queue` from the patch
-/// files in `snapshot`. Leaves the checkout detached on what it applied.
+/// texts in `patches`. Leaves the checkout detached on what it applied.
 pub(super) fn probe_rebuild_from(
     repo: &Path,
     queue: &QueueState,
-    snapshot: &Path,
+    patches: &mut PatchSet,
     upstream_ref: &str,
     force: bool,
 ) -> Result<RebuildReport> {
@@ -457,7 +458,7 @@ pub(super) fn probe_rebuild_from(
         GitOpts::default(),
     )?;
     // A rebuild that stops on a conflict never asks for a verdict.
-    let Replayed::Applied { applied, .. } = replay_queue(repo, &mut queue, snapshot, upstream_ref)?
+    let Replayed::Applied { applied, .. } = replay_queue(repo, &mut queue, patches, upstream_ref)?
     else {
         return Ok(report);
     };
@@ -477,8 +478,8 @@ pub(super) fn probe_rebuild_from(
     }
 }
 
-/// [`probe_rebuild_from`] with the patch files in `.uplink`, returning to
-/// the commit that was checked out.
+/// [`probe_rebuild_from`] with the patches as this command has them,
+/// returning to the commit that was checked out.
 pub(super) fn probe_rebuild(
     repo: &Path,
     queue: &QueueState,
@@ -486,11 +487,9 @@ pub(super) fn probe_rebuild(
     force: bool,
 ) -> Result<RebuildReport> {
     let (original, original_sha) = checkout_identity(repo)?;
-    let snapshot = snapshot_uplink(repo)?;
-    let outcome = probe_rebuild_from(repo, queue, &snapshot, upstream_ref, force);
-    let _ = fs::remove_dir_all(&snapshot);
+    let outcome = probe_rebuild_from(repo, queue, &mut PatchSet::new(), upstream_ref, force);
     restore_checkout(repo, &original, &original_sha)?;
-    crate::repo::ensure_state_worktree(repo)?;
+    crate::repo::ensure_state_branch(repo)?;
     outcome
 }
 
@@ -547,8 +546,8 @@ pub(super) struct Inline<'a> {
     /// Patch authors (id, authors) to replay with, so the replayed commits
     /// already name the people who resolved them.
     pub authors: &'a [(String, Vec<String>)],
-    /// Runs on the queue before the rebuild is published, once `.uplink`
-    /// holds the patch files as replayed.
+    /// Runs on the queue before the rebuild is published, once the
+    /// command's changes hold the patch files as replayed.
     pub before_publish: &'a mut dyn FnMut(&mut QueueState) -> Result<()>,
 }
 
@@ -584,11 +583,11 @@ pub(super) fn rebuild_replay(
     };
     ensure_clean_worktree(repo, "a rebuild")?;
     let previous = replaced_main(repo, &company_branch, upstream_ref)?;
-    let snapshot = snapshot_uplink(repo)?;
-    let outcome = (|| -> Result<Rebuilt> {
+    let mut patches = PatchSet::new();
+    (|| -> Result<Rebuilt> {
         if let Some(inline) = &inline {
             for (id, contents) in inline.replace {
-                fs::write(snapshot.join(patch_path(id)?), contents)?;
+                patches.set(id, contents.clone());
             }
             for (id, authors) in inline.authors {
                 get_patch_mut(&mut queue, id)?.source.authors = authors.clone();
@@ -599,7 +598,7 @@ pub(super) fn rebuild_replay(
             &["checkout", "-f", "--quiet", "--detach", upstream_ref],
             GitOpts::default(),
         )?;
-        let applied = match replay_queue(repo, &mut queue, &snapshot, upstream_ref)? {
+        let applied = match replay_queue(repo, &mut queue, &mut patches, upstream_ref)? {
             Replayed::Applied { applied, .. } => applied,
             Replayed::Blocked(patch) => {
                 restore_company_branch(repo, &company_branch)?;
@@ -620,7 +619,7 @@ pub(super) fn rebuild_replay(
                 return Err(Error::Conflict(persist_conflict(
                     repo,
                     &mut queue,
-                    &snapshot,
+                    &patches,
                     &company_branch,
                     upstream_ref,
                     &patch,
@@ -663,7 +662,7 @@ pub(super) fn rebuild_replay(
                 return Err(Error::Conflict(persist_conflict(
                     repo,
                     &mut queue,
-                    &snapshot,
+                    &patches,
                     &company_branch,
                     upstream_ref,
                     &patch,
@@ -676,22 +675,19 @@ pub(super) fn rebuild_replay(
         }
 
         if let Some(inline) = inline.as_mut() {
-            fs::create_dir_all(repo.join(".uplink/patches"))?;
-            copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
+            patches.save(repo)?;
             (inline.before_publish)(&mut queue)?;
         }
         publish_rebuilt_company(
             repo,
             &mut queue,
-            &snapshot,
+            &patches,
             &company_branch,
             upstream_ref,
             previous.as_ref(),
         )?;
         Ok(Rebuilt::Published(Box::new(queue)))
-    })();
-    let _ = fs::remove_dir_all(&snapshot);
-    outcome
+    })()
 }
 
 /// The company main this rebuild is about to replace, for `git uplink rebase`:
@@ -756,25 +752,19 @@ fn mark_merged_by_empty_rebase(
 
 /// Refreshes the stable patch id of a patch that applied. A patch in
 /// conflict never gets here: the rebuild stops on it before applying.
-fn refresh_patch_id(
-    repo: &Path,
-    queue: &mut QueueState,
-    id: &str,
-    patch_file: &Path,
-) -> Result<()> {
-    let contents = fs::read_to_string(patch_file)?;
+fn refresh_patch_id(repo: &Path, queue: &mut QueueState, id: &str, text: &str) -> Result<()> {
     let current = get_patch_mut(queue, id)?;
-    current.patch_id_stable = Some(stable_patch_id_from_contents(repo, &contents)?);
+    current.patch_id_stable = Some(stable_patch_id_from_contents(repo, text)?);
     Ok(())
 }
 
-/// Commits the rebuilt tree, points the company branch at it, restores
-/// `.uplink` from the snapshot, and records the rebuild and the main it
-/// replaced on uplink/state.
+/// Commits the rebuilt tree, points the company branch at it, and records
+/// the replayed patches, the rebuild and the main it replaced on
+/// uplink/state.
 fn publish_rebuilt_company(
     repo: &Path,
     queue: &mut QueueState,
-    snapshot: &Path,
+    patches: &PatchSet,
     company_branch: &str,
     upstream_ref: &str,
     previous: Option<&PreviousMain>,
@@ -803,8 +793,7 @@ fn publish_rebuilt_company(
         &["checkout", "-f", "--quiet", company_branch],
         GitOpts::default(),
     )?;
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
+    patches.save(repo)?;
     queue.last_sync = Some(LastSync {
         at: stamp(),
         upstream_sha: rev_parse(repo, upstream_ref)?,
@@ -903,8 +892,7 @@ fn resolve_once(
             return Err(err);
         }
     };
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
+    crate::state::write(repo, patch_path(id)?, format_patch_at_head(repo)?)?;
     {
         let patch = get_patch_mut(&mut queue, id)?;
         patch.commit_message = updated.commit_message;

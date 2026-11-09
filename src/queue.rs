@@ -1,6 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -33,10 +31,18 @@ pub fn is_active(patch: &Patch) -> bool {
 }
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
-    if !repo.join(QUEUE_PATH).is_file() {
-        crate::repo::ensure_state_worktree(repo)?;
+    let mut raw = crate::state::read_string(repo, QUEUE_PATH)?;
+    if raw.is_none() {
+        // Only origin may have uplink/state yet.
+        crate::repo::ensure_state_branch(repo)?;
+        raw = crate::state::read_string(repo, QUEUE_PATH)?;
     }
-    let raw = fs::read_to_string(repo.join(QUEUE_PATH))?;
+    let raw = raw.ok_or_else(|| {
+        Error::msg(
+            "No queue on uplink/state; this clone is not initialized. \
+Run `git uplink init --upstream <url> --contrib <url>` to create a queue.",
+        )
+    })?;
     let mut queue = parse_queue(&raw)?;
     queue.settings = crate::settings::load_settings(repo, queue.config.forge);
     Ok(queue)
@@ -104,29 +110,15 @@ pub fn migrate_legacy_messages(value: &mut serde_json::Value) {
     }
 }
 
-/// Temp file for [`write_queue`]; `commit_queue` never stages `*.tmp`.
-const QUEUE_TMP_PATH: &str = ".uplink/queue.json.tmp";
-
-/// Writes `queue.json` via a temp file and rename so a crash never leaves it truncated.
+/// Sets `queue.json` for the command's next state commit.
 pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
-    fs::create_dir_all(repo.join(PATCH_DIR))?;
     let body = format!("{}\n", serde_json::to_string_pretty(queue)?);
-    let tmp = repo.join(QUEUE_TMP_PATH);
-    let written = (|| -> std::io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(body.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&tmp, repo.join(QUEUE_PATH))
-    })();
-    if written.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    Ok(written?)
+    crate::state::write(repo, QUEUE_PATH, body)
 }
 
 pub fn write_previous_main(repo: &Path, previous: &PreviousMain) -> Result<()> {
     let body = format!("{}\n", serde_json::to_string_pretty(previous)?);
-    Ok(fs::write(repo.join(PREVIOUS_MAIN_PATH), body)?)
+    crate::state::write(repo, PREVIOUS_MAIN_PATH, body)
 }
 
 pub fn active_upstream(queue: &QueueState) -> Vec<&Patch> {
@@ -856,18 +848,20 @@ mod tests {
     }
 
     #[test]
-    fn write_queue_replaces_file_without_leaving_temp() {
+    fn write_queue_replaces_the_queue() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
+        crate::git::git_ok(repo, &["init", "--quiet"]).unwrap();
         let mut queue = QueueState::empty(QueueConfig::default());
         write_queue(repo, &queue).unwrap();
         queue.upstream.push(patch("upl_one"));
         write_queue(repo, &queue).unwrap();
 
-        let raw = fs::read_to_string(repo.join(QUEUE_PATH)).unwrap();
+        let raw = crate::state::read_string(repo, QUEUE_PATH)
+            .unwrap()
+            .unwrap();
         let read: QueueState = serde_json::from_str(&raw).unwrap();
         assert_eq!(read.upstream.len(), 1);
-        assert!(!repo.join(QUEUE_TMP_PATH).exists());
     }
 
     #[test]

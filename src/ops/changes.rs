@@ -76,7 +76,7 @@ pub(super) fn patch_paths(patch: &str) -> BTreeSet<String> {
 
 /// The paths the stored patch `id` touches.
 pub(super) fn stored_patch_paths(repo: &Path, id: &str) -> Result<BTreeSet<String>> {
-    let text = fs::read_to_string(repo.join(patch_path(id)?)).unwrap_or_default();
+    let text = crate::state::patch_text(repo, id).unwrap_or_default();
     Ok(patch_paths(&text))
 }
 

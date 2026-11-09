@@ -182,9 +182,9 @@ pub(super) fn add_patch_once(
         return Ok(duplicate.clone());
     }
 
-    let candidate_abs = repo.join(patch_path(&id)?);
-    if let Err(err) = validate_candidate(repo, queue, opts, &patch, &candidate_abs, head_sha) {
-        let _ = fs::remove_file(&candidate_abs);
+    let candidate = crate::state::patch_text(repo, &id)?;
+    if let Err(err) = validate_candidate(repo, queue, opts, &patch, &candidate, head_sha) {
+        let _ = crate::state::forget(repo, patch_path(&id)?);
         return Err(err);
     }
 
@@ -293,15 +293,15 @@ fn validate_candidate(
     queue: &QueueState,
     opts: &AddPatchOpts,
     patch: &Patch,
-    candidate_abs: &Path,
+    candidate: &str,
     head_sha: &str,
 ) -> Result<()> {
     if !opts.internal_only {
-        export_preflight(repo, queue, patch, candidate_abs, None, &opts.preflight)?;
+        export_preflight(repo, queue, patch, candidate, None, &opts.preflight)?;
     }
     let explicit_range = opts.from_ref.is_some() && opts.head_ref.is_some();
     if !explicit_range {
-        assert_change_already_on_company(repo, queue, candidate_abs, &opts.subject(), head_sha)?;
+        assert_change_already_on_company(repo, queue, candidate, &opts.subject(), head_sha)?;
     }
     Ok(())
 }

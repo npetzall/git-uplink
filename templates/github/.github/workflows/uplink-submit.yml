@@ -254,7 +254,7 @@ jobs:
             exit "$code"
           fi
           # What this run asks the reviewers to approve.
-          echo "review_token=$(cat ".uplink/reports/${PATCH_ID}/review-token")" >> "$GITHUB_OUTPUT"
+          echo "review_token=$(git show "uplink/state:.uplink/reports/${PATCH_ID}/review-token")" >> "$GITHUB_OUTPUT"
           echo "state_sha=$(git rev-parse uplink/state)" >> "$GITHUB_OUTPUT"
 
   # Do not put uplink-mutate on this job. A required-reviewer environment

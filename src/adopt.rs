@@ -462,7 +462,7 @@ fn check_group_order(analysis: &AheadAnalysis, assigned: &[Option<usize>]) -> Re
 pub(crate) fn remove_patch_files(repo: &Path, ids: &[String]) {
     for id in ids {
         if let Ok(rel) = patch_path(id) {
-            let _ = fs::remove_file(repo.join(rel));
+            let _ = crate::state::remove(repo, rel);
         }
     }
 }

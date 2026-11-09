@@ -91,7 +91,7 @@ fn check_ready_to_submit(
         repo,
         queue,
         patch,
-        &repo.join(patch_path(id)?),
+        &crate::state::patch_text(repo, id)?,
         None,
         preflight,
     ) {
@@ -133,26 +133,18 @@ fn export_onto(
     let id = &patch.id;
     let company_branch = &queue.config.internal_branch;
     ensure_clean_worktree(repo, "submit")?;
-    let snapshot = snapshot_uplink(repo)?;
-    let applied = (|| -> Result<ApplyOutcome> {
+    let text = crate::state::patch_text(repo, id)?;
+    let (applied, _) = (|| -> Result<(ApplyOutcome, Option<String>)> {
         git(
             repo,
             &["checkout", "-f", "--quiet", "--detach", start],
             GitOpts::default(),
         )?;
-        apply_patch_file(repo, queue, patch, &snapshot.join(patch_path(id)?), true)
-    })();
-    let applied = match applied {
-        Ok(v) => v,
-        Err(err) => {
-            let _ = fs::remove_dir_all(&snapshot);
-            return Err(err);
-        }
-    };
+        apply_patch_text(repo, queue, patch, &text, true)
+    })()?;
     if applied == ApplyOutcome::Conflict {
         let files = conflicted_files(repo).unwrap_or_default();
         checkout_company(repo, company_branch)?;
-        let _ = fs::remove_dir_all(&snapshot);
         return Err(Error::Conflict(ConflictError::new(
             format!("Cannot export {id} onto upstream"),
             id,
@@ -161,13 +153,11 @@ fn export_onto(
     }
     if applied == ApplyOutcome::Empty {
         checkout_company(repo, company_branch)?;
-        let _ = fs::remove_dir_all(&snapshot);
         return Err(Error::msg(format!(
             "{id} applies empty onto upstream; mark it merged instead."
         )));
     }
     git(repo, &["branch", "-f", branch, "HEAD"], GitOpts::default())?;
-    let _ = fs::remove_dir_all(&snapshot);
 
     let sha = rev_parse(repo, branch)?;
     checkout_company(repo, company_branch)?;

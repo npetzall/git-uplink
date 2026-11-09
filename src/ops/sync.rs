@@ -298,7 +298,8 @@ fn add_merged_pr(
         skip("the commit is not in the range being synced");
         return Ok(());
     };
-    let contained = patch_already_applied_on(repo, &commit.sha, &repo.join(patch_path(id)?))?;
+    let contained =
+        patch_already_applied_on(repo, &commit.sha, &crate::state::patch_text(repo, id)?)?;
     commit.class = CommitClass::Ours(id.to_string());
     reconciliation.merges.push(PendingMerge {
         id: id.to_string(),
@@ -325,8 +326,8 @@ fn residual(
         if !merges.iter().any(|merge| merge.id == patch.id) {
             continue;
         }
-        let file = repo.join(patch_path(&patch.id)?);
-        if apply_abs(dir, &file, patch.subject())? == ApplyOutcome::Conflict {
+        let file = crate::state::patch_text(repo, &patch.id)?;
+        if apply_text(dir, &file, patch.subject())? == ApplyOutcome::Conflict {
             git(dir, &["reset", "--hard", "--quiet"], GitOpts::default())?;
             git(dir, &["clean", "-fdq"], GitOpts::default())?;
         }
@@ -431,7 +432,7 @@ pub(super) fn output_tail(output: &str) -> String {
 pub(super) fn persist_conflict(
     repo: &Path,
     queue: &mut QueueState,
-    snapshot: &Path,
+    patches: &PatchSet,
     company_branch: &str,
     upstream_ref: &str,
     patch: &Patch,
@@ -516,8 +517,7 @@ pub(super) fn persist_conflict(
     });
 
     restore_company_branch(repo, company_branch)?;
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
+    patches.save(repo)?;
     write_queue_file(repo, queue)?;
     commit_queue(repo, &format!("uplink: conflict on {}", patch.id))?;
     Ok(ConflictError::new(message, &patch.id, files))
@@ -650,15 +650,11 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
         }
         let report = write_incoming_packet(repo, &fetched, &reconciliation)?;
         let report_path = from_upstream_report_paths().1;
-        let abs = repo.join(&report_path);
-        if let Some(parent) = abs.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let mut body = report.clone();
         if !body.ends_with('\n') {
             body.push('\n');
         }
-        fs::write(&abs, body)?;
+        crate::state::write(repo, &report_path, body)?;
         let mut queue = read_queue_file(repo)?;
         queue.pending_upstream = Some(PendingUpstream {
             sha: reconciliation.pending_sha.clone(),

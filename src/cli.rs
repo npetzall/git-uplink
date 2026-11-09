@@ -24,7 +24,9 @@ Queue state lives on the orphan branch `uplink/state` as `.uplink/queue.json` an
 
 Company `main` is product-only: public upstream, then the tooling patch, then every active `upstream[]` and `internal[]` patch.
 
-Reports live under `.uplink/reports/<id>/` on `uplink/state`, so a product rebuild never drops them.",
+Reports live under `.uplink/reports/<id>/` on `uplink/state`, so a product rebuild never drops them.
+
+Nothing of it is checked out, in the work tree or anywhere else. A command reads the files as git objects of `uplink/state`, holds what it changes in memory, and commits it to `uplink/state` with a compare-and-swap on the branch. A command whose `uplink/state` moved under it while it had changes refuses instead of overwriting them. Read a file with `git show uplink/state:.uplink/queue.json`.",
     ),
     (
         "Settings in uplink.toml",
@@ -311,7 +313,7 @@ pub enum Commands {
         ///
         /// Before anything moves, the upgrade refuses to start while work
         /// unrelated to it is pending: changes or untracked files in the
-        /// checkout, `.uplink/` edits not on `uplink/state`, a local
+        /// checkout, a local
         /// `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of
         /// origin's, or company main commits origin's main does not have.
         /// Push that work, or discard it with `git uplink reset`.
@@ -325,7 +327,7 @@ pub enum Commands {
         resume: bool,
         /// Continue a paused upgrade by dropping the patch it stopped on.
         ///
-        /// The patch file stays in `.uplink/patches/`.
+        /// The patch file stays on `uplink/state` in `.uplink/patches/`.
         #[arg(long, requires = "upgrade", conflicts_with = "abort")]
         drop: bool,
         /// Give up a paused upgrade: the checkout is put back and nothing was written.
@@ -708,7 +710,7 @@ pub enum Commands {
     Refresh,
     /// Fetch origin and hard-reset company main, uplink/state, uplink/upstream, and uplink/hooks.
     ///
-    /// Afterwards the clone matches origin and `.uplink/` is restored.
+    /// Afterwards the clone matches origin.
     /// A local `uplink/hooks` that origin does not have yet is kept.
     /// Untracked files in the checkout are left alone.
     Reset,

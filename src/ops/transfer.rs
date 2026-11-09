@@ -216,14 +216,14 @@ pub(super) fn start_transfer(
     };
     ensure_clean_worktree(repo, "a transfer")?;
     let (original, original_sha) = checkout_identity(repo)?;
-    let snapshot = snapshot_uplink(repo)?;
+    let mut patches = PatchSet::new();
     let outcome = (|| -> Result<Checked<TransferResult>> {
         git(
             repo,
             &["checkout", "-f", "--quiet", "--detach", upstream_ref],
             GitOpts::default(),
         )?;
-        let target = match apply_queue_preview(repo, &preview, &snapshot, id, false)? {
+        let target = match apply_queue_preview(repo, &preview, &mut patches, id, false)? {
             // Gated without asking the script.
             PreviewOutcome::Conflict { .. } if checks.is_probe() => {
                 return Ok(Checked::Probed(PreflightReport::of(Ok(None))));
@@ -243,21 +243,22 @@ pub(super) fn start_transfer(
             PreviewOutcome::Applied(target) => target,
         };
 
-        copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
+        // The checks read the dependencies as the replay left them.
+        patches.save(repo)?;
         let checked = transfer_checks(
             repo,
             &preview,
             &patch,
-            &snapshot.join(patch_path(id)?),
+            &patches.get(repo, id)?,
             direction,
             target.onto.as_deref(),
             target.after.as_deref(),
             checks.verdict(),
         );
-        let _ = fs::remove_dir_all(repo.join(".uplink"));
+        let _ = crate::state::discard(repo);
         if checks.is_probe() {
             return probe_report(checked.map(|(_, token)| token), || {
-                probe_rebuild_from(repo, &preview, &snapshot, upstream_ref, false)
+                probe_rebuild_from(repo, &preview, &mut patches, upstream_ref, false)
             })
             .map(Checked::Probed);
         }
@@ -291,22 +292,21 @@ pub(super) fn start_transfer(
         };
 
         restore_checkout(repo, &original, &original_sha)?;
-        crate::repo::ensure_state_worktree(repo)?;
+        crate::repo::ensure_state_branch(repo)?;
         finish_successful_transfer(repo, id, direction, assess_report, checks.verdict())
             .map(Checked::Recorded)
     })();
-    let _ = fs::remove_dir_all(&snapshot);
     match outcome {
         // A finished transfer has already returned to the company branch.
         Ok(Checked::Recorded(result)) if !result.gated => Ok(Checked::Recorded(result)),
         Ok(other) => {
             restore_checkout(repo, &original, &original_sha)?;
-            crate::repo::ensure_state_worktree(repo)?;
+            crate::repo::ensure_state_branch(repo)?;
             Ok(other)
         }
         Err(err) => {
             let _ = restore_checkout(repo, &original, &original_sha);
-            let _ = crate::repo::ensure_state_worktree(repo);
+            let _ = crate::repo::ensure_state_branch(repo);
             Err(err)
         }
     }
@@ -340,7 +340,7 @@ pub(super) fn not_previewed(id: &str) -> Error {
 pub(super) fn apply_queue_preview(
     repo: &Path,
     preview: &QueueState,
-    snapshot: &Path,
+    patches: &mut PatchSet,
     id: &str,
     stop_after_target: bool,
 ) -> Result<PreviewOutcome> {
@@ -353,8 +353,11 @@ pub(super) fn apply_queue_preview(
             )));
         }
         let onto_here = rev_parse(repo, "HEAD")?;
-        let patch_file = snapshot.join(patch_path(&item.id)?);
-        let result = apply_patch_file(repo, preview, &item, &patch_file, false)?;
+        let text = patches.get(repo, &item.id)?;
+        let (result, refreshed) = apply_patch_text(repo, preview, &item, &text, false)?;
+        if let Some(refreshed) = refreshed {
+            patches.set(&item.id, refreshed);
+        }
         if result == ApplyOutcome::Conflict {
             if item.id != id {
                 let why = if stop_after_target {
@@ -389,7 +392,7 @@ pub(super) fn apply_queue_preview(
     Ok(PreviewOutcome::Applied(target))
 }
 
-/// To upstream: assess the change `onto..after`, export preflight of `patch_abs`,
+/// To upstream: assess the change `onto..after`, export preflight of `patch_text`,
 /// and upstream-layer apply. To internal: `preflight.sh`.
 /// Returns the new assess report for an upstream move, and the token of the
 /// tree `preflight.sh` was asked about.
@@ -398,7 +401,7 @@ fn transfer_checks(
     repo: &Path,
     preview: &QueueState,
     patch: &Patch,
-    patch_abs: &Path,
+    patch_text: &str,
     direction: TransferDirection,
     onto: Option<&str>,
     after: Option<&str>,
@@ -409,7 +412,7 @@ fn transfer_checks(
             let onto = onto.ok_or_else(|| not_previewed(&patch.id))?;
             let after = after.ok_or_else(|| not_previewed(&patch.id))?;
             let report = assess_transfer_to_upstream(repo, preview, patch, onto, after)?;
-            let token = export_preflight(repo, preview, patch, patch_abs, None, verdict)?;
+            let token = export_preflight(repo, preview, patch, patch_text, None, verdict)?;
             assert_upstream_layer_applies(repo, preview)?;
             Ok((Some(report), token))
         }
@@ -568,8 +571,7 @@ pub(super) fn complete_transfer(
                 return Err(err);
             }
         };
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
+    crate::state::write(repo, patch_path(id)?, format_patch_at_head(repo)?)?;
 
     let mut preview = queue.clone();
     move_patch(&mut preview, id, direction.to_internal())?;
@@ -582,7 +584,7 @@ pub(super) fn complete_transfer(
         repo,
         &preview,
         get_patch(&preview, id)?,
-        &repo.join(patch_path(id)?),
+        &crate::state::patch_text(repo, id)?,
         direction,
         Some(&onto),
         Some("HEAD"),

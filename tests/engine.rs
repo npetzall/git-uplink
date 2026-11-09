@@ -37,12 +37,57 @@ fn temp_dir() -> TempDir {
     tempfile::tempdir().expect("tempdir")
 }
 
+/// Writes `file` in the work tree, or a state path (`.uplink/...`) as a
+/// change the next `commit_queue` commits.
 fn write(repo: &Path, file: &str, contents: &str) {
+    if file.starts_with(".uplink") {
+        return state_file(repo, file).write(contents).unwrap();
+    }
     let full = repo.join(file);
     if let Some(parent) = full.parent() {
         fs::create_dir_all(parent).unwrap();
     }
     fs::write(full, contents).unwrap();
+}
+
+/// A state path (such as `.uplink/queue.json`): read from uplink/state with
+/// this process's uncommitted changes, written as a change.
+struct StateFile {
+    repo: PathBuf,
+    rel: String,
+}
+
+impl StateFile {
+    fn read(&self) -> std::io::Result<String> {
+        git_uplink::state::read_string(&self.repo, &self.rel)
+            .unwrap()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, self.rel.clone()))
+    }
+
+    fn write(&self, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+        git_uplink::state::write(&self.repo, &self.rel, contents).unwrap();
+        Ok(())
+    }
+
+    fn exists(&self) -> bool {
+        git_uplink::state::exists(&self.repo, &self.rel).unwrap()
+    }
+
+    fn is_file(&self) -> bool {
+        self.exists()
+    }
+
+    /// The files under this state directory.
+    fn list(&self) -> Vec<String> {
+        git_uplink::state::list(&self.repo, &self.rel).unwrap()
+    }
+}
+
+fn state_file(repo: impl AsRef<Path>, rel: impl AsRef<Path>) -> StateFile {
+    StateFile {
+        repo: repo.as_ref().to_path_buf(),
+        rel: rel.as_ref().to_string_lossy().into_owned(),
+    }
 }
 
 fn commit_all(repo: &Path, message: &str) {
@@ -319,11 +364,11 @@ fn work_branch_of(patch: &Patch) -> String {
 fn a_stored_state_branch_setting_is_ignored() {
     let world = setup_world();
     let company = &world.company;
-    let path = company.join(".uplink/queue.json");
-    let mut raw: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let path = state_file(company, ".uplink/queue.json");
+    let mut raw: serde_json::Value = serde_json::from_str(&path.read().unwrap()).unwrap();
     raw["config"]["stateBranch"] = "custom/state".into();
-    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    path.write(serde_json::to_string_pretty(&raw).unwrap())
+        .unwrap();
 
     git_uplink::read_queue(company).unwrap();
     let before = rev_of(company, STATE_BRANCH);
@@ -351,7 +396,7 @@ fn init_puts_uplink_on_the_orphan_state_branch_not_main() {
         GitOpts::default(),
     )
     .unwrap();
-    assert!(company.join(".uplink/queue.json").is_file());
+    assert!(state_file(company, ".uplink/queue.json").is_file());
     assert!(!tree_has_uplink(company, "main"));
     let stored = git_ok(
         company,
@@ -745,7 +790,7 @@ fn init_without_args_hydrates_remotes_from_origin_state() {
         remote_get_url(&world.company, "contrib")
     );
     assert!(has_git_ref(&clone, "uplink/upstream"));
-    assert!(clone.join(".uplink/queue.json").is_file());
+    assert!(state_file(&clone, ".uplink/queue.json").is_file());
 }
 
 #[test]
@@ -1023,8 +1068,8 @@ fn reset_from_origin_matches_moved_refs_and_discards_local_work() {
         fs::read_to_string(clone.join("README.md")).unwrap(),
         "dirty working tree\n"
     );
-    assert!(!clone.join(".uplink/local-only.md").is_file());
-    assert!(clone.join(".uplink/queue.json").is_file());
+    assert!(!state_file(&clone, ".uplink/local-only.md").is_file());
+    assert!(state_file(&clone, ".uplink/queue.json").is_file());
     assert_eq!(
         git_ok(
             &clone,
@@ -1089,19 +1134,6 @@ fn refresh_from_origin_updates_tracking_without_moving_local() {
             "--quiet",
             "origin",
             "uplink/upstream:uplink/upstream",
-        ],
-        GitOpts::default(),
-    )
-    .unwrap();
-    git(
-        &clone,
-        &[
-            "restore",
-            "--source",
-            STATE_BRANCH,
-            "--worktree",
-            "--",
-            ".uplink",
         ],
         GitOpts::default(),
     )
@@ -1193,7 +1225,7 @@ fn refresh_from_origin_updates_tracking_without_moving_local() {
         fs::read_to_string(clone.join("README.md")).unwrap(),
         "dirty working tree\n"
     );
-    assert!(clone.join(".uplink/local-only.md").is_file());
+    assert!(state_file(&clone, ".uplink/local-only.md").is_file());
     assert!(!clone.join("MAIN.md").is_file());
 }
 
@@ -1281,7 +1313,7 @@ fn file_history_lists_patch_revisions() {
     let first = git_uplink::file_history(company, STATE_BRANCH, &path).unwrap();
     assert!(!first.is_empty(), "{first:?}");
 
-    let mut body = fs::read_to_string(company.join(&path)).unwrap();
+    let mut body = state_file(company, &path).read().unwrap();
     body.push_str("+extra\n");
     write(company, &path, &body);
     git_uplink::commit_queue(company, "uplink: revise patch").unwrap();
@@ -1443,14 +1475,11 @@ fn former_forge_names_still_work() {
     let company = &world.company;
 
     // A queue written by an older binary names the forge `ghec`.
-    let path = company.join(".uplink/queue.json");
-    let stored = fs::read_to_string(&path).unwrap();
+    let path = state_file(company, ".uplink/queue.json");
+    let stored = path.read().unwrap();
     assert!(stored.contains("\"forge\": \"github\""), "{stored}");
-    fs::write(
-        &path,
-        stored.replace("\"forge\": \"github\"", "\"forge\": \"ghec\""),
-    )
-    .unwrap();
+    path.write(stored.replace("\"forge\": \"github\"", "\"forge\": \"ghec\""))
+        .unwrap();
     git_uplink::commit_queue(company, "uplink: old forge name").unwrap();
 
     let upgraded = init(
@@ -1509,7 +1538,9 @@ fn make_tooling_stale(company: &Path, id: &str) {
         GitOpts::default(),
     )
     .unwrap();
-    fs::write(company.join(format!(".uplink/patches/{id}.patch")), stale).unwrap();
+    state_file(company, format!(".uplink/patches/{id}.patch"))
+        .write(stale)
+        .unwrap();
     let mut queue = git_uplink::read_queue(company).unwrap();
     queue.tooling.as_mut().unwrap().patch_id_stable = Some("stale".into());
     git_uplink::write_queue(company, &queue).unwrap();
@@ -1558,7 +1589,7 @@ fn init_upgrade_refreshes_the_same_tooling_patch() {
     );
     assert!(prepare.contains("git uplink preflight"), "{prepare}");
     assert!(!prepare.trim().eq("stale"));
-    let patch_file = fs::read_to_string(tooling_patch_path(&world.company, &id)).unwrap();
+    let patch_file = tooling_patch_path(&world.company, &id).read().unwrap();
     assert!(
         patch_file.contains(&format!("Uplink-Patch-Id: {id}")),
         "{patch_file}"
@@ -1642,7 +1673,9 @@ fn init_upgrade_cli_reports_a_tooling_refresh() {
     let world = setup_uninitialized();
     let queue = init_with_recorded_urls(&world);
     let id = queue.patch_refs()[0].id.clone();
-    fs::write(tooling_patch_path(&world.company, &id), "stale\n").unwrap();
+    tooling_patch_path(&world.company, &id)
+        .write("stale\n")
+        .unwrap();
     git_uplink::commit_queue(&world.company, "uplink: stale tooling patch").unwrap();
     // No origin here, so main is compared with what it was.
     let before = git_ok(&world.company, &["rev-parse", "--short", "main"]).unwrap();
@@ -1683,7 +1716,7 @@ fn embedded_pr_template() -> String {
 fn install_older_pack(company: &Path, edit: impl FnOnce(&Path)) -> String {
     let id = git_uplink::read_queue(company).unwrap().tooling.unwrap().id;
     let path = tooling_patch_path(company, &id);
-    let stored = fs::read_to_string(&path).unwrap();
+    let stored = path.read().unwrap();
     git(
         company,
         &["checkout", "--quiet", "--detach", "uplink/upstream"],
@@ -1692,8 +1725,11 @@ fn install_older_pack(company: &Path, edit: impl FnOnce(&Path)) -> String {
     .unwrap();
     git(
         company,
-        &["am", "--quiet", path.to_str().unwrap()],
-        GitOpts::default(),
+        &["am", "--quiet"],
+        GitOpts {
+            input: Some(stored.as_bytes()),
+            ..GitOpts::default()
+        },
     )
     .unwrap();
     edit(company);
@@ -1712,7 +1748,7 @@ fn install_older_pack(company: &Path, edit: impl FnOnce(&Path)) -> String {
         GitOpts::default(),
     )
     .unwrap();
-    fs::write(&path, format!("{older}\n")).unwrap();
+    path.write(format!("{older}\n")).unwrap();
     git_uplink::commit_queue(company, "uplink: older tooling pack").unwrap();
     rebuild(company).unwrap();
     id
@@ -2122,7 +2158,7 @@ fn init_stamps_tooling_patch_id_and_rebuild_leaves_it() {
     let queue = init_with_recorded_urls(&world);
     let patch = &queue.patch_refs()[0];
     let path = tooling_patch_path(&world.company, &patch.id);
-    let before = fs::read_to_string(&path).unwrap();
+    let before = path.read().unwrap();
     let trailer = format!("Uplink-Patch-Id: {}", patch.id);
     assert_eq!(before.matches(&trailer).count(), 1, "{before}");
     assert!(
@@ -2131,7 +2167,7 @@ fn init_stamps_tooling_patch_id_and_rebuild_leaves_it() {
         patch.commit_message
     );
     rebuild(&world.company).unwrap();
-    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    assert_eq!(path.read().unwrap(), before);
 }
 
 #[test]
@@ -2140,9 +2176,9 @@ fn init_upgrade_stamps_a_missing_tooling_patch_id_once() {
     let queue = init_with_recorded_urls(&world);
     let id = queue.patch_refs()[0].id.clone();
     let path = tooling_patch_path(&world.company, &id);
-    let stripped = strip_patch_id_trailer(&fs::read_to_string(&path).unwrap());
+    let stripped = strip_patch_id_trailer(&path.read().unwrap());
     assert!(!stripped.contains("Uplink-Patch-Id:"));
-    fs::write(&path, &stripped).unwrap();
+    path.write(&stripped).unwrap();
     git_uplink::commit_queue(&world.company, "uplink: drop tooling trailer").unwrap();
 
     let upgraded = init(
@@ -2154,7 +2190,7 @@ fn init_upgrade_stamps_a_missing_tooling_patch_id_once() {
     )
     .unwrap();
     assert_eq!(upgraded.patch_refs()[0].id, id);
-    let stamped = fs::read_to_string(&path).unwrap();
+    let stamped = path.read().unwrap();
     assert_eq!(
         stamped.matches(&format!("Uplink-Patch-Id: {id}")).count(),
         1,
@@ -2172,7 +2208,7 @@ fn init_upgrade_stamps_a_missing_tooling_patch_id_once() {
     let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
     assert_eq!(before, after);
     assert_eq!(again.patch_refs()[0].id, id);
-    assert_eq!(fs::read_to_string(&path).unwrap(), stamped);
+    assert_eq!(path.read().unwrap(), stamped);
 }
 
 #[test]
@@ -2181,9 +2217,9 @@ fn init_upgrade_ignores_tooling_from_and_date_headers() {
     let queue = init_with_recorded_urls(&world);
     let id = queue.patch_refs()[0].id.clone();
     let path = tooling_patch_path(&world.company, &id);
-    let rewritten = rewrite_mbox_from_and_date(&fs::read_to_string(&path).unwrap());
-    assert_ne!(rewritten, fs::read_to_string(&path).unwrap());
-    fs::write(&path, &rewritten).unwrap();
+    let rewritten = rewrite_mbox_from_and_date(&path.read().unwrap());
+    assert_ne!(rewritten, path.read().unwrap());
+    path.write(&rewritten).unwrap();
     git_uplink::commit_queue(&world.company, "uplink: rewrite tooling mbox headers").unwrap();
     let before = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
 
@@ -2198,11 +2234,11 @@ fn init_upgrade_ignores_tooling_from_and_date_headers() {
     let after = git_ok(&world.company, &["rev-parse", STATE_BRANCH]).unwrap();
     assert_eq!(before, after);
     assert_eq!(upgraded.patch_refs()[0].id, id);
-    assert_eq!(fs::read_to_string(&path).unwrap(), rewritten);
+    assert_eq!(path.read().unwrap(), rewritten);
 }
 
-fn tooling_patch_path(repo: &Path, id: &str) -> PathBuf {
-    repo.join(format!(".uplink/patches/{id}.patch"))
+fn tooling_patch_path(repo: &Path, id: &str) -> StateFile {
+    state_file(repo, format!(".uplink/patches/{id}.patch"))
 }
 
 fn strip_patch_id_trailer(text: &str) -> String {
@@ -2298,7 +2334,7 @@ fn commit_on_top(repo: &Path, branch: &str) {
 /// file under `.uplink/`.
 fn assert_upgrade_refused(company: &Path, needle: &str) {
     let refs = git_ok(company, &["for-each-ref", "refs/heads"]).unwrap();
-    let queue = fs::read_to_string(company.join(".uplink/queue.json")).unwrap();
+    let queue = state_file(company, ".uplink/queue.json").read().unwrap();
     let err = upgrade(company).unwrap_err().to_string();
     assert!(err.starts_with("refusing to upgrade"), "{err}");
     assert!(err.contains(needle), "{err}");
@@ -2307,7 +2343,7 @@ fn assert_upgrade_refused(company: &Path, needle: &str) {
         refs
     );
     assert_eq!(
-        fs::read_to_string(company.join(".uplink/queue.json")).unwrap(),
+        state_file(company, ".uplink/queue.json").read().unwrap(),
         queue
     );
 }
@@ -2335,28 +2371,6 @@ fn init_upgrade_refuses_staged_changes() {
     write(company, PR_TEMPLATE, "mine\n");
     git(company, &["add", PR_TEMPLATE], GitOpts::default()).unwrap();
     assert_upgrade_refused(company, PR_TEMPLATE);
-}
-
-#[test]
-fn init_upgrade_refuses_a_stray_file_under_uplink() {
-    let world = published_world_due_an_upgrade();
-    let company = &world.company;
-    write(company, ".uplink/stray.txt", "stray\n");
-    assert_upgrade_refused(company, "stray.txt");
-    reset_then_upgrade(company);
-    assert!(!company.join(".uplink/stray.txt").exists());
-}
-
-#[test]
-fn init_upgrade_refuses_an_uncommitted_queue_edit() {
-    let world = published_world_due_an_upgrade();
-    let company = &world.company;
-    let path = company.join(".uplink/queue.json");
-    let edited = format!("{}\n", fs::read_to_string(&path).unwrap());
-    fs::write(&path, edited).unwrap();
-    let err = upgrade(company).unwrap_err().to_string();
-    assert!(err.contains("queue.json"), "{err}");
-    reset_then_upgrade(company);
 }
 
 #[test]
@@ -2660,10 +2674,10 @@ fn rebuild_leaves_stored_patch_bytes_unchanged() {
         },
     )
     .unwrap();
-    let path = company.join(format!(".uplink/patches/{}.patch", patch.id));
-    let before = fs::read(&path).unwrap();
+    let path = state_file(company, format!(".uplink/patches/{}.patch", patch.id));
+    let before = path.read().unwrap();
     rebuild(company).unwrap();
-    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(path.read().unwrap(), before);
 }
 
 #[test]
@@ -3902,8 +3916,8 @@ fn sync_holds_foreign_commits_until_accept_upstream() {
         git_ok(company, &["rev-parse", "uplink/upstream"]).unwrap(),
         before
     );
-    let incoming = company.join(from_upstream_report_paths().1);
-    let packet = fs::read_to_string(&incoming).unwrap();
+    let incoming = state_file(company, from_upstream_report_paths().1);
+    let packet = incoming.read().unwrap();
     assert!(packet.contains("from-upstream"));
     assert!(packet.contains("document 1.2"));
     assert_eq!(
@@ -4340,10 +4354,7 @@ fn add_refuses_a_change_merged_into_another_branch() {
     assert_eq!(rev_of(company, STATE_BRANCH), before);
     let queue = git_uplink::read_queue(company).unwrap();
     assert!(queue.upstream.is_empty(), "{:?}", queue.upstream);
-    let patches: Vec<_> = fs::read_dir(company.join(".uplink/patches"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
+    let patches = state_file(company, ".uplink/patches").list();
     assert_eq!(patches.len(), usize::from(queue.tooling.is_some()));
 
     let patch = add_landed_patch(company, opts("main")).unwrap();
@@ -4423,8 +4434,8 @@ fn report_writes_the_token_that_approve_takes_back() {
 
     let report = cli(&["report", id]);
     assert!(report.status.success(), "{report:?}");
-    let token_file = company.join(format!(".uplink/reports/{id}/review-token"));
-    let token = fs::read_to_string(&token_file).unwrap().trim().to_string();
+    let token_file = state_file(company, format!(".uplink/reports/{id}/review-token"));
+    let token = token_file.read().unwrap().trim().to_string();
     assert_eq!(token, review_token(company, &hash_patch).unwrap());
     let committed = git_ok(
         company,
@@ -4444,16 +4455,16 @@ fn report_writes_the_token_that_approve_takes_back() {
         "{stale:?}"
     );
     assert!(
-        !company
-            .join(format!(".uplink/reports/{id}/approval.md"))
-            .exists(),
+        !state_file(company, format!(".uplink/reports/{id}/approval.md")).exists(),
         "a refused approval leaves no receipt"
     );
     assert_eq!(stored_patch(company, id).status, PatchStatus::Queued);
 
     let report = cli(&["report", id]);
     assert!(report.status.success(), "{report:?}");
-    let token = fs::read_to_string(&token_file).unwrap().trim().to_string();
+    // The CLI committed a new token; the stage follows uplink/state.
+    let token_file = state_file(company, format!(".uplink/reports/{id}/review-token"));
+    let token = token_file.read().unwrap().trim().to_string();
     let approved = cli(&["approve", id, "--reviewed", &token]);
     assert!(approved.status.success(), "{approved:?}");
     let receipt = String::from_utf8_lossy(&approved.stdout).into_owned();
@@ -4469,8 +4480,8 @@ fn report_writes_the_token_that_approve_takes_back() {
     );
 
     // A re-run for the same content records nothing and keeps the receipt.
-    let receipt_path = company.join(format!(".uplink/reports/{id}/approval.md"));
-    let first_receipt = fs::read_to_string(&receipt_path).unwrap();
+    let receipt_path = state_file(company, format!(".uplink/reports/{id}/approval.md"));
+    let first_receipt = receipt_path.read().unwrap();
     let state = rev_of(company, STATE_BRANCH);
     let again = cli(&["approve", id, "--reviewed", &token]);
     assert!(again.status.success(), "{again:?}");
@@ -4478,7 +4489,7 @@ fn report_writes_the_token_that_approve_takes_back() {
         String::from_utf8_lossy(&again.stdout).contains("is already approved"),
         "{again:?}"
     );
-    assert_eq!(fs::read_to_string(&receipt_path).unwrap(), first_receipt);
+    assert_eq!(receipt_path.read().unwrap(), first_receipt);
     assert_eq!(rev_of(company, STATE_BRANCH), state);
     assert_eq!(stored_patch(company, id).approvals.len(), 1);
 }
@@ -5976,10 +5987,10 @@ fn assess_writes_a_package_for_a_patch_and_for_a_change() {
     );
     // change.patch is the patch file, and changeBlob names it.
     let change = dir.path().join("change.patch");
-    let patch_file = company.join(format!(".uplink/patches/{}.patch", hash_patch.id));
+    let patch_file = state_file(company, format!(".uplink/patches/{}.patch", hash_patch.id));
     assert_eq!(
         fs::read_to_string(&change).unwrap(),
-        fs::read_to_string(patch_file).unwrap()
+        patch_file.read().unwrap()
     );
     assert_eq!(
         package["changeBlob"],
@@ -6242,7 +6253,7 @@ fn report_stores_an_assessment_only_for_the_patch_as_it_is_now() {
     assess_patch_package(company, id, dir.path());
     let result = dir.path().join("assessment.json");
     let patch_file = format!(".uplink/patches/{id}.patch");
-    let text = fs::read_to_string(company.join(&patch_file)).unwrap();
+    let text = state_file(company, &patch_file).read().unwrap();
     write(
         company,
         &patch_file,
@@ -6973,11 +6984,6 @@ fn status_reports_ahead_after_local_add() {
     let snapshot = status_snapshot(company).unwrap();
     assert_eq!(snapshot.state.ahead, Some(1));
     assert_eq!(snapshot.state.behind, Some(0));
-    assert!(
-        snapshot.state.uncommitted.is_empty(),
-        "{:?}",
-        snapshot.state.uncommitted
-    );
     assert!(snapshot.state.remote.is_some());
 }
 
@@ -7023,33 +7029,6 @@ fn status_reports_behind_when_origin_moved() {
     );
     assert_eq!(snapshot.state.ahead, Some(0));
     assert_eq!(snapshot.state.behind, Some(1));
-    assert!(
-        snapshot.state.uncommitted.is_empty(),
-        "{:?}",
-        snapshot.state.uncommitted
-    );
-}
-
-#[test]
-fn status_reports_uncommitted_queue() {
-    let world = setup_world();
-    let company = &world.company;
-    let _origin = publish_origin(company);
-    let path = company.join(".uplink/queue.json");
-    let raw = fs::read_to_string(&path).unwrap();
-    fs::write(&path, raw.replace("\"version\": 1", "\"version\": 1 ")).unwrap();
-    let snapshot = status_snapshot(company).unwrap();
-    assert!(
-        snapshot
-            .state
-            .uncommitted
-            .iter()
-            .any(|path| path == ".uplink/queue.json"),
-        "{:?}",
-        snapshot.state.uncommitted
-    );
-    assert_eq!(snapshot.state.ahead, Some(0));
-    assert_eq!(snapshot.state.behind, Some(0));
 }
 
 #[test]
@@ -7964,7 +7943,7 @@ fn user_git_config_and_hooks_do_not_change_the_imported_patch() {
         },
     )
     .unwrap();
-    let body = fs::read_to_string(tooling_patch_path(company, &patch.id)).unwrap();
+    let body = tooling_patch_path(company, &patch.id).read().unwrap();
     assert!(!body.contains('\u{1b}'), "{body}");
     assert!(body.contains("--- a/src/tokens.js"), "{body}");
     assert!(body.contains("+++ b/src/tokens.js"), "{body}");
@@ -8175,8 +8154,9 @@ fn strips_the_internal_commit_section_and_adds_a_co_author_trailer() {
     assert!(company_log.contains(&format!("Uplink-Patch-Id: {}", patch.id)));
     assert!(!company_log.contains("wip: ignore this git log"));
 
-    let stored =
-        fs::read_to_string(company.join(format!(".uplink/patches/{}.patch", patch.id))).unwrap();
+    let stored = state_file(company, format!(".uplink/patches/{}.patch", patch.id))
+        .read()
+        .unwrap();
     assert!(stored.contains("Replace SHA-1 in the default hasher."));
     assert!(stored.contains("PROJ-9999"));
     assert!(!stored.contains("Visible while writing"));
@@ -8828,12 +8808,12 @@ fn submit_cli_prints_the_contrib_commit_for_the_forge() {
 fn reads_a_queue_with_legacy_export_author_fields() {
     let world = setup_world();
     let company = &world.company;
-    let path = company.join(".uplink/queue.json");
-    let mut value: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let path = state_file(company, ".uplink/queue.json");
+    let mut value: serde_json::Value = serde_json::from_str(&path.read().unwrap()).unwrap();
     value["config"]["exportAuthorName"] = "Uplink Contributor".into();
     value["config"]["exportAuthorEmail"] = "uplink@users.noreply.github.com".into();
-    fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    path.write(serde_json::to_string_pretty(&value).unwrap())
+        .unwrap();
     let queue = git_uplink::read_queue(company).unwrap();
     let written = serde_json::to_string(&queue).unwrap();
     assert!(!written.contains("exportAuthor"), "{written}");
@@ -9054,8 +9034,8 @@ fn formats_a_contribution_packet_and_keeps_reports_across_rebuild() {
     .unwrap();
 
     rebuild(company).unwrap();
-    let kept = fs::read_to_string(company.join(&prepare_path)).unwrap();
-    let receipt = fs::read_to_string(company.join(&approval_path)).unwrap();
+    let kept = state_file(company, &prepare_path).read().unwrap();
+    let receipt = state_file(company, &approval_path).read().unwrap();
     assert!(kept.contains(&patch.id));
     assert!(receipt.contains("authoritative approval event"));
     assert!(receipt.contains("`to-upstream`"));
@@ -11003,7 +10983,9 @@ fn init_writes_the_answers_to_the_hooks_branch() {
     assert!(settings.problem.is_none());
 
     // The settings live on uplink/hooks only, never in queue.json.
-    let stored = fs::read_to_string(world.company.join(".uplink/queue.json")).unwrap();
+    let stored = state_file(&world.company, ".uplink/queue.json")
+        .read()
+        .unwrap();
     for key in [
         "preflightCommand",
         "bannedWords",
@@ -11044,10 +11026,9 @@ fn init_upgrade_adds_a_missing_uplink_toml_from_flags_and_the_old_queue() {
         fs::remove_file(dir.join("uplink.toml")).unwrap();
     });
     // An older binary kept these in queue.json.
-    let path = company.join(".uplink/queue.json");
-    let stored = fs::read_to_string(&path).unwrap();
-    fs::write(
-        &path,
+    let path = state_file(company, ".uplink/queue.json");
+    let stored = path.read().unwrap();
+    path.write(
         stored.replacen(
             "\"config\": {",
             "\"config\": {\n    \"redactKeywords\": [\"LegacyCo\"],\n    \"internalEmailDomains\": [\"legacy-co.net\"],",
@@ -11143,16 +11124,13 @@ fn init_upgrade_adds_a_missing_preflight_script_and_never_rewrites_it() {
         fs::remove_file(dir.join("preflight.sh")).unwrap();
     });
     // An older binary kept the command in queue.json.
-    let path = company.join(".uplink/queue.json");
-    let stored = fs::read_to_string(&path).unwrap();
-    fs::write(
-        &path,
-        stored.replacen(
-            "\"config\": {",
-            "\"config\": {\n    \"preflightCommand\": \"make legacy\",",
-            1,
-        ),
-    )
+    let path = state_file(company, ".uplink/queue.json");
+    let stored = path.read().unwrap();
+    path.write(stored.replacen(
+        "\"config\": {",
+        "\"config\": {\n    \"preflightCommand\": \"make legacy\",",
+        1,
+    ))
     .unwrap();
     git_uplink::commit_queue(company, "uplink: old command").unwrap();
 
@@ -11615,8 +11593,9 @@ fn amend_complete_leaves_tracked_uplink_files_out_of_the_patch() {
     amend_patch(company, &patch.id, false, None).unwrap();
     let work = format!("uplink/amend/{}-work", patch.id);
     git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
-    // The checkout ignores .uplink/, so the gated work has to force it in.
-    write(company, ".uplink/queue.json", "{}\n");
+    // Gated work that tracks a `.uplink/` of its own in the product tree.
+    fs::create_dir_all(company.join(".uplink")).unwrap();
+    fs::write(company.join(".uplink/queue.json"), "{}\n").unwrap();
     git(
         company,
         &["add", "-f", ".uplink/queue.json"],
@@ -11863,11 +11842,12 @@ test -z "$(git config --get credential.helper)""#,
 fn a_ci_job_with_credentials_refuses_to_run_the_preflight_script() {
     let world = setup_world();
     let company = &world.company;
-    let path = company.join(".uplink/queue.json");
-    let mut raw: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let path = state_file(company, ".uplink/queue.json");
+    let mut raw: serde_json::Value = serde_json::from_str(&path.read().unwrap()).unwrap();
     raw["config"]["forge"] = "github".into();
-    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    path.write(serde_json::to_string_pretty(&raw).unwrap())
+        .unwrap();
+    git_uplink::commit_queue(company, "uplink: record forge").unwrap();
     let marker = set_counting_preflight_script(company, "true");
     sha256_change(company);
 
@@ -12291,11 +12271,11 @@ fn a_job_with_credentials_submits_with_the_result_of_a_job_without() {
     )
     .unwrap();
     approve_patch(company, &patch.id).unwrap();
-    let path = company.join(".uplink/queue.json");
-    let mut raw: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let path = state_file(company, ".uplink/queue.json");
+    let mut raw: serde_json::Value = serde_json::from_str(&path.read().unwrap()).unwrap();
     raw["config"]["forge"] = "github".into();
-    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    path.write(serde_json::to_string_pretty(&raw).unwrap())
+        .unwrap();
     git_uplink::commit_queue(company, "test: record a forge").unwrap();
     let marker = set_counting_preflight_script(company, "true");
 
@@ -12443,9 +12423,8 @@ fn init_refuses_to_seed_uplink_upstream_when_origin_has_the_queue_without_it() {
 /// Removes the stored assess report of `id`, as an older or hand-edited
 /// queue would have it.
 fn drop_assess_report(company: &Path, id: &str) {
-    let path = company.join(".uplink/queue.json");
-    let mut raw: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let path = state_file(company, ".uplink/queue.json");
+    let mut raw: serde_json::Value = serde_json::from_str(&path.read().unwrap()).unwrap();
     let patch = raw["upstream"]
         .as_array_mut()
         .unwrap()
@@ -12453,7 +12432,8 @@ fn drop_assess_report(company: &Path, id: &str) {
         .find(|patch| patch["id"] == id)
         .unwrap();
     patch.as_object_mut().unwrap().remove("assess");
-    fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    path.write(serde_json::to_string_pretty(&raw).unwrap())
+        .unwrap();
     git_uplink::commit_queue(company, "test: drop the assess report").unwrap();
     assert!(patch_of(company, id).assess.is_none());
 }
@@ -13854,11 +13834,7 @@ fn adopt_branch_rejects_duplicates_and_groups_across_skipped_commits() {
     let company = &world.company;
     let fork = adopt_fork_world(company);
     let state_before = rev_of(company, STATE_BRANCH);
-    let patches = || {
-        fs::read_dir(company.join(".uplink/patches"))
-            .unwrap()
-            .count()
-    };
+    let patches = || state_file(company, ".uplink/patches").list().len();
     let patches_before = patches();
 
     let err = adopt_fork(
@@ -14371,11 +14347,7 @@ fn adopt_branch_abort_abort_keep_and_skip_a_paused_group() {
         let fork = adopt_fork_world(company);
         let edit = fork_edit_notes(company);
         let state_before = rev_of(company, STATE_BRANCH);
-        let patches = || {
-            fs::read_dir(company.join(".uplink/patches"))
-                .unwrap()
-                .count()
-        };
+        let patches = || state_file(company, ".uplink/patches").list().len();
         let patches_before = patches();
         adopt_fork_deciding(
             company,
@@ -14458,11 +14430,7 @@ fn adopt_branch_failure_mid_run_resets_uplink_state() {
     let fork = adopt_fork_world(company);
     set_preflight_script(company, "exit 1");
     let state_before = rev_of(company, STATE_BRANCH);
-    let patches = || {
-        fs::read_dir(company.join(".uplink/patches"))
-            .unwrap()
-            .count()
-    };
+    let patches = || state_file(company, ".uplink/patches").list().len();
     let patches_before = patches();
     adopt_fork(
         company,
@@ -16047,8 +16015,9 @@ fn add_records_internal_authors_as_co_authors_below_the_cutoff_on_main_only() {
         ]
     );
     assert!(!patch.commit_message.contains("Co-Authored-By"));
-    let stored =
-        fs::read_to_string(company.join(format!(".uplink/patches/{}.patch", patch.id))).unwrap();
+    let stored = state_file(company, format!(".uplink/patches/{}.patch", patch.id))
+        .read()
+        .unwrap();
     assert!(
         stored.contains("Co-Authored-By: Cam <cam@example.com>"),
         "{stored}"
@@ -16255,4 +16224,109 @@ fn adopt_stops_to_amend_a_group_marked_so() {
         stored[0].stop_to_amend && stored[0].amended.is_some(),
         "{stored:?}"
     );
+}
+
+#[test]
+fn the_queue_never_lands_in_the_work_tree() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "README.md", "from-local\n");
+    commit_all(company, "readme");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Readme".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    rebuild(company).unwrap();
+    let status = uplink_cli(company, &["status"]);
+    assert!(status.status.success(), "{status:?}");
+    assert!(!company.join(".uplink").exists());
+    let ignored = git_ok(company, &["status", "--porcelain", "--ignored"]).unwrap();
+    assert!(!ignored.contains(".uplink"), "{ignored}");
+    // No checkout under the git directory either; temp indexes are gone.
+    assert!(!company.join(".git/uplink/stage").exists());
+    let leftovers: Vec<_> = fs::read_dir(company.join(".git/uplink/tmp"))
+        .map(|dir| dir.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn a_command_sees_uplink_state_moved_by_another_process() {
+    let world = setup_world();
+    let company = &world.company;
+    assert_eq!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .config
+            .upstream_branch,
+        "main"
+    );
+    // Another clone of the same repository commits to uplink/state.
+    let other = keep_dir().join("other");
+    git(
+        company,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            other.to_str().unwrap(),
+            STATE_BRANCH,
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let path = other.join(".uplink/queue.json");
+    let raw = fs::read_to_string(&path).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    value["config"]["upstreamBranch"] = "develop".into();
+    fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    commit_all(&other, "uplink: elsewhere");
+    // This process read the queue before; it must not keep the old copy.
+    assert_eq!(
+        git_uplink::read_queue(company)
+            .unwrap()
+            .config
+            .upstream_branch,
+        "develop"
+    );
+}
+
+#[test]
+fn the_cli_retires_a_matching_work_tree_mirror_and_refuses_an_edited_one() {
+    let world = setup_world();
+    let company = &world.company;
+    let queue = git_ok(
+        company,
+        &["show", &format!("{STATE_BRANCH}:.uplink/queue.json")],
+    )
+    .unwrap();
+    fs::create_dir_all(company.join(".uplink/patches")).unwrap();
+    fs::write(company.join(".uplink/queue.json"), format!("{queue}\n")).unwrap();
+    fs::write(company.join(".git/info/exclude"), ".uplink/\n").unwrap();
+    let status = uplink_cli(company, &["status"]);
+    assert!(status.status.success(), "{status:?}");
+    assert!(!company.join(".uplink").exists());
+    assert_eq!(
+        fs::read_to_string(company.join(".git/info/exclude")).unwrap(),
+        ""
+    );
+
+    fs::create_dir_all(company.join(".uplink")).unwrap();
+    fs::write(company.join(".uplink/notes.md"), "mine\n").unwrap();
+    let refused = uplink_cli(company, &["status"]);
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains(".uplink/notes.md"), "{stderr}");
+    assert!(company.join(".uplink/notes.md").exists());
 }

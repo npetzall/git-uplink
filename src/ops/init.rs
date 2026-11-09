@@ -38,8 +38,8 @@ pub struct InitOpts {
 }
 
 /// Refuses an upgrade that would sweep unrelated work into its commits or
-/// throw it away: the upgrade resets `uplink/state`, `uplink/upstream` and
-/// `.uplink/` to origin's, commits all of `.uplink/`, and rebuilds company
+/// throw it away: the upgrade resets `uplink/state` and `uplink/upstream` to
+/// origin's, commits the new tooling patch, and rebuilds company
 /// main. A ref origin does not have is not checked; `uplink/hooks` missing on
 /// origin is what an upgrade creates.
 fn upgrade_preflight(repo: &Path) -> Result<()> {
@@ -54,17 +54,6 @@ fn upgrade_preflight(repo: &Path) -> Result<()> {
             indent_lines(&dirty)
         ));
     }
-    if has_ref(repo, STATE_BRANCH)? {
-        let uplink = uplink_uncommitted_paths(repo, STATE_BRANCH)?;
-        if !uplink.is_empty() {
-            reset_fixes = true;
-            problems.push(format!(
-                ".uplink/ differs from {STATE_BRANCH}:\n{}",
-                indent_lines(&uplink)
-            ));
-        }
-    }
-
     // A missing origin, or a branch it lacks, fails the fetch: nothing to compare.
     for branch in [STATE_BRANCH, UPSTREAM_REF, HOOKS_BRANCH] {
         if let Some(problem) = ahead_of_origin(repo, branch)? {
@@ -533,7 +522,7 @@ pub(super) fn init_existing(
     opts: &InitOpts,
     progress: &mut StepProgress,
 ) -> Result<(QueueState, Option<RunPreview>)> {
-    ensure_state_worktree(repo)?;
+    ensure_state_branch(repo)?;
     let mut queue = read_queue_file(repo)?;
     let mut mismatches = Vec::new();
     check_name(
@@ -768,7 +757,7 @@ Stop, changing nothing:  git uplink init --upgrade --abort"
             "upgrade paused: {id} (\"{}\") changes files of the tooling pack and does not apply on the new pack.\n\
 The checkout holds the new pack with the failed apply. In conflict:\n  {}\n\
 {resolve}\n\
-A dropped patch stays in .uplink/patches/{id}.patch.",
+A dropped patch stays on uplink/state as .uplink/patches/{id}.patch.",
             self.patch_title,
             self.files.join("\n  ")
         )
@@ -834,7 +823,7 @@ fn resume_paused(repo: &Path, resume: UpgradeResume) -> Result<Option<PausedUpgr
         }
     }
     restore_checkout(repo, &paused.original, &paused.original_sha)?;
-    ensure_state_worktree(repo)?;
+    ensure_state_branch(repo)?;
     fs::remove_file(paused_path(repo))?;
     Ok((resume != UpgradeResume::Abort).then_some(paused))
 }
@@ -1003,7 +992,7 @@ fn finish_tooling_upgrade(repo: &Path, ready: ReadyUpgrade) -> Result<Upgraded> 
         overrides,
     } = ready;
     for patch in &amended {
-        fs::write(repo.join(patch_path(&patch.id)?), &patch.contents)?;
+        crate::state::write(repo, patch_path(&patch.id)?, &patch.contents)?;
     }
     crate::tooling::commit_tooling_refresh(repo, plan, |queue| {
         for (id, _) in &dropped {
@@ -1207,11 +1196,10 @@ pub fn init_repo_with_progress(
     progress: &mut StepProgress,
 ) -> Result<QueueState> {
     let queue = progress.run_step("queue-created", "Create uplink queue", || {
-        crate::repo::ensure_uplink_dirs(repo)?;
         let queue = QueueState::empty(config);
         write_queue_file(repo, &queue)?;
         commit_queue(repo, "uplink: initialize patch queue")?;
-        ensure_state_worktree(repo)?;
+        ensure_state_branch(repo)?;
         let sha = git_ok(repo, &["rev-parse", "--short", STATE_BRANCH])?;
         Ok((queue, StepOutcome::pass(format!("uplink/state at {sha}"))))
     })?;

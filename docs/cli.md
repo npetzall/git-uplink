@@ -101,13 +101,13 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
 
   A queued patch that changes pack files is replayed on the new pack before anything is written. One the new pack makes empty is dropped. One that no longer applies pauses the upgrade the way `git rebase` stops on a commit: the checkout is left on the new pack with the failed apply, and `--continue`, `--drop` or `--abort` takes it from there.
 
-  Before anything moves, the upgrade refuses to start while work unrelated to it is pending: changes or untracked files in the checkout, `.uplink/` edits not on `uplink/state`, a local `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of origin's, or company main commits origin's main does not have. Push that work, or discard it with `git uplink reset`.
+  Before anything moves, the upgrade refuses to start while work unrelated to it is pending: changes or untracked files in the checkout, a local `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of origin's, or company main commits origin's main does not have. Push that work, or discard it with `git uplink reset`.
 - `--continue`: Continue a paused upgrade with the conflict resolved.
 
   Resolve the files, `git add` them, and what they hold becomes the patch. A patch resolved to what the new pack has is dropped.
 - `--drop`: Continue a paused upgrade by dropping the patch it stopped on.
 
-  The patch file stays in `.uplink/patches/`.
+  The patch file stays on `uplink/state` in `.uplink/patches/`.
 - `--abort`: Give up a paused upgrade: the checkout is put back and nothing was written.
 - `--adopt-groups [<path>]`: Open the terminal UI with the groups from this JSON file when internal is ahead of upstream (default: the file `--write-groups` writes).
 
@@ -196,7 +196,7 @@ The refs are `uplink/state`, `uplink/upstream`, company main, and `uplink/hooks`
 
 Fetch origin and hard-reset company main, uplink/state, uplink/upstream, and uplink/hooks.
 
-Afterwards the clone matches origin and `.uplink/` is restored. A local `uplink/hooks` that origin does not have yet is kept. Untracked files in the checkout are left alone.
+Afterwards the clone matches origin. A local `uplink/hooks` that origin does not have yet is kept. Untracked files in the checkout are left alone.
 
 ### `restack`
 
@@ -616,6 +616,8 @@ Queue state lives on the orphan branch `uplink/state` as `.uplink/queue.json` an
 Company `main` is product-only: public upstream, then the tooling patch, then every active `upstream[]` and `internal[]` patch.
 
 Reports live under `.uplink/reports/<id>/` on `uplink/state`, so a product rebuild never drops them.
+
+Nothing of it is checked out, in the work tree or anywhere else. A command reads the files as git objects of `uplink/state`, holds what it changes in memory, and commits it to `uplink/state` with a compare-and-swap on the branch. A command whose `uplink/state` moved under it while it had changes refuses instead of overwriting them. Read a file with `git show uplink/state:.uplink/queue.json`.
 
 ## Settings in uplink.toml
 

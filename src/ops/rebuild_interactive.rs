@@ -111,7 +111,8 @@ Stop, changing nothing:    git uplink rebuild --abort",
                 "rebuild paused on {id} (\"{}\"): it does not apply on the patches before it, \
 and git apply --3way could not merge it, so nothing of it is applied.\n\
 The checkout holds the queue before {id}. Make its change by hand, from \
-.uplink/patches/{id}.patch (git apply --reject writes what does not fit to .rej files).\n",
+`git show uplink/state:.uplink/patches/{id}.patch` (git apply --reject writes what does not fit \
+to .rej files).\n",
                 stop.title
             ),
             StopCause::Apply { files } => format!(
@@ -248,7 +249,7 @@ pub fn resume_rebuild(repo: &Path, resume: RebuildResume) -> Result<Option<Inlin
         RebuildResume::Abort => {
             restore_checkout(repo, &paused.original, &paused.original_sha)?;
             restore_uplink_from_state(repo)?;
-            ensure_state_worktree(repo)?;
+            ensure_state_branch(repo)?;
             end_pause(repo)?;
             Ok(None)
         }
@@ -402,7 +403,7 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
     };
     if paused.original != company_branch {
         restore_checkout(repo, &paused.original, &paused.original_sha)?;
-        ensure_state_worktree(repo)?;
+        ensure_state_branch(repo)?;
     }
     Ok(InlineRebuild {
         result: RebuildResult {
@@ -419,7 +420,7 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
 }
 
 /// Records the resolutions on the queue as amends of their patches, in one
-/// uplink/state commit. `.uplink/patches` holds them as replayed.
+/// uplink/state commit. The command's changes hold them as replayed.
 fn record_resolved(repo: &Path, queue: &mut QueueState, resolved: &[ResolvedPatch]) -> Result<()> {
     let mut ids = Vec::new();
     for resolution in resolved {

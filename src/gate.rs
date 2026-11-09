@@ -127,8 +127,8 @@ pub fn commit_resolution(repo: &Path, onto: &str, message: &str) -> Result<()> {
     }
     git(repo, &["reset", "--soft", onto], GitOpts::default())?;
     // Gated work that tracks a file under `.uplink/` must not put it in the
-    // patch: the assessment does not scan that path, and the checkout holds
-    // the real queue and patches there.
+    // patch: the assessment does not scan that path, which is where the
+    // queue keeps its own files on `uplink/state`.
     git(
         repo,
         &["reset", "--quiet", onto, "--", ".uplink"],
@@ -176,7 +176,7 @@ pub(crate) fn ensure_clean_worktree(repo: &Path, what: &str) -> Result<()> {
 }
 
 /// Tracked changes and untracked, non-ignored files, as `git status --porcelain`
-/// lists them. `.uplink/` is excluded through `.git/info/exclude`.
+/// lists them.
 pub(crate) fn dirty_paths(repo: &Path) -> Result<Vec<String>> {
     Ok(
         git_ok(repo, &["status", "--porcelain", "--untracked-files=all"])?

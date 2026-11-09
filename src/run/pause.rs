@@ -14,9 +14,9 @@ use crate::error::{Error, Result};
 use crate::gate::{assert_resolution_clean, commit_resolution};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::ops::{checkout_identity, restore_checkout};
-use crate::preflight::apply_abs;
-use crate::queue::{get_patch, patch_path};
-use crate::repo::{UPSTREAM_REF, conflicted_files, ensure_state_worktree, rev_parse};
+use crate::preflight::apply_text;
+use crate::queue::get_patch;
+use crate::repo::{UPSTREAM_REF, conflicted_files, ensure_state_branch, rev_parse};
 use crate::types::{ApplyOutcome, PatchStatus, QueueState};
 
 /// How `--continue`, `--skip`, `--abort` or `--abort-keep` takes up a run.
@@ -148,7 +148,7 @@ with the commands above, in order.\n"
             let _ = git(repo, &["cherry-pick", "--abort"], GitOpts::allow_fail());
         }
         restore_checkout(repo, &self.original, &self.original_sha)?;
-        ensure_state_worktree(repo)
+        ensure_state_branch(repo)
     }
 }
 
@@ -185,7 +185,7 @@ pub(super) fn pause(
     queue: &QueueState,
     run: &BranchRun,
     info: &AdoptFailure,
-    candidate_abs: &Path,
+    candidate: &str,
     at: &PauseAt,
 ) -> Result<Paused> {
     let (original, original_sha) = checkout_identity(repo)?;
@@ -208,7 +208,7 @@ pub(super) fn pause(
         };
         let onto = rev_parse(repo, "HEAD")?;
         let commits = if item.commits().is_empty() {
-            vec![apply_whole(repo, candidate_abs, item)?]
+            vec![apply_whole(repo, candidate, item)?]
         } else {
             pick_each(repo, item.commits())?
         };
@@ -221,7 +221,7 @@ pub(super) fn pause(
                 let _ = git(repo, &["cherry-pick", "--abort"], GitOpts::allow_fail());
             }
             restore_checkout(repo, &original, &original_sha)?;
-            ensure_state_worktree(repo)?;
+            ensure_state_branch(repo)?;
             return Err(err);
         }
     };
@@ -260,7 +260,9 @@ fn apply_deps(repo: &Path, queue: &QueueState, deps: &[String], info: &AdoptFail
         if dep.status == PatchStatus::Merged {
             continue;
         }
-        if apply_abs(repo, &repo.join(patch_path(id)?), dep.subject())? == ApplyOutcome::Conflict {
+        if apply_text(repo, &crate::state::patch_text(repo, id)?, dep.subject())?
+            == ApplyOutcome::Conflict
+        {
             return Err(Error::msg(format!(
                 "{id} (\"{}\") does not apply onto public upstream, so {} cannot be amended on it",
                 dep.subject(),
@@ -272,16 +274,15 @@ fn apply_deps(repo: &Path, queue: &QueueState, deps: &[String], info: &AdoptFail
 }
 
 /// Applies an item that is one patch file with a 3-way merge, staged.
-fn apply_whole(repo: &Path, candidate_abs: &Path, item: &RunItem) -> Result<PausedCommit> {
+fn apply_whole(repo: &Path, candidate: &str, item: &RunItem) -> Result<PausedCommit> {
     let applied = git(
         repo,
-        &[
-            "apply",
-            "--3way",
-            "--index",
-            candidate_abs.to_str().unwrap_or(""),
-        ],
-        GitOpts::allow_fail(),
+        &["apply", "--3way", "--index"],
+        GitOpts {
+            allow_fail: true,
+            input: Some(candidate.as_bytes()),
+            ..GitOpts::default()
+        },
     )?;
     let files = conflicted_files(repo)?;
     let state = if !files.is_empty() {

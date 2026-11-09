@@ -98,7 +98,7 @@ jobs:
           # transfer-to-internal. If the queue cannot be read, assess.
           is_internal() {
             local queue
-            queue=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json 2>/dev/null) || return 1
+            queue=$(git show uplink/state:.uplink/queue.json 2>/dev/null) || return 1
             jq -e --arg id "$1" 'any(.internal[]?; .id == $id)' <<<"$queue" >/dev/null
           }
           # The result goes to the comment job; the next step fails on it.
