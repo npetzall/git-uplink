@@ -20,6 +20,9 @@ permissions:
 
 env:
   PRODUCT_VERSION: ${{ inputs.version }}
+  # Every job starts with an empty target/, so incremental output is never reused.
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
 
 jobs:
   vuln-check:
@@ -31,9 +34,6 @@ jobs:
       - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         with:
           install: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.98.1
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
@@ -127,9 +127,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.98.1
+      - name: Install Rust toolchain
+        run: |
+          rustup set profile minimal
+          rustup toolchain install --no-self-update
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
@@ -166,9 +167,10 @@ jobs:
         with:
           name: web-dist
           path: web/dist
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.98.1
+      - name: Install Rust toolchain
+        run: |
+          rustup set profile minimal
+          rustup toolchain install --no-self-update
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
@@ -202,10 +204,13 @@ jobs:
         with:
           name: web-dist
           path: web/dist
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.98.1
-          targets: ${{ matrix.target }}
+      - name: Install Rust toolchain
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup set profile minimal
+          rustup toolchain install --no-self-update
+          rustup target add "$TARGET"
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
@@ -262,10 +267,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: ".pre-commit-config.yaml"
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.98.1
-          components: rustfmt, clippy
+      - name: Install Rust toolchain
+        run: |
+          rustup set profile minimal
+          rustup toolchain install --no-self-update
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free

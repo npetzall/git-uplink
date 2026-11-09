@@ -12,6 +12,10 @@ on:
 
 permissions: {}
 
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -69,10 +73,11 @@ jobs:
         with:
           install: false
 
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+      - name: Install Rust toolchain
         if: matrix.language == 'rust'
-        with:
-          toolchain: 1.98.1
+        run: |
+          rustup set profile minimal
+          rustup toolchain install --no-self-update
 
       - name: Initialize CodeQL
         if: matrix.config != ''
