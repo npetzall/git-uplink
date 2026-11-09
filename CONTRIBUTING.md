@@ -81,7 +81,7 @@ Running it under `sfw` installs the Python hook environments (ruff, zizmor, PyYA
 
 Runs on every PR. The `Changed scopes` job passes the changed paths to `.github/changed-scopes.sh`, which decides which of two scopes apply:
 
-- **Product**, when the PR changes `src/`, `web/`, `templates/`, the Rust manifests, `build.rs`, `Cross.toml`, `rust-toolchain.toml`, tests, anything under `.github/`, or the shell scripts in `scripts/`, `examples/github/reset/` and `tui-demo/`. The last two are there so that pre-commit (actionlint, ShellCheck, zizmor) runs on every workflow and script.
+- **Product**, when the PR changes `src/`, `web/`, `templates/`, the Rust manifests, `build.rs`, `Cross.toml`, `rust-toolchain.toml`, tests, anything under `.github/`, or the shell scripts in `scripts/`, `examples/github/reset/` and `demo/`. The last two are there so that pre-commit (actionlint, ShellCheck, zizmor) runs on every workflow and script.
 - **Site**, when it changes `site/`, the markdown the site renders (`docs/`, `templates/*/README.md`, `examples/github/stories/`), or the site workflows.
 
 `Merge gate` is the only required check. It always runs, and fails when any job failed or was cancelled. A scope that did not apply is skipped, and that passes.

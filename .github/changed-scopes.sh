@@ -23,7 +23,7 @@ product_patterns=(
   '\.github/'
   'scripts/'
   'examples/github/reset/'
-  'tui-demo/'
+  'demo/'
 )
 
 site_patterns=(
@@ -88,7 +88,7 @@ self_check() {
   expect_scopes true false ".github/dependabot.yml"
   expect_scopes true false "scripts/man.sh"
   expect_scopes true false "examples/github/reset/upstream.sh"
-  expect_scopes true false "tui-demo/adopt/run-demo.sh"
+  expect_scopes true false "demo/adopt/run-demo.sh"
   expect_scopes false true "examples/github/stories/01-solo-fix.md"
   expect_scopes true true "docs/cli.md"
   expect_scopes true true "templates/github/README.md"
