@@ -238,6 +238,7 @@ pub(super) fn pause(
             }
             AdoptFailureKind::Stack => "it does not apply on company main".into(),
             AdoptFailureKind::CompanyPreflight => "preflight.sh fails on it on company main".into(),
+            AdoptFailureKind::Planned => "the groups file asks to stop and amend it".into(),
         },
         commits,
     })

@@ -696,17 +696,43 @@ struct InitArgs {
     forge: Option<Forge>,
     upgrade: bool,
     resume: Option<UpgradeResume>,
-    adopt_groups: Option<PathBuf>,
+    adopt_groups: Option<Option<PathBuf>>,
+    apply: bool,
+    write_groups: bool,
     no_preview: bool,
     json: bool,
     settings: SettingsFlags,
 }
 
-fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
-    let adopt_groups = match args.adopt_groups {
-        Some(path) => Some(load_groups_file(&path)?),
-        None => None,
+/// The groups of a `--groups` / `--adopt-groups` file. No path is the
+/// groups file of `key` (the branch adopted from), the one `--write-groups`
+/// writes. `-` reads stdin, which leaves no terminal for the UI.
+fn groups_from(
+    repo: &Path,
+    path: Option<Option<PathBuf>>,
+    key: &str,
+    apply: bool,
+) -> Result<Option<Vec<git_uplink::AdoptGroup>>, Error> {
+    let path = match path {
+        None => return Ok(None),
+        Some(None) => git_uplink::groups_file_path(repo, key)?,
+        Some(Some(path)) => path,
     };
+    if path.as_os_str() == "-" && !apply {
+        return Err(Error::msg(
+            "groups from stdin (-) can only be adopted with --apply",
+        ));
+    }
+    Ok(Some(load_groups_file(&path)?))
+}
+
+fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
+    let adopt_groups = groups_from(
+        repo,
+        args.adopt_groups,
+        git_uplink::ADOPT_FROM_REF,
+        args.apply,
+    )?;
     let hydrate = args.upstream.is_none()
         && args.contrib.is_none()
         && args.upstream_remote_name.is_none()
@@ -714,6 +740,7 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
         && args.contrib_remote_name.is_none()
         && args.internal_branch.is_none()
         && adopt_groups.is_none()
+        && !args.write_groups
         && args.forge.is_none()
         && !args.upgrade;
     let opts = InitOpts {
@@ -727,6 +754,8 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
         upgrade: args.upgrade,
         resume: args.resume,
         adopt_groups,
+        adopt_apply: args.apply,
+        write_groups: args.write_groups,
         interactive: None,
         decide: None,
         no_preview: args.no_preview,
@@ -776,8 +805,9 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
 
 struct AdoptArgs {
     branch: Option<String>,
-    groups: Option<PathBuf>,
-    write_groups: Option<PathBuf>,
+    groups: Option<Option<PathBuf>>,
+    apply: bool,
+    write_groups: bool,
     resume: Option<AdoptResume>,
     keep_test_branches: bool,
     no_preflight_deps: bool,
@@ -788,19 +818,18 @@ struct AdoptArgs {
 /// `git uplink adopt --branch`: local only, one uplink/state commit.
 fn cmd_adopt(repo: &Path, args: AdoptArgs) -> Result<(), Error> {
     refuse_script_here(repo, &ScriptVerdict::Run, None)?;
-    let groups = match args.groups {
-        Some(path) => Some(load_groups_file(&path)?),
-        None => None,
-    };
+    let branch = args.branch.unwrap_or_default();
+    let groups = groups_from(repo, args.groups, &branch, args.apply)?;
     let result = adopt_branch(
         repo,
         AdoptBranchOpts {
-            branch: args.branch.unwrap_or_default(),
+            branch,
             groups,
+            apply: args.apply,
+            write_groups: args.write_groups,
             interactive: None,
             keep_test_branches: args.keep_test_branches,
             no_preflight_deps: args.no_preflight_deps,
-            write_groups: args.write_groups,
             resume: args.resume,
             decide: None,
             no_preview: args.no_preview,
@@ -1961,6 +1990,8 @@ fn run() -> Result<(), Error> {
             drop,
             abort,
             adopt_groups,
+            apply,
+            write_groups,
             no_preview,
             json,
             preflight,
@@ -1983,6 +2014,8 @@ fn run() -> Result<(), Error> {
                     _ => None,
                 },
                 adopt_groups,
+                apply,
+                write_groups,
                 no_preview,
                 json,
                 settings: SettingsFlags {
@@ -2028,6 +2061,7 @@ fn run() -> Result<(), Error> {
         Commands::Adopt {
             branch,
             groups,
+            apply,
             write_groups,
             resume,
             skip,
@@ -2042,6 +2076,7 @@ fn run() -> Result<(), Error> {
             AdoptArgs {
                 branch,
                 groups,
+                apply,
                 write_groups,
                 resume: match (resume, skip, abort, abort_keep) {
                     (true, ..) => Some(AdoptResume::Continue),
@@ -2404,6 +2439,54 @@ mod tests {
     fn web_ui_has_no_bind_option() {
         assert!(Cli::try_parse_from(["git-uplink", "web-ui", "--bind", "0.0.0.0"]).is_err());
         assert!(Cli::try_parse_from(["git-uplink", "web-ui", "--port", "1", "--no-open"]).is_ok());
+    }
+
+    type Parsed = (Option<Option<PathBuf>>, bool, bool);
+
+    fn adopt_parses(extra: &[&str]) -> Option<Parsed> {
+        let mut argv = vec!["git-uplink", "adopt", "--branch", "main-fork"];
+        argv.extend(extra);
+        match Cli::try_parse_from(argv).ok()?.command {
+            Commands::Adopt {
+                groups,
+                apply,
+                write_groups,
+                ..
+            } => Some((groups, apply, write_groups)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn adopt_groups_flags() {
+        assert_eq!(adopt_parses(&[]), Some((None, false, false)));
+        // No path: the groups file of the branch.
+        assert_eq!(
+            adopt_parses(&["--groups"]),
+            Some((Some(None), false, false))
+        );
+        assert_eq!(
+            adopt_parses(&["--groups", "g.json", "--apply"]),
+            Some((Some(Some(PathBuf::from("g.json"))), true, false))
+        );
+        assert_eq!(adopt_parses(&["--write-groups"]), Some((None, false, true)));
+        assert_eq!(adopt_parses(&["--write-groups", "g.json"]), None);
+        assert_eq!(adopt_parses(&["--write-groups", "--groups"]), None);
+        assert_eq!(adopt_parses(&["--apply"]), None);
+    }
+
+    #[test]
+    fn init_adopt_groups_flags() {
+        let ok = |args: &[&str]| {
+            let mut argv = vec!["git-uplink", "init"];
+            argv.extend(args);
+            Cli::try_parse_from(argv).is_ok()
+        };
+        assert!(ok(&["--adopt-groups"]));
+        assert!(ok(&["--adopt-groups", "g.json", "--apply"]));
+        assert!(ok(&["--write-groups"]));
+        assert!(!ok(&["--apply"]));
+        assert!(!ok(&["--write-groups", "--adopt-groups"]));
     }
 
     fn merged_via(args: &[&str]) -> Option<MergeVia> {

@@ -34,7 +34,7 @@ pub struct AdoptCommit {
     pub on_main: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdoptGroup {
     pub commits: Vec<String>,
@@ -51,6 +51,10 @@ pub struct AdoptGroup {
     /// adopted instead of the commits'. `adopt --branch` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amended: Option<String>,
+    /// Pause on the group to amend it before it is checked, as choosing
+    /// Amend on a failure does. Once amended, the run goes on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop_to_amend: bool,
 }
 
 impl AdoptGroup {
@@ -80,6 +84,7 @@ pub(crate) struct ResolvedGroup {
     pub(crate) message: String,
     pub(crate) ignore_preflight: bool,
     pub(crate) amended: Option<String>,
+    pub(crate) stop_to_amend: bool,
 }
 
 pub fn analyze_ahead(repo: &Path) -> Result<AheadAnalysis> {
@@ -262,6 +267,7 @@ pub fn resolve_groups(analysis: &AheadAnalysis, groups: &[AdoptGroup]) -> Result
             intent: g.intent,
             ignore_preflight: g.ignore_preflight,
             amended: g.amended,
+            stop_to_amend: g.stop_to_amend,
         })
         .collect())
 }
@@ -416,6 +422,7 @@ pub(crate) fn resolve_group(
         message,
         ignore_preflight: group.ignore_preflight,
         amended: group.amended.clone(),
+        stop_to_amend: group.stop_to_amend,
     })
 }
 

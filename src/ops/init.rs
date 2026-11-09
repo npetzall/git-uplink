@@ -12,7 +12,15 @@ pub struct InitOpts {
     pub upgrade: bool,
     /// With `upgrade`: what to do with the upgrade that paused on a patch.
     pub resume: Option<UpgradeResume>,
+    /// Groups from a groups file, shown in the terminal UI, or adopted as
+    /// they are with `adopt_apply`.
     pub adopt_groups: Option<Vec<AdoptGroup>>,
+    /// Adopt `adopt_groups` without the terminal UI.
+    pub adopt_apply: bool,
+    /// Write the groups the terminal UI would first show to the groups
+    /// file and stop before adopting; `uplink/adopt-from` stays, so the next
+    /// `init` takes the adoption up.
+    pub write_groups: bool,
     /// `None` detects a TTY. Tests set `Some(false)` so adopt never opens the TUI.
     pub interactive: Option<bool>,
     /// Says what to do with an adopt group that fails; `None` asks in a
@@ -1118,9 +1126,20 @@ delete uplink/adopt-from or reset uplink/state before adopting again",
             "Uplink tooling patch is missing; cannot adopt history until init installs it.",
         ));
     }
+    let groups_file = adopt::groups_file_path(repo, adopt::ADOPT_FROM_REF)?;
+    if opts.write_groups {
+        let groups = crate::tui::initial_groups(&queue, &analysis);
+        adopt::write_groups_file(&groups_file, &groups)?;
+        eprintln!(
+            "Groups written to {file}; nothing was adopted.\n\
+Open them with: git uplink init --adopt-groups {file}\n\
+Adopt them with: git uplink init --adopt-groups {file} --apply",
+            file = groups_file.display()
+        );
+        return Ok((queue, None));
+    }
     let groups = groups_for_adopt(repo, opts, &queue, &analysis)?;
     let groups = adopt::resolve_groups(&analysis, &groups)?;
-    let groups_file = adopt::groups_file_path(repo, adopt::ADOPT_FROM_REF)?;
     adopt::write_groups_file(&groups_file, &groups)?;
     let run = adopt::BranchRun::new(
         repo,
@@ -1156,16 +1175,23 @@ pub(super) fn groups_for_adopt(
     queue: &QueueState,
     analysis: &adopt::AheadAnalysis,
 ) -> Result<Vec<AdoptGroup>> {
-    if let Some(groups) = &opts.adopt_groups {
+    if let (Some(groups), true) = (&opts.adopt_groups, opts.adopt_apply) {
         return Ok(groups.clone());
     }
     let interactive = opts.interactive.unwrap_or_else(adopt::stdin_is_tty);
     if interactive {
-        return crate::tui::run_adopt(repo, queue, analysis, None)
+        let groups_file = adopt::groups_file_path(repo, adopt::ADOPT_FROM_REF)?;
+        let loaded = opts.adopt_groups.as_deref();
+        return crate::tui::run_adopt(repo, queue, analysis, &groups_file, loaded)
             .map(crate::tui::TuiOutcome::into_groups);
     }
+    if opts.adopt_groups.is_some() {
+        return Err(Error::msg(
+            "pass --apply to adopt the groups without the terminal UI",
+        ));
+    }
     Err(Error::msg(
-        "internal is ahead of uplink/upstream; pass --adopt-groups <file> \
+        "internal is ahead of uplink/upstream; pass --adopt-groups <file> --apply \
 or re-run git uplink init in a terminal to group commits",
     ))
 }

@@ -30,7 +30,7 @@ mod types;
 pub mod webui;
 
 pub use adopt::{
-    ADOPT_AMENDED_REF_PREFIX, ADOPT_TEST_BRANCH_PREFIX, AdoptGroup, analyze_branch,
+    ADOPT_AMENDED_REF_PREFIX, ADOPT_FROM_REF, ADOPT_TEST_BRANCH_PREFIX, AdoptGroup, analyze_branch,
     groups_file_path, load_groups_file, stdin_is_tty,
 };
 pub use assess::{
