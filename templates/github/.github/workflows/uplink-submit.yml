@@ -367,6 +367,10 @@ jobs:
           owner: ${{ steps.queue.outputs.contrib_owner }}
           repositories: ${{ steps.queue.outputs.contrib_repo }}
           permission-contents: write
+          # The Git Database API refuses trees that change .github/workflows/
+          # without it. Workflows do not run on the fork, and upstream reviews
+          # the PR before merging.
+          permission-workflows: write
 
       - name: Mint upstream GitHub App token
         id: upstream-app

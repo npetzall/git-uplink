@@ -170,9 +170,9 @@ const APPS = [
   {
     name: "Contrib App",
     where: "Public github.com, owned by {{contribOrg}}",
-    perms: "Contents: read and write",
+    perms: "Contents: read and write · Workflows: read and write",
     install: "{{contribOrg}}/{{contribRepo}} only",
-    why: "Pushes and deletes uplink/<id> on the fork. Its key only exists in the to-upstream and abandon-contrib Environments.",
+    why: "Pushes and deletes uplink/<id> on the fork, including contributions that change .github/workflows/. Its key only exists in the to-upstream and abandon-contrib Environments.",
   },
 ];
 

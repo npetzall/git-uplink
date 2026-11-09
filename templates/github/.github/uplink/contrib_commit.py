@@ -11,7 +11,7 @@ token's identity is the author.
 Environment:
   CONTRIB_COMMIT        the `contribCommit` JSON from `git uplink submit`
   CONTRIB_REPO          owner/name of the contrib repository
-  UPLINK_CONTRIB_TOKEN  token with contents write on CONTRIB_REPO
+  UPLINK_CONTRIB_TOKEN  token with contents and workflows write on CONTRIB_REPO
   GITHUB_API_URL        default https://api.github.com
   GITHUB_SERVER_URL     default https://github.com
   CONTRIB_GIT_URL       optional git URL for the base push (default
@@ -31,6 +31,7 @@ import urllib.parse
 import urllib.request
 
 GITLINK = "160000"
+WORKFLOWS = ".github/workflows/"
 
 
 class ApiError(Exception):
@@ -219,11 +220,23 @@ def main():
         if not entries:
             raise SystemExit(f"{local} has no changes on {base}")
         base_tree = git("rev-parse", f"{base}^{{tree}}").decode().strip()
-        tree = api.call(
-            "POST",
-            "/git/trees",
-            {"base_tree": base_tree, "tree": tree_entries(api, entries)},
-        )
+        try:
+            tree = api.call(
+                "POST",
+                "/git/trees",
+                {"base_tree": base_tree, "tree": tree_entries(api, entries)},
+            )
+        except ApiError as err:
+            if err.status == 403 and any(
+                entry[4].startswith(WORKFLOWS) for entry in entries
+            ):
+                raise SystemExit(
+                    f"{err}\nThe export changes {WORKFLOWS}, which needs Workflows "
+                    "write on UPLINK_CONTRIB: give the contrib GitHub App Workflows "
+                    "read and write and accept it on the installation, or give the "
+                    "PAT the workflow scope (fine-grained: Workflows read and write)."
+                ) from None
+            raise
         if tree["sha"] != expected_tree:
             raise SystemExit(
                 f"contrib tree {tree['sha']} does not match the local export tree {expected_tree}"

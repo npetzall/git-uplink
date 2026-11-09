@@ -24,6 +24,8 @@ The workflows themselves are identical. The setup sets the repository variables 
 
 The internal token opens the gated conflict, transfer, and amend PRs, so it needs **Pull requests: read and write** besides Contents and Workflows.
 
+The contrib token needs **Contents: read and write** and **Workflows: read and write** on the fork: GitHub refuses a commit that changes `.github/workflows/` without Workflows.
+
 ## Reset example
 
 Not part of the pack. [`examples/github/example-reset.yml`](../../examples/github/example-reset.yml) is copied into the example repositories during setup, and each repository's reset script from [`examples/github/reset/`](../../examples/github/reset/) is published on the orphan branch `example-reset`.
