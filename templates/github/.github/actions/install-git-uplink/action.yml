@@ -1,5 +1,5 @@
 name: Install git-uplink
-description: Download a git-uplink release binary and put it on PATH for this runner.
+description: Download and verify a git-uplink release binary, cache it, and put it on PATH for this runner.
 inputs:
   repo:
     description: GitHub repository (owner/name) that publishes git-uplink releases. Empty means npetzall/git-uplink.
@@ -20,33 +20,43 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-    - name: Install git-uplink
+    - name: Resolve the git-uplink release
+      id: resolve
       shell: bash
       env:
         REPO: ${{ inputs.repo }}
         VERSION: ${{ inputs.version }}
         TOKEN: ${{ inputs.token }}
         SIGNER: ${{ inputs.signer }}
-      run: | # zizmor: ignore[github-env] constant PATH entry for release binary
+      run: |
         set -euo pipefail
         REPO="${REPO:-npetzall/git-uplink}"
         # git uplink init writes its own version here.
         VERSION="${VERSION:-@GIT_UPLINK_VERSION@}"
         SIGNER="${SIGNER:-https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main}"
-        if [[ "$VERSION" != "latest" ]]; then
+        if [[ -n "$TOKEN" ]]; then
+          export GH_TOKEN="$TOKEN"
+        fi
+        # The cache key and gh release verify-asset need a fixed tag.
+        if [[ "$VERSION" == "latest" ]]; then
+          tag="$(gh release view --repo "$REPO" --json tagName -q .tagName)"
+        else
           tag="$VERSION"
           if [[ "$tag" != v* ]]; then
             tag="v$tag"
           fi
         fi
-        download_release() {
-          if [[ "$VERSION" == "latest" ]]; then
-            gh release download --repo "$REPO" "$@"
-          else
-            gh release download "$tag" --repo "$REPO" "$@"
-          fi
-        }
+        if [[ ! "$tag" =~ ^v[0-9A-Za-z.+-]+$ ]]; then
+          echo "invalid release tag: $tag" >&2
+          exit 1
+        fi
+        # Attestations are looked up in the repository of the signing workflow.
+        if [[ "$SIGNER" =~ ^https://github\.com/([^/]+/[^/]+)/\.github/workflows/[^@]+@.+$ ]]; then
+          signer_repo="${BASH_REMATCH[1]}"
+        else
+          echo "cannot read the repository from signer: $SIGNER" >&2
+          exit 1
+        fi
         case "${RUNNER_OS}-${RUNNER_ARCH}" in
           Linux-X64) target="x86_64-unknown-linux-musl"; suffix="" ;;
           Linux-ARM64) target="aarch64-unknown-linux-musl"; suffix="" ;;
@@ -57,26 +67,91 @@ runs:
             exit 1
             ;;
         esac
+        # A different source or signer never reuses a binary checked against another.
+        origin="$(printf '%s\n%s\n' "$REPO" "$SIGNER" | sha256sum | cut -c1-16)"
+        # pull_request_target runs save to the default branch scope, which
+        # every branch reads; code later in such a job could plant an entry.
+        save=true
+        if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request_target" ]]; then
+          save=false
+        fi
+        {
+          echo "repo=$REPO"
+          echo "tag=$tag"
+          echo "signer=$SIGNER"
+          echo "signer_repo=$signer_repo"
+          echo "asset=git-uplink-${target}${suffix}"
+          echo "suffix=$suffix"
+          echo "dir=${RUNNER_TEMP}/git-uplink-cache/${tag}/${target}"
+          echo "key=git-uplink-${tag}-${target}-${origin}"
+          echo "save=$save"
+        } >> "$GITHUB_OUTPUT"
+    - name: Restore the verified binary
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.resolve.outputs.dir }}
+        key: ${{ steps.resolve.outputs.key }}
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+    - name: Download and verify git-uplink
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        REPO: ${{ steps.resolve.outputs.repo }}
+        TAG: ${{ steps.resolve.outputs.tag }}
+        SIGNER: ${{ steps.resolve.outputs.signer }}
+        SIGNER_REPO: ${{ steps.resolve.outputs.signer_repo }}
+        ASSET: ${{ steps.resolve.outputs.asset }}
+        SUFFIX: ${{ steps.resolve.outputs.suffix }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+        TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
         if [[ -n "$TOKEN" ]]; then
           export GH_TOKEN="$TOKEN"
         fi
         rm -rf _git-uplink-dl
-        mkdir -p _git-uplink-dl "$HOME/.local/bin"
-        asset="git-uplink-${target}${suffix}"
-        download_release --pattern "$asset" --pattern "$asset.sigstore.json" --pattern SHA256SUMS --dir _git-uplink-dl
+        mkdir -p _git-uplink-dl
+        gh release download "$TAG" --repo "$REPO" \
+          --pattern "$ASSET" --pattern "$ASSET.sigstore.json" --pattern SHA256SUMS \
+          --dir _git-uplink-dl
         (
           cd _git-uplink-dl
-          if [[ ! -f "$asset" || ! -f "$asset.sigstore.json" ]]; then
-            echo "release asset $asset or its signature $asset.sigstore.json not found" >&2
+          if [[ ! -f "$ASSET" || ! -f "$ASSET.sigstore.json" ]]; then
+            echo "release asset $ASSET or its signature $ASSET.sigstore.json not found" >&2
             exit 1
           fi
           sha256sum -c SHA256SUMS --ignore-missing
-          cosign verify-blob "$asset" \
-            --bundle "$asset.sigstore.json" \
+          cosign verify-blob "$ASSET" \
+            --bundle "$ASSET.sigstore.json" \
             --certificate-identity "$SIGNER" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          # GitHub's release attestation: the asset belongs to this immutable release.
+          gh release verify-asset "$TAG" "$ASSET" --repo "$REPO"
+          # Build provenance and the SBOM, both made by the signing workflow.
+          gh attestation verify "$ASSET" --repo "$SIGNER_REPO" --cert-identity "$SIGNER"
+          gh attestation verify "$ASSET" --repo "$SIGNER_REPO" --cert-identity "$SIGNER" \
+            --predicate-type https://spdx.dev/Document/v2.3
         )
-        install -m 755 "_git-uplink-dl/$asset" "$HOME/.local/bin/git-uplink"
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        # Only a binary that passed every check reaches the cached directory.
+        mkdir -p "$DIR"
+        install -m 755 "_git-uplink-dl/$ASSET" "$DIR/git-uplink${SUFFIX}"
         rm -rf _git-uplink-dl
+    - name: Cache the verified binary
+      if: steps.restore.outputs.cache-hit != 'true' && steps.resolve.outputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.resolve.outputs.dir }}
+        key: ${{ steps.resolve.outputs.key }}
+    - name: Install git-uplink
+      shell: bash
+      env:
+        SUFFIX: ${{ steps.resolve.outputs.suffix }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+      run: | # zizmor: ignore[github-env] constant PATH entry for release binary
+        set -euo pipefail
+        mkdir -p "$HOME/.local/bin"
+        install -m 755 "$DIR/git-uplink${SUFFIX}" "$HOME/.local/bin/git-uplink"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         git-uplink -h >/dev/null

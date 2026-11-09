@@ -322,10 +322,14 @@ export function SecurityPage() {
             SPDX SBOMs, and every asset has a cosign signature (
             <code>.sigstore.json</code>) made by the release workflow on{" "}
             <code>main</code>. The pack&apos;s install action checks the
-            checksum and the signature on every job, also when{" "}
-            <code>UPLINK_SRC</code> points at a mirror, and installs the release
-            that wrote the pack unless you set <code>UPLINK_VERSION</code>. A
-            release without a signature stops the job.
+            checksum, the signature, the release attestation and the build
+            provenance and SBOM attestations, also when <code>UPLINK_SRC</code>{" "}
+            points at a mirror, and installs the release that wrote the pack
+            unless you set <code>UPLINK_VERSION</code>. A release without a
+            signature or attestations stops the job. A binary that passed is
+            kept in the Actions cache, and later jobs that find it skip the
+            download and the checks. Runs triggered by{" "}
+            <code>pull_request_target</code> never write that cache.
           </li>
           <li>
             Releases are immutable: once published, a release&apos;s tag cannot

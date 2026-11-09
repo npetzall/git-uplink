@@ -165,7 +165,8 @@ export function ForgePage() {
           </li>
           <li>
             Every job runs the <code>git-uplink</code> release that wrote the
-            pack, and checks its signature.
+            pack. It checks the signature and attestations once, then keeps the
+            verified binary in the Actions cache.
           </li>
           <li>
             Gated pull requests are opened by the internal App, so the
