@@ -96,6 +96,9 @@ fn decode_base64(text: &str) -> Vec<u8> {
 struct Fake {
     bare: PathBuf,
     requests: Arc<Mutex<Vec<(String, String, Value)>>>,
+    /// The token has Workflows write; without it a tree that changes
+    /// `.github/workflows/` is refused, as GitHub does.
+    workflows: bool,
 }
 
 impl Fake {
@@ -283,6 +286,13 @@ async fn post_tree(
         let Some(path) = entry["path"].as_str().filter(|v| valid_tree_path(v)) else {
             return invalid("tree path");
         };
+        if !fake.workflows && path.starts_with(".github/workflows/") {
+            return (
+                StatusCode::FORBIDDEN,
+                r#"{"message":"Resource not accessible by integration"}"#,
+            )
+                .into_response();
+        }
         let record = match (&entry["sha"], entry["mode"].as_str()) {
             (Value::Null, _) => format!("0 {}\t{path}", "0".repeat(40)),
             (Value::String(sha), Some(mode)) if valid_oid(sha) && valid_mode(mode) => {
@@ -454,7 +464,8 @@ struct World {
 }
 
 /// A local repo with an upstream base and an export commit that modifies,
-/// adds an executable, adds a symlink, deletes, and creates a nested file.
+/// adds an executable, adds a symlink, deletes, and creates a nested file and
+/// a workflow.
 fn world() -> World {
     let keep = tempfile::tempdir().unwrap();
     let local = keep.path().join("local");
@@ -481,6 +492,8 @@ fn world() -> World {
         [0xffu8, 0x00, 0x10, b'\n'],
     )
     .unwrap();
+    fs::create_dir_all(local.join(".github/workflows")).unwrap();
+    fs::write(local.join(".github/workflows/ci.yml"), "on: push\n").unwrap();
     run_git(&local, &["add", "-A"], None);
     let message = "Use SHA-256 for tokens\n\nReplace SHA-1.\n\nUplink-Patch-Id: upl_0123456789\nCo-Authored-By: Jane Public <jane@users.noreply.github.com>\n";
     run_git(
@@ -545,6 +558,7 @@ fn recreates_the_export_commit_on_contrib_with_modes_and_no_author() {
     let api = serve(Fake {
         bare: world.bare.clone(),
         requests: requests.clone(),
+        workflows: true,
     });
 
     let out = run_script(&world, &api, TOKEN);
@@ -608,7 +622,10 @@ fn recreates_the_export_commit_on_contrib_with_modes_and_no_author() {
         assert!(commit.get(key).is_none(), "{commit}");
     }
     let blobs = requests.iter().filter(|(_, p, _)| p == "blobs").count();
-    assert_eq!(blobs, 5, "modified, two executables, symlink, nested file");
+    assert_eq!(
+        blobs, 6,
+        "modified, two executables, symlink, nested file, workflow"
+    );
     assert!(
         requests
             .iter()
@@ -634,6 +651,7 @@ fn moves_an_existing_contrib_branch_without_pushing_the_base() {
     let api = serve(Fake {
         bare: world.bare.clone(),
         requests: requests.clone(),
+        workflows: true,
     });
 
     let out = run_script(&world, &api, TOKEN);
@@ -681,6 +699,7 @@ fn fails_without_touching_the_branch_when_the_token_is_rejected() {
     let api = serve(Fake {
         bare: world.bare.clone(),
         requests: Arc::new(Mutex::new(Vec::new())),
+        workflows: true,
     });
 
     let out = run_script(&world, &api, "wrong-token");
@@ -696,6 +715,31 @@ fn fails_without_touching_the_branch_when_the_token_is_rejected() {
         ),
         world.base
     );
+}
+
+#[test]
+fn names_the_workflows_permission_when_a_workflow_change_is_refused() {
+    let world = world();
+    let api = serve(Fake {
+        bare: world.bare.clone(),
+        requests: Arc::new(Mutex::new(Vec::new())),
+        workflows: false,
+    });
+
+    let out = run_script(&world, &api, TOKEN);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("403"), "{out:?}");
+    assert!(stderr.contains("Workflows read and write"), "{out:?}");
+    for branch in [
+        "refs/heads/uplink/upl_0123456789",
+        "refs/heads/uplink-base/upl_0123456789",
+    ] {
+        assert!(
+            !try_git(&world.bare, &["rev-parse", "--verify", "--quiet", branch]),
+            "{branch}"
+        );
+    }
 }
 
 #[test]
