@@ -18,6 +18,7 @@ use ratatui::{
 };
 
 use crate::adopt::{AdoptDecision, AdoptFailure, AdoptFailureKind, AdoptGroup, AheadAnalysis};
+use crate::assess::cutoff_marker;
 use crate::edit::width;
 use crate::error::Result;
 use crate::prompt::{Choice, Selection, next_selection};
@@ -46,21 +47,72 @@ impl TuiOutcome {
 /// commit. `analysis.allow_skip` tells `adopt --branch` (commits can be
 /// skipped, and the groups written to `groups_file` without adopting) from
 /// `init` (every commit is adopted).
+///
+/// `groups` (from a groups file) are shown as they are; without them each
+/// commit starts in a group of its own. The groups as first shown are
+/// written to `groups_file` when the window opens. When the operator quits,
+/// its path is printed on the way out, so it can be edited and passed back.
 pub fn run_adopt(
     repo: &Path,
     queue: &QueueState,
     analysis: &AheadAnalysis,
-    groups_file: Option<&Path>,
+    groups_file: &Path,
+    groups: Option<&[AdoptGroup]>,
 ) -> Result<TuiOutcome> {
     if analysis.commits.is_empty() {
         return Err(crate::error::Error::msg(
             "no unique first-parent commits to adopt",
         ));
     }
+    // Before the terminal is taken, so a bad file is reported plainly.
+    let tree = match groups {
+        Some(groups) => {
+            let resolved = crate::adopt::resolve_groups(analysis, groups)?;
+            tree::AdoptTree::from_groups(
+                analysis.commits.clone(),
+                analysis.allow_skip,
+                &cutoff_marker(queue),
+                &resolved,
+            )
+            .map_err(crate::error::Error::msg)?
+        }
+        None => initial_tree(queue, analysis),
+    };
     let mut terminal = init_terminal();
-    let result = adopt::run(&mut terminal, repo, queue, analysis, groups_file);
+    let result = adopt::run(&mut terminal, repo, queue, analysis, groups_file, tree);
     restore_terminal();
+    // Adopt and Ctrl+w report the file themselves; quitting does not.
+    if result.is_err() && groups_file.is_file() {
+        eprintln!("{}", groups_file_hint(groups_file, analysis.allow_skip));
+    }
     result
+}
+
+/// The groups the adopt UI first shows: each commit in a group of its own,
+/// except that, adopting from a branch, a commit already on main is skipped.
+pub fn initial_groups(queue: &QueueState, analysis: &AheadAnalysis) -> Vec<AdoptGroup> {
+    initial_tree(queue, analysis).to_groups()
+}
+
+fn initial_tree(queue: &QueueState, analysis: &AheadAnalysis) -> tree::AdoptTree {
+    tree::AdoptTree::new(
+        analysis.commits.clone(),
+        analysis.allow_skip,
+        &cutoff_marker(queue),
+    )
+}
+
+/// Where the groups file is, and how to open or adopt it after editing.
+fn groups_file_hint(groups_file: &Path, from_branch: bool) -> String {
+    let flag = if from_branch {
+        "git uplink adopt --branch <ref> --groups"
+    } else {
+        "git uplink init --adopt-groups"
+    };
+    format!(
+        "Groups file: {}\nEdit it, then `{flag}` opens it again; add `--apply` to adopt it without the UI.",
+        groups_file.display()
+    )
 }
 
 /// The full-screen terminal, with mouse events.
@@ -235,6 +287,7 @@ fn draw_failure(
         AdoptFailureKind::Stack if failure.internal_only => "Does not apply on company main",
         AdoptFailureKind::Stack => "Does not apply on origin's queue",
         AdoptFailureKind::CompanyPreflight => "Preflight failed on company main",
+        AdoptFailureKind::Planned => "Stopped to amend",
     };
     frame.render_widget(
         Paragraph::new(format!(
@@ -252,7 +305,7 @@ fn draw_failure(
     let block = Block::default()
         .borders(Borders::ALL)
         .title(match failure.kind {
-            AdoptFailureKind::Apply | AdoptFailureKind::Stack => "Why",
+            AdoptFailureKind::Apply | AdoptFailureKind::Stack | AdoptFailureKind::Planned => "Why",
             AdoptFailureKind::Preflight | AdoptFailureKind::CompanyPreflight => {
                 "preflight.sh output"
             }
@@ -296,6 +349,16 @@ fn draw_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn groups_file_hint_names_the_file_and_the_flag_to_adopt_with() {
+        let path = Path::new("/repo/.git/uplink/adopt/main-fork.json");
+        let branch = groups_file_hint(path, true);
+        assert!(branch.contains("/repo/.git/uplink/adopt/main-fork.json"));
+        assert!(branch.contains("`git uplink adopt --branch <ref> --groups`"));
+        assert!(branch.contains("--apply"));
+        assert!(groups_file_hint(path, false).contains("`git uplink init --adopt-groups`"));
+    }
 
     #[test]
     fn output_scroll_stops_at_both_ends() {

@@ -55,7 +55,13 @@ fn usage(arg: &Arg) -> String {
         return value(arg);
     };
     if arg.get_action().takes_values() {
-        format!("--{long} {}", value(arg))
+        // A value that may be left out, as in `--groups [<path>]`.
+        let optional = arg.get_num_args().is_some_and(|n| n.min_values() == 0);
+        if optional {
+            format!("--{long} [{}]", value(arg))
+        } else {
+            format!("--{long} {}", value(arg))
+        }
     } else {
         format!("--{long}")
     }

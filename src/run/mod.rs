@@ -125,6 +125,8 @@ pub enum AdoptFailureKind {
     Stack,
     /// `preflight.sh` fails on an internal-only item applied on the stack.
     CompanyPreflight,
+    /// Nothing failed: the groups file asks to stop and amend the item.
+    Planned,
 }
 
 impl AdoptFailureKind {
@@ -235,6 +237,11 @@ impl RunItem {
             Self::Group(group) => group.ignore_preflight = true,
             Self::Queued(item) => item.ignore_preflight = true,
         }
+    }
+
+    /// Planned to pause for an amend, and not amended yet.
+    fn stops_to_amend(&self) -> bool {
+        matches!(self, Self::Group(group) if group.stop_to_amend && group.amended.is_none())
     }
 
     fn amended(&self) -> Option<&str> {
@@ -1049,6 +1056,11 @@ fn check_item(
         let (Some(stack), Some(tip)) = (run.stack.clone(), stack_tip.clone()) else {
             return Ok(Checked::Add { stack_tip });
         };
+        if item.stops_to_amend() {
+            let info = failure(AdoptFailureKind::Planned, PLANNED.into(), String::new());
+            let at = PauseAt::Stack(stack);
+            return planned_stop(ctx, queue, run, info, candidate_abs, &at).map(Checked::Instead);
+        }
         if matches!(item, RunItem::Group(_))
             && let Some(found) =
                 detect_internal_depends_on(repo, queue, candidate_abs, patch.subject())?
@@ -1125,6 +1137,11 @@ fn check_item(
         }
     }
     patch.depends_on = deps;
+    if item.stops_to_amend() {
+        let info = failure(AdoptFailureKind::Planned, PLANNED.into(), String::new());
+        let at = PauseAt::Upstream(patch.depends_on.clone());
+        return planned_stop(ctx, queue, run, info, candidate_abs, &at).map(Checked::Instead);
+    }
     if run.preflight {
         let failed = match export_preflight_with(
             repo,
@@ -1239,6 +1256,37 @@ fn ignore_failure(queue: &QueueState, patch: &mut Patch, done: &mut BranchAdopte
     done.preflight_ignored = true;
 }
 
+const PLANNED: &str = "stopped to amend, as the groups file asks";
+
+/// Pauses on an item marked `stopToAmend`, the way Amend on a failure does.
+fn planned_stop(
+    ctx: &mut Ctx<'_>,
+    queue: &QueueState,
+    run: &mut BranchRun,
+    info: AdoptFailure,
+    candidate_abs: &Path,
+    at: &PauseAt,
+) -> Result<Step> {
+    let repo = ctx.repo;
+    if !pause::checkout_clean(repo)? {
+        return Err(Error::msg(format!(
+            "{} is marked to stop and amend, and amending needs a checkout without changes; \
+commit or stash them, then run git uplink {} --continue",
+            info.item,
+            run.kind.command()
+        )));
+    }
+    ctx.lines.line(StepOutcome::warn("paused to amend"));
+    Ok(Step::Paused(Box::new(pause::pause(
+        repo,
+        queue,
+        run,
+        &info,
+        candidate_abs,
+        at,
+    )?)))
+}
+
 /// Shows the failure, asks what to do with the item and does it. `None`
 /// when the preflight failure is to be ignored.
 fn on_failure(
@@ -1327,9 +1375,9 @@ fn unattended(run: &BranchRun, info: &AdoptFailure, error: Option<PreflightError
             let file = path.display();
             let n = info.group;
             let rerun = if run.kind == RunKind::Init {
-                format!("re-run git uplink init with --adopt-groups {file}")
+                format!("re-run git uplink init with --adopt-groups {file} --apply")
             } else {
-                format!("re-run with --groups {file}")
+                format!("re-run with --groups {file} --apply")
             };
             match info.kind {
                 AdoptFailureKind::CompanyPreflight => format!(
@@ -1344,10 +1392,12 @@ or run git uplink {cmd} in a terminal to amend it."
                     "To adopt it anyway, set \"ignorePreflight\": true (or \"intent\": \"internal-only\") on group {n} in {file} \
 and {rerun}, or run git uplink {cmd} in a terminal to amend it."
                 ),
-                AdoptFailureKind::Apply | AdoptFailureKind::Stack => format!(
-                    "Rebase those commits onto current upstream, set \"intent\": \"internal-only\" on group {n} in {file} \
+                AdoptFailureKind::Apply | AdoptFailureKind::Stack | AdoptFailureKind::Planned => {
+                    format!(
+                        "Rebase those commits onto current upstream, set \"intent\": \"internal-only\" on group {n} in {file} \
 and {rerun}, or run git uplink {cmd} in a terminal to amend it."
-                ),
+                    )
+                }
             }
         }
         None => format!("Run git uplink {cmd} in a terminal to amend, skip or ignore it."),

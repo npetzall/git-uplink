@@ -604,8 +604,11 @@ export function InternalsPage() {
             applied, in conflict or still to pick, until <code>--continue</code>
             . Every decision goes to{" "}
             <code>.git/uplink/adopt/&lt;branch&gt;.json</code>, which{" "}
-            <code>--groups</code> replays, skipping groups already queued. It
-            runs locally only.
+            <code>--groups --apply</code> replays, skipping groups already
+            queued. <code>--write-groups</code> writes that file without the UI,
+            and <code>--groups</code> opens the UI with it, so a run can be
+            planned ahead: a group can be marked to skip preflight or to stop
+            for an amend. It runs locally only.
           </li>
           <li>
             <code>init</code> adopts a company <code>main</code> that is ahead

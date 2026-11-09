@@ -18,14 +18,18 @@ pub const PREVIEW_BRANCH: &str = "uplink/preview/verify";
 pub struct AdoptBranchOpts {
     /// Local branch (or any local rev) to adopt commits from. Not used to resume.
     pub branch: String,
-    /// Groups to adopt; commits left out of every group are skipped.
+    /// Groups from a groups file; commits left out of every group are
+    /// skipped. Shown in the terminal UI, or adopted as they are with `apply`.
     pub groups: Option<Vec<AdoptGroup>>,
+    /// Adopt `groups` without the terminal UI.
+    pub apply: bool,
+    /// Write the groups the terminal UI would first show to the groups
+    /// file, and adopt nothing.
+    pub write_groups: bool,
     /// `None` detects a terminal.
     pub interactive: Option<bool>,
     /// Leave `uplink/adopt-test/*` at upstream + dependencies + each patch.
     pub keep_test_branches: bool,
-    /// Where the groups are written; `None` for [`adopt::groups_file_path`].
-    pub write_groups: Option<PathBuf>,
     /// Takes up the run in progress instead of starting one.
     pub resume: Option<AdoptResume>,
     /// Says what to do with a group that fails. `None` asks in a terminal
@@ -84,23 +88,24 @@ fn adopt_branch_offline(repo: &Path, opts: AdoptBranchOpts) -> Result<AdoptBranc
     let company_branch = queue.config.internal_branch.clone();
     let interactive = opts.interactive.unwrap_or_else(adopt::stdin_is_tty);
     let analysis = check_refs(repo, &queue, &opts.branch, &company_branch)?;
-    // Absolute, so a paused run finds it from any directory.
-    let groups_file = match &opts.write_groups {
-        Some(path) if path.is_relative() => std::env::current_dir()?.join(path),
-        Some(path) => path.clone(),
-        None => adopt::groups_file_path(repo, &opts.branch)?,
-    };
-    let (groups, write_only) = match opts.groups.clone() {
-        Some(groups) => (groups, false),
-        None if interactive => {
-            match crate::tui::run_adopt(repo, &queue, &analysis, Some(&groups_file))? {
+    let groups_file = adopt::groups_file_path(repo, &opts.branch)?;
+    let (groups, write_only) = match opts.groups.as_deref() {
+        _ if opts.write_groups => (crate::tui::initial_groups(&queue, &analysis), true),
+        Some(groups) if opts.apply => (groups.to_vec(), false),
+        loaded if interactive => {
+            match crate::tui::run_adopt(repo, &queue, &analysis, &groups_file, loaded)? {
                 TuiOutcome::Adopt(groups) => (groups, false),
                 TuiOutcome::WriteAndExit(groups) => (groups, true),
             }
         }
+        Some(_) => {
+            return Err(Error::msg(
+                "pass --apply to adopt the groups without the terminal UI",
+            ));
+        }
         None => {
             return Err(Error::msg(
-                "pass --groups <file> or re-run git uplink adopt in a terminal to pick commits",
+                "pass --groups <file> --apply, or re-run git uplink adopt in a terminal to pick commits",
             ));
         }
     };

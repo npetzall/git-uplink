@@ -1,7 +1,8 @@
 //! The adopt window: the commits as a tree of groups on the left, the
 //! selected commit's change or group's form on the right. Enter (or a
 //! double-click) on a commit offers what to do with it; Ctrl+s adopts and
-//! Ctrl+w writes the groups file, each after a confirmation.
+//! Ctrl+w writes the groups file, each after a confirmation. The groups as
+//! first shown are written to the groups file when the window opens.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,8 +20,8 @@ use ratatui::{
 
 use super::tree::{Action, AdoptTree, GroupId, Row};
 use super::{TuiOutcome, button_at, buttons, centered, clamp_top, contains};
-use crate::adopt::{AdoptGroup, AheadAnalysis, resolve_groups};
-use crate::assess::{assert_assess_ok, assess_from_message, cutoff_marker};
+use crate::adopt::{AdoptGroup, AheadAnalysis, resolve_groups, write_groups_file};
+use crate::assess::{assert_assess_ok, assess_from_message};
 use crate::edit::{clip, width};
 use crate::error::{Error, Result};
 use crate::git::git_ok;
@@ -34,7 +35,17 @@ const SIDEWAYS: usize = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
     Upstream,
+    /// `ignorePreflight`; adopting from a branch only.
+    SkipPreflight,
+    /// `stopToAmend`.
+    StopToAmend,
     Message,
+}
+
+impl Field {
+    fn is_box(self) -> bool {
+        self != Self::Message
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +85,8 @@ enum Confirm {
 struct Spots {
     tree: Rect,
     detail: Rect,
-    upstream: Rect,
+    /// The checkboxes of the group's form, with the field each toggles.
+    boxes: Vec<(Field, Rect)>,
     message: Rect,
     popup: Rect,
     items: Vec<Rect>,
@@ -93,7 +105,7 @@ struct Ui<'a> {
     repo: &'a Path,
     queue: &'a QueueState,
     analysis: &'a AheadAnalysis,
-    groups_file: Option<&'a Path>,
+    groups_file: &'a Path,
     tree: AdoptTree,
     rows: Vec<Row>,
     selected: usize,
@@ -114,13 +126,10 @@ pub(super) fn run(
     repo: &Path,
     queue: &QueueState,
     analysis: &AheadAnalysis,
-    groups_file: Option<&Path>,
+    groups_file: &Path,
+    tree: AdoptTree,
 ) -> Result<TuiOutcome> {
-    let tree = AdoptTree::new(
-        analysis.commits.clone(),
-        analysis.allow_skip,
-        &cutoff_marker(queue),
-    );
+    write_groups_file(groups_file, &tree.to_groups())?;
     let mut ui = Ui {
         repo,
         queue,
@@ -132,7 +141,7 @@ pub(super) fn run(
         list: ListState::default().with_selected(Some(0)),
         focus: Focus::Tree,
         popup: None,
-        status: String::new(),
+        status: format!("Groups file: {}", groups_file.display()),
         shows: HashMap::new(),
         commit_top: 0,
         commit_left: 0,
@@ -275,24 +284,46 @@ impl Ui<'_> {
         }
     }
 
+    /// The form's fields in order: the checkboxes, then the message.
+    fn fields(&self) -> Vec<Field> {
+        let mut fields = vec![Field::Upstream];
+        if self.tree.allow_skip() {
+            fields.push(Field::SkipPreflight);
+        }
+        fields.extend([Field::StopToAmend, Field::Message]);
+        fields
+    }
+
+    fn toggle(&mut self, id: GroupId, field: Field) {
+        let form = self.tree.form_mut(id);
+        match field {
+            Field::Upstream => form.upstream = !form.upstream,
+            Field::SkipPreflight => form.skip_preflight = !form.skip_preflight,
+            Field::StopToAmend => form.stop_to_amend = !form.stop_to_amend,
+            Field::Message => {}
+        }
+    }
+
     fn on_field_key(&mut self, field: Field, key: KeyEvent) {
         let Row::Group(id) = self.row() else {
             self.focus = Focus::Tree;
             return;
         };
-        let other = |f| match f {
-            Field::Upstream => Field::Message,
-            Field::Message => Field::Upstream,
-        };
+        let fields = self.fields();
+        let at = fields.iter().position(|f| *f == field).unwrap_or(0);
+        let step =
+            |by: isize| fields[(at as isize + by).rem_euclid(fields.len() as isize) as usize];
         match (field, key.code) {
             (_, KeyCode::Esc) => self.focus = Focus::Tree,
-            (_, KeyCode::Tab | KeyCode::BackTab) => self.focus = Focus::Field(other(field)),
-            (Field::Upstream, KeyCode::Char(' ') | KeyCode::Enter) => {
-                let form = self.tree.form_mut(id);
-                form.upstream = !form.upstream;
-            }
+            (_, KeyCode::Tab) => self.focus = Focus::Field(step(1)),
+            (_, KeyCode::BackTab) => self.focus = Focus::Field(step(-1)),
+            (f, KeyCode::Char(' ') | KeyCode::Enter) if f.is_box() => self.toggle(id, f),
             (Field::Upstream, KeyCode::Left) => self.focus = Focus::Tree,
-            (Field::Upstream, KeyCode::Down) => self.focus = Focus::Field(Field::Message),
+            (f, KeyCode::Left) if f.is_box() => self.focus = Focus::Field(step(-1)),
+            (f, KeyCode::Right) if f.is_box() && step(1).is_box() => {
+                self.focus = Focus::Field(step(1));
+            }
+            (f, KeyCode::Down) if f.is_box() => self.focus = Focus::Field(Field::Message),
             (Field::Message, KeyCode::Up) if self.tree.form(id).message.on_first_line() => {
                 self.focus = Focus::Field(Field::Upstream);
             }
@@ -315,6 +346,7 @@ impl Ui<'_> {
 
     fn take_action(&mut self, commit: usize, action: Action) {
         self.popup = None;
+        let amended = self.tree.amended_count();
         match self.tree.apply(commit, action) {
             Ok(group) => {
                 self.rebuild_rows();
@@ -324,6 +356,11 @@ impl Ui<'_> {
                     Some(id) => format!("{short} is in group {}", self.tree.number(id)),
                     None => format!("{short} is skipped"),
                 };
+                if self.tree.amended_count() < amended {
+                    self.status.push_str(
+                        "; a group amended in an earlier run changed, so its amended change is dropped",
+                    );
+                }
             }
             Err(why) => self.status = why.to_string(),
         }
@@ -351,10 +388,7 @@ impl Ui<'_> {
         };
         let (n, grouped, skipped) = self.tree.counts();
         let text = if write {
-            let path = self.groups_file.map_or_else(
-                || "the groups file".to_string(),
-                |p| p.display().to_string(),
-            );
+            let path = self.groups_file.display();
             format!("Write the {n} group(s) to\n{path}\nand exit without adopting?")
         } else {
             format!("Adopt {n} group(s): {grouped} commit(s), {skipped} skipped?")
@@ -570,11 +604,15 @@ impl Ui<'_> {
             }
             return;
         };
-        let (upstream, message) = (spots.upstream, spots.message);
-        if contains(upstream, x, y) {
-            self.focus = Focus::Field(Field::Upstream);
-            let form = self.tree.form_mut(id);
-            form.upstream = !form.upstream;
+        let message = spots.message;
+        let clicked = spots
+            .boxes
+            .iter()
+            .find(|(_, rect)| contains(*rect, x, y))
+            .map(|(field, _)| *field);
+        if let Some(field) = clicked {
+            self.focus = Focus::Field(field);
+            self.toggle(id, field);
         } else if contains(message, x, y) {
             self.focus = Focus::Field(Field::Message);
             self.tree
@@ -655,7 +693,13 @@ impl Ui<'_> {
             .map(|row| match *row {
                 Row::Group(id) => {
                     let form = self.tree.form(id);
-                    let tag = if form.upstream { "[up]" } else { "[int]" };
+                    let mut tag = if form.upstream { "[up]" } else { "[int]" }.to_string();
+                    if form.skip_preflight {
+                        tag.push_str(" [skip preflight]");
+                    }
+                    if form.stop_to_amend {
+                        tag.push_str(" [amend]");
+                    }
                     ListItem::new(format!(
                         "▾ {} {}  {tag}",
                         self.tree.number(id),
@@ -777,22 +821,46 @@ impl Ui<'_> {
                 "  "
             }
         };
+        let fields = self.fields();
+        let amended = self
+            .tree
+            .amended_of(id)
+            .map(|sha| sha[..sha.len().min(7)].to_string());
         let form = self.tree.form_mut(id);
 
-        let check = if form.upstream { "x" } else { " " };
-        let upstream_text = format!(
-            "{}[{check}] Upstream (unticked: internal-only)",
-            mark(Field::Upstream)
-        );
-        frame.render_widget(Paragraph::new(upstream_text.clone()), rows[0]);
-        let upstream_area = Rect {
-            width: (width(&upstream_text) as u16).min(rows[0].width),
-            ..rows[0]
-        };
+        // The checkboxes, side by side, each clickable.
+        let mut boxes = Vec::new();
+        let mut x = rows[0].x;
+        for field in fields.into_iter().filter(|f| f.is_box()) {
+            let (ticked, label) = match field {
+                Field::Upstream => (form.upstream, "Upstream (unticked: internal-only)"),
+                Field::SkipPreflight => (form.skip_preflight, "Skip preflight"),
+                Field::StopToAmend => (form.stop_to_amend, "Stop to amend"),
+                Field::Message => continue,
+            };
+            let text = format!(
+                "{}[{}] {label}",
+                mark(field),
+                if ticked { "x" } else { " " }
+            );
+            let end = rows[0].x + rows[0].width;
+            let w = (width(&text) as u16).min(end.saturating_sub(x));
+            let rect = Rect {
+                x,
+                width: w,
+                ..rows[0]
+            };
+            frame.render_widget(Paragraph::new(text), rect);
+            boxes.push((field, rect));
+            x = (x + w + 2).min(end);
+        }
 
+        let mut commits_line = format!("  Commits: {}", shorts.join(", "));
+        if let Some(short) = &amended {
+            commits_line.push_str(&format!(" · amended in an earlier run: {short}"));
+        }
         frame.render_widget(
-            Paragraph::new(format!("  Commits: {}", shorts.join(", ")))
-                .style(Style::default().add_modifier(Modifier::DIM)),
+            Paragraph::new(commits_line).style(Style::default().add_modifier(Modifier::DIM)),
             rows[1],
         );
         if warn {
@@ -824,7 +892,7 @@ impl Ui<'_> {
             ));
         }
         frame.render_widget(Paragraph::new(view.lines.join("\n")), message_area);
-        self.spots.upstream = upstream_area;
+        self.spots.boxes = boxes;
         self.spots.message = message_area;
     }
 
@@ -842,7 +910,7 @@ impl Ui<'_> {
                 "↑/↓ PgUp/PgDn or wheel scroll · →/← sideways (← at column 1: back) · Enter actions · Ctrl+s adopt{write}"
             ),
             Focus::Field(_) => {
-                "Tab next field · Space toggles Upstream · Ctrl+a/Ctrl+e line start/end · Alt+←/→ word · Ctrl+w delete word · Esc back · Ctrl+s adopt"
+                "Tab next field · Space toggles a box · Ctrl+a/Ctrl+e line start/end · Alt+←/→ word · Ctrl+w delete word · Esc back · Ctrl+s adopt"
                     .to_string()
             }
         };

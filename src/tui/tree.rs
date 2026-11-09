@@ -11,10 +11,17 @@ use crate::types::{PatchIntent, first_line};
 
 pub type GroupId = usize;
 
-/// What a group says about its patch.
+/// What a group says about its patch, and what the run does with it.
 pub struct GroupForm {
     pub upstream: bool,
     pub message: TextEdit,
+    /// Adopt it even when `preflight.sh` fails (`ignorePreflight`).
+    pub skip_preflight: bool,
+    /// Pause on it to amend before it is checked (`stopToAmend`).
+    pub stop_to_amend: bool,
+    /// The amended commit from an earlier run, with the commits it was
+    /// made from. It only holds while the group has exactly those.
+    pub amended: Option<(String, Vec<usize>)>,
 }
 
 impl GroupForm {
@@ -81,6 +88,73 @@ impl AdoptTree {
             }
         }
         tree
+    }
+
+    /// The tree of `groups`, which [`crate::adopt::resolve_groups`] has
+    /// checked against `commits`: full shas, in order, none left out unless
+    /// `allow_skip`.
+    pub fn from_groups(
+        commits: Vec<AdoptCommit>,
+        allow_skip: bool,
+        marker: &str,
+        groups: &[AdoptGroup],
+    ) -> Result<Self, String> {
+        let mut tree = Self {
+            owner: vec![None; commits.len()],
+            commits,
+            groups: BTreeMap::new(),
+            next_id: 0,
+            allow_skip,
+            marker: marker.to_string(),
+        };
+        for group in groups {
+            let id = tree.next_id;
+            tree.next_id += 1;
+            let mut members = Vec::new();
+            for sha in &group.commits {
+                let i = tree
+                    .commits
+                    .iter()
+                    .position(|c| &c.sha == sha)
+                    .ok_or_else(|| format!("commit {sha} is not one to adopt"))?;
+                tree.owner[i] = Some(id);
+                members.push(i);
+            }
+            let mut message = group.message.clone();
+            if !strip_html_comments(&message).contains(&tree.marker) {
+                message.push_str("\n\n");
+                message.push_str(&tree.marker);
+                message.push('\n');
+            }
+            tree.groups.insert(
+                id,
+                GroupForm {
+                    upstream: !group.intent.is_internal_only(),
+                    message: TextEdit::multiline(message),
+                    skip_preflight: group.ignore_preflight,
+                    stop_to_amend: group.stop_to_amend,
+                    amended: group.amended.clone().map(|sha| (sha, members)),
+                },
+            );
+        }
+        if !allow_skip && tree.owner.iter().any(Option::is_none) {
+            return Err("init adopts every commit; each must be in a group".into());
+        }
+        Ok(tree)
+    }
+
+    /// Groups whose amended commit still holds.
+    pub fn amended_count(&self) -> usize {
+        self.group_ids()
+            .into_iter()
+            .filter(|id| self.amended_of(*id).is_some())
+            .count()
+    }
+
+    /// The amended commit of group `id`, while its members are unchanged.
+    pub fn amended_of(&self, id: GroupId) -> Option<&str> {
+        let (sha, members) = self.groups[&id].amended.as_ref()?;
+        (*members == self.members(id)).then_some(sha.as_str())
     }
 
     pub fn commits(&self) -> &[AdoptCommit] {
@@ -256,7 +330,9 @@ impl AdoptTree {
                         PatchIntent::InternalOnly
                     },
                     message: self.message_of(form.message.text()),
-                    ..Default::default()
+                    ignore_preflight: form.skip_preflight,
+                    stop_to_amend: form.stop_to_amend,
+                    amended: self.amended_of(id).map(str::to_string),
                 }
             })
             .collect()
@@ -309,6 +385,9 @@ impl AdoptTree {
             GroupForm {
                 upstream: true,
                 message: TextEdit::multiline(message),
+                skip_preflight: false,
+                stop_to_amend: false,
+                amended: None,
             },
         );
         id
@@ -519,5 +598,56 @@ mod tests {
         assert_eq!(groups[0].intent, PatchIntent::Upstream);
         assert_eq!(groups[1].intent, PatchIntent::InternalOnly);
         assert!(!t.after_internal_only(last));
+    }
+
+    #[test]
+    fn from_groups_round_trips_the_run_decisions() {
+        let commits: Vec<AdoptCommit> = (0..3).map(|i| commit(i, false)).collect();
+        let groups = vec![
+            AdoptGroup {
+                commits: vec![commits[0].sha.clone(), commits[1].sha.clone()],
+                message: "First".into(),
+                intent: PatchIntent::Upstream,
+                ignore_preflight: true,
+                amended: Some("a".repeat(40)),
+                stop_to_amend: false,
+            },
+            AdoptGroup {
+                commits: vec![commits[2].sha.clone()],
+                message: "Second".into(),
+                intent: PatchIntent::InternalOnly,
+                stop_to_amend: true,
+                ..Default::default()
+            },
+        ];
+        let t = AdoptTree::from_groups(commits, true, MARKER, &groups).unwrap();
+        assert_eq!(t.to_groups(), groups);
+    }
+
+    #[test]
+    fn an_amended_mark_is_dropped_when_the_group_changes() {
+        let commits: Vec<AdoptCommit> = (0..3).map(|i| commit(i, false)).collect();
+        let groups = vec![AdoptGroup {
+            commits: vec![commits[0].sha.clone(), commits[1].sha.clone()],
+            message: "First".into(),
+            amended: Some("a".repeat(40)),
+            ..Default::default()
+        }];
+        let mut t = AdoptTree::from_groups(commits, true, MARKER, &groups).unwrap();
+        assert_eq!(t.amended_count(), 1);
+        t.apply(2, Action::ToPrevious).unwrap();
+        assert_eq!(t.amended_count(), 0);
+        assert_eq!(t.to_groups()[0].amended, None);
+    }
+
+    #[test]
+    fn from_groups_needs_every_commit_when_none_may_be_skipped() {
+        let commits: Vec<AdoptCommit> = (0..2).map(|i| commit(i, false)).collect();
+        let groups = vec![AdoptGroup {
+            commits: vec![commits[0].sha.clone()],
+            message: "First".into(),
+            ..Default::default()
+        }];
+        assert!(AdoptTree::from_groups(commits, false, MARKER, &groups).is_err());
     }
 }

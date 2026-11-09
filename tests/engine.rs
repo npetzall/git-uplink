@@ -2488,6 +2488,7 @@ fn init_adopt(world: &World, groups: Vec<AdoptGroup>) -> QueueState {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Github),
+            adopt_apply: true,
             adopt_groups: Some(groups),
             interactive: Some(false),
             ..Default::default()
@@ -2768,6 +2769,7 @@ fn init_adopts_each_merge_commit_as_a_patch() {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Github),
+            adopt_apply: true,
             adopt_groups: Some(vec![adopt_group(&[&side], "Side", PatchIntent::Upstream)]),
             interactive: Some(false),
             ..Default::default()
@@ -2883,6 +2885,7 @@ fn init_rejects_incomplete_and_noncontiguous_adopt_groups() {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Github),
+            adopt_apply: true,
             adopt_groups: Some(vec![adopt_group(
                 &[&a, &b],
                 "Partial",
@@ -2903,6 +2906,7 @@ fn init_rejects_incomplete_and_noncontiguous_adopt_groups() {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Github),
+            adopt_apply: true,
             adopt_groups: Some(vec![
                 adopt_group(&[&a, &c], "Split", PatchIntent::Upstream),
                 adopt_group(&[&b], "Mid", PatchIntent::Upstream),
@@ -2938,6 +2942,7 @@ fn init_rejects_history_that_is_ahead_and_behind() {
             upstream_url: Some(world.upstream.to_str().unwrap().into()),
             contrib_url: Some(remote_get_url(&world.company, "contrib")),
             forge: Some(Forge::Github),
+            adopt_apply: true,
             adopt_groups: Some(vec![adopt_group(&["HEAD"], "Nope", PatchIntent::Upstream)]),
             interactive: Some(false),
             ..Default::default()
@@ -13756,6 +13761,7 @@ fn adopt_fork(
         company,
         git_uplink::AdoptBranchOpts {
             branch: "main-fork".into(),
+            apply: true,
             groups: Some(groups),
             interactive: Some(false),
             keep_test_branches,
@@ -13983,6 +13989,7 @@ fn adopt_branch_is_local_only() {
         company,
         git_uplink::AdoptBranchOpts {
             branch: "only-on-origin".into(),
+            apply: true,
             groups: Some(Vec::new()),
             interactive: Some(false),
             keep_test_branches: false,
@@ -14079,6 +14086,7 @@ fn adopt_fork_deciding(
         company,
         git_uplink::AdoptBranchOpts {
             branch: "main-fork".into(),
+            apply: true,
             groups: Some(groups),
             interactive: Some(false),
             decide: Some(std::sync::Arc::new(move |_| Ok(decision))),
@@ -14148,6 +14156,7 @@ fn adopt_branch_depends_on_what_preflight_needs() {
         company,
         git_uplink::AdoptBranchOpts {
             branch: "main-fork".into(),
+            apply: true,
             groups: Some(groups),
             interactive: Some(false),
             ..Default::default()
@@ -14475,6 +14484,7 @@ fn init_adopt_opts(world: &World, groups: Vec<AdoptGroup>) -> InitOpts {
         upstream_url: Some(world.upstream.to_str().unwrap().into()),
         contrib_url: Some(remote_get_url(&world.company, "contrib")),
         forge: Some(Forge::Github),
+        adopt_apply: true,
         adopt_groups: Some(groups),
         interactive: Some(false),
         ..Default::default()
@@ -14721,6 +14731,7 @@ fn adopt_branch_builds_the_preview_unless_asked_not_to() {
             company,
             git_uplink::AdoptBranchOpts {
                 branch: "main-fork".into(),
+                apply: true,
                 groups: Some(vec![adopt_group(
                     &[&fork.new_file],
                     "Add limits",
@@ -15501,6 +15512,7 @@ fn adopt_preflights_an_internal_group_on_company_main_and_amends_it_there() {
         company,
         git_uplink::AdoptBranchOpts {
             branch: "main-fork".into(),
+            apply: true,
             groups: Some(vec![adopt_group(
                 &[&fork.notes],
                 "Fork notes",
@@ -16163,4 +16175,84 @@ fn resolving_a_conflict_adds_the_resolver_as_author() {
         "{message}"
     );
     assert!(!message.contains("Uplink Bot"), "{message}");
+}
+
+#[test]
+fn adopt_write_groups_writes_the_first_groups_and_adopts_nothing() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let state_before = git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap();
+    let result = git_uplink::adopt_branch(
+        company,
+        git_uplink::AdoptBranchOpts {
+            branch: "main-fork".into(),
+            write_groups: true,
+            interactive: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(result.adoption.is_none());
+    assert_eq!(
+        result.groups_file,
+        git_uplink::groups_file_path(company, "main-fork").unwrap()
+    );
+    let groups = fork_groups_file(company);
+    // Each commit in a group of its own, as the terminal UI first shows them.
+    assert!(groups.iter().all(|g| g.commits.len() == 1), "{groups:?}");
+    assert!(groups.iter().any(|g| g.commits == [fork.new_file.clone()]));
+    assert_eq!(
+        git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap(),
+        state_before
+    );
+}
+
+#[test]
+fn adopt_groups_without_apply_needs_a_terminal() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let err = git_uplink::adopt_branch(
+        company,
+        git_uplink::AdoptBranchOpts {
+            branch: "main-fork".into(),
+            groups: Some(vec![adopt_group(
+                &[&fork.new_file[..7]],
+                "Add limits",
+                PatchIntent::Upstream,
+            )]),
+            interactive: Some(false),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("--apply"), "{err}");
+}
+
+#[test]
+fn adopt_stops_to_amend_a_group_marked_so() {
+    let world = setup_world();
+    let company = &world.company;
+    let fork = adopt_fork_world(company);
+    let mut group = adopt_group(&[&fork.new_file[..7]], "Add limits", PatchIntent::Upstream);
+    group.stop_to_amend = true;
+    // It applies and passes; only the plan stops it.
+    let err = adopt_fork(company, vec![group], false).unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("adopt paused on group 1"), "{text}");
+    assert!(text.contains("asks to stop and amend"), "{text}");
+    assert!(company.join(".git/uplink-run.json").is_file());
+
+    write(company, "src/limits.js", "export const max = 20;\n");
+    git(company, &["add", "src/limits.js"], GitOpts::default()).unwrap();
+    let result = adopt_resume(company, git_uplink::AdoptResume::Continue).unwrap();
+    let adoption = result.adoption.as_ref().unwrap();
+    assert_eq!(adoption.adopted.len(), 1);
+    assert!(adoption.adopted[0].amended);
+    let stored = fork_groups_file(company);
+    assert!(
+        stored[0].stop_to_amend && stored[0].amended.is_some(),
+        "{stored:?}"
+    );
 }
