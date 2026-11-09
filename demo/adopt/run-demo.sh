@@ -4,9 +4,8 @@
 # ./run-demo.sh --no-preflight-deps
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-ROOT=$(cd "$HERE/../.." && pwd)
-if [ ! -d "$HERE/demo/company" ]; then
+if [ ! -d "$HERE/scratch/company" ] || [ ! -e "$HERE/scratch/bin/git-uplink" ]; then
   "$HERE/make-demo.sh"
 fi
-cd "$HERE/demo/company"
-exec "$ROOT/target/debug/git-uplink" adopt --branch main-fork "$@"
+cd "$HERE/scratch/company"
+exec "$HERE/scratch/bin/git-uplink" adopt --branch main-fork "$@"
