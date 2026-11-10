@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
+import { FinishedFilter } from "../components/finished-filter";
 import { PatchTable } from "../components/patch-table";
 import { SourceToggle } from "../components/source-toggle";
 import { StatusBadge } from "../components/status-badge";
@@ -15,6 +16,7 @@ import {
 import { Tabs } from "../components/ui/tabs";
 import {
   loadStatus,
+  type Patch,
   parseSource,
   type QueueSource,
   refreshRemote,
@@ -25,10 +27,14 @@ import {
 import { LABEL_ORDER, STATUS_INFO, STATUS_ORDER } from "../lib/status";
 import { cn } from "../lib/utils";
 import {
+  finishedStatuses,
+  parseShown,
   parseView,
   type QueueView,
+  type ShownFinished,
   sourceBranch,
   viewSearch,
+  visiblePatches,
 } from "../lib/view";
 
 const COUNTERS: { key: keyof StatusCounts; label: string }[] = [
@@ -109,11 +115,70 @@ function SyncPill({ state }: { state: StateStatus }) {
   );
 }
 
+/** The Upstream or Internal card, with a dropdown to show its finished patches. */
+function LayerCard({
+  title,
+  layer,
+  patches,
+  shown,
+  onShownChange,
+  search,
+  stale,
+  empty,
+}: {
+  title: string;
+  layer: "upstream" | "internal";
+  patches: Patch[];
+  shown: ShownFinished[];
+  onShownChange: (shown: ShownFinished[]) => void;
+  search: string;
+  stale?: string[];
+  empty: string;
+}) {
+  const visible = visiblePatches(patches, layer, shown);
+  const hidden = patches.length - visible.length;
+  const options = finishedStatuses(layer).map((status) => {
+    const token = `${layer}-${status}` as ShownFinished;
+    return {
+      status,
+      checked: shown.includes(token),
+      onChange: (checked: boolean) =>
+        onShownChange(
+          checked
+            ? [...shown, token]
+            : shown.filter((other) => other !== token),
+        ),
+    };
+  });
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
+        <CardTitle className="text-base">{title}</CardTitle>
+        <FinishedFilter label={title} options={options} hiddenCount={hidden} />
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <PatchTable
+          search={search}
+          layer={layer}
+          patches={visible}
+          stale={stale}
+          empty={
+            hidden
+              ? `${hidden} finished ${hidden === 1 ? "patch is" : "patches are"} hidden.`
+              : empty
+          }
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
 export function QueuePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const source = parseSource(searchParams.get("source"));
   const view = parseView(searchParams.get("view"));
-  const search = viewSearch(source, view);
+  const shown = parseShown(searchParams.get("show"));
+  const search = viewSearch(source, view, shown);
   const [data, setData] = useState<StatusResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -141,8 +206,14 @@ export function QueuePage() {
     (data?.upstream ?? []).filter((patch) => patch.id === id),
   );
 
-  function show(nextSource: QueueSource, nextView: QueueView) {
-    setSearchParams(new URLSearchParams(viewSearch(nextSource, nextView)));
+  function show(
+    nextSource: QueueSource,
+    nextView: QueueView,
+    nextShown: ShownFinished[] = shown,
+  ) {
+    setSearchParams(
+      new URLSearchParams(viewSearch(nextSource, nextView, nextShown)),
+    );
   }
 
   async function onRefresh() {
@@ -335,33 +406,25 @@ export function QueuePage() {
                   />
                 </CardContent>
               </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Upstream</CardTitle>
-                </CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <PatchTable
-                    search={search}
-                    layer="upstream"
-                    patches={data.upstream ?? []}
-                    stale={data.staleApprovals}
-                    empty="No upstream-bound patches."
-                  />
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Internal</CardTitle>
-                </CardHeader>
-                <CardContent className="overflow-x-auto">
-                  <PatchTable
-                    search={search}
-                    layer="internal"
-                    patches={data.internal ?? []}
-                    empty="No internal patches."
-                  />
-                </CardContent>
-              </Card>
+              <LayerCard
+                title="Upstream"
+                layer="upstream"
+                patches={data.upstream ?? []}
+                shown={shown}
+                onShownChange={(next) => show(source, view, next)}
+                search={search}
+                stale={data.staleApprovals}
+                empty="No upstream-bound patches."
+              />
+              <LayerCard
+                title="Internal"
+                layer="internal"
+                patches={data.internal ?? []}
+                shown={shown}
+                onShownChange={(next) => show(source, view, next)}
+                search={search}
+                empty="No internal patches."
+              />
             </>
           )}
         </div>
