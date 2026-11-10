@@ -12,6 +12,7 @@ on:
       - build.rs
       - Cross.toml
       - rust-toolchain.toml
+      - scripts/install.sh
       - .github/calculate-version.sh
       - .github/workflows/release.yml
       - .github/workflows/product.yml
@@ -112,6 +113,8 @@ jobs:
           )
           cp sbom/git-uplink.cdx.json "staged/git-uplink-${NEXT_VERSION}.cdx.json"
           cp sbom/git-uplink.spdx.json "staged/git-uplink-${NEXT_VERSION}.spdx.json"
+          # The bootstrap of ~/.uplink; signed below so it can be verified before it runs.
+          install -m 755 scripts/install.sh staged/install.sh
           for f in staged/*; do
             cosign sign-blob "$f" --bundle "$f.sigstore.json" --yes
           done
