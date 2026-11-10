@@ -23,6 +23,7 @@ mod prompt;
 mod queue;
 mod repo;
 mod run;
+mod selfinstall;
 mod settings;
 mod tooling;
 mod tui;
@@ -86,6 +87,9 @@ pub use preflight::{
 };
 pub use progress::{ProgressMode, StepOutcome, StepProgress, format_step_line};
 pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};
+pub use selfinstall::{
+    DEFAULT_REPO, SelfConfig, SelfEnv, self_available, self_check, self_list, self_update, self_use,
+};
 pub use settings::{SETTINGS_PATH, Settings, SettingsFlags};
 pub use types::{
     AssessReport, CheckStatus, ConflictCause, DEFAULT_CUTOFF, Forge, GateKind, MergeVia,

@@ -565,6 +565,7 @@ dependencies = [
  "rust-embed-utils",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",

@@ -36,6 +36,7 @@ use git_uplink::{
     strip_html_comments, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
     trim_deps, upstream_pr_body, write_man_pages,
 };
+use git_uplink::{SelfEnv, self_available, self_check, self_list, self_update, self_use};
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -2414,6 +2415,27 @@ fn run() -> Result<(), Error> {
         }
         Commands::Version => {
             println!("git-uplink {VERSION}");
+            Ok(())
+        }
+        Commands::SelfUpdate { version, no_switch } => {
+            let env = SelfEnv::from_env()?;
+            println!("{}", self_update(&env, version.as_deref(), no_switch)?);
+            Ok(())
+        }
+        Commands::SelfUse { version } => {
+            println!("{}", self_use(&SelfEnv::from_env()?, &version)?);
+            Ok(())
+        }
+        Commands::SelfList => {
+            println!("{}", self_list(&SelfEnv::from_env()?)?);
+            Ok(())
+        }
+        Commands::SelfAvailable => {
+            println!("{}", self_available(&SelfEnv::from_env()?)?);
+            Ok(())
+        }
+        Commands::SelfCheck => {
+            println!("{}", self_check(&SelfEnv::from_env()?)?);
             Ok(())
         }
     }
