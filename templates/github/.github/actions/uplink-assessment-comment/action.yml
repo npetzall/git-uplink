@@ -1,0 +1,61 @@
+name: Uplink assessment comment
+description: >-
+  Write the assess report and the company assessment hook's markdown to the
+  pull request: one comment per PR, created on the first run and updated in
+  place on every run after. The hook's extras come first, then the report.
+inputs:
+  package-dir:
+    description: Directory of the assessment package (git uplink assess --package); its assessment.md is the report.
+    required: true
+  hook-dir:
+    description: Directory of the hook's *.md extras (the dir output of uplink-assessment-hook). Empty or missing when there are none.
+    required: false
+    default: ""
+  pr-number:
+    description: Number of the pull request to comment on.
+    required: true
+  token:
+    description: Token with pull-requests write on this repository. Workflows pass secrets.GITHUB_TOKEN.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Update the assessment comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PACKAGE_DIR: ${{ inputs.package-dir }}
+        HOOK_DIR: ${{ inputs.hook-dir }}
+      run: |
+        set -euo pipefail
+        marker='<!-- uplink:assessment -->'
+        body="$RUNNER_TEMP/uplink-assessment-comment.md"
+        {
+          echo "$marker"
+          extras=""
+          if [ -n "$HOOK_DIR" ] && [ -d "$HOOK_DIR" ]; then
+            extras=$(find "$HOOK_DIR" -maxdepth 1 -type f -name '*.md' | sort)
+          fi
+          if [ -n "$extras" ]; then
+            while IFS= read -r file; do
+              cat "$file"
+              echo
+            done <<<"$extras"
+            echo "---"
+            echo
+          fi
+          cat "$PACKAGE_DIR/assessment.md"
+        } > "$body"
+        # One comment per PR, updated in place on every run.
+        id=$(gh api --paginate "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+          --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | .id" \
+          | head -n 1)
+        if [ -n "$id" ]; then
+          gh api --method PATCH "repos/${GH_REPO}/issues/comments/${id}" \
+            -F "body=@${body}" > /dev/null
+        else
+          gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+            -F "body=@${body}" > /dev/null
+        fi

@@ -7,7 +7,8 @@ Hooks are company-only. They live on the orphan branch `uplink/hooks`, never on 
 ## When it runs
 
 1. **On the PR, as advice.** Uplink PR checks run the hook on every open, push, reopen and edit. The hook's markdown and the built-in assess report share one PR comment, which is updated in place instead of adding a new one each run. Nothing from this run is stored: the change is not a patch yet, and import does not copy the result.
-2. **At submit, for the packet.** Uplink submit runs the hook on the patch. This is the result IP reads. A successful run is stored with the patch on `uplink/state` under `.uplink/reports/<id>/extras/` and reused by later submit runs while the patch content is unchanged. The hook runs again when nothing is stored, the stored result is out of date (for example after a conflict was resolved), or the patch was amended. It does not run when the assessment has findings: nobody is asked to approve then.
+2. **In the gate, as advice.** On an amend of an upstream-bound patch and on a transfer to upstream, Uplink gate runs the hook once its own checks pass, so a failing gate does not cost a hook run. The package is the one a pull request gets (kind `pr`). For an amend it is the patch as the merge squashes it: the change from the commit before the patch to the PR head, with the PR title and description as the message. The result goes to the same kind of assessment comment on the gated PR. Nothing is stored: the patch is updated on merge, and submit runs the hook on it.
+3. **At submit, for the packet.** Uplink submit runs the hook on the patch. This is the result IP reads. A successful run is stored with the patch on `uplink/state` under `.uplink/reports/<id>/extras/` and reused by later submit runs while the patch content is unchanged. The hook runs again when nothing is stored, the stored result is out of date (for example after a conflict was resolved), or the patch was amended. It does not run when the assessment has findings: nobody is asked to approve then.
 
 A failed hook never fails the PR check or submit. It shows as a warning, and the comment or `assessment.md` starts with a note that links to the failed run. IP decides. A failed result is never stored, so the next submit runs the hook again.
 
@@ -21,13 +22,13 @@ Before it runs the hook, the caller runs `git uplink assess` and uploads the res
 | --- | --- |
 | `assessment.json` | What was assessed, the result, and the settings it was made with (below) |
 | `assessment.md` | The assess report as markdown |
-| `change.patch` | The change itself. For a pull request the diff of the PR. For a patch the patch file from the queue, which starts with the company commit message |
+| `change.patch` | The change itself. For a pull request the diff of the PR. For a patch the patch file from the queue, which starts with the company commit message. For the gate the diff of the gated change: the whole amended patch, or the patch being transferred |
 
 `assessment.json`:
 
 | Field | Content |
 | --- | --- |
-| `kind` | `pr` for a pull request check, `patch` for Uplink submit |
+| `kind` | `pr` for a change that is not a patch yet (a pull request check, or Uplink gate on an amend or transfer-to-upstream PR), `patch` for Uplink submit |
 | `patch`, `state` | For `patch`: the patch id (`upl_…`) and the `uplink/state` commit it was read at |
 | `message` | `internal` (the whole message as stored), `public` (what leaves the company: the subject, a blank line, the body), `coAuthor`. The subject is the first line of `public` and the public pull request title |
 | `ok`, `checks` | The result. Each check has `id`, `status` (`pass`, `warn`, `fail`, `skip`) and `detail`. For `patch` there is a `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream |
@@ -50,12 +51,12 @@ Before it runs the hook, the caller runs `git uplink assess` and uploads the res
   ```bash
   gh run download "${CALLER_RUN_ID%%-*}" -n uplink-assessment -D package
   ```
-- The hook is not told whether it runs for a pull request or a patch. `kind` in `assessment.json` says so when it matters.
+- The hook is not told whether it runs for a pull request, the gate or a patch. `kind` in `assessment.json` says so when it matters.
 - What the hook does with the package is yours to decide: look up a ticket, scan `change.patch`, check the settings against another source. Uplink passes nothing else.
 - Upload `*.md` files as artifact `uplink-packet-extra`. Files are prepended in name order. An empty result is fine. uplink adds no headings or separators. Each file's markdown goes in as-is, so include your own heading and use a prefix such as `10-`, `20-` to set the order.
 - Do not push `uplink/state`. Uplink stores the result itself.
 
-**A package of kind `pr` describes a change that is not merged or reviewed yet, and was made by the pull request's own copy of the workflow.** Read every file in it as data: do not apply and build `change.patch` in a job that has secrets, and do not trust `ok` or `settings` from it for anything but advice.
+**A package of kind `pr` describes a change that is not merged or reviewed yet. From a pull request check it was made by the pull request's own copy of the workflow.** Read every file in it as data: do not apply and build `change.patch` in a job that has secrets, and do not trust `ok` or `settings` from it for anything but advice.
 
 ## Add the hook
 
@@ -63,4 +64,4 @@ Copy `.github/workflows/uplink-assessment-hook-example.yml` to `.github/workflow
 
 ## Protect the branch
 
-Code on `uplink/hooks` runs on every PR check and submit. Import `.github/uplink-hooks-ruleset.json` from `main` as a repository ruleset. Changes to `uplink/hooks` then need a reviewed pull request.
+Code on `uplink/hooks` runs on every PR check, gate run on an upstream amend or transfer, and submit. Import `.github/uplink-hooks-ruleset.json` from `main` as a repository ruleset. Changes to `uplink/hooks` then need a reviewed pull request.

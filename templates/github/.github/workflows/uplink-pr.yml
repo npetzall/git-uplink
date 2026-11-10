@@ -147,38 +147,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update the assessment comment
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HOOK_DIR: ${{ steps.hook.outputs.dir }}
-        run: |
-          set -euo pipefail
-          marker='<!-- uplink:assessment -->'
-          {
-            echo "$marker"
-            extras=$(find "$HOOK_DIR" -maxdepth 1 -type f -name '*.md' | sort)
-            if [ -n "$extras" ]; then
-              while IFS= read -r file; do
-                cat "$file"
-                echo
-              done <<<"$extras"
-              echo "---"
-              echo
-            fi
-            cat "$RUNNER_TEMP/uplink-assessment/assessment.md"
-          } > "$RUNNER_TEMP/uplink-comment.md"
-          # One comment per PR, updated in place on every run.
-          id=$(gh api --paginate "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${marker}\"))) | .id" \
-            | head -n 1)
-          if [ -n "$id" ]; then
-            gh api --method PATCH "repos/${GH_REPO}/issues/comments/${id}" \
-              -F "body=@${RUNNER_TEMP}/uplink-comment.md" > /dev/null
-          else
-            gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
-              -F "body=@${RUNNER_TEMP}/uplink-comment.md" > /dev/null
-          fi
+        uses: $/.github/actions/uplink-assessment-comment
+        with:
+          package-dir: ${{ runner.temp }}/uplink-assessment
+          hook-dir: ${{ steps.hook.outputs.dir }}
+          pr-number: ${{ github.event.pull_request.number }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report assess result
         env:

@@ -707,11 +707,69 @@ mod embed_tests {
                 pr.contains("uses: $/.github/actions/uplink-assessment-hook"),
                 "{forge:?}\n{pr}"
             );
-            assert!(pr.contains("<!-- uplink:assessment -->"), "{forge:?}");
-            assert!(pr.contains("--method PATCH"), "{forge:?}");
+            let comment = files
+                .iter()
+                .find(|(p, _)| p == ".github/actions/uplink-assessment-comment/action.yml")
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing assessment comment action"));
+            assert!(comment.contains("<!-- uplink:assessment -->"), "{comment}");
+            assert!(
+                comment.contains("--method PATCH") && comment.contains("--method POST"),
+                "{comment}"
+            );
+            assert!(!comment.contains("gh pr comment"), "{comment}");
+            assert!(
+                pr.contains("uses: $/.github/actions/uplink-assessment-comment"),
+                "{forge:?}\n{pr}"
+            );
             assert!(!pr.contains("fingerprint"), "{forge:?}\n{pr}");
-            // Both callers upload the package before they run the hook.
-            for (name, workflow) in [("pr", pr.as_str()), ("submit", text.as_ref())] {
+            // The gate runs the same hook on the same package, in a job of
+            // its own after validate, for upstream amends and transfers.
+            let gate = files
+                .iter()
+                .find(|(p, _)| p == ".github/workflows/uplink-gate.yml")
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap();
+            let gate_hook = jobs_of(&gate)
+                .into_iter()
+                .find(|(key, _)| key == "assessment-hook")
+                .map(|(_, job)| job)
+                .unwrap_or_else(|| panic!("{forge:?} gate has no assessment-hook job"));
+            assert!(
+                gate_hook.contains("needs: validate")
+                    && gate_hook.contains("needs.validate.result == 'success'")
+                    // A fork's PR would get the job's write token.
+                    && gate_hook
+                        .contains("github.event.pull_request.head.repo.full_name == github.repository")
+                    && gate_hook.contains("'uplink/amend/'")
+                    && gate_hook.contains("'uplink/transfer-to-upstream/'"),
+                "{forge:?}\n{gate_hook}"
+            );
+            assert!(
+                gate_hook.contains("--package \"$out\"")
+                    // An amend's package is the patch as merge squashes it.
+                    && gate_hook.contains("from=\"${FROM_SHA}^\"")
+                    && gate_hook.contains("uses: $/.github/actions/uplink-assessment-comment")
+                    && gate_hook.contains("if: steps.assess.outputs.ok == 'true'"),
+                "{forge:?}\n{gate_hook}"
+            );
+            // Write tokens: never preflight.sh, never the gated tree checked
+            // out, nothing read from validate.
+            assert!(
+                !gate_hook.contains("git uplink preflight")
+                    && !gate_hook.contains("uplink-toolchain-hook")
+                    && !gate_hook.contains("ref: ${{ github.event.pull_request.head")
+                    && !gate_hook.contains("needs.validate.outputs")
+                    && gate_hook.contains("ref: ${{ github.event.repository.default_branch }}")
+                    && gate_hook.contains("persist-credentials: false"),
+                "{forge:?}\n{gate_hook}"
+            );
+            // All callers upload the package before they run the hook.
+            for (name, workflow) in [
+                ("pr", pr.as_str()),
+                ("submit", text.as_ref()),
+                ("gate", gate_hook.as_str()),
+            ] {
                 let assess = workflow
                     .find("git uplink assess")
                     .unwrap_or_else(|| panic!("{forge:?} {name} runs no assess"));
@@ -1491,15 +1549,86 @@ mod embed_tests {
                     && gate.contains("git uplink assess --patch \"${BASE_REF#uplink/amend/}\""),
                 "{forge:?} gate must assess amends\n{gate}"
             );
+            // An upstream amend is assessed, then gets export preflight of
+            // the whole amended patch, as amend --complete runs after merge.
+            // Not --command-only: the PR head has every earlier queued patch,
+            // so a dependency missing from Uplink-Depends-On would pass.
+            let amend = gate
+                .find("git uplink assess --patch \"${BASE_REF#uplink/amend/}\"")
+                .unwrap();
+            let amend_body = &gate[amend..];
+            let amend_body = &amend_body[..amend_body.find("elif").unwrap_or(amend_body.len())];
+            let preflight = amend_body
+                .find("run_preflight")
+                .unwrap_or_else(|| panic!("{forge:?} gate must preflight upstream amends"));
+            assert!(
+                amend_body[preflight..].contains("--message-file /tmp/uplink-msg.txt")
+                    && amend_body[preflight..].contains("--from \"${FROM_SHA}^\"")
+                    && !amend_body.contains("--command-only"),
+                "{forge:?} gate must run export preflight on upstream amends\n{amend_body}"
+            );
+            // The hook job routes as validate does. If the copies drift, the
+            // hook runs on an internal-only amend or skips an upstream one.
+            let is_internal = |job: &str| {
+                let start = job
+                    .find("is_internal() {")
+                    .unwrap_or_else(|| panic!("{forge:?} no is_internal in\n{job}"));
+                let body = &job[start..];
+                let end = body.find("\n          }\n").map_or(body.len(), |i| i + 12);
+                body[..end]
+                    .lines()
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let jobs = jobs_of(&gate);
+            let job = |name: &str| {
+                jobs.iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, job)| job.as_str())
+                    .unwrap_or_else(|| panic!("{forge:?} gate has no {name} job"))
+            };
+            assert_eq!(
+                is_internal(job("validate")),
+                is_internal(job("assessment-hook")),
+                "{forge:?} gate is_internal copies differ"
+            );
+            // A transfer to upstream runs preflight.sh, then is assessed as
+            // upstream-bound, so a failing assessment still updates the
+            // preflight comment. Not with --patch: that would take the
+            // patch's current queue, internal.
+            let branch = gate
+                .find("elif [[ \"$BASE_REF\" == uplink/transfer-to-upstream/* ]]")
+                .unwrap_or_else(|| panic!("{forge:?} gate has no transfer-to-upstream branch"));
+            let body = &gate[branch..];
+            let body = &body[..body[1..].find("elif").map_or(body.len(), |i| i + 1)];
+            let assess = body.find("git uplink assess \\").unwrap_or_else(|| {
+                panic!("{forge:?} gate must assess transfers to upstream\n{body}")
+            });
+            let preflight = body
+                .find("run_preflight")
+                .unwrap_or_else(|| panic!("{forge:?} gate must preflight transfers to upstream"));
+            assert!(preflight < assess, "{forge:?}\n{body}");
+            assert!(!body.contains("--patch \""), "{forge:?}\n{body}");
             assert!(
                 gate.contains("is_internal \"${BASE_REF#uplink/conflict/}\"")
                     && gate.contains("is_internal \"${BASE_REF#uplink/amend/}\""),
                 "{forge:?} gate must skip assess for internal-only patches\n{gate}"
             );
-            // Only the job that writes the preflight comment may write, and
-            // it never sees the gated tree.
+            // Only the jobs that comment may write. The preflight comment
+            // never sees the gated tree. The assessment hook reads it as
+            // data only: its checkout is the default branch, and it never
+            // runs preflight.sh or the toolchain hook.
             for (key, job) in jobs_of(&gate) {
-                if key == "preflight-comment" {
+                if key == "assessment-hook" {
+                    assert!(
+                        job.contains("ref: ${{ github.event.repository.default_branch }}")
+                            && !job.contains("ref: ${{ github.event.pull_request.head")
+                            && !job.contains("git uplink preflight")
+                            && !job.contains("uplink-toolchain-hook"),
+                        "{forge:?} gate {key} must not check out or run the gated tree\n{job}"
+                    );
+                } else if key == "preflight-comment" {
                     assert!(
                         !job.contains("pull_request.head") && !job.contains("git uplink"),
                         "{forge:?} gate {key} must not check out or run the gated tree\n{job}"

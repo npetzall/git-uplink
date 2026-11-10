@@ -29,6 +29,7 @@
           ".github/workflows/uplink-transfer.yml",
           ".github/workflows/uplink-verify.yml",
           ".github/actions/install-git-uplink/**",
+          ".github/actions/uplink-assessment-comment/**",
           ".github/actions/uplink-assessment-hook/**",
           ".github/actions/uplink-dispatch-submit/**",
           ".github/actions/uplink-preflight-comment/**",
