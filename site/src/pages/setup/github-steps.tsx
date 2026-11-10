@@ -280,6 +280,7 @@ const PACK_RULESET = `{
           ".github/workflows/uplink-transfer.yml",
           ".github/workflows/uplink-verify.yml",
           ".github/actions/install-git-uplink/**",
+          ".github/actions/uplink-assessment-comment/**",
           ".github/actions/uplink-assessment-hook/**",
           ".github/actions/uplink-dispatch-submit/**",
           ".github/actions/uplink-preflight-comment/**",
@@ -980,10 +981,11 @@ function RulesetList() {
       <li>
         <strong>Uplink: hooks branch</strong> (<code>uplink/hooks</code>): pull
         request with one approval, no deletion or force-push. The assessment
-        hook on this branch runs on every PR check and submit, and the toolchain
-        hook and <code>preflight.sh</code> before every import, submit, amend,
-        transfer, resolve, verify and accepted upstream. No bypass: nothing in
-        Actions writes this branch. Sample:{" "}
+        hook on this branch runs on every PR check, gate run on an upstream
+        amend or transfer, and submit, and the toolchain hook and{" "}
+        <code>preflight.sh</code> before every import, submit, amend, transfer,
+        resolve, verify and accepted upstream. No bypass: nothing in Actions
+        writes this branch. Sample:{" "}
         <a
           href={`${GITHUB_BLOB}/templates/github/.github/uplink-hooks-ruleset.json`}
         >

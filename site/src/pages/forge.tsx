@@ -48,7 +48,7 @@ const WORKFLOWS: [string, string, string, string][] = [
   [
     "Uplink gate",
     "Pull request into a conflict, amend or transfer base",
-    "Assesses and preflights what the gated PR would make the patch.",
+    "Assesses and preflights what the gated PR would make the patch. On an upstream amend or transfer that passes, runs the assessment hook as advice.",
     "assess, preflight",
   ],
   [
