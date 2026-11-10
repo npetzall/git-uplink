@@ -152,6 +152,9 @@ const PUSH_RACE_REJECTIONS: &[&str] = &[
     "non-fast-forward",
     "fetch first",
     "cannot lock ref",
+    // GitHub's `[remote rejected] ... (failure)` when a concurrent ref
+    // update wins.
+    "fatal error in commit_refs",
 ];
 
 pub fn is_push_lease_rejected(err: &Error) -> bool {
@@ -193,6 +196,14 @@ mod tests {
         assert!(is_push_lease_rejected(&git_failure(
             &push,
             " ! [rejected] uplink/state -> uplink/state (fetch first)\nerror: failed to push some refs",
+        )));
+        assert!(is_push_lease_rejected(&git_failure(
+            &push,
+            "remote: fatal error in commit_refs\n ! [remote rejected] uplink/state -> uplink/state (failure)\nerror: failed to push some refs",
+        )));
+        assert!(!is_push_lease_rejected(&git_failure(
+            &push,
+            " ! [remote rejected] uplink/state -> uplink/state (failure)\nerror: failed to push some refs",
         )));
         assert!(!is_push_lease_rejected(&git_failure(
             &push,
