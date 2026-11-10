@@ -128,6 +128,11 @@ pub const GROUPS: &[(&str, &str, &[&str])] = &[
             "merged",
             "trim-deps",
             "web-ui",
+            "self-update",
+            "self-use",
+            "self-list",
+            "self-available",
+            "self-check",
         ],
     ),
     (
@@ -294,6 +299,8 @@ pub enum Commands {
         #[arg(long, value_enum, value_name = "forge")]
         forge: Option<ForgeArg>,
         /// Refresh the tooling patch in its slot; re-run after upgrading the binary.
+        ///
+        /// Upgrade the binary first with `git uplink self-update`.
         ///
         /// Also creates `uplink/hooks` for queues initialized before it
         /// existed, and adds files a newer pack brings as one commit on top.
@@ -1492,6 +1499,63 @@ pub enum Commands {
         #[arg(long)]
         no_open: bool,
     },
+    /// Install a release of git uplink under `~/.uplink` and make it active.
+    ///
+    /// Without a version, installs the latest release. Each version is kept
+    /// as `~/.uplink/bin/git-uplink-X.Y.Z`, and `~/.uplink/bin/git-uplink`
+    /// is a symlink to the active one, so put `~/.uplink/bin` first on
+    /// `PATH`. A version that is already installed is only switched to.
+    ///
+    /// Releases come from the `repo` in `~/.uplink/config.toml` (default
+    /// `npetzall/git-uplink`). Each download must match the release's
+    /// `SHA256SUMS`, carry a cosign signature by the `signer` in the same
+    /// file (default the `release.yml` workflow on `main` of `repo`), and
+    /// report the version it was downloaded as. Needs `curl` and `cosign`.
+    /// A fork sets `repo = "acme/git-uplink"`, and `signer` only when its
+    /// release workflow is not `release.yml` on `main`.
+    ///
+    /// `UPLINK_HOME` replaces `~/.uplink`. macOS and Linux only.
+    #[command(name = "self-update")]
+    SelfUpdate {
+        /// Version to install: `X.Y.Z`, `vX.Y.Z` or `latest`.
+        #[arg(value_name = "version")]
+        version: Option<String>,
+        /// Install without making it the active version.
+        #[arg(long)]
+        no_switch: bool,
+    },
+    /// Make an installed version of git uplink the active one.
+    ///
+    /// Points `~/.uplink/bin/git-uplink` at `git-uplink-X.Y.Z`. Nothing is
+    /// downloaded; install a version first with `git uplink self-update`.
+    #[command(name = "self-use")]
+    SelfUse {
+        /// Installed version: `X.Y.Z` or `vX.Y.Z`.
+        #[arg(value_name = "version")]
+        version: String,
+    },
+    /// List the versions of git uplink installed under `~/.uplink`.
+    ///
+    /// The active one is marked `*`. Also prints the repository and signer
+    /// `self-update` uses.
+    #[command(name = "self-list")]
+    SelfList,
+    /// List the ten latest releases of the configured repository.
+    ///
+    /// Newest first, with the publish date, and which are installed or
+    /// active. Drafts and prereleases are left out. Asks the GitHub API
+    /// without a token; nothing is downloaded.
+    #[command(name = "self-available")]
+    SelfAvailable,
+    /// Tell whether a newer git uplink than the active one exists.
+    ///
+    /// Compares the active version with the newest one installed under
+    /// `~/.uplink` and with the latest release of the configured
+    /// repository, and names the command that switches or installs it.
+    /// Asks the GitHub API without a token; nothing is downloaded. Exits 0
+    /// unless the check itself fails.
+    #[command(name = "self-check")]
+    SelfCheck,
     /// Write the man pages into a directory.
     ///
     /// Writes `git-uplink.1` and one page per command, generated from this

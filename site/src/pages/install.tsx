@@ -18,27 +18,86 @@ export function InstallPage() {
           The binary is <code>git-uplink</code>, so Git treats it as{" "}
           <code>git uplink</code>. The <Link to="/operator">operator</Link>{" "}
           installs it, and the forge installs its own copy in every job.
-          Developers don&apos;t need it. Download a release binary for your
-          platform and put it on <code>PATH</code>.
+          Developers don&apos;t need it. On macOS and Linux, a signed script
+          installs it under <code>~/.uplink</code>, and after that it upgrades
+          itself.
         </>
       }
     >
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">macOS and Linux</h2>
         <p className="text-[15px] leading-7 text-muted-foreground">
-          With the{" "}
-          <a href="https://cli.github.com/" className={link}>
-            GitHub CLI
-          </a>
-          : download, verify the checksum, the{" "}
+          Download <code className={code}>install.sh</code> from the latest
+          release, check its{" "}
           <a
             href="https://docs.sigstore.dev/cosign/system_config/installation/"
             className={link}
           >
             cosign
           </a>{" "}
-          signature and GitHub&apos;s release attestation, make it executable,
-          and move it onto <code className={code}>PATH</code>.
+          signature, and run it. It needs <code className={code}>curl</code> and{" "}
+          <code className={code}>cosign</code>.
+        </p>
+        <pre
+          className={pre}
+        >{`curl -fsSLO https://github.com/npetzall/git-uplink/releases/latest/download/install.sh
+curl -fsSLO https://github.com/npetzall/git-uplink/releases/latest/download/install.sh.sigstore.json
+cosign verify-blob install.sh --bundle install.sh.sigstore.json \\
+  --certificate-identity https://github.com/npetzall/git-uplink/.github/workflows/release.yml@refs/heads/main \\
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sh install.sh`}</pre>
+        <p className="text-[15px] leading-7 text-muted-foreground">
+          Each version is kept as{" "}
+          <code className={code}>~/.uplink/bin/git-uplink-X.Y.Z</code>, and{" "}
+          <code className={code}>~/.uplink/bin/git-uplink</code> links to the
+          active one. Every download is checked against the release&apos;s{" "}
+          <code className={code}>SHA256SUMS</code>, its cosign signature by the
+          release workflow, and the version the binary reports. Put{" "}
+          <code className={code}>~/.uplink/bin</code> first on{" "}
+          <code className={code}>PATH</code>, then open a new shell:
+        </p>
+        <pre
+          className={pre}
+        >{`echo 'export PATH="$HOME/.uplink/bin:$PATH"' >> ~/.zshrc        # zsh
+echo 'export PATH="$HOME/.uplink/bin:$PATH"' >> ~/.bashrc       # bash on Linux
+echo 'export PATH="$HOME/.uplink/bin:$PATH"' >> ~/.bash_profile # bash on macOS`}</pre>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-xl font-semibold">Upgrade and switch versions</h2>
+        <p className="text-[15px] leading-7 text-muted-foreground">
+          The binary installs other versions with the same checks, and switches
+          between them by moving the link.
+        </p>
+        <pre
+          className={pre}
+        >{`git uplink self-available        # the ten latest releases
+git uplink self-check            # is a newer version installed or released?
+git uplink self-update           # install the latest and switch to it
+git uplink self-update 1.2.3     # install a given version and switch to it
+git uplink self-list             # installed versions, * marks the active one
+git uplink self-use 1.2.3        # switch back to an installed version`}</pre>
+        <p className="text-[15px] leading-7 text-muted-foreground">
+          Releases come from the repository in{" "}
+          <code className={code}>~/.uplink/config.toml</code>, which{" "}
+          <code className={code}>install.sh</code> writes. A fork points its
+          users at its own releases and release workflow (
+          <code className={code}>sh install.sh --repo acme/git-uplink</code>{" "}
+          writes it on a first install):
+        </p>
+        <pre className={pre}>{`repo = "acme/git-uplink"
+signer = "https://github.com/acme/git-uplink/.github/workflows/release.yml@refs/heads/main"`}</pre>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-xl font-semibold">By hand</h2>
+        <p className="text-[15px] leading-7 text-muted-foreground">
+          With the{" "}
+          <a href="https://cli.github.com/" className={link}>
+            GitHub CLI
+          </a>{" "}
+          you can also check GitHub&apos;s release attestation and the build
+          provenance:
         </p>
         <pre
           className={pre}
@@ -54,9 +113,7 @@ chmod +x "git-uplink-$target"
 mkdir -p ~/.local/bin && mv "git-uplink-$target" ~/.local/bin/git-uplink
 git uplink version`}</pre>
         <p className="text-[15px] leading-7 text-muted-foreground">
-          Make sure <code className={code}>~/.local/bin</code> is on your{" "}
-          <code className={code}>PATH</code>. Without{" "}
-          <code className={code}>gh</code>, download the same files from{" "}
+          Without <code className={code}>gh</code>, download the same files from{" "}
           <a href={`${GITHUB_REPO}/releases`} className={link}>
             Releases
           </a>

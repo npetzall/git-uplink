@@ -96,8 +96,9 @@ git uplink rebuild --push`}</Code>
 
       <Section id="upgrade" title="Upgrade the pack and the binary">
         <p>
-          The pack and the binary are one version. From a clean clone, with the
-          new release:
+          The pack and the binary are one version. Install the new release with{" "}
+          <code>git uplink self-update</code> (see{" "}
+          <Link to="/install">Install</Link>), then, from a clean clone:
         </p>
         <Code>{`git uplink init --upgrade
 git uplink push
