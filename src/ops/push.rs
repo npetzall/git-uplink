@@ -229,7 +229,7 @@ pub fn push_imported_main(
 /// lease on `lease` (the remote branch as fetched right before), and only
 /// when `uplink/state` already had everything `lease` has. That holds when
 /// every commit on `lease` above `uplink/upstream` was written by a rebuild
-/// (has an `Uplink-Patch-Id`), or when a rebuild of `recorded_on` (the
+/// (has an `Uplink-Patch-Id` naming a patch on `recorded_on`), or when a rebuild of `recorded_on` (the
 /// state the command started from) on `upstream_start` gives the tree of
 /// `lease`. A merge that is not recorded yet is never dropped from the
 /// remote; its import pushes the branch.
@@ -250,10 +250,18 @@ pub fn push_rebuilt_main(
     if main_start == Some(main.as_str()) || main == lease {
         return Ok(MainPush::Unchanged);
     }
-    let unrecorded =
-        commits_with_patch_id(repo, &["--first-parent", lease, "--not", UPSTREAM_REF])?
-            .into_iter()
-            .any(|(_, has_patch_id)| !has_patch_id);
+    // A commit counts as written by a rebuild only when its Uplink-Patch-Id
+    // names a patch uplink/state has: a message can carry the trailer too.
+    let known: HashSet<String> = queue_at(repo, recorded_on)?
+        .all_patches()
+        .map(|patch| patch.id.clone())
+        .collect();
+    let unrecorded = crate::repo::commits_with_patch_ids(
+        repo,
+        &["--first-parent", lease, "--not", UPSTREAM_REF],
+    )?
+    .into_iter()
+    .any(|(_, ids)| ids.is_empty() || ids.iter().any(|id| !known.contains(id)));
     if unrecorded && !force && !recorded_in_history(repo, lease, recorded_on, upstream_start)? {
         return Ok(MainPush::Unrecorded);
     }
