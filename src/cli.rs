@@ -1400,7 +1400,9 @@ pub enum Commands {
         ///
         /// Without it, --push pushes main only when uplink/state already has
         /// everything origin's main has: every commit on it was written by a
-        /// rebuild, or a rebuild of uplink/state as it was gives its tree.
+        /// rebuild, or a rebuild of uplink/state as it was, or as it was a
+        /// few commits back, gives its tree. A changed tooling patch after
+        /// init --upgrade, a drop or an amend needs no --force.
         /// Otherwise uplink/state is pushed, main is not, and the command
         /// fails. --force drops what uplink/state lacks from main (record a
         /// failed import from its uplink/rescue/ branch first). The push is
