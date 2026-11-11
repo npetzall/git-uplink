@@ -10263,6 +10263,56 @@ fn rebuild_push_force_never_overwrites_a_merge_that_lands_during_the_push() {
 }
 
 #[test]
+fn rebuild_push_after_a_tooling_change_needs_no_force() {
+    let world = setup_uninitialized();
+    let queue = init_with_recorded_urls(&world);
+    let tooling = queue.tooling.as_ref().expect("a tooling patch").id.clone();
+    let company = world.company.clone();
+    // An internal-only import leaves its merge on main, without an
+    // Uplink-Patch-Id.
+    let base = rev_of(&company, "main");
+    let merge = land_merge(&company, "INTERNAL.md");
+    let head = git_ok(&company, &["rev-parse", &format!("{merge}^2")]).unwrap();
+    add_patch(
+        &company,
+        AddPatchOpts {
+            message: "Internal file".into(),
+            from_ref: Some(base),
+            head_ref: Some(head),
+            internal_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let origin = publish_origin(&company);
+    git(
+        &company,
+        &["push", "--quiet", "origin", "uplink/hooks"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let (_runner_keep, runner) = clone_company_from(&origin, &world.upstream);
+    reset_from_origin(&runner).unwrap();
+    // What an upgrade does to uplink/state: another tooling patch.
+    make_tooling_stale(&runner, &tooling);
+
+    let out = uplink_cli(&runner, &["rebuild", "--push"]);
+
+    assert!(out.status.success(), "{out:?}");
+    let main = git_ok(&origin, &["rev-parse", "refs/heads/main"]).unwrap();
+    assert_eq!(main, rev_of(&runner, "main"));
+    assert_eq!(
+        git_ok(
+            &origin,
+            &["show", &format!("{main}:.github/workflows/uplink-pr.yml")]
+        )
+        .unwrap(),
+        "stale"
+    );
+    assert!(git_ok(&origin, &["show", &format!("{main}:INTERNAL.md")]).is_ok());
+}
+
+#[test]
 fn rescue_keeps_a_failed_import_and_the_queue_it_saw_on_a_branch() {
     let race = import_race(false);
     // What the failed run recorded and could not push.

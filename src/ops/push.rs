@@ -254,12 +254,8 @@ pub fn push_rebuilt_main(
         commits_with_patch_id(repo, &["--first-parent", lease, "--not", UPSTREAM_REF])?
             .into_iter()
             .any(|(_, has_patch_id)| !has_patch_id);
-    if unrecorded && !force {
-        let lease_tree = rev_parse(repo, &format!("{lease}^{{tree}}"))?;
-        let recorded = super::rebuild::rebuilt_tree_at(repo, recorded_on, upstream_start)?;
-        if recorded.as_deref() != Some(lease_tree.as_str()) {
-            return Ok(MainPush::Unrecorded);
-        }
+    if unrecorded && !force && !recorded_in_history(repo, lease, recorded_on, upstream_start)? {
+        return Ok(MainPush::Unrecorded);
     }
     let lease_arg = format!("--force-with-lease=refs/heads/{company_branch}:{lease}");
     let dest = format!("{main}:refs/heads/{company_branch}");
@@ -272,6 +268,49 @@ pub fn push_rebuilt_main(
         Err(err) if is_push_lease_rejected(&err) => Ok(MainPush::Moved),
         Err(err) => Err(err),
     }
+}
+
+/// How far back [`recorded_in_history`] looks in `uplink/state`.
+const RECORDED_HISTORY_DEPTH: &str = "20";
+
+/// True when a rebuild of `recorded_on`, or of one of its recent
+/// first-parent ancestors on `uplink/state`, gives the tree of `main`: then
+/// everything `main` has is in the history of `uplink/state`, and replacing
+/// it loses nothing. An older state matches when the queue changed since
+/// `main` was built from it, for example the tooling patch of an
+/// `init --upgrade`, a drop or an amend. Each state is rebuilt on the
+/// upstream `main` was built on.
+fn recorded_in_history(
+    repo: &Path,
+    main: &str,
+    recorded_on: &str,
+    upstream_start: &str,
+) -> Result<bool> {
+    let main_tree = rev_parse(repo, &format!("{main}^{{tree}}"))?;
+    let upstream = merge_base(repo, main, upstream_start)?.unwrap_or_else(|| upstream_start.into());
+    let states = git_ok(
+        repo,
+        &[
+            "rev-list",
+            "--first-parent",
+            "--max-count",
+            RECORDED_HISTORY_DEPTH,
+            recorded_on,
+        ],
+    )?;
+    for state in states.lines().filter(|line| !line.is_empty()) {
+        if !path_exists_at(repo, state, crate::types::QUEUE_PATH)? {
+            continue;
+        }
+        // A state that does not rebuild here is no match.
+        let rebuilt = super::rebuild::rebuilt_tree_at(repo, state, &upstream)
+            .ok()
+            .flatten();
+        if rebuilt.as_deref() == Some(main_tree.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The push of an operator's `rebuild --push`: local `uplink/state` as a
