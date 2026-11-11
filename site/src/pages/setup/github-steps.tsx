@@ -284,6 +284,7 @@ const PACK_RULESET = `{
           ".github/actions/uplink-dispatch-submit/**",
           ".github/actions/uplink-preflight-comment/**",
           ".github/actions/uplink-rebase-comment/**",
+          ".github/actions/uplink-rescue-import/**",
           ".github/uplink/**" ] } }
   ]
 }`;

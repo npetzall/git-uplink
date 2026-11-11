@@ -1,0 +1,106 @@
+name: Uplink rescue import
+description: >-
+  Keep a merged change that Uplink import did not record, whatever failed.
+  git uplink rescue commits the change, the pull request message, what the
+  run printed and the queue as this run saw it to
+  uplink/rescue/import-<pr>-<run>-<attempt>. When that fails too (git-uplink
+  itself is what broke, or was never installed), plain git keeps the change,
+  the message and the note on such a branch with a -git suffix. Runs in a
+  checkout that can push to origin, and prints an error naming the branch.
+inputs:
+  pr-number:
+    description: Number of the merged pull request.
+    required: true
+  pr-url:
+    description: URL of the merged pull request.
+    required: true
+  title:
+    description: Title of the merged pull request.
+    required: true
+  body:
+    description: Body of the merged pull request.
+    required: false
+    default: ""
+  from-sha:
+    description: Base of the merged change.
+    required: true
+  head-sha:
+    description: Head of the merged change.
+    required: true
+  token:
+    description: >-
+      Internal token with contents write on this repository, for git uplink
+      (UPLINK_INTERNAL_TOKEN). Plain git uses the checkout's credentials.
+    required: true
+outputs:
+  branch:
+    description: The rescue branch on origin.
+    value: ${{ steps.rescue.outputs.branch }}
+runs:
+  using: composite
+  steps:
+    - name: Rescue the merged change
+      id: rescue
+      shell: bash
+      env:
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PR_URL: ${{ inputs.pr-url }}
+        TITLE: ${{ inputs.title }}
+        BODY: ${{ inputs.body }}
+        FROM_SHA: ${{ inputs.from-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        UPLINK_INTERNAL_TOKEN: ${{ inputs.token }}
+      run: |
+        set -uo pipefail
+        note="$RUNNER_TEMP/uplink-rescue-note.txt"
+        message="$RUNNER_TEMP/uplink-rescue-msg.txt"
+        {
+          echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ -f /tmp/uplink-add.out ]; then cat /tmp/uplink-add.out; fi
+        } > "$note"
+        {
+          printf '%s\n\n' "$TITLE"
+          printf '%s\n' "${BODY:-}"
+        } > "$message"
+        if out=$(git uplink rescue --from "$FROM_SHA" --head "$HEAD_SHA" \
+          --pr "$PR_NUMBER" --pr-url "$PR_URL" \
+          --message-file "$message" --note-file "$note"); then
+          branch=${out%% *}
+        else
+          echo "git uplink rescue failed; keeping the change with plain git."
+          name="import-${PR_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          branch="uplink/rescue/${name}-git"
+          dir=".uplink/rescue/${name}"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/uplink-rescue-index"
+          export GIT_AUTHOR_NAME="github-actions[bot]" GIT_COMMITTER_NAME="github-actions[bot]"
+          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          add_blob() {
+            local blob
+            blob=$(git hash-object -w --stdin) || return 1
+            git update-index --add --cacheinfo "100644,${blob},$1"
+          }
+          # The queue as this run saw it: local uplink/state, else origin's.
+          base=$(git rev-parse --verify --quiet refs/heads/uplink/state || true)
+          if [ -z "$base" ] && git fetch --quiet origin "+refs/heads/uplink/state:refs/remotes/origin/uplink/state"; then
+            base=$(git rev-parse --verify --quiet refs/remotes/origin/uplink/state || true)
+          fi
+          parent=()
+          if [ -n "$base" ]; then
+            git read-tree "$base"
+            parent=(-p "$base")
+          else
+            git read-tree --empty
+          fi
+          git diff --binary --full-index "$FROM_SHA" "$HEAD_SHA" | add_blob "$dir/change.patch"
+          add_blob "$dir/message.md" < "$message"
+          add_blob "$dir/note.txt" < "$note"
+          commit=$(git commit-tree "$(git write-tree)" ${parent[@]+"${parent[@]}"} -m "uplink: rescue the import of #${PR_NUMBER}")
+          if ! git push origin "${commit}:refs/heads/${branch}"; then
+            echo "::error title=Import of #${PR_NUMBER} failed::keeping the change on a rescue branch failed too. It is still in #${PR_NUMBER} (${FROM_SHA}..${HEAD_SHA}); run the job again."
+            exit 1
+          fi
+        fi
+        echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+        echo "::error title=Import of #${PR_NUMBER} failed::the change is kept on ${branch}, with the queue as this run saw it. Fix the cause and run the job again (an import records a pull request once), check uplink/state, then delete the branch."
+        echo "Import of #${PR_NUMBER} failed; the change is kept on \`${branch}\`." >> "$GITHUB_STEP_SUMMARY"

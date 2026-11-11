@@ -1238,18 +1238,52 @@ mod embed_tests {
                     && !text.contains("git uplink push"),
                 "{forge:?}\n{text}"
             );
-            // Whatever failed, the change goes to a rescue branch, with
-            // plain git when git-uplink itself fails.
-            let rescue = steps_of(&text)
+            // Whatever failed before the change was recorded, it goes to a
+            // rescue branch: from the import job, or from a job of its own
+            // when import did not run (a failed preflight job).
+            let import = jobs_of(&text)
+                .into_iter()
+                .find(|(k, _)| k == "import")
+                .map(|(_, job)| job)
+                .unwrap();
+            assert!(
+                import.contains("recorded: ${{ steps.add.outputs.recorded }}")
+                    && import.contains("rescued: ${{ steps.rescue.outputs.branch }}")
+                    && import.contains("echo \"recorded=true\" >> \"$GITHUB_OUTPUT\""),
+                "{forge:?}\n{import}"
+            );
+            let step = steps_of(&import)
                 .into_iter()
                 .find(|step| step.contains("name: Rescue a failed import"))
-                .unwrap_or_else(|| panic!("{forge:?} has no rescue step\n{text}"));
+                .unwrap_or_else(|| panic!("{forge:?} has no rescue step\n{import}"));
             assert!(
-                rescue.contains("if: failure() && steps.add.outcome != 'success'")
-                    && rescue.contains("git uplink rescue --from \"$FROM_SHA\"")
-                    && rescue.contains("git commit-tree")
-                    && rescue.contains("refs/heads/${branch}"),
+                step.contains("if: failure() && steps.add.outputs.recorded != 'true'")
+                    && step.contains("uses: $/.github/actions/uplink-rescue-import"),
+                "{forge:?}\n{step}"
+            );
+            let rescue = jobs_of(&text)
+                .into_iter()
+                .find(|(k, _)| k == "rescue")
+                .map(|(_, job)| job)
+                .unwrap_or_else(|| panic!("{forge:?} has no rescue job\n{text}"));
+            assert!(
+                rescue.contains("needs: [preflight, import]")
+                    && rescue.contains("if: always() && github.event.pull_request.merged && needs.import.outputs.recorded != 'true' && needs.import.outputs.rescued == ''")
+                    && rescue.contains("uses: $/.github/actions/uplink-rescue-import"),
                 "{forge:?}\n{rescue}"
+            );
+            // git uplink first, plain git when that fails; both need a token.
+            let action = files
+                .iter()
+                .find(|(p, _)| p == ".github/actions/uplink-rescue-import/action.yml")
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} has no rescue action"));
+            assert!(
+                action.contains("git uplink rescue --from \"$FROM_SHA\"")
+                    && action.contains("git commit-tree")
+                    && action.contains("refs/heads/${branch}")
+                    && action.contains("UPLINK_INTERNAL_TOKEN: ${{ inputs.token }}"),
+                "{forge:?}\n{action}"
             );
         }
     }
