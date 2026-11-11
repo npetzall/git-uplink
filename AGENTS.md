@@ -18,6 +18,12 @@ Docs, CLI help, and PR comments address three roles: the **operator** (setup, `i
 
 The forge pack (`templates/`) and the binary are released and upgraded together. Assume a workflow always runs the binary of its own release: change CLI flags, output and the workflows that use them in the same commit, and do not add compatibility for an older pack or an older binary. This is stated for operators in `templates/github/README.md`.
 
+## Rules
+
+Read the rule that applies before you change that area:
+
+- [`docs/rules/state-and-main.md`](docs/rules/state-and-main.md): pushing `uplink/state` and `main` from commands and workflows (no force on `uplink/state`, lease on `main`, record again on a lost race, rescue a failed import, and how to test races).
+
 ## Socket Firewall
 
 Prefix every `pnpm` and `cargo` command with `sfw` ([Socket Firewall Free](https://docs.socket.dev/docs/socket-firewall-free)). This includes install, build, test, fmt, and clippy.
