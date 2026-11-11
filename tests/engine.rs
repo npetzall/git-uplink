@@ -10106,6 +10106,51 @@ fn transfer_push_pushes_main_when_its_merges_are_all_recorded() {
 }
 
 #[test]
+fn transfer_push_does_not_trust_a_patch_id_it_does_not_know() {
+    let race = rebuild_race(false);
+    // A squash merge whose message ends with a trailer, as a pasted
+    // exported commit would.
+    git(
+        &race.company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&race.company, "SQUASHED.md", "not in uplink/state\n");
+    git(&race.company, &["add", "-A"], GitOpts::default()).unwrap();
+    git(
+        &race.company,
+        &[
+            "commit",
+            "--quiet",
+            "-m",
+            "Squashed change\n\nUplink-Patch-Id: upl_0000000000",
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &race.company,
+        &["push", "--quiet", "origin", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let before = race.origin_main();
+    git(
+        &race.runner,
+        &["fetch", "--quiet", "origin"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    reset_from_origin(&race.runner).unwrap();
+
+    let json = race.cli_json(&["transfer", &race.hash.id, "--to-internal", "--push"]);
+
+    assert_eq!(json["push"]["main"], "unrecorded", "{json}");
+    assert_eq!(race.origin_main(), before);
+}
+
+#[test]
 fn transfer_push_never_overwrites_a_merge_that_lands_during_the_push() {
     let race = rebuild_race(false);
     let landed = land_merge(&race.company, "LANDED.md");

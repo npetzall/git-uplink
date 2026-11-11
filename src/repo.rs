@@ -790,6 +790,29 @@ pub fn merge_base(repo: &Path, a: &str, b: &str) -> Result<Option<String>> {
     Ok(Some(result.stdout))
 }
 
+/// Commits `git log <args>` lists, in its order, each with the values of its
+/// `Uplink-Patch-Id` trailers (none for a commit no rebuild wrote).
+pub fn commits_with_patch_ids(repo: &Path, args: &[&str]) -> Result<Vec<(String, Vec<String>)>> {
+    let mut log = vec![
+        "log",
+        "--format=%H %(trailers:key=Uplink-Patch-Id,valueonly,separator=%x2C)",
+    ];
+    log.extend_from_slice(args);
+    Ok(git_ok(repo, &log)?
+        .lines()
+        .filter_map(|line| {
+            let (sha, ids) = line.split_once(' ').unwrap_or((line, ""));
+            let ids = ids
+                .split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .collect();
+            (!sha.is_empty()).then(|| (sha.to_string(), ids))
+        })
+        .collect())
+}
+
 /// Commits `git log <args>` lists, in its order, each with whether it carries
 /// an `Uplink-Patch-Id` trailer. Every commit a rebuild writes has one.
 pub fn commits_with_patch_id(repo: &Path, args: &[&str]) -> Result<Vec<(String, bool)>> {
