@@ -1335,7 +1335,9 @@ pub enum Commands {
         branch: Option<String>,
         /// Push uplink/state and the rebuilt branch after rebuild.
         ///
-        /// With --verify, only uplink/state is pushed, and only when a patch
+        /// uplink/state is pushed as a fast-forward. Main is pushed with a
+        /// lease on origin's main, and only when uplink/state covers it; see
+        /// --force. With --verify, only uplink/state is pushed, and only when a patch
         /// was gated: a pass leaves origin as it is. When origin's
         /// uplink/state moved before the push, verify records the gate again
         /// on the state that won. Main is not pushed.
@@ -1394,6 +1396,18 @@ pub enum Commands {
             conflicts_with_all = ["branch", "json", "preflight_only", "preflight_result", "interactive", "push", "push_remote", "verify"]
         )]
         abort: bool,
+        /// With --push: replace main on origin also when uplink/state lacks something it has.
+        ///
+        /// Without it, --push pushes main only when uplink/state already has
+        /// everything origin's main has: every commit on it was written by a
+        /// rebuild, or a rebuild of uplink/state as it was gives its tree.
+        /// Otherwise uplink/state is pushed, main is not, and the command
+        /// fails. --force drops what uplink/state lacks from main (record a
+        /// failed import from its uplink/rescue/ branch first). The push is
+        /// still leased on origin's main, fetched right before: a merge that
+        /// lands meanwhile is never overwritten.
+        #[arg(long, requires = "push", conflicts_with = "verify")]
+        force: bool,
     },
     /// Finish a conflict resolution and put the patch back in the queue.
     ///

@@ -240,6 +240,7 @@ pub fn push_rebuilt_main(
     lease: &str,
     recorded_on: &str,
     upstream_start: &str,
+    force: bool,
 ) -> Result<MainPush> {
     let company_branch = read_queue_file(repo)?.config.internal_branch;
     if !has_ref(repo, &company_branch)? {
@@ -253,7 +254,7 @@ pub fn push_rebuilt_main(
         commits_with_patch_id(repo, &["--first-parent", lease, "--not", UPSTREAM_REF])?
             .into_iter()
             .any(|(_, has_patch_id)| !has_patch_id);
-    if unrecorded {
+    if unrecorded && !force {
         let lease_tree = rev_parse(repo, &format!("{lease}^{{tree}}"))?;
         let recorded = super::rebuild::rebuilt_tree_at(repo, recorded_on, upstream_start)?;
         if recorded.as_deref() != Some(lease_tree.as_str()) {
@@ -271,6 +272,41 @@ pub fn push_rebuilt_main(
         Err(err) if is_push_lease_rejected(&err) => Ok(MainPush::Moved),
         Err(err) => Err(err),
     }
+}
+
+/// The push of an operator's `rebuild --push`: local `uplink/state` as a
+/// fast-forward (never forced), then the rebuilt company branch as
+/// [`push_rebuilt_main`] does, with a lease on the remote branch fetched
+/// right before. `force` pushes it also when `uplink/state` lacks something
+/// the remote branch has; the lease still holds.
+pub fn push_operator_rebuild(
+    repo: &Path,
+    remote: &str,
+    recorded_on: &str,
+    upstream_start: &str,
+    force: bool,
+) -> Result<MainPush> {
+    push_state_branch(repo, remote, STATE_BRANCH)?;
+    let company_branch = read_queue_file(repo)?.config.internal_branch;
+    let Some(lease) = fetch_state_tracking(repo, remote, &company_branch)? else {
+        // The first publish: leased on the branch not existing yet.
+        let lease = format!("--force-with-lease=refs/heads/{company_branch}:");
+        let dest = format!("refs/heads/{company_branch}:refs/heads/{company_branch}");
+        return match git(repo, &["push", &lease, remote, &dest], GitOpts::default()) {
+            Ok(_) => Ok(MainPush::Pushed),
+            Err(err) if is_push_lease_rejected(&err) => Ok(MainPush::Moved),
+            Err(err) => Err(err),
+        };
+    };
+    push_rebuilt_main(
+        repo,
+        remote,
+        None,
+        &lease,
+        recorded_on,
+        upstream_start,
+        force,
+    )
 }
 
 pub fn push_queue(repo: &Path, opts: PushOpts) -> Result<PushResult> {

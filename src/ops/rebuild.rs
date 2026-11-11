@@ -10,6 +10,9 @@ pub struct RebuildOpts {
     pub preflight: ScriptVerdict,
     /// Get that verdict also when the company branch already has the tree.
     pub verify: bool,
+    /// With `push`: push the company branch also when uplink/state lacks
+    /// something origin's has. It is still leased.
+    pub force: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +25,8 @@ pub struct RebuildResult {
     /// What the rebuild changes against origin's company branch; for a
     /// preview, against the company branch. `None` without one to compare.
     pub changes: Option<MainChanges>,
+    /// With `push`: what happened to the company branch on the remote.
+    pub main_push: Option<MainPush>,
 }
 
 pub fn rebuild(repo: &Path) -> Result<QueueState> {
@@ -64,6 +69,9 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
         } else {
             None
         };
+        // What uplink/state covered before this rebuild, for the push.
+        let recorded_on = rev_parse(repo, STATE_BRANCH)?;
+        let upstream_start = rev_parse(repo, UPSTREAM_REF).unwrap_or_default();
         let queue = if preview {
             rebuild_preview(repo, &target)?
         } else {
@@ -75,18 +83,26 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
             Some(base) => Some(main_changes(repo, &queue, base, &target)?),
             None => None,
         };
-        if opts.push {
+        let main_push = if opts.push {
             let remote = opts.push_remote.as_deref().unwrap_or("origin");
             // State first: a rejected state push leaves origin main alone.
-            push_state_branch(repo, remote, STATE_BRANCH)?;
-            push_branch_force(repo, remote, &target)?;
-        }
+            Some(super::push::push_operator_rebuild(
+                repo,
+                remote,
+                &recorded_on,
+                &upstream_start,
+                opts.force,
+            )?)
+        } else {
+            None
+        };
         Ok(RebuildResult {
             queue,
             branch: target,
             preview,
             tree_changed,
             changes,
+            main_push,
         })
     })
 }

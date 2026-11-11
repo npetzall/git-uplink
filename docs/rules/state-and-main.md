@@ -26,6 +26,7 @@ What matters first is that `uplink/state` has the change, every patch updated. P
    - Import (`add --push --merged-as`): its scope is its merge commit. Lease on it (`--force-with-lease=refs/heads/main:<merge_commit_sha>`), and push only a rebuild whose tree equals the merge's tree, since an import only reorders (`push_imported_main`). Never lease on the `main` the job happened to fetch: it can hold later merges the rebuild left out.
    - Sync, accept-upstream, resolve, amend, transfer (`--push`): they change content, so their own rebuild cannot be compared with `main`. Fetch origin's `main` right before the push and lease on it. Push only when `uplink/state` already had everything that `main` has: every first-parent commit above `uplink/upstream` has an `Uplink-Patch-Id` (a rebuild wrote it), or a rebuild of the state the command started from gives `main`'s tree (`rebuilt_tree_at`, in a temporary index). The second case covers merges an internal-only import recorded and left on `main`. Otherwise it is `unrecorded`: do not push.
 3. **A main that is not pushed is not a failure.** The import of the merge that is waiting rebuilds from the recorded state and pushes `main`. Report it (`push.main` is `moved`, `differs` or `unrecorded`) and go on.
+   - An operator's `rebuild --push` (and `rebuild -i --push`): the same check and lease as the workflows, and it fails when `main` is not pushed. `--force` skips the check, never the lease. On a first publish the lease is that `main` does not exist yet.
 4. **Reset every ref the command moves before recording again.** `record_on_remote` puts the company branch and `uplink/upstream` back where they were before each attempt, so a sync run again still sees the new upstream.
 
 ## Failures
@@ -47,6 +48,5 @@ Every rule above has a test.
 
 These still push without the rules above and are left for later changes:
 
-- An operator's `git uplink rebuild --push` force-pushes `main` without these checks.
-- `differs` and `unrecorded` mean `main` has content `uplink/state` lacks: a failed import (its change is on a rescue branch), a push to `main` that bypassed import, or a merge whose content differs from its patch. Jobs keep `main` as it is until the change is recorded (`git uplink add` from the rescue branch) or an operator rebuilds.
+- `differs` and `unrecorded` mean `main` has content `uplink/state` lacks: a failed import (its change is on a rescue branch), a push to `main` that bypassed import, or a merge whose content differs from its patch. Jobs keep `main` as it is until the change is recorded (`git uplink add` from the rescue branch) or an operator runs `git uplink rebuild --push --force`.
 - A command run again on a moved state can fail where its preflight result no longer matches (the state changed content, not only records). Nothing is lost: the gated branches are still there, and the workflow can be run again.
