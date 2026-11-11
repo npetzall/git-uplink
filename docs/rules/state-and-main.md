@@ -41,7 +41,8 @@ What matters first is that `uplink/state` has the change, every patch updated. P
 Every rule above has a test.
 
 - **Races:** engine tests in `tests/engine.rs` with real repositories: a bare origin and two clones. To make a push lose a race at the right moment, give origin a `pre-receive` hook that moves the ref once (`unset GIT_QUARANTINE_PATH` first, so `git update-ref` is allowed); see `move_state_on_first_push`. Assert what origin has afterwards: fast-forward history, both changes kept, `main` as expected.
-- **Workflow wiring:** text tests in `src/tooling.rs` check that a workflow calls the command with `--push`, that no workflow pushes `main` itself (`no_workflow_force_pushes_main_itself`), and that import has the rescue step with its fallback.
+- **Workflow wiring:** text tests in `src/tooling.rs` check that a workflow calls the command with `--push`, that no workflow pushes `main` itself (`no_workflow_force_pushes_main_itself`), and that import has the rescue step and the rescue job, both using the `uplink-rescue-import` action.
+- **Fallbacks:** a fallback that does not need the binary is run for real: `rescue_action_falls_back_to_plain_git` runs the rescue action's script with `bash` and no `git-uplink` on `PATH`.
 - **Output:** a command that gains `--push` keeps its output. Test that the output with `--push` matches the output without it.
 
 ## Known gaps
