@@ -177,7 +177,9 @@ jobs:
           git uplink init
           printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
 
-          rebuild_json=$(git uplink rebuild --verify --json \
+          # --push publishes uplink/state only when a patch was gated, and
+          # records the gate again when another run moved uplink/state.
+          rebuild_json=$(git uplink rebuild --verify --json --push \
             --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
 
           # A pass pushes nothing: the rebuild made here has the tree main
@@ -187,7 +189,6 @@ jobs:
             echo "preflight.sh passes on main as rebuilt from the queue." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          git push origin uplink/state
 
           conflict_id=$(jq -r '.conflict.id // empty' <<<"$rebuild_json")
           conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$rebuild_json")

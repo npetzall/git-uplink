@@ -1255,7 +1255,7 @@ mod embed_tests {
     }
 
     #[test]
-    fn no_workflow_force_pushes_main_itself() {
+    fn no_workflow_pushes_main_or_state_itself() {
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
             for (path, body) in &files {
@@ -1268,6 +1268,11 @@ mod embed_tests {
                     assert!(
                         !(line.starts_with("git push") && line.contains("main")),
                         "{forge:?} {path} pushes main itself; the command pushes it with a lease: {line}"
+                    );
+                    assert!(
+                        !(line.starts_with("git push") && line.contains("uplink/state"))
+                            && !line.starts_with("git uplink push"),
+                        "{forge:?} {path} pushes uplink/state itself; the command that wrote it pushes it: {line}"
                     );
                 }
             }

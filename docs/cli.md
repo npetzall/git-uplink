@@ -38,15 +38,15 @@ git uplink assess [--from <ref>] [--head <ref>]
             [--message <text> | --message-file <path>] [--internal-only | --patch <id>]
             [--package <dir>] [--json]
 git uplink report <id> [--out <path>] [--extra-dir <path>] [--store-extras]
-            [--extra-source <url>] [--assess-result <path>]
+            [--extra-source <url>] [--assess-result <path>] [--push]
 git uplink status [--json]
 git uplink doctor [--json]
 git uplink approve <id> [--out <path>] [--reviewed <token>] [--push]
 git uplink submit <id> [--push] [--preflight-result <path>]
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
-git uplink waiting <id> --preflight-result <path> [--run-url <url>]
+git uplink waiting <id> --preflight-result <path> [--run-url <url>] [--push]
 git uplink rejected <id> [--run-url <url>] [--cancelled] [--by <login>]
-            [--comment <text>]
+            [--comment <text>] [--push]
 git uplink sync [--merged-pr <id=sha>]... [--push]
 git uplink accept-upstream [--sha <sha>] [--fetch-only] [--preflight-result <path>]
             [--preflight-only] [--push]
@@ -262,6 +262,8 @@ Operator fallback: a gated patch is fixed on its branches without a PR: `git swi
 
 - `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
 - `--push`: Push uplink/state and the rebuilt branch after rebuild.
+
+  With --verify, only uplink/state is pushed, and only when a patch was gated: a pass leaves origin as it is. When origin's uplink/state moved before the push, verify records the gate again on the state that won. Main is not pushed.
 - `--push-remote <remote>`: Remote for --push, origin by default.
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
 
@@ -463,6 +465,9 @@ Stored extras lead the packet while the patch content is unchanged (same stable 
 - `--assess-result <path>`: Store this assessment instead of assessing here: `assessment.json` of `assess --patch <id> --package`.
 
   Refused when it is not for the patch as it is now: the patch file, message or `uplink.toml` changed since, or the result does not match what assessing the patch gives. The company assessment hook read the same package, so this also covers --extra-dir.
+- `--push`: Record on origin's uplink/state and push it there.
+
+  Pushed as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, so what it writes is for the state that is published.
 
 ### `approve`
 
@@ -488,6 +493,9 @@ Uplink submit runs it once every check passed, right before the job that waits o
 - `<id>`: Patch the run asks IP to approve.
 - `--preflight-result <path>`: Output of `git uplink preflight <id> --json` from the same run.
 - `--run-url <url>`: The submit run; defaults to the GitHub Actions run of this job.
+- `--push`: Record on origin's uplink/state and push it there.
+
+  Pushed as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, so what it writes is for the state that is published.
 
 ### `rejected`
 
@@ -500,6 +508,9 @@ Uplink submit runs it when the to-upstream Environment was rejected, or the run 
 - `--cancelled`: The run was cancelled instead of rejected.
 - `--by <login>`: Login of the reviewer who rejected it.
 - `--comment <text>`: The reviewer's comment.
+- `--push`: Record on origin's uplink/state and push it there.
+
+  Pushed as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, so what it writes is for the state that is published.
 
 ### `submit`
 
