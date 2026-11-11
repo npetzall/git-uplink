@@ -63,6 +63,133 @@ pub struct PushResult {
     pub hooks: HooksPushAction,
 }
 
+/// How often [`record_on_remote`] records again after losing a push race.
+const RECORD_PUSH_ATTEMPTS: u32 = 8;
+
+/// Runs `record` on `uplink/state` as `remote` has it, and pushes what it
+/// recorded there as a fast-forward. Never forced.
+///
+/// Before each attempt, local `uplink/state` and `.uplink/` are moved to the
+/// remote's `uplink/state` and the company branch back to where it was, so
+/// `record` (and a rebuild it runs) works on the newest state. When the push
+/// loses a race, `record` runs again on the state that won. `record` must
+/// be safe to run again: an import is, since it records a pull request once.
+///
+/// Refuses when `.uplink/` has uncommitted changes, or local `uplink/state`
+/// has commits the remote lacks: moving it would lose them.
+pub fn record_on_remote<T>(
+    repo: &Path,
+    remote: &str,
+    mut record: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    with_queue_lock(repo, || {
+        ensure_state_worktree(repo)?;
+        let uncommitted = uplink_uncommitted_paths(repo, STATE_BRANCH)?;
+        if !uncommitted.is_empty() {
+            return Err(Error::msg(format!(
+                ".uplink/ has uncommitted changes ({}); commit or reset them first",
+                uncommitted.join(", ")
+            )));
+        }
+        let company_branch = read_queue_file(repo)?.config.internal_branch;
+        let main_start = if has_ref(repo, &company_branch)? {
+            Some(rev_parse(repo, &company_branch)?)
+        } else {
+            None
+        };
+        let mut last_error = None;
+        for attempt in 0..RECORD_PUSH_ATTEMPTS {
+            let Some(base) = fetch_state_tracking(repo, remote, STATE_BRANCH)? else {
+                return Err(Error::msg(format!(
+                    "Could not fetch {STATE_BRANCH} from {remote}."
+                )));
+            };
+            let local = rev_parse(repo, STATE_BRANCH)?;
+            if attempt == 0 && !is_ancestor(repo, &local, &base)? {
+                return Err(Error::msg(format!(
+                    "{STATE_BRANCH} has commits {remote} lacks; run `git uplink push`, then run this again"
+                )));
+            }
+            if local != base {
+                apply_state_sha(repo, STATE_BRANCH, &base)?;
+            }
+            if let Some(start) = main_start.as_deref()
+                && rev_parse(repo, &company_branch)? != start
+            {
+                git(
+                    repo,
+                    &["checkout", "-f", "--quiet", "-B", &company_branch, start],
+                    GitOpts::default(),
+                )?;
+            }
+            let value = record()?;
+            if rev_parse(repo, STATE_BRANCH)? == base {
+                return Ok(value);
+            }
+            match push_state_branch(repo, remote, STATE_BRANCH) {
+                Ok(()) => return Ok(value),
+                Err(err) if is_push_lease_rejected(&err) => {
+                    last_error = Some(err);
+                    thread::sleep(Duration::from_millis(40 * 2u64.pow(attempt)));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| Error::msg("push failed")))
+    })
+}
+
+/// What [`push_imported_main`] did with the company branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MainPush {
+    /// The import did not rebuild it: nothing to push.
+    Unchanged,
+    /// Force-pushed with a lease on the merge commit.
+    Pushed,
+    /// The remote branch is no longer the merge commit (a merge landed
+    /// after it), so the rebuilt branch was not pushed.
+    Moved,
+    /// The rebuilt branch has another tree than the merge commit, so pushing
+    /// it would change content, not only order. Not pushed.
+    Differs,
+}
+
+/// Pushes the company branch an import rebuilt, only when that changes the
+/// order of commits and nothing else, and only while the remote branch is
+/// still `merged_as`: the import's scope then includes its head.
+///
+/// The rebuilt tree must equal the tree of `merged_as`. The push is forced,
+/// with a lease on `merged_as`, so a merge that landed while the import ran
+/// is never overwritten. A lost lease is not an error: the import of that
+/// merge rebuilds and pushes the branch.
+pub fn push_imported_main(
+    repo: &Path,
+    remote: &str,
+    main_start: Option<&str>,
+    merged_as: &str,
+) -> Result<MainPush> {
+    let company_branch = read_queue_file(repo)?.config.internal_branch;
+    if !has_ref(repo, &company_branch)? {
+        return Ok(MainPush::Unchanged);
+    }
+    let main = rev_parse(repo, &company_branch)?;
+    if main_start == Some(main.as_str()) {
+        return Ok(MainPush::Unchanged);
+    }
+    let tree = rev_parse(repo, &format!("{main}^{{tree}}"))?;
+    if tree != rev_parse(repo, &format!("{merged_as}^{{tree}}"))? {
+        return Ok(MainPush::Differs);
+    }
+    let lease = format!("--force-with-lease=refs/heads/{company_branch}:{merged_as}");
+    let dest = format!("{main}:refs/heads/{company_branch}");
+    match git(repo, &["push", &lease, remote, &dest], GitOpts::default()) {
+        Ok(_) => Ok(MainPush::Pushed),
+        Err(err) if is_push_lease_rejected(&err) => Ok(MainPush::Moved),
+        Err(err) => Err(err),
+    }
+}
+
 pub fn push_queue(repo: &Path, opts: PushOpts) -> Result<PushResult> {
     with_queue_lock(repo, || {
         let remote = opts

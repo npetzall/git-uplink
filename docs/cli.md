@@ -21,6 +21,7 @@ git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <na
 git uplink add [--message <text> | --message-file <path>] [--from <ref>] [--head <ref>]
             [--internal-only] [--pr <n>] [--pr-url <url>] [--base-branch <branch>]
             [--depends-on <id>]... [--preflight-result <path>] [--gate] [--json]
+            [--push] [--merged-as <sha>]
 git uplink adopt [--branch <ref>] [--groups [<path>]] [--apply] [--write-groups]
             [--continue] [--skip] [--abort] [--abort-keep] [--keep-test-branches]
             [--no-preflight-deps] [--no-preview] [--json]
@@ -393,6 +394,12 @@ Merge lands the change on `main`; import records the patch on `uplink/state` (`u
 - `--json`: Print the patch as JSON, with `readyToSubmit`.
 
   `readyToSubmit` lists the patches this import made ready to submit: upstream-bound, queued, and every upstream dependency merged. Import dispatches Uplink submit for them when the repository variable `UPLINK_AUTO_SUBMIT` is `true`. When the rebuild after the import stops on a patch that no longer applies, the change is still recorded: the output has `conflict` and `gh.prCreate` for the gated PR, and the command exits 0.
+- `--push`: Record on origin's uplink/state and push it, then push a rebuilt main.
+
+  The import is recorded on origin's uplink/state and pushed as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the import is recorded again on the state that won, and main is rebuilt again from it.
+
+  Main is pushed only when the import rebuilt it, the rebuilt tree is the tree of `--merged-as` (the rebuild only changed the order of commits), and origin's main is still `--merged-as`: a force-push with that lease. When a merge landed after it, main is left as it is and the import of that merge pushes it. The output has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `differs`).
+- `--merged-as <sha>`: The commit the pull request was merged as. Needs `--push`.
 
 ### `preflight`
 
