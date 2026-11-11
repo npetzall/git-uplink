@@ -24,7 +24,7 @@ What matters first is that `uplink/state` has the change, every patch updated. P
 1. **Push `uplink/state` before `main`.** When the state push fails, `main` stays as it was.
 2. **Force-push only with a lease, and never drop an unimported merge.**
    - Import (`add --push --merged-as`): its scope is its merge commit. Lease on it (`--force-with-lease=refs/heads/main:<merge_commit_sha>`), and push only a rebuild whose tree equals the merge's tree, since an import only reorders (`push_imported_main`). Never lease on the `main` the job happened to fetch: it can hold later merges the rebuild left out.
-   - Sync, accept-upstream, resolve, amend, transfer (`--push`): they change content, so the tree check cannot apply. Fetch origin's `main` right before the push, lease on it, and push only when every first-parent commit on it above `uplink/upstream` has an `Uplink-Patch-Id`, that is, was written by a rebuild (`push_rebuilt_main`). A merge not imported yet makes it `unrecorded`: do not push.
+   - Sync, accept-upstream, resolve, amend, transfer (`--push`): they change content, so their own rebuild cannot be compared with `main`. Fetch origin's `main` right before the push and lease on it. Push only when `uplink/state` already had everything that `main` has: every first-parent commit above `uplink/upstream` has an `Uplink-Patch-Id` (a rebuild wrote it), or a rebuild of the state the command started from gives `main`'s tree (`rebuilt_tree_at`, in a temporary index). The second case covers merges an internal-only import recorded and left on `main`. Otherwise it is `unrecorded`: do not push.
 3. **A main that is not pushed is not a failure.** The import of the merge that is waiting rebuilds from the recorded state and pushes `main`. Report it (`push.main` is `moved`, `differs` or `unrecorded`) and go on.
 4. **Reset every ref the command moves before recording again.** `record_on_remote` puts the company branch and `uplink/upstream` back where they were before each attempt, so a sync run again still sees the new upstream.
 
@@ -33,6 +33,7 @@ What matters first is that `uplink/state` has the change, every patch updated. P
 1. **Keep the change whatever failed.** A failed import pushes `uplink/rescue/import-<pr>-<run>-<attempt>` with `git uplink rescue`: the change, the message, the run's output and the queue as the run saw it.
 2. **Have a fallback that does not need the binary.** When `git uplink rescue` fails, the workflow keeps the same files with plain git (`-git` suffix). A failure of git-uplink itself is one of the failures to survive.
 3. **Never push a rescue to `uplink/state`.** It goes to a new branch, without force.
+4. **Do not rely on a re-run when the command can redo its work.** A packet, a waiting or rejected record and a verify gate are written for the state they are published on, so they record again on the state that won (`--push`) instead of failing the job.
 
 ## Tests
 
@@ -46,7 +47,6 @@ Every rule above has a test.
 
 These still push without the rules above and are left for later changes:
 
-- Submit's packet and rejected jobs and verify push `uplink/state` with a separate `git push origin uplink/state`. They hold `uplink-mutate`, but submit's approve does not, so their push can lose to it and fail the job (nothing is lost; the job fails visibly).
 - An operator's `git uplink rebuild --push` force-pushes `main` without these checks.
-- When an import reported `differs`, its merge stays on `main`, so later jobs report `unrecorded` and do not push `main` until an operator rebuilds.
+- `differs` and `unrecorded` mean `main` has content `uplink/state` lacks: a failed import (its change is on a rescue branch), a push to `main` that bypassed import, or a merge whose content differs from its patch. Jobs keep `main` as it is until the change is recorded (`git uplink add` from the rescue branch) or an operator rebuilds.
 - A command run again on a moved state can fail where its preflight result no longer matches (the state changed content, not only records). Nothing is lost: the gated branches are still there, and the workflow can be run again.

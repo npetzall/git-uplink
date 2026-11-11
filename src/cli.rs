@@ -931,6 +931,13 @@ pub enum Commands {
         /// --extra-dir.
         #[arg(long = "assess-result", value_name = "path")]
         assess_result: Option<PathBuf>,
+        /// Record on origin's uplink/state and push it there.
+        ///
+        /// Pushed as a fast-forward; uplink/state is never force-pushed. When
+        /// origin moved before the push, the command runs again on the state
+        /// that won, so what it writes is for the state that is published.
+        #[arg(long)]
+        push: bool,
     },
     /// Show the queue.
     Status {
@@ -1054,6 +1061,13 @@ pub enum Commands {
         /// The submit run; defaults to the GitHub Actions run of this job.
         #[arg(long = "run-url", value_name = "url")]
         run_url: Option<String>,
+        /// Record on origin's uplink/state and push it there.
+        ///
+        /// Pushed as a fast-forward; uplink/state is never force-pushed. When
+        /// origin moved before the push, the command runs again on the state
+        /// that won, so what it writes is for the state that is published.
+        #[arg(long)]
+        push: bool,
     },
     /// Record that the to-upstream review of a waiting patch was rejected.
     ///
@@ -1080,6 +1094,13 @@ pub enum Commands {
         /// The reviewer's comment.
         #[arg(long, value_name = "text")]
         comment: Option<String>,
+        /// Record on origin's uplink/state and push it there.
+        ///
+        /// Pushed as a fast-forward; uplink/state is never force-pushed. When
+        /// origin moved before the push, the command runs again on the state
+        /// that won, so what it writes is for the state that is published.
+        #[arg(long)]
+        push: bool,
     },
     /// Account for new public commits and rebuild main when upstream moved.
     ///
@@ -1313,6 +1334,11 @@ pub enum Commands {
         #[arg(long, value_name = "name")]
         branch: Option<String>,
         /// Push uplink/state and the rebuilt branch after rebuild.
+        ///
+        /// With --verify, only uplink/state is pushed, and only when a patch
+        /// was gated: a pass leaves origin as it is. When origin's
+        /// uplink/state moved before the push, verify records the gate again
+        /// on the state that won. Main is not pushed.
         #[arg(long)]
         push: bool,
         /// Remote for --push, origin by default.

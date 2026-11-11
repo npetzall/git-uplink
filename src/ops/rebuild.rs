@@ -527,6 +527,64 @@ pub(super) fn probe_report(
 /// Replays the queue onto upstream and publishes the company branch.
 /// `check` is where the verdict of `preflight.sh` on the result comes from;
 /// `None` publishes without one. `force`: see [`RebuildOpts::verify`].
+/// The tree a rebuild of the queue on the `uplink/state` commit `state`
+/// gives on `upstream`: its active patches applied in rebuild order, in a
+/// temporary index, without touching the checkout. `None` when a patch is
+/// in conflict or does not apply there.
+pub fn rebuilt_tree_at(repo: &Path, state: &str, upstream: &str) -> Result<Option<String>> {
+    let queue = queue_at(repo, state)?;
+    let scratch = repo.join(format!(".git/uplink-replay-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&scratch)?;
+    let index = scratch.join("index");
+    let opts = GitOpts {
+        extra_env: vec![(
+            "GIT_INDEX_FILE".into(),
+            index.to_string_lossy().into_owned(),
+        )],
+        ..GitOpts::default()
+    };
+    let outcome = (|| -> Result<Option<String>> {
+        git(repo, &["read-tree", upstream], opts.clone())?;
+        for patch in apply_order_active(&queue)? {
+            if patch.status == PatchStatus::Conflict {
+                return Ok(None);
+            }
+            let rel = patch_path(&patch.id)?;
+            let file = scratch.join(format!("{}.patch", patch.id));
+            fs::write(
+                &file,
+                format!("{}\n", show_at(repo, state, &rel.to_string_lossy())?),
+            )?;
+            let file = file.to_string_lossy().into_owned();
+            let applies = |args: &[&str]| -> Result<bool> {
+                let mut all = vec!["apply", "--cached"];
+                all.extend_from_slice(args);
+                all.push(&file);
+                Ok(git(
+                    repo,
+                    &all,
+                    GitOpts {
+                        allow_fail: true,
+                        ..opts.clone()
+                    },
+                )?
+                .code
+                    == 0)
+            };
+            // Already in the tree: the rebuild leaves it out as empty.
+            if applies(&["--reverse", "--check"])? {
+                continue;
+            }
+            if !applies(&["--3way"])? {
+                return Ok(None);
+            }
+        }
+        Ok(Some(git(repo, &["write-tree"], opts.clone())?.stdout))
+    })();
+    let _ = fs::remove_dir_all(&scratch);
+    outcome
+}
+
 pub(super) fn rebuild_once(
     repo: &Path,
     check: Option<&ScriptVerdict>,

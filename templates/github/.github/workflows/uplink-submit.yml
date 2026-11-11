@@ -214,20 +214,24 @@ jobs:
           # --assess-result stores the assessment the assess job made, which
           # the hook read too. It stops when that is not for the patch as it
           # is now (the patch, its message or uplink.toml changed since).
+          # report and waiting push uplink/state themselves. The submit job
+          # of another run holds no uplink-mutate: when it moved uplink/state,
+          # they run again on the state that won, so the packet and its review
+          # token are for the state that is published.
           code=0
           case "$HOOK_STATUS" in
             success)
               mkdir -p "$EXTRA_DIR"
-              packet=$(git uplink report "$PATCH_ID" --assess-result "$ASSESSMENT" \
+              packet=$(git uplink report "$PATCH_ID" --push --assess-result "$ASSESSMENT" \
                 --extra-dir "$EXTRA_DIR" --store-extras --extra-source "$HOOK_RUN_URL") || code=$?
               ;;
             failure)
               mkdir -p "$EXTRA_DIR"
-              packet=$(git uplink report "$PATCH_ID" --assess-result "$ASSESSMENT" \
+              packet=$(git uplink report "$PATCH_ID" --push --assess-result "$ASSESSMENT" \
                 --extra-dir "$EXTRA_DIR") || code=$?
               ;;
             *)
-              packet=$(git uplink report "$PATCH_ID" --assess-result "$ASSESSMENT") || code=$?
+              packet=$(git uplink report "$PATCH_ID" --push --assess-result "$ASSESSMENT") || code=$?
               ;;
           esac
           # With assessment findings report still writes the packet, then
@@ -242,13 +246,12 @@ jobs:
           # Every check passed: the patch now waits on the review. A patch an
           # approval already covers keeps its status.
           if [ "$code" -eq 0 ] && [ "$COVERED" != "true" ]; then
-            if git uplink waiting "$PATCH_ID" --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --run-url "$RUN_URL"; then
+            if git uplink waiting "$PATCH_ID" --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --run-url "$RUN_URL" --push; then
               echo "waiting=true" >> "$GITHUB_OUTPUT"
             else
               code=1
             fi
           fi
-          git push origin uplink/state
           printf '%s\n' "$packet" >> "$GITHUB_STEP_SUMMARY"
           if [ "$code" -ne 0 ]; then
             exit "$code"
@@ -504,7 +507,7 @@ jobs:
           set -euo pipefail
           git uplink init
           if [ "$SUBMIT_RESULT" = "cancelled" ]; then
-            git uplink rejected "$PATCH_ID" --run-url "$RUN_URL" --cancelled | tee -a "$GITHUB_STEP_SUMMARY"
+            git uplink rejected "$PATCH_ID" --push --run-url "$RUN_URL" --cancelled | tee -a "$GITHUB_STEP_SUMMARY"
           else
             review=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
               --jq '[.[] | select(.state == "rejected" and any(.environments[]; .name == "to-upstream"))] | last // empty')
@@ -512,8 +515,7 @@ jobs:
               echo "The to-upstream review was not rejected; submit failed after approval. Nothing to record."
               exit 0
             fi
-            git uplink rejected "$PATCH_ID" --run-url "$RUN_URL" \
+            git uplink rejected "$PATCH_ID" --push --run-url "$RUN_URL" \
               --by "$(jq -r '.user.login // empty' <<<"$review")" \
               --comment "$(jq -r '.comment // empty' <<<"$review")" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-          git push origin uplink/state

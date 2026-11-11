@@ -78,11 +78,26 @@ const RECORD_PUSH_ATTEMPTS: u32 = 8;
 ///
 /// Refuses when `.uplink/` has uncommitted changes, or local `uplink/state`
 /// has commits the remote lacks: moving it would lose them.
+///
+/// Returns what `record` returned and the remote's `uplink/state` it was
+/// recorded on.
 pub fn record_on_remote<T>(
     repo: &Path,
     remote: &str,
+    record: impl FnMut() -> Result<T>,
+) -> Result<(T, String)> {
+    record_on_remote_if(repo, remote, record, |_| true)
+}
+
+/// [`record_on_remote`], pushing only when `keep` says so for what `record`
+/// returned. Otherwise local `uplink/state` and `.uplink/` go back to the
+/// remote's and nothing is pushed.
+pub fn record_on_remote_if<T>(
+    repo: &Path,
+    remote: &str,
     mut record: impl FnMut() -> Result<T>,
-) -> Result<T> {
+    keep: impl Fn(&T) -> bool,
+) -> Result<(T, String)> {
     with_queue_lock(repo, || {
         ensure_state_worktree(repo)?;
         let uncommitted = uplink_uncommitted_paths(repo, STATE_BRANCH)?;
@@ -135,10 +150,14 @@ pub fn record_on_remote<T>(
             }
             let value = record()?;
             if rev_parse(repo, STATE_BRANCH)? == base {
-                return Ok(value);
+                return Ok((value, base));
+            }
+            if !keep(&value) {
+                apply_state_sha(repo, STATE_BRANCH, &base)?;
+                return Ok((value, base));
             }
             match push_state_branch(repo, remote, STATE_BRANCH) {
-                Ok(()) => return Ok(value),
+                Ok(()) => return Ok((value, base)),
                 Err(err) if is_push_lease_rejected(&err) => {
                     last_error = Some(err);
                     thread::sleep(Duration::from_millis(40 * 2u64.pow(attempt)));
@@ -207,15 +226,20 @@ pub fn push_imported_main(
 
 /// Pushes the company branch a resolve, amend, transfer or sync rebuilt,
 /// only when that overwrites nothing on the remote: a force-push with a
-/// lease on `lease` (the remote branch as the job fetched it), and only when
+/// lease on `lease` (the remote branch as fetched right before), and only
+/// when `uplink/state` already had everything `lease` has. That holds when
 /// every commit on `lease` above `uplink/upstream` was written by a rebuild
-/// (has an `Uplink-Patch-Id`). A merge that is not imported yet is never
-/// dropped from the remote; its import pushes the branch.
+/// (has an `Uplink-Patch-Id`), or when a rebuild of `recorded_on` (the
+/// state the command started from) on `upstream_start` gives the tree of
+/// `lease`. A merge that is not recorded yet is never dropped from the
+/// remote; its import pushes the branch.
 pub fn push_rebuilt_main(
     repo: &Path,
     remote: &str,
     main_start: Option<&str>,
     lease: &str,
+    recorded_on: &str,
+    upstream_start: &str,
 ) -> Result<MainPush> {
     let company_branch = read_queue_file(repo)?.config.internal_branch;
     if !has_ref(repo, &company_branch)? {
@@ -230,7 +254,11 @@ pub fn push_rebuilt_main(
             .into_iter()
             .any(|(_, has_patch_id)| !has_patch_id);
     if unrecorded {
-        return Ok(MainPush::Unrecorded);
+        let lease_tree = rev_parse(repo, &format!("{lease}^{{tree}}"))?;
+        let recorded = super::rebuild::rebuilt_tree_at(repo, recorded_on, upstream_start)?;
+        if recorded.as_deref() != Some(lease_tree.as_str()) {
+            return Ok(MainPush::Unrecorded);
+        }
     }
     let lease_arg = format!("--force-with-lease=refs/heads/{company_branch}:{lease}");
     let dest = format!("{main}:refs/heads/{company_branch}");

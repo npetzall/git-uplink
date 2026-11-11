@@ -10,7 +10,7 @@ use git_uplink::{
     AddOutcome, AdoptResume, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, MainPush,
     Patch, PatchConflict, PatchIntent, PatchStatus, QueueState, RemoteApproval, RescueOpts,
     SettingsFlags, SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult,
-    UpgradeResume, rescue_import, stdin_is_tty,
+    UpgradeResume, record_on_remote_if, rescue_import, stdin_is_tty,
 };
 use git_uplink::{
     AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendResult, ApprovalReceipt, AssessPackage,
@@ -1089,7 +1089,8 @@ fn record_maybe_push<T>(
     }
     let branch = read_queue(repo)?.config.internal_branch;
     let main_start = git_ok(repo, &["rev-parse", "--verify", "--quiet", &branch]).ok();
-    let value = record_on_remote(repo, "origin", record)?;
+    let upstream_start = git_ok(repo, &["rev-parse", "uplink/upstream"])?;
+    let (value, recorded_on) = record_on_remote(repo, "origin", record)?;
     git_ok(
         repo,
         &[
@@ -1103,7 +1104,14 @@ fn record_maybe_push<T>(
         repo,
         &["rev-parse", &format!("refs/remotes/origin/{branch}")],
     )?;
-    let main = push_rebuilt_main(repo, "origin", main_start.as_deref(), &lease)?;
+    let main = push_rebuilt_main(
+        repo,
+        "origin",
+        main_start.as_deref(),
+        &lease,
+        &recorded_on,
+        &upstream_start,
+    )?;
     eprint_main_push(main, &branch, &lease);
     let report = serde_json::json!({
         "state": git_ok(repo, &["rev-parse", STATE_BRANCH])?,
@@ -1222,7 +1230,7 @@ fn cmd_add(
             let company_branch = read_queue(repo)?.config.internal_branch;
             let main_start =
                 git_ok(repo, &["rev-parse", "--verify", "--quiet", &company_branch]).ok();
-            let recorded = record_on_remote(repo, "origin", record)?;
+            let (recorded, _) = record_on_remote(repo, "origin", record)?;
             let main = push_imported_main(repo, "origin", main_start.as_deref(), merged_as)?;
             eprint_main_push(main, &company_branch, merged_as);
             let mut recorded = recorded;
@@ -1444,20 +1452,62 @@ fn cmd_assess(
     Ok(())
 }
 
-fn cmd_report(
-    repo: &Path,
-    id: &str,
+struct ReportArgs {
     out: Option<PathBuf>,
     extra_dir: Option<PathBuf>,
     store_extras: bool,
     extra_source: Option<String>,
     assess_result: Option<PathBuf>,
-) -> Result<(), Error> {
+}
+
+fn cmd_report(repo: &Path, id: &str, args: ReportArgs, push: bool) -> Result<(), Error> {
+    // The packet is written and published also when the assessment has
+    // findings; the command fails after that.
+    let (packet, dest, not_ready) =
+        record_state_maybe_push(repo, push, || write_report(repo, id, &args))?;
+    println!("{packet}");
+    eprintln!("Wrote {}", dest.display());
+    if not_ready {
+        return Err(Error::msg(format!(
+            "{id} is not ready for contribution. Fix the upstream assessment findings in the packet first."
+        )));
+    }
+    Ok(())
+}
+
+/// Runs `record`; with `push`, on origin's uplink/state, pushing it there
+/// and recording again on a lost race. Main is not touched.
+fn record_state_maybe_push<T>(
+    repo: &Path,
+    push: bool,
+    mut record: impl FnMut() -> Result<T, Error>,
+) -> Result<T, Error> {
+    if push {
+        Ok(record_on_remote(repo, "origin", record)?.0)
+    } else {
+        record()
+    }
+}
+
+/// Stores the assessment (and extras), writes and commits the packet.
+/// Returns it, where it went, and whether the assessment has findings.
+fn write_report(
+    repo: &Path,
+    id: &str,
+    args: &ReportArgs,
+) -> Result<(String, PathBuf, bool), Error> {
+    let ReportArgs {
+        out,
+        extra_dir,
+        store_extras,
+        extra_source,
+        assess_result,
+    } = args;
     // First: a result that is not for the patch as it is now stops here,
     // before the extras of the hook that read the same package are stored.
     match assess_result {
         Some(path) => {
-            let text = fs::read_to_string(&path)
+            let text = fs::read_to_string(path)
                 .map_err(|err| Error::msg(format!("could not read {}: {err}", path.display())))?;
             let package: AssessPackage = serde_json::from_str(&text).map_err(|err| {
                 Error::msg(format!(
@@ -1471,8 +1521,8 @@ fn cmd_report(
             assess_patch_for_packet(repo, id)?;
         }
     }
-    if store_extras && let Some(dir) = extra_dir.as_deref() {
-        store_patch_extras(repo, id, dir, extra_source)?;
+    if *store_extras && let Some(dir) = extra_dir.as_deref() {
+        store_patch_extras(repo, id, dir, extra_source.clone())?;
     }
     let queue = read_queue(repo)?;
     let patch = queue
@@ -1481,21 +1531,15 @@ fn cmd_report(
         .ok_or_else(|| Error::msg(format!("unknown patch {id}")))?;
     let packet = format_contribution_packet_with_extras(repo, patch, extra_dir.as_deref())?;
     let default_out = report_paths(id)?.1;
-    let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
+    let dest = out.clone().unwrap_or_else(|| PathBuf::from(&default_out));
     write_markdown_file(repo, &dest, &packet)?;
     // What the packet is for: `approve --reviewed` takes it back.
     if let Ok(token) = review_token(repo, patch) {
         write_markdown_file(repo, Path::new(&review_token_path(id)?), &token)?;
     }
     commit_queue(repo, &format!("uplink: contribution packet {id}"))?;
-    println!("{packet}");
-    eprintln!("Wrote {}", dest.display());
-    if queue.is_upstream(id) && patch.assess.as_ref().is_some_and(|report| !report.ok) {
-        return Err(Error::msg(format!(
-            "{id} is not ready for contribution. Fix the upstream assessment findings in the packet first."
-        )));
-    }
-    Ok(())
+    let not_ready = queue.is_upstream(id) && patch.assess.as_ref().is_some_and(|report| !report.ok);
+    Ok((packet, dest, not_ready))
 }
 
 /// The verdict a command works with: read from `--preflight-result`, else
@@ -1815,9 +1859,11 @@ fn cmd_waiting(
     id: &str,
     preflight_result: PathBuf,
     run_url: Option<&str>,
+    push: bool,
 ) -> Result<(), Error> {
     let verdict = script_verdict(Some(preflight_result))?;
-    let (patch, outcome) = mark_waiting(repo, id, &verdict, run_url)?;
+    let (patch, outcome) =
+        record_state_maybe_push(repo, push, || mark_waiting(repo, id, &verdict, run_url))?;
     match outcome {
         WaitingOutcome::Waiting => println!("{} waiting on {TO_UPSTREAM_ENVIRONMENT}", patch.id),
         WaitingOutcome::Covered => println!(
@@ -1828,8 +1874,8 @@ fn cmd_waiting(
     Ok(())
 }
 
-fn cmd_rejected(repo: &Path, id: &str, rejection: &Rejection) -> Result<(), Error> {
-    match mark_rejected(repo, id, rejection)? {
+fn cmd_rejected(repo: &Path, id: &str, rejection: &Rejection, push: bool) -> Result<(), Error> {
+    match record_state_maybe_push(repo, push, || mark_rejected(repo, id, rejection))? {
         Some(patch) => println!("{} rejected", patch.id),
         None => println!(
             "{id} is no longer waiting for this run; nothing recorded (an amend, a resolve or a newer run took over)"
@@ -1981,20 +2027,45 @@ fn cmd_rebuild(
     json: bool,
 ) -> Result<(), Error> {
     let remote = push_remote.clone().unwrap_or_else(|| "origin".into());
-    let result = rebuild_with(
-        repo,
-        RebuildOpts {
-            branch,
-            push,
-            push_remote: if push {
-                Some(remote.clone())
-            } else {
-                push_remote
+    let result = if verify && push {
+        // Verify publishes only a gated patch: a pass leaves origin as it
+        // is. The gate is recorded again when origin's state moved; main is
+        // not pushed.
+        record_on_remote_if(
+            repo,
+            &remote,
+            || match rebuild_with(
+                repo,
+                RebuildOpts {
+                    branch: None,
+                    push: false,
+                    push_remote: None,
+                    preflight: preflight.clone(),
+                    verify: true,
+                },
+            ) {
+                Err(Error::Conflict(err)) => Ok(Err(Error::Conflict(err))),
+                other => other.map(Ok),
             },
-            preflight,
-            verify,
-        },
-    );
+            |outcome| outcome.is_err(),
+        )?
+        .0
+    } else {
+        rebuild_with(
+            repo,
+            RebuildOpts {
+                branch,
+                push,
+                push_remote: if push {
+                    Some(remote.clone())
+                } else {
+                    push_remote
+                },
+                preflight,
+                verify,
+            },
+        )
+    };
     let result = match result {
         Err(Error::Conflict(err)) => {
             let queue = read_queue(repo)?;
@@ -2038,7 +2109,7 @@ fn cmd_rebuild(
         }
         println!("{}", format_product_changes(changes, &result.branch, false));
     }
-    if push {
+    if push && !verify {
         println!("pushed {} to {remote}", result.branch);
     }
     Ok(())
@@ -2455,14 +2526,18 @@ fn run() -> Result<(), Error> {
             store_extras,
             extra_source,
             assess_result,
+            push,
         } => cmd_report(
             &repo,
             &id,
-            out,
-            extra_dir,
-            store_extras,
-            extra_source,
-            assess_result,
+            ReportArgs {
+                out,
+                extra_dir,
+                store_extras,
+                extra_source,
+                assess_result,
+            },
+            push,
         ),
         Commands::Preflight {
             id,
@@ -2516,13 +2591,15 @@ fn run() -> Result<(), Error> {
             id,
             preflight_result,
             run_url,
-        } => cmd_waiting(&repo, &id, preflight_result, run_url.as_deref()),
+            push,
+        } => cmd_waiting(&repo, &id, preflight_result, run_url.as_deref(), push),
         Commands::Rejected {
             id,
             run_url,
             cancelled,
             by,
             comment,
+            push,
         } => cmd_rejected(
             &repo,
             &id,
@@ -2532,6 +2609,7 @@ fn run() -> Result<(), Error> {
                 by,
                 comment,
             },
+            push,
         ),
         Commands::Sync { merged_pr, push } => cmd_sync(&repo, merged_pr, push),
         Commands::AcceptUpstream {
