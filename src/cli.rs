@@ -1104,6 +1104,19 @@ pub enum Commands {
         /// these. One that names a commit outside the new range is ignored.
         #[arg(long = "merged-pr", value_name = "id=sha")]
         merged_pr: Vec<String>,
+        /// Push uplink/state, then a rebuilt main that overwrites nothing.
+        ///
+        /// Records on origin's uplink/state and pushes it as a fast-forward;
+        /// uplink/state is never force-pushed. When origin moved before the
+        /// push, the command runs again on the state that won, from the same
+        /// main and uplink/upstream. Main is then force-pushed with a lease
+        /// on origin's main, fetched right before, and only when every commit
+        /// on it was written by a rebuild: a merge that is not imported yet
+        /// is never dropped, and its import pushes main. The JSON has
+        /// `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or
+        /// `unrecorded`).
+        #[arg(long)]
+        push: bool,
     },
     /// Promote a pending public main after from-upstream environment approval.
     ///
@@ -1143,6 +1156,19 @@ pub enum Commands {
         /// upstream fails.
         #[arg(long = "preflight-only", conflicts_with_all = ["preflight_result"])]
         preflight_only: bool,
+        /// Push uplink/state, then a rebuilt main that overwrites nothing.
+        ///
+        /// Records on origin's uplink/state and pushes it as a fast-forward;
+        /// uplink/state is never force-pushed. When origin moved before the
+        /// push, the command runs again on the state that won, from the same
+        /// main and uplink/upstream. Main is then force-pushed with a lease
+        /// on origin's main, fetched right before, and only when every commit
+        /// on it was written by a rebuild: a merge that is not imported yet
+        /// is never dropped, and its import pushes main. The JSON has
+        /// `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or
+        /// `unrecorded`).
+        #[arg(long)]
+        push: bool,
     },
     /// Keep a merged change that import could not record on a rescue branch.
     ///
@@ -1403,6 +1429,19 @@ pub enum Commands {
         /// squashed resolution, so use a clone made for it.
         #[arg(long = "preflight-only", conflicts_with_all = ["preflight_result"])]
         preflight_only: bool,
+        /// Push uplink/state, then a rebuilt main that overwrites nothing.
+        ///
+        /// Records on origin's uplink/state and pushes it as a fast-forward;
+        /// uplink/state is never force-pushed. When origin moved before the
+        /// push, the command runs again on the state that won, from the same
+        /// main and uplink/upstream. Main is then force-pushed with a lease
+        /// on origin's main, fetched right before, and only when every commit
+        /// on it was written by a rebuild: a merge that is not imported yet
+        /// is never dropped, and its import pushes main. The JSON has
+        /// `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or
+        /// `unrecorded`).
+        #[arg(long)]
+        push: bool,
     },
     /// Move a patch between the internal and upstream queues.
     ///
@@ -1468,6 +1507,19 @@ pub enum Commands {
         /// left on the squashed work, so use a clone made for it.
         #[arg(long = "preflight-only", conflicts_with = "preflight_result")]
         preflight_only: bool,
+        /// Push uplink/state, then a rebuilt main that overwrites nothing.
+        ///
+        /// Records on origin's uplink/state and pushes it as a fast-forward;
+        /// uplink/state is never force-pushed. When origin moved before the
+        /// push, the command runs again on the state that won, from the same
+        /// main and uplink/upstream. Main is then force-pushed with a lease
+        /// on origin's main, fetched right before, and only when every commit
+        /// on it was written by a rebuild: a merge that is not imported yet
+        /// is never dropped, and its import pushes main. The JSON has
+        /// `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or
+        /// `unrecorded`).
+        #[arg(long)]
+        push: bool,
     },
     /// Revise a patch through a gated PR from uplink/amend/<id>-work.
     ///
@@ -1547,6 +1599,19 @@ pub enum Commands {
             requires = "complete"
         )]
         preflight_only: bool,
+        /// Push uplink/state, then a rebuilt main that overwrites nothing.
+        ///
+        /// Records on origin's uplink/state and pushes it as a fast-forward;
+        /// uplink/state is never force-pushed. When origin moved before the
+        /// push, the command runs again on the state that won, from the same
+        /// main and uplink/upstream. Main is then force-pushed with a lease
+        /// on origin's main, fetched right before, and only when every commit
+        /// on it was written by a rebuild: a merge that is not imported yet
+        /// is never dropped, and its import pushes main. The JSON has
+        /// `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or
+        /// `unrecorded`).
+        #[arg(long)]
+        push: bool,
     },
     /// Start the embedded operator dashboard on 127.0.0.1 and open a browser.
     ///

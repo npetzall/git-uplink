@@ -200,19 +200,16 @@ jobs:
         run: |
           git uplink init
           printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
-          main_before=$(git rev-parse HEAD)
 
           # A failed preflight in the result gates the transfer, as before.
+          # --push pushes uplink/state (a fast-forward; on a lost race it runs
+          # again on the state that won), then main with a lease, only when
+          # that drops no merge waiting for its import.
           transfer_json=$(git uplink transfer "$PATCH_ID" --"$DIRECTION" \
-            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --push)
           gated=$(jq -r '.gated // false' <<<"$transfer_json")
           if [ "$gated" != "true" ]; then
-            git push origin uplink/state
             echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$transfer_json")" >> "$GITHUB_OUTPUT"
-            main_after=$(git rev-parse HEAD)
-            if [ "$main_after" != "$main_before" ]; then
-              git push origin HEAD:main --force
-            fi
             close_url=$(jq -r '.gh.prClose.url // empty' <<<"$transfer_json")
             close_branch=$(jq -r '.gh.prClose.contribBranch // empty' <<<"$transfer_json")
             if [ -n "$close_url" ] || [ -n "$close_branch" ]; then
@@ -495,23 +492,13 @@ jobs:
             printf '%s\n' "${BODY:-}"
           } > "$RUNNER_TEMP/uplink-pr-msg.txt"
 
-          main_before=$(git rev-parse origin/main)
+          # --push pushes uplink/state (a fast-forward; on a lost race it runs
+          # again on the state that won), then main with a lease, only when
+          # that drops no merge waiting for its import.
           transfer_json=$(git uplink transfer "$id" --"$direction" --complete \
             --message-file "$RUNNER_TEMP/uplink-pr-msg.txt" \
-            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
-
-          head=$(git rev-parse --abbrev-ref HEAD)
-          if [ "$head" != "main" ]; then
-            echo "HEAD is ${head}, not main; refusing to push"
-            exit 1
-          fi
-
-          git push origin uplink/state
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --push)
           echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$transfer_json")" >> "$GITHUB_OUTPUT"
-          main_after=$(git rev-parse HEAD)
-          if [ "$main_after" != "$main_before" ]; then
-            git push origin main --force
-          fi
           close_url=$(jq -r '.gh.prClose.url // empty' <<<"$transfer_json")
           close_branch=$(jq -r '.gh.prClose.contribBranch // empty' <<<"$transfer_json")
           if [ -n "$close_url" ] || [ -n "$close_branch" ]; then

@@ -212,24 +212,13 @@ jobs:
             printf '%s\n' "${BODY:-}"
           } > "$RUNNER_TEMP/uplink-pr-msg.txt"
 
-          main_before=$(git rev-parse origin/main)
-
+          # --push pushes uplink/state (a fast-forward; on a lost race it runs
+          # again on the state that won), then main with a lease, only when
+          # that drops no merge waiting for its import.
           resolve_json=$(git uplink resolve "$id" \
             --message-file "$RUNNER_TEMP/uplink-pr-msg.txt" \
-            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
-
-          head=$(git rev-parse --abbrev-ref HEAD)
-          if [ "$head" != "main" ]; then
-            echo "HEAD is ${head}, not main; refusing to push"
-            exit 1
-          fi
-
-          git push origin uplink/state
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --push)
           echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$resolve_json")" >> "$GITHUB_OUTPUT"
-          main_after=$(git rev-parse HEAD)
-          if [ "$main_after" != "$main_before" ]; then
-            git push origin main --force
-          fi
 
           public=$(jq -r '.public // empty' <<<"$resolve_json")
           if [ -z "$public" ]; then

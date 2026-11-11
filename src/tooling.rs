@@ -1170,6 +1170,7 @@ mod embed_tests {
                 let pushed = writer
                     .find("git push origin uplink/state")
                     .or_else(|| writer.find("git uplink add "))
+                    .or_else(|| writer.find(" --push)"))
                     .unwrap();
                 let read = writer.find(".readyToSubmit // []").unwrap_or_else(|| {
                     panic!("{forge:?} {workflow} {job_key} reads readyToSubmit\n{writer}")
@@ -1250,6 +1251,53 @@ mod embed_tests {
                     && rescue.contains("refs/heads/${branch}"),
                 "{forge:?}\n{rescue}"
             );
+        }
+    }
+
+    #[test]
+    fn no_workflow_force_pushes_main_itself() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            for (path, body) in &files {
+                if !path.ends_with(".yml") {
+                    continue;
+                }
+                let text = String::from_utf8_lossy(body);
+                for line in text.lines() {
+                    let line = line.trim();
+                    assert!(
+                        !(line.starts_with("git push") && line.contains("main")),
+                        "{forge:?} {path} pushes main itself; the command pushes it with a lease: {line}"
+                    );
+                }
+            }
+            let text = |name: &str| {
+                files
+                    .iter()
+                    .find(|(p, _)| p.ends_with(name))
+                    .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_else(|| panic!("{forge:?} missing {name}"))
+            };
+            for (workflow, command) in [
+                ("uplink-resolve.yml", "git uplink resolve \"$id\""),
+                ("uplink-amend.yml", "git uplink amend \"$id\" --complete"),
+                ("uplink-transfer.yml", "git uplink transfer \"$PATCH_ID\""),
+                ("uplink-transfer.yml", "git uplink transfer \"$id\""),
+                ("uplink-sync.yml", "git uplink sync "),
+                ("uplink-sync.yml", "git uplink accept-upstream --sha"),
+            ] {
+                let text = text(workflow);
+                // The last call is the one that writes; earlier ones preflight.
+                let at = text
+                    .rfind(command)
+                    .unwrap_or_else(|| panic!("{forge:?} {workflow} runs no {command}"));
+                let end = text[at..].find(')').unwrap() + at;
+                assert!(
+                    text[at..end].contains("--push"),
+                    "{forge:?} {workflow}: {command} must push itself\n{}",
+                    &text[at..end]
+                );
+            }
         }
     }
 
@@ -1574,6 +1622,7 @@ mod embed_tests {
                     job.contains("git push origin main --force")
                         || job.contains("git push origin HEAD:main --force")
                         || job.contains("git uplink rebuild --push")
+                        || job.contains(" --push)")
                         || job.contains("--push --merged-as \"$MERGE_SHA\""),
                     "{forge:?} {workflow} {key} pushes main\n{job}"
                 );

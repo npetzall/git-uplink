@@ -70,8 +70,9 @@ const RECORD_PUSH_ATTEMPTS: u32 = 8;
 /// recorded there as a fast-forward. Never forced.
 ///
 /// Before each attempt, local `uplink/state` and `.uplink/` are moved to the
-/// remote's `uplink/state` and the company branch back to where it was, so
-/// `record` (and a rebuild it runs) works on the newest state. When the push
+/// remote's `uplink/state`, and the company branch and `uplink/upstream` back
+/// to where they were, so `record` (and a rebuild or sync it runs) works on
+/// the newest state from the same start. When the push
 /// loses a race, `record` runs again on the state that won. `record` must
 /// be safe to run again: an import is, since it records a pull request once.
 ///
@@ -94,6 +95,11 @@ pub fn record_on_remote<T>(
         let company_branch = read_queue_file(repo)?.config.internal_branch;
         let main_start = if has_ref(repo, &company_branch)? {
             Some(rev_parse(repo, &company_branch)?)
+        } else {
+            None
+        };
+        let upstream_start = if has_ref(repo, UPSTREAM_REF)? {
+            Some(rev_parse(repo, UPSTREAM_REF)?)
         } else {
             None
         };
@@ -121,6 +127,11 @@ pub fn record_on_remote<T>(
                     &["checkout", "-f", "--quiet", "-B", &company_branch, start],
                     GitOpts::default(),
                 )?;
+            }
+            if let Some(start) = upstream_start.as_deref()
+                && rev_parse(repo, UPSTREAM_REF)? != start
+            {
+                point_branch_at(repo, UPSTREAM_REF, start)?;
             }
             let value = record()?;
             if rev_parse(repo, STATE_BRANCH)? == base {
@@ -153,6 +164,10 @@ pub enum MainPush {
     /// The rebuilt branch has another tree than the merge commit, so pushing
     /// it would change content, not only order. Not pushed.
     Differs,
+    /// The remote branch has commits no rebuild wrote (a merge that is not
+    /// imported yet), which the rebuild left out. Not pushed: that import
+    /// rebuilds from the recorded state and pushes the branch.
+    Unrecorded,
 }
 
 /// Pushes the company branch an import rebuilt, only when that changes the
@@ -184,6 +199,46 @@ pub fn push_imported_main(
     let lease = format!("--force-with-lease=refs/heads/{company_branch}:{merged_as}");
     let dest = format!("{main}:refs/heads/{company_branch}");
     match git(repo, &["push", &lease, remote, &dest], GitOpts::default()) {
+        Ok(_) => Ok(MainPush::Pushed),
+        Err(err) if is_push_lease_rejected(&err) => Ok(MainPush::Moved),
+        Err(err) => Err(err),
+    }
+}
+
+/// Pushes the company branch a resolve, amend, transfer or sync rebuilt,
+/// only when that overwrites nothing on the remote: a force-push with a
+/// lease on `lease` (the remote branch as the job fetched it), and only when
+/// every commit on `lease` above `uplink/upstream` was written by a rebuild
+/// (has an `Uplink-Patch-Id`). A merge that is not imported yet is never
+/// dropped from the remote; its import pushes the branch.
+pub fn push_rebuilt_main(
+    repo: &Path,
+    remote: &str,
+    main_start: Option<&str>,
+    lease: &str,
+) -> Result<MainPush> {
+    let company_branch = read_queue_file(repo)?.config.internal_branch;
+    if !has_ref(repo, &company_branch)? {
+        return Ok(MainPush::Unchanged);
+    }
+    let main = rev_parse(repo, &company_branch)?;
+    if main_start == Some(main.as_str()) || main == lease {
+        return Ok(MainPush::Unchanged);
+    }
+    let unrecorded =
+        commits_with_patch_id(repo, &["--first-parent", lease, "--not", UPSTREAM_REF])?
+            .into_iter()
+            .any(|(_, has_patch_id)| !has_patch_id);
+    if unrecorded {
+        return Ok(MainPush::Unrecorded);
+    }
+    let lease_arg = format!("--force-with-lease=refs/heads/{company_branch}:{lease}");
+    let dest = format!("{main}:refs/heads/{company_branch}");
+    match git(
+        repo,
+        &["push", &lease_arg, remote, &dest],
+        GitOpts::default(),
+    ) {
         Ok(_) => Ok(MainPush::Pushed),
         Err(err) if is_push_lease_rejected(&err) => Ok(MainPush::Moved),
         Err(err) => Err(err),
