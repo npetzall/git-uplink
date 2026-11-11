@@ -1539,7 +1539,8 @@ mod embed_tests {
                 assert!(
                     job.contains("git push origin main --force")
                         || job.contains("git push origin HEAD:main --force")
-                        || job.contains("git uplink rebuild --push"),
+                        || job.contains("git uplink rebuild --push")
+                        || job.contains("--push --merged-as \"$MERGE_SHA\""),
                     "{forge:?} {workflow} {key} pushes main\n{job}"
                 );
                 let last = *steps_of(&job).last().unwrap();

@@ -195,7 +195,8 @@ pub(super) fn add_patch_once(
     if rebuild {
         // Not tested: an import only reorders what a reviewed pull request
         // already merged into main. Main can also hold merges that are not
-        // imported yet, which this rebuild leaves out until their import.
+        // imported yet, which this rebuild leaves out: `add --push` then
+        // does not push it (see `push_imported_main`).
         rebuild_once(repo, None, false)?;
     } else {
         mark_empty_if_already_upstream(repo, &id)?;

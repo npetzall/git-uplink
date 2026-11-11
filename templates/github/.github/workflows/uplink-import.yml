@@ -10,7 +10,9 @@
 #
 # An upstream import rebuilds main so the patch sits under the internal
 # patches. That rebuild is not preflighted: the pull request that merged the
-# change was reviewed and checked. If it stops on a patch (the queue is
+# change was reviewed and checked. The rebuilt main is pushed only when it
+# has the tree of the merge (only the order changed) and origin's main is
+# still that merge; otherwise main keeps every merge as it is. If it stops on a patch (the queue is
 # blocked on a conflict), the change is still recorded and that conflict PR
 # is opened or kept. For a main that turned out broken, run Uplink verify.
 #
@@ -162,6 +164,7 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           FROM_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
@@ -169,18 +172,24 @@ jobs:
         run: |
           git uplink init
           printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
-          main_before=$(git rev-parse --verify --quiet refs/heads/main || true)
           extra=()
           if [ "$INTERNAL_ONLY" = "true" ]; then extra+=(--internal-only); fi
           {
             printf '%s\n\n' "$TITLE"
             printf '%s\n' "${BODY:-}"
           } > /tmp/uplink-msg.txt
+          # add records the change on origin's uplink/state and pushes it
+          # (a fast-forward, never forced). When another run moved it, add
+          # records the change again on the state that won and rebuilds main
+          # from it. Main is pushed only when the rebuild changed nothing but
+          # the order and origin's main is still this merge: a later merge
+          # is never overwritten, and its own import pushes main.
           set +e
           git uplink add --message-file /tmp/uplink-msg.txt \
             --from "$FROM_SHA" --head "$HEAD_SHA" --base-branch "$BASE_REF" \
             --pr "$PR_NUMBER" --pr-url "$PR_URL" \
-            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --gate --json "${extra[@]}" > /tmp/uplink-add.out
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --gate --json \
+            --push --merged-as "$MERGE_SHA" "${extra[@]}" > /tmp/uplink-add.out
           code=$?
           set -e
           # The pull request is closed, so the failure is reported on the
@@ -198,7 +207,7 @@ jobs:
 
           # Tell the merged pull request its patch id, so a developer can
           # build on it with Uplink-Depends-On without running git uplink.
-          # Called once uplink/state is pushed; a failed comment is a warning.
+          # uplink/state is pushed by now; a failed comment is a warning.
           comment_recorded() {
             local id queue
             id=$(jq -r '.id' /tmp/uplink-add.out)
@@ -219,7 +228,6 @@ jobs:
           if jq -e '.fallback != null and .fallback.transfer.transferred != true' /tmp/uplink-add.out >/dev/null; then
             add_json=$(cat /tmp/uplink-add.out)
             patch_id=$(jq -r '.id' <<<"$add_json")
-            git uplink push
             comment_recorded
             {
               echo "#${PR_NUMBER} was recorded internal-only as \`${patch_id}\`: it fails what an upstream-bound patch has to pass."
@@ -259,7 +267,6 @@ jobs:
           # conflict, old or new. Main keeps the merge as the PR left it.
           if jq -e '.conflict != null' /tmp/uplink-add.out >/dev/null; then
             add_json=$(cat /tmp/uplink-add.out)
-            git uplink push
             comment_recorded
             conflict_id=$(jq -r '.conflict.id // empty' <<<"$add_json")
             conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$add_json")
@@ -294,15 +301,16 @@ jobs:
             git uplink gated "$conflict_id" --pr-url "$url"
             exit 0
           fi
-          # State first: a rejected state push leaves origin main alone.
-          # Main is pushed when the import rebuilt it, to put an upstream
-          # patch under the internal ones. It is not rebuilt again here: a
-          # rebuild by itself is preflighted, and this job runs no script.
-          git uplink push
-          main_after=$(git rev-parse --verify --quiet refs/heads/main || true)
-          if [ -n "$main_after" ] && [ "$main_after" != "$main_before" ]; then
-            git push origin main --force
-          fi
+          # add pushed main when it rebuilt it to put an upstream patch under
+          # the internal ones. Not pushed, main keeps every merge.
+          case "$(jq -r '.push.main' /tmp/uplink-add.out)" in
+            moved)
+              echo "::notice title=main not pushed::main moved while this job ran (a merge landed), so the rebuilt main was not pushed. main keeps every merge; the import of that merge orders it."
+              ;;
+            differs)
+              echo "::warning title=main not pushed::the rebuilt main has another tree than the merge of #${PR_NUMBER}, so it was not pushed. main keeps every merge; run Uplink verify."
+              ;;
+          esac
           comment_recorded
 
       - name: Dispatch Uplink submit for patches that became ready

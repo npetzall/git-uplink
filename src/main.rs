@@ -7,8 +7,8 @@ use std::process::ExitCode;
 use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
-    AddOutcome, AdoptResume, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, Patch,
-    PatchConflict, PatchIntent, PatchStatus, QueueState, RemoteApproval, SettingsFlags,
+    AddOutcome, AdoptResume, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, MainPush,
+    Patch, PatchConflict, PatchIntent, PatchStatus, QueueState, RemoteApproval, SettingsFlags,
     SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult, UpgradeResume,
     stdin_is_tty,
 };
@@ -29,14 +29,14 @@ use git_uplink::{
     format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
     mark_rejected, mark_waiting, message_subject, newly_ready_to_submit, parse_github_repo,
-    parse_pull_request_url, patch_text, public_subject_and_body, push_queue, read_queue,
-    rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, refuse_script_with_credentials,
-    report_paths, reset_from_origin, resolve_conflict_with, resolve_preflight, restack,
-    resume_rebuild, review_token, review_token_path, set_script_echo, split_subject_body,
-    status_report, status_snapshot, store_assess_result, store_patch_extras, strip_html_comments,
-    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, trim_deps,
-    upstream_pr_body, write_man_pages,
+    parse_pull_request_url, patch_text, public_subject_and_body, push_imported_main, push_queue,
+    read_queue, rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
+    record_gated_pr, record_on_remote, record_pull_request, refresh_from_origin,
+    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
+    resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
+    split_subject_body, status_report, status_snapshot, store_assess_result, store_patch_extras,
+    strip_html_comments, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
+    trim_deps, upstream_pr_body, write_man_pages,
 };
 use git_uplink::{SelfEnv, self_available, self_check, self_list, self_update, self_use};
 
@@ -1031,14 +1031,28 @@ fn cmd_doctor(repo: &Path, json: bool) -> Result<(), Error> {
     Ok(())
 }
 
+/// What one attempt of `git uplink add` recorded, and what it reports.
+struct AddRecorded {
+    before: QueueState,
+    patch: Patch,
+    extra: serde_json::Map<String, serde_json::Value>,
+    notes: Vec<String>,
+    conflict: Option<Patch>,
+}
+
 /// `git uplink add`. With `gate`, a change that fails what an upstream-bound
 /// patch has to pass is recorded internal-only and a transfer to upstream
 /// is started for it, instead of failing.
-fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool, gate: bool) -> Result<(), Error> {
+fn cmd_add(
+    repo: &Path,
+    opts: AddPatchOpts,
+    json: bool,
+    gate: bool,
+    merged_as: Option<&str>,
+) -> Result<(), Error> {
     if !opts.internal_only {
         refuse_script_here(repo, &opts.preflight, None)?;
     }
-    let before = read_queue(repo)?;
     let layer = |queue: &QueueState, id: &str| {
         if queue.is_internal(id) {
             "internal"
@@ -1046,6 +1060,116 @@ fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool, gate: bool) -> Result<()
             "upstream"
         }
     };
+    // Runs once, or once per attempt with --push. What it reports on stderr
+    // is printed after the last attempt.
+    let record = || -> Result<AddRecorded, Error> {
+        let before = read_queue(repo)?;
+        let added = if gate {
+            add_patch_or_gate(repo, opts.clone())
+        } else {
+            add_patch(repo, opts.clone()).map(|patch| AddOutcome {
+                patch,
+                fallback: None,
+            })
+        };
+        let mut notes = Vec::new();
+        let mut conflict = None;
+        let (patch, extra) = match added {
+            Ok(AddOutcome { patch, fallback }) => {
+                let mut extra = serde_json::Map::new();
+                if let Some(fallback) = fallback {
+                    notes.push(format!(
+                        "{} was recorded internal-only: it fails what an upstream-bound patch has to pass.\n\n{}",
+                        patch.id, fallback.reason
+                    ));
+                    let mut value = serde_json::json!({ "reason": fallback.reason });
+                    match &fallback.transfer {
+                        Ok(transfer) => {
+                            value["transfer"] =
+                                transfer_artifact(repo, transfer, Some(&fallback.reason))?;
+                        }
+                        Err(err) => {
+                            notes.push(format!(
+                                "The transfer to upstream could not be started: {err}"
+                            ));
+                            value["transferError"] = serde_json::Value::String(err.clone());
+                        }
+                    }
+                    extra.insert("fallback".into(), value);
+                }
+                (patch, extra)
+            }
+            // The change is recorded; the rebuild stopped on a patch above it.
+            Err(Error::Conflict(err)) => {
+                let queue = read_queue(repo)?;
+                let added = queue
+                    .all_patches()
+                    .find(|patch| before.all_patches().all(|old| old.id != patch.id));
+                let (Some(patch), Some(stopped)) = (added, find_conflict(&queue)) else {
+                    return Err(Error::Conflict(err));
+                };
+                let mut extra = serde_json::Map::new();
+                extra.insert("conflict".into(), conflict_json(stopped));
+                extra.insert(
+                    "gh".into(),
+                    serde_json::json!({ "prCreate": conflict_pr_create_artifact(repo, stopped, None)? }),
+                );
+                conflict = Some(stopped.clone());
+                (patch.clone(), extra)
+            }
+            Err(err) => {
+                print_failure_comment(&err);
+                return Err(err);
+            }
+        };
+        Ok(AddRecorded {
+            before,
+            patch,
+            extra,
+            notes,
+            conflict,
+        })
+    };
+    let AddRecorded {
+        before,
+        patch,
+        extra,
+        notes,
+        conflict,
+    } = match merged_as {
+        Some(merged_as) => {
+            let company_branch = read_queue(repo)?.config.internal_branch;
+            let main_start =
+                git_ok(repo, &["rev-parse", "--verify", "--quiet", &company_branch]).ok();
+            let recorded = record_on_remote(repo, "origin", record)?;
+            let main = push_imported_main(repo, "origin", main_start.as_deref(), merged_as)?;
+            match main {
+                MainPush::Moved => eprintln!(
+                    "{company_branch} on origin is no longer {merged_as} (a merge landed after it), so the rebuilt {company_branch} was not pushed. The import of that merge pushes it."
+                ),
+                MainPush::Differs => eprintln!(
+                    "The rebuilt {company_branch} has another tree than {merged_as}, so pushing it would change content, not only order; it was not pushed. Run Uplink verify to find out why."
+                ),
+                MainPush::Pushed | MainPush::Unchanged => {}
+            }
+            let mut recorded = recorded;
+            recorded.extra.insert(
+                "push".into(),
+                serde_json::json!({
+                    "state": git_ok(repo, &["rev-parse", STATE_BRANCH])?,
+                    "main": main,
+                }),
+            );
+            recorded
+        }
+        None => record()?,
+    };
+    for note in &notes {
+        eprintln!("{note}");
+    }
+    if let Some(conflict) = &conflict {
+        eprint_conflict(conflict);
+    }
     let describe = |queue: &QueueState, patch: &Patch| {
         serde_json::json!({
             "id": patch.id,
@@ -1054,60 +1178,6 @@ fn cmd_add(repo: &Path, opts: AddPatchOpts, json: bool, gate: bool) -> Result<()
             "title": patch.subject(),
             "readyToSubmit": newly_ready_to_submit(&before, queue),
         })
-    };
-    let added = if gate {
-        add_patch_or_gate(repo, opts)
-    } else {
-        add_patch(repo, opts).map(|patch| AddOutcome {
-            patch,
-            fallback: None,
-        })
-    };
-    let (patch, extra) = match added {
-        Ok(AddOutcome { patch, fallback }) => {
-            let mut extra = serde_json::Map::new();
-            if let Some(fallback) = fallback {
-                eprintln!(
-                    "{} was recorded internal-only: it fails what an upstream-bound patch has to pass.\n\n{}",
-                    patch.id, fallback.reason
-                );
-                let mut value = serde_json::json!({ "reason": fallback.reason });
-                match &fallback.transfer {
-                    Ok(transfer) => {
-                        value["transfer"] =
-                            transfer_artifact(repo, transfer, Some(&fallback.reason))?;
-                    }
-                    Err(err) => {
-                        eprintln!("The transfer to upstream could not be started: {err}");
-                        value["transferError"] = serde_json::Value::String(err.clone());
-                    }
-                }
-                extra.insert("fallback".into(), value);
-            }
-            (patch, extra)
-        }
-        // The change is recorded; the rebuild stopped on a patch above it.
-        Err(Error::Conflict(err)) => {
-            let queue = read_queue(repo)?;
-            let added = queue
-                .all_patches()
-                .find(|patch| before.all_patches().all(|old| old.id != patch.id));
-            let (Some(patch), Some(conflict)) = (added, find_conflict(&queue)) else {
-                return Err(Error::Conflict(err));
-            };
-            eprint_conflict(conflict);
-            let mut extra = serde_json::Map::new();
-            extra.insert("conflict".into(), conflict_json(conflict));
-            extra.insert(
-                "gh".into(),
-                serde_json::json!({ "prCreate": conflict_pr_create_artifact(repo, conflict, None)? }),
-            );
-            (patch.clone(), extra)
-        }
-        Err(err) => {
-            print_failure_comment(&err);
-            return Err(err);
-        }
     };
     let queue = read_queue(repo)?;
     if json {
@@ -2100,6 +2170,8 @@ fn run() -> Result<(), Error> {
             preflight_result,
             json,
             gate,
+            push: _,
+            merged_as,
         } => {
             let message = read_commit_message(message, message_file, "")?;
             cmd_add(
@@ -2118,6 +2190,7 @@ fn run() -> Result<(), Error> {
                 },
                 json,
                 gate,
+                merged_as.as_deref(),
             )
         }
         Commands::Adopt {

@@ -464,6 +464,25 @@ pub enum Commands {
         /// and `gh.prCreate` for the gated PR, and the command exits 0.
         #[arg(long)]
         json: bool,
+        /// Record on origin's uplink/state and push it, then push a rebuilt main.
+        ///
+        /// The import is recorded on origin's uplink/state and pushed as a
+        /// fast-forward; uplink/state is never force-pushed. When origin
+        /// moved before the push, the import is recorded again on the state
+        /// that won, and main is rebuilt again from it.
+        ///
+        /// Main is pushed only when the import rebuilt it, the rebuilt tree
+        /// is the tree of `--merged-as` (the rebuild only changed the order
+        /// of commits), and origin's main is still `--merged-as`: a
+        /// force-push with that lease. When a merge landed after it, main
+        /// is left as it is and the import of that merge pushes it. The
+        /// output has `push.state` and `push.main` (`pushed`, `unchanged`,
+        /// `moved` or `differs`).
+        #[arg(long, requires = "merged_as")]
+        push: bool,
+        /// The commit the pull request was merged as. Needs `--push`.
+        #[arg(long = "merged-as", value_name = "sha", requires = "push")]
+        merged_as: Option<String>,
     },
     /// Pick commits from another local branch and queue them as patches.
     ///
