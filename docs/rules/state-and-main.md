@@ -19,10 +19,14 @@ A change that reached the company (a merged pull request, an approval, a recorde
 
 `main` moves when a pull request merges, and when a job pushes a rebuilt `main`.
 
-1. **Force-push only with a lease on what the job's scope includes.** An import's scope is its merge commit: push with `--force-with-lease=refs/heads/main:<merge_commit_sha>`. Never lease on the `main` the job happened to fetch: it can hold later merges the rebuild left out.
-2. **A rebuild that only reorders must keep the tree.** Before an import pushes its rebuilt `main`, its tree must equal the merge commit's tree. If it differs, do not push (`push.main` is `differs`).
-3. **A lost lease is not a failure when a later job pushes `main` anyway.** The import of the merge that landed later rebuilds and pushes `main`. Report it (`push.main` is `moved`) and go on.
-4. **Push `uplink/state` before `main`.** When the state push fails, `main` stays as it was.
+What matters first is that `uplink/state` has the change, every patch updated. Pushing the rebuilt `main` comes second; it only must not overwrite anything.
+
+1. **Push `uplink/state` before `main`.** When the state push fails, `main` stays as it was.
+2. **Force-push only with a lease, and never drop an unimported merge.**
+   - Import (`add --push --merged-as`): its scope is its merge commit. Lease on it (`--force-with-lease=refs/heads/main:<merge_commit_sha>`), and push only a rebuild whose tree equals the merge's tree, since an import only reorders (`push_imported_main`). Never lease on the `main` the job happened to fetch: it can hold later merges the rebuild left out.
+   - Sync, accept-upstream, resolve, amend, transfer (`--push`): they change content, so the tree check cannot apply. Fetch origin's `main` right before the push, lease on it, and push only when every first-parent commit on it above `uplink/upstream` has an `Uplink-Patch-Id`, that is, was written by a rebuild (`push_rebuilt_main`). A merge not imported yet makes it `unrecorded`: do not push.
+3. **A main that is not pushed is not a failure.** The import of the merge that is waiting rebuilds from the recorded state and pushes `main`. Report it (`push.main` is `moved`, `differs` or `unrecorded`) and go on.
+4. **Reset every ref the command moves before recording again.** `record_on_remote` puts the company branch and `uplink/upstream` back where they were before each attempt, so a sync run again still sees the new upstream.
 
 ## Failures
 
@@ -35,12 +39,14 @@ A change that reached the company (a merged pull request, an approval, a recorde
 Every rule above has a test.
 
 - **Races:** engine tests in `tests/engine.rs` with real repositories: a bare origin and two clones. To make a push lose a race at the right moment, give origin a `pre-receive` hook that moves the ref once (`unset GIT_QUARANTINE_PATH` first, so `git update-ref` is allowed); see `move_state_on_first_push`. Assert what origin has afterwards: fast-forward history, both changes kept, `main` as expected.
-- **Workflow wiring:** text tests in `src/tooling.rs` check that a workflow calls the command with `--push`, has no bare `git push origin main --force` or `git uplink push` where the command pushes, and has the rescue step with its fallback.
+- **Workflow wiring:** text tests in `src/tooling.rs` check that a workflow calls the command with `--push`, that no workflow pushes `main` itself (`no_workflow_force_pushes_main_itself`), and that import has the rescue step with its fallback.
 - **Output:** a command that gains `--push` keeps its output. Test that the output with `--push` matches the output without it.
 
 ## Known gaps
 
 These still push without the rules above and are left for later changes:
 
-- Sync, resolve, amend and transfer force-push `main` without a lease.
-- The submit packet and rejected jobs, resolve, amend, sync, transfer and verify push `uplink/state` with a separate `git push origin uplink/state`. They hold `uplink-mutate`, but submit's approve does not, so their push can lose to it and fail the job (nothing is lost; the job fails visibly).
+- Submit's packet and rejected jobs and verify push `uplink/state` with a separate `git push origin uplink/state`. They hold `uplink-mutate`, but submit's approve does not, so their push can lose to it and fail the job (nothing is lost; the job fails visibly).
+- An operator's `git uplink rebuild --push` force-pushes `main` without these checks.
+- When an import reported `differs`, its merge stays on `main`, so later jobs report `unrecorded` and do not push `main` until an operator rebuilds.
+- A command run again on a moved state can fail where its preflight result no longer matches (the state changed content, not only records). Nothing is lost: the gated branches are still there, and the workflow can be run again.

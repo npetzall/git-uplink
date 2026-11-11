@@ -47,9 +47,9 @@ git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink waiting <id> --preflight-result <path> [--run-url <url>]
 git uplink rejected <id> [--run-url <url>] [--cancelled] [--by <login>]
             [--comment <text>]
-git uplink sync [--merged-pr <id=sha>]...
+git uplink sync [--merged-pr <id=sha>]... [--push]
 git uplink accept-upstream [--sha <sha>] [--fetch-only] [--preflight-result <path>]
-            [--preflight-only]
+            [--preflight-only] [--push]
 git uplink rescue --from <sha> --head <sha> [--pr <n>] [--pr-url <url>]
             [--message-file <path>] [--note-file <path>] [--push-remote <remote>]
 git uplink gated <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
@@ -60,12 +60,12 @@ git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
             [--preflight-result <path>] [--preflight-only] [--verify] [--json]
             [--interactive] [--continue] [--abort]
 git uplink resolve <id> [--message <text> | --message-file <path>]
-            [--preflight-result <path>] [--preflight-only]
+            [--preflight-result <path>] [--preflight-only] [--push]
 git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
             [--message <text> | --message-file <path>] [--preflight-result <path>]
-            [--preflight-only]
+            [--preflight-only] [--push]
 git uplink amend <id> [--complete] [--message <text> | --message-file <path>]
-            [--preflight-result <path>] [--preflight-only]
+            [--preflight-result <path>] [--preflight-only] [--push]
 git uplink web-ui [--port <port>] [--no-open]
 git uplink self-update [<version>] [--no-switch]
 git uplink self-use <version>
@@ -535,6 +535,9 @@ On a conflict it prints `gh.prCreate` JSON for the gated conflict PR and exits 0
 `readyToSubmit` in the output lists the queued patches whose last unmerged upstream dependency this sync marked merged, also when the sync ends in a conflict on another patch.
 
 - `--merged-pr <id=sha>`: A recorded public pull request the forge reports as merged, with its merge commit. Repeat it per patch; the sync workflow passes these. One that names a commit outside the new range is ignored.
+- `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
+
+  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
 
 ### `accept-upstream`
 
@@ -554,6 +557,9 @@ The pending upstream brings changes that are not ours, so it is promoted only wh
 - `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
 
   For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the pending upstream fails.
+- `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
+
+  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
 
 ### `gated`
 
@@ -599,6 +605,9 @@ The forge runs it when the gated conflict PR merges. Operator fallback, when the
 - `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
 
   For a job without credentials; pass the output to the same command with `--preflight-result`. The checkout is left on the squashed resolution, so use a clone made for it.
+- `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
+
+  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
 
 ### `transfer`
 
@@ -622,6 +631,9 @@ The forge runs it when a developer dispatches Uplink transfer, and with `--compl
 - `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
 
   For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the result is not a pass. With `--complete` the checkout is left on the squashed work, so use a clone made for it.
+- `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
+
+  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
 
 ### `amend`
 
@@ -645,6 +657,9 @@ Without `--complete` it replays the queue on `uplink/upstream` up to and includi
 - `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
 
   For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the result is not a pass. The checkout is left on the squashed work, so use a clone made for it.
+- `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
+
+  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
 
 ### `rebase`
 

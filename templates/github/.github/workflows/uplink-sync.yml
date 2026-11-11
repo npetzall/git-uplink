@@ -184,13 +184,15 @@ jobs:
           UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
         run: |
           git uplink init
-          main_before=$(git rev-parse HEAD)
 
           merged=()
           while IFS= read -r item; do
             if [ -n "$item" ]; then merged+=(--merged-pr "$item"); fi
           done < "$RUNNER_TEMP/uplink-merged-prs"
-          sync_json=$(git uplink sync "${merged[@]}")
+          # --push pushes uplink/state (a fast-forward; on a lost race it runs
+          # again on the state that won), then main with a lease, only when
+          # that drops no merge waiting for its import.
+          sync_json=$(git uplink sync "${merged[@]}" --push)
 
           needs_approval=$(jq -r '.needsApproval // false' <<<"$sync_json")
           echo "needs_approval=${needs_approval}" >> "$GITHUB_OUTPUT"
@@ -200,18 +202,12 @@ jobs:
             printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          git push origin uplink/state
           echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$sync_json")" >> "$GITHUB_OUTPUT"
           if [ "$needs_approval" = "true" ]; then
             exit 0
           fi
 
           git push origin uplink/upstream --force || true
-
-          main_after=$(git rev-parse HEAD)
-          if [ "$main_after" != "$main_before" ]; then
-            git push origin HEAD:main --force
-          fi
 
           if jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
             conflict_id=$(jq -r '.conflict.id // empty' <<<"$sync_json")
@@ -498,25 +494,21 @@ jobs:
         run: |
           git uplink init
           printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
-          main_before=$(git rev-parse HEAD)
 
           # Only the pending upstream that was reviewed is accepted, and
           # only when preflight.sh passed on it.
+          # --push pushes uplink/state (a fast-forward; on a lost race it runs
+          # again on the state that won), then main with a lease, only when
+          # that drops no merge waiting for its import.
           sync_json=$(git uplink accept-upstream --sha "$PENDING_SHA" \
-            --preflight-result "$RUNNER_TEMP/uplink-preflight.json")
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --push)
           summary=$(jq -r '.summary // empty' <<<"$sync_json")
           if [ -n "$summary" ]; then
             printf '%s\n' "$summary" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          git push origin uplink/state
           echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$sync_json")" >> "$GITHUB_OUTPUT"
           git push origin uplink/upstream --force || true
-
-          main_after=$(git rev-parse HEAD)
-          if [ "$main_after" != "$main_before" ]; then
-            git push origin HEAD:main --force
-          fi
 
           if ! jq -e '.conflict != null' <<<"$sync_json" >/dev/null; then
             exit 0

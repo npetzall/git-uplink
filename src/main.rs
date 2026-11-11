@@ -30,13 +30,13 @@ use git_uplink::{
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
     mark_rejected, mark_waiting, message_subject, newly_ready_to_submit, parse_github_repo,
     parse_pull_request_url, patch_text, public_subject_and_body, push_imported_main, push_queue,
-    read_queue, rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
-    record_gated_pr, record_on_remote, record_pull_request, refresh_from_origin,
-    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
-    resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
-    split_subject_body, status_report, status_snapshot, store_assess_result, store_patch_extras,
-    strip_html_comments, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
-    trim_deps, upstream_pr_body, write_man_pages,
+    push_rebuilt_main, read_queue, rebase_onto_main, rebase_plan, rebuild_inline,
+    rebuild_preflight, rebuild_with, record_gated_pr, record_on_remote, record_pull_request,
+    refresh_from_origin, refuse_script_with_credentials, report_paths, reset_from_origin,
+    resolve_conflict_with, resolve_preflight, restack, resume_rebuild, review_token,
+    review_token_path, set_script_echo, split_subject_body, status_report, status_snapshot,
+    store_assess_result, store_patch_extras, strip_html_comments, submit_patch_with, sync_with,
+    transfer_patch_with, transfer_preflight, trim_deps, upstream_pr_body, write_man_pages,
 };
 use git_uplink::{SelfEnv, self_available, self_check, self_list, self_update, self_use};
 
@@ -330,6 +330,7 @@ fn print_sync_artifact(
     repo: &Path,
     result: &SyncResult,
     summary: Option<&str>,
+    push: Option<&serde_json::Value>,
 ) -> Result<(), Error> {
     let queue = &result.queue;
     let conflict = find_conflict(queue);
@@ -355,12 +356,23 @@ fn print_sync_artifact(
             "prCreate": conflict_pr_create_artifact(repo, patch, None)?,
         });
     }
+    if let Some(push) = push {
+        value["push"] = push.clone();
+    }
     println!("{value}");
     Ok(())
 }
 
-fn print_transfer_artifact(repo: &Path, result: &TransferResult) -> Result<(), Error> {
-    println!("{}", transfer_artifact(repo, result, None)?);
+fn print_transfer_artifact(
+    repo: &Path,
+    result: &TransferResult,
+    push: Option<&serde_json::Value>,
+) -> Result<(), Error> {
+    let mut value = transfer_artifact(repo, result, None)?;
+    if let Some(push) = push {
+        value["push"] = push.clone();
+    }
+    println!("{value}");
     Ok(())
 }
 
@@ -448,8 +460,13 @@ Checkout `{}`, fix the tree, mark this PR ready, and merge it into the protected
     Ok(value)
 }
 
-fn finish_sync(repo: &Path, result: SyncResult, summary: Option<&str>) -> Result<(), Error> {
-    print_sync_artifact(repo, &result, summary)?;
+fn finish_sync(
+    repo: &Path,
+    result: SyncResult,
+    summary: Option<&str>,
+    push: Option<&serde_json::Value>,
+) -> Result<(), Error> {
+    print_sync_artifact(repo, &result, summary, push)?;
     if let Some(conflict) = find_conflict(&result.queue) {
         eprint_conflict(conflict);
     }
@@ -462,9 +479,13 @@ fn print_resolve_artifact(
     before: &QueueState,
     queue: &QueueState,
     follow_on_conflict: bool,
+    push: Option<&serde_json::Value>,
 ) -> Result<(), Error> {
     let mut value = resolve_artifact(repo, resolved_id, queue, follow_on_conflict)?;
     value["readyToSubmit"] = serde_json::json!(newly_ready_to_submit(before, queue));
+    if let Some(push) = push {
+        value["push"] = push.clone();
+    }
     println!("{value}");
     Ok(())
 }
@@ -541,12 +562,19 @@ fn write_gated_pr_files(
     Ok(Some((body_file, comment_file)))
 }
 
-fn print_amend_artifact(repo: &Path, result: &AmendResult) -> Result<(), Error> {
+fn print_amend_artifact(
+    repo: &Path,
+    result: &AmendResult,
+    push: Option<&serde_json::Value>,
+) -> Result<(), Error> {
     if result.completed {
         let mut value = resolve_artifact(repo, &result.id, &result.queue, false)?;
         value["completed"] = serde_json::Value::Bool(true);
         value["changed"] = serde_json::Value::Bool(result.changed);
         value["readyToSubmit"] = serde_json::json!(result.ready_to_submit);
+        if let Some(push) = push {
+            value["push"] = push.clone();
+        }
         println!("{value}");
         return Ok(());
     }
@@ -1031,6 +1059,59 @@ fn cmd_doctor(repo: &Path, json: bool) -> Result<(), Error> {
     Ok(())
 }
 
+/// Says on stderr why a rebuilt company branch was not pushed.
+fn eprint_main_push(main: MainPush, branch: &str, lease: &str) {
+    match main {
+        MainPush::Moved => eprintln!(
+            "{branch} on origin is no longer {lease} (a merge landed meanwhile), so the rebuilt {branch} was not pushed. The import of that merge pushes it."
+        ),
+        MainPush::Differs => eprintln!(
+            "The rebuilt {branch} has another tree than {lease}, so pushing it would change content, not only order; it was not pushed. Run Uplink verify to find out why."
+        ),
+        MainPush::Unrecorded => eprintln!(
+            "{branch} on origin ({lease}) has commits no rebuild wrote (a merge not imported yet), so the rebuilt {branch} was not pushed. uplink/state has this change; the import of that merge pushes {branch}."
+        ),
+        MainPush::Pushed | MainPush::Unchanged => {}
+    }
+}
+
+/// Runs `record`; with `push`, on origin's uplink/state, pushing it there
+/// (and recording again on a lost race), then pushes the company branch it
+/// rebuilt with a lease on origin's, fetched right before. Returns what
+/// `record` returned and, with `push`, the `push` JSON.
+fn record_maybe_push<T>(
+    repo: &Path,
+    push: bool,
+    mut record: impl FnMut() -> Result<T, Error>,
+) -> Result<(T, Option<serde_json::Value>), Error> {
+    if !push {
+        return Ok((record()?, None));
+    }
+    let branch = read_queue(repo)?.config.internal_branch;
+    let main_start = git_ok(repo, &["rev-parse", "--verify", "--quiet", &branch]).ok();
+    let value = record_on_remote(repo, "origin", record)?;
+    git_ok(
+        repo,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"),
+        ],
+    )?;
+    let lease = git_ok(
+        repo,
+        &["rev-parse", &format!("refs/remotes/origin/{branch}")],
+    )?;
+    let main = push_rebuilt_main(repo, "origin", main_start.as_deref(), &lease)?;
+    eprint_main_push(main, &branch, &lease);
+    let report = serde_json::json!({
+        "state": git_ok(repo, &["rev-parse", STATE_BRANCH])?,
+        "main": main,
+    });
+    Ok((value, Some(report)))
+}
+
 /// What one attempt of `git uplink add` recorded, and what it reports.
 struct AddRecorded {
     before: QueueState,
@@ -1143,15 +1224,7 @@ fn cmd_add(
                 git_ok(repo, &["rev-parse", "--verify", "--quiet", &company_branch]).ok();
             let recorded = record_on_remote(repo, "origin", record)?;
             let main = push_imported_main(repo, "origin", main_start.as_deref(), merged_as)?;
-            match main {
-                MainPush::Moved => eprintln!(
-                    "{company_branch} on origin is no longer {merged_as} (a merge landed after it), so the rebuilt {company_branch} was not pushed. The import of that merge pushes it."
-                ),
-                MainPush::Differs => eprintln!(
-                    "The rebuilt {company_branch} has another tree than {merged_as}, so pushing it would change content, not only order; it was not pushed. Run Uplink verify to find out why."
-                ),
-                MainPush::Pushed | MainPush::Unchanged => {}
-            }
+            eprint_main_push(main, &company_branch, merged_as);
             let mut recorded = recorded;
             recorded.extra.insert(
                 "push".into(),
@@ -1765,7 +1838,7 @@ fn cmd_rejected(repo: &Path, id: &str, rejection: &Rejection) -> Result<(), Erro
     Ok(())
 }
 
-fn cmd_sync(repo: &Path, merged_pr: Vec<String>) -> Result<(), Error> {
+fn cmd_sync(repo: &Path, merged_pr: Vec<String>, push: bool) -> Result<(), Error> {
     let mut merged_prs = Vec::new();
     for item in merged_pr {
         match item.split_once('=') {
@@ -1779,16 +1852,37 @@ fn cmd_sync(repo: &Path, merged_pr: Vec<String>) -> Result<(), Error> {
             }
         }
     }
-    let result = sync_with(repo, SyncOpts { merged_prs })?;
+    let (result, push) = record_maybe_push(repo, push, || {
+        sync_with(
+            repo,
+            SyncOpts {
+                merged_prs: merged_prs.clone(),
+            },
+        )
+    })?;
     let summary = result.report.clone();
-    finish_sync(repo, result, summary.as_deref())
+    finish_sync(repo, result, summary.as_deref(), push.as_ref())
 }
 
 fn cmd_accept_upstream(
     repo: &Path,
     sha: Option<&str>,
     verdict: &ScriptVerdict,
+    push: bool,
 ) -> Result<(), Error> {
+    // The receipt names the uplink/state it is for, so with --push it is
+    // written again on each attempt.
+    let ((result, receipt), push) =
+        record_maybe_push(repo, push, || accept_upstream_once(repo, sha, verdict))?;
+    finish_sync(repo, result, Some(&receipt), push.as_ref())
+}
+
+/// Checks the pending upstream, writes the from-upstream receipt and accepts it.
+fn accept_upstream_once(
+    repo: &Path,
+    sha: Option<&str>,
+    verdict: &ScriptVerdict,
+) -> Result<(SyncResult, String), Error> {
     let queue = read_queue(repo)?;
     let Some(pending) = &queue.pending_upstream else {
         return Err(Error::msg(
@@ -1813,11 +1907,7 @@ fn cmd_accept_upstream(
     );
     let dest = PathBuf::from(from_upstream_report_paths().2);
     write_markdown_file(repo, &dest, &receipt.text)?;
-    finish_sync(
-        repo,
-        accept_upstream_with(repo, sha, verdict)?,
-        Some(&receipt.text),
-    )
+    Ok((accept_upstream_with(repo, sha, verdict)?, receipt.text))
 }
 
 fn cmd_gated(
@@ -1991,20 +2081,23 @@ fn cmd_resolve(
     id: &str,
     change: Option<PatchMessage>,
     verdict: &ScriptVerdict,
+    push: bool,
 ) -> Result<(), Error> {
-    let before = read_queue(repo)?;
-    match resolve_conflict_with(repo, id, change, verdict) {
-        Ok(queue) => print_resolve_artifact(repo, id, &before, &queue, false),
-        Err(Error::Conflict(_)) => {
-            let queue = read_queue(repo)?;
-            print_resolve_artifact(repo, id, &before, &queue, true)?;
-            if let Some(conflict) = find_conflict(&queue) {
-                eprint_conflict(conflict);
-            }
-            Ok(())
+    // The rebuild stopping on another patch is recorded too: Ok(false).
+    let ((before, resolved), push) = record_maybe_push(repo, push, || {
+        let before = read_queue(repo)?;
+        match resolve_conflict_with(repo, id, change.clone(), verdict) {
+            Ok(_) => Ok((before, true)),
+            Err(Error::Conflict(_)) => Ok((before, false)),
+            Err(err) => Err(err),
         }
-        Err(err) => Err(err),
+    })?;
+    let queue = read_queue(repo)?;
+    print_resolve_artifact(repo, id, &before, &queue, !resolved, push.as_ref())?;
+    if !resolved && let Some(conflict) = find_conflict(&queue) {
+        eprint_conflict(conflict);
     }
+    Ok(())
 }
 
 /// The new message from `--message[-file]`, if either is set.
@@ -2025,13 +2118,21 @@ fn cmd_amend(
     complete: bool,
     change: Option<PatchMessage>,
     verdict: &ScriptVerdict,
+    push: bool,
 ) -> Result<(), Error> {
     if complete {
         refuse_script_here(repo, verdict, None)?;
     }
-    match amend_patch_with(repo, id, complete, change, verdict) {
+    // A completion whose rebuild stopped on a patch is recorded too.
+    let (amended, push) = record_maybe_push(repo, push, || {
+        match amend_patch_with(repo, id, complete, change.clone(), verdict) {
+            Err(Error::Conflict(err)) if complete => Ok(Err(Error::Conflict(err))),
+            other => other.map(Ok),
+        }
+    })?;
+    match amended {
         Ok(result) => {
-            print_amend_artifact(repo, &result)?;
+            print_amend_artifact(repo, &result, push.as_ref())?;
             if !result.completed {
                 eprintln!(
                     "AMEND {} on {}",
@@ -2046,6 +2147,9 @@ fn cmd_amend(
             let mut value = resolve_artifact(repo, id, &queue, true)?;
             value["completed"] = serde_json::Value::Bool(true);
             value["changed"] = serde_json::Value::Bool(true);
+            if let Some(push) = &push {
+                value["push"] = push.clone();
+            }
             println!("{value}");
             if let Some(conflict) = find_conflict(&queue) {
                 eprint_conflict(conflict);
@@ -2063,10 +2167,13 @@ fn cmd_transfer(
     complete: bool,
     change: Option<PatchMessage>,
     verdict: &ScriptVerdict,
+    push: bool,
 ) -> Result<(), Error> {
     refuse_script_here(repo, verdict, None)?;
-    let result = transfer_patch_with(repo, id, direction, complete, change, verdict)?;
-    print_transfer_artifact(repo, &result)?;
+    let (result, push) = record_maybe_push(repo, push, || {
+        transfer_patch_with(repo, id, direction, complete, change.clone(), verdict)
+    })?;
+    print_transfer_artifact(repo, &result, push.as_ref())?;
     if result.gated {
         eprintln!(
             "TRANSFER {} needs work on {}",
@@ -2426,12 +2533,13 @@ fn run() -> Result<(), Error> {
                 comment,
             },
         ),
-        Commands::Sync { merged_pr } => cmd_sync(&repo, merged_pr),
+        Commands::Sync { merged_pr, push } => cmd_sync(&repo, merged_pr, push),
         Commands::AcceptUpstream {
             sha,
             fetch_only,
             preflight_result,
             preflight_only,
+            push,
         } => {
             if fetch_only {
                 let fetched = fetch_pending_upstream(&repo, sha.as_deref())?;
@@ -2442,7 +2550,12 @@ fn run() -> Result<(), Error> {
                 let report = accept_upstream_preflight(&repo, sha.as_deref())?;
                 return finish_preflight_report(report, None);
             }
-            cmd_accept_upstream(&repo, sha.as_deref(), &script_verdict(preflight_result)?)
+            cmd_accept_upstream(
+                &repo,
+                sha.as_deref(),
+                &script_verdict(preflight_result)?,
+                push,
+            )
         }
         Commands::Gated {
             id,
@@ -2509,12 +2622,13 @@ fn run() -> Result<(), Error> {
             message_file,
             preflight_result,
             preflight_only,
+            push,
         } => {
             let change = patch_message(message, message_file)?;
             if preflight_only {
                 return finish_preflight_report(resolve_preflight(&repo, &id, change)?, None);
             }
-            cmd_resolve(&repo, &id, change, &script_verdict(preflight_result)?)
+            cmd_resolve(&repo, &id, change, &script_verdict(preflight_result)?, push)
         }
         Commands::Transfer {
             id,
@@ -2525,6 +2639,7 @@ fn run() -> Result<(), Error> {
             message_file,
             preflight_result,
             preflight_only,
+            push,
         } => {
             let change = patch_message(message, message_file)?;
             // clap requires exactly one of --to-upstream / --to-internal.
@@ -2545,6 +2660,7 @@ fn run() -> Result<(), Error> {
                 complete,
                 change,
                 &script_verdict(preflight_result)?,
+                push,
             )
         }
         Commands::Amend {
@@ -2554,6 +2670,7 @@ fn run() -> Result<(), Error> {
             message_file,
             preflight_result,
             preflight_only,
+            push,
         } => {
             let change = patch_message(message, message_file)?;
             if preflight_only {
@@ -2567,6 +2684,7 @@ fn run() -> Result<(), Error> {
                 complete,
                 change,
                 &script_verdict(preflight_result)?,
+                push,
             )
         }
         Commands::WebUi { port, no_open } => cmd_web_ui(repo, port, no_open),

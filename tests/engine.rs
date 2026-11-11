@@ -9776,13 +9776,19 @@ impl ImportRace {
 /// Makes the first push into `origin` lose a race: it moves uplink/state to
 /// `sha` first.
 fn move_state_on_first_push(origin: &Path, sha: &str) -> PathBuf {
+    move_ref_on_first_push(origin, "refs/heads/uplink/state", sha)
+}
+
+/// Makes the first push of `refname` into `origin` lose a race: it moves
+/// `refname` to `sha` first.
+fn move_ref_on_first_push(origin: &Path, refname: &str, sha: &str) -> PathBuf {
     let marker = git_dir_of(origin).join("moved");
     let hook = git_dir_of(origin).join("hooks/pre-receive");
     fs::create_dir_all(hook.parent().unwrap()).unwrap();
     fs::write(
         &hook,
         format!(
-            "#!/bin/sh\ncat >/dev/null\nif [ ! -e '{m}' ]; then\n  touch '{m}'\n  unset GIT_QUARANTINE_PATH\n  git update-ref refs/heads/uplink/state {sha}\nfi\nexit 0\n",
+            "#!/bin/sh\ninput=$(cat)\nif [ ! -e '{m}' ] && printf '%s\\n' \"$input\" | grep -q ' {refname}$'; then\n  touch '{m}'\n  unset GIT_QUARANTINE_PATH\n  git update-ref {refname} {sha}\nfi\nexit 0\n",
             m = marker.display()
         ),
     )
@@ -9873,6 +9879,238 @@ fn import_push_does_not_push_a_main_that_would_lose_content() {
 
     assert_eq!(json["push"]["main"], "differs", "{json}");
     assert_eq!(race.origin_main(), race.merged_as);
+}
+
+/// A company whose main was rebuilt: an internal-only patch on top of an
+/// upstream-bound one. `runner` is a job's clone; Ben moves origin's
+/// uplink/state while it runs.
+struct RebuildRace {
+    _keep: (TempDir, TempDir, World),
+    company: PathBuf,
+    upstream: PathBuf,
+    origin: PathBuf,
+    runner: PathBuf,
+    ben: PathBuf,
+    notes: Patch,
+    hash: Patch,
+}
+
+fn rebuild_race(unimported_merge: bool) -> RebuildRace {
+    let world = setup_world();
+    let company = world.company.clone();
+    let upstream = world.upstream.clone();
+    git(
+        &company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&company, "NOTES.md", "internal\n");
+    commit_all(&company, "internal notes");
+    let notes = add_landed_patch(
+        &company,
+        AddPatchOpts {
+            message: "Internal notes".into(),
+            from_ref: Some("main".into()),
+            internal_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        &company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        &company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(&company, "use sha256");
+    let hash = add_landed_patch(
+        &company,
+        AddPatchOpts {
+            message: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        &company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let origin = publish_origin(&company);
+    if unimported_merge {
+        land_merge(&company, "UNIMPORTED.md");
+        git(
+            &company,
+            &["push", "--quiet", "origin", "main"],
+            GitOpts::default(),
+        )
+        .unwrap();
+    }
+    let (runner_keep, runner) = clone_company_from(&origin, &upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &upstream);
+    reset_from_origin(&runner).unwrap();
+    reset_from_origin(&ben).unwrap();
+    RebuildRace {
+        _keep: (runner_keep, ben_keep, world),
+        company,
+        upstream,
+        origin,
+        runner,
+        ben,
+        notes,
+        hash,
+    }
+}
+
+/// A pull request merged into `main` of `company` and not imported.
+fn land_merge(company: &Path, file: &str) -> String {
+    let branch = format!("feat/{file}");
+    git(company, &["checkout", "-b", &branch], GitOpts::default()).unwrap();
+    write(company, file, "merged, not imported\n");
+    commit_all(company, &format!("add {file}"));
+    let head = rev_of(company, "HEAD");
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["merge", "--no-ff", "--no-edit", "--quiet", &head],
+        GitOpts::default(),
+    )
+    .unwrap();
+    rev_of(company, "main")
+}
+
+impl RebuildRace {
+    fn cli_json(&self, args: &[&str]) -> serde_json::Value {
+        let out = uplink_cli(&self.runner, args);
+        assert!(out.status.success(), "{out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let line = stdout.lines().rev().find(|l| l.starts_with('{')).unwrap();
+        serde_json::from_str(line).unwrap()
+    }
+
+    fn origin_main(&self) -> String {
+        git_ok(&self.origin, &["rev-parse", "refs/heads/main"]).unwrap()
+    }
+
+    /// Ben retitles the internal patch and leaves his state beside
+    /// origin's; the first state push into origin moves to it.
+    fn ben_wins_the_state_push(&self) -> (String, PathBuf) {
+        retitle(&self.ben, &self.notes.id, "Internal notes, renamed");
+        git(
+            &self.ben,
+            &["push", "--quiet", "origin", "uplink/state:refs/ben/state"],
+            GitOpts::default(),
+        )
+        .unwrap();
+        let ben_state = rev_of(&self.ben, "uplink/state");
+        let marker = move_state_on_first_push(&self.origin, &ben_state);
+        (ben_state, marker)
+    }
+}
+
+#[test]
+fn transfer_push_records_again_on_a_moved_state_and_leases_main() {
+    let race = rebuild_race(false);
+    let (ben_state, marker) = race.ben_wins_the_state_push();
+
+    let json = race.cli_json(&["transfer", &race.hash.id, "--to-internal", "--push"]);
+
+    assert!(marker.exists(), "the first state push lost the race");
+    assert_eq!(json["push"]["main"], "pushed", "{json}");
+    let state = origin_state(&race.origin);
+    assert!(git_succeeds_in(
+        &race.origin,
+        &["merge-base", "--is-ancestor", &ben_state, &state]
+    ));
+    let queue = git_uplink::queue_at(&race.origin, &state).unwrap();
+    assert!(
+        queue.is_internal(&race.hash.id),
+        "the transfer is on origin"
+    );
+    let main = race.origin_main();
+    let subjects = git_ok(&race.origin, &["log", "--format=%s", &main]).unwrap();
+    assert!(
+        subjects.contains("Internal notes, renamed"),
+        "main is rebuilt from the state that won\n{subjects}"
+    );
+}
+
+#[test]
+fn transfer_push_leaves_main_with_a_merge_that_is_not_imported() {
+    let race = rebuild_race(true);
+    let before = race.origin_main();
+
+    let json = race.cli_json(&["transfer", &race.hash.id, "--to-internal", "--push"]);
+
+    assert_eq!(json["push"]["main"], "unrecorded", "{json}");
+    assert_eq!(race.origin_main(), before, "the merge stays on main");
+    let queue = git_uplink::queue_at(&race.origin, "refs/heads/uplink/state").unwrap();
+    assert!(queue.is_internal(&race.hash.id), "the transfer is recorded");
+}
+
+#[test]
+fn transfer_push_never_overwrites_a_merge_that_lands_during_the_push() {
+    let race = rebuild_race(false);
+    let landed = land_merge(&race.company, "LANDED.md");
+    git(
+        &race.company,
+        &["push", "--quiet", "origin", "main:refs/landed/main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    move_ref_on_first_push(&race.origin, "refs/heads/main", &landed);
+
+    let json = race.cli_json(&["transfer", &race.hash.id, "--to-internal", "--push"]);
+
+    assert_eq!(json["push"]["main"], "moved", "{json}");
+    assert_eq!(race.origin_main(), landed);
+}
+
+#[test]
+fn accept_upstream_push_records_again_on_a_moved_state() {
+    let race = rebuild_race(false);
+    write(&race.upstream, "UPSTREAM.md", "from upstream\n");
+    commit_all(&race.upstream, "upstream change");
+    let upstream_sha = rev_of(&race.upstream, "HEAD");
+    let synced = race.cli_json(&["sync", "--push"]);
+    assert_eq!(synced["needsApproval"], true, "{synced}");
+    reset_from_origin(&race.ben).unwrap();
+    let (ben_state, marker) = race.ben_wins_the_state_push();
+
+    let json = race.cli_json(&["accept-upstream", "--sha", &upstream_sha, "--push"]);
+
+    assert!(marker.exists(), "the first state push lost the race");
+    assert_eq!(json["push"]["main"], "pushed", "{json}");
+    let state = origin_state(&race.origin);
+    assert!(git_succeeds_in(
+        &race.origin,
+        &["merge-base", "--is-ancestor", &ben_state, &state]
+    ));
+    let queue = git_uplink::queue_at(&race.origin, &state).unwrap();
+    assert_eq!(
+        queue.last_sync.as_ref().map(|s| s.upstream_sha.as_str()),
+        Some(upstream_sha.as_str()),
+        "the accepted upstream is recorded on origin"
+    );
+    assert!(queue.pending_upstream.is_none());
+    let main = race.origin_main();
+    assert!(git_succeeds_in(
+        &race.origin,
+        &["merge-base", "--is-ancestor", &upstream_sha, &main]
+    ));
 }
 
 #[test]
