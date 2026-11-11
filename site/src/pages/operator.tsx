@@ -255,6 +255,16 @@ git uplink rebuild --continue   # --abort changes nothing`}</Code>
             <strong>Old depends-on lists that name whole chains:</strong>{" "}
             <code>git uplink trim-deps</code> shortens them once.
           </li>
+          <li>
+            <strong>
+              <code>main</code> has what <code>uplink/state</code> lacks:
+            </strong>{" "}
+            <code>rebuild --push</code> then pushes <code>uplink/state</code>{" "}
+            and refuses <code>main</code>. Record the change first (a failed
+            import is on an <code>uplink/rescue/</code> branch), or add{" "}
+            <code>--force</code> to replace <code>main</code> anyway. The push
+            is leased either way, so a merge that lands meanwhile is kept.
+          </li>
         </ul>
         <p>
           Then <code>git uplink push</code> (and{" "}

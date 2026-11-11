@@ -932,19 +932,6 @@ pub fn ensure_company_branch_ref(repo: &Path, remote: &str, branch: &str) -> Res
     Ok(sha)
 }
 
-/// Force-push a local branch (preview or company main).
-/// The published commit is a queue replay, so this does not lease the remote tip
-/// and does not fetch the branch first.
-pub fn push_branch_force(repo: &Path, remote: &str, branch: &str) -> Result<()> {
-    let dest = format!("refs/heads/{branch}:refs/heads/{branch}");
-    git(
-        repo,
-        &["push", "--quiet", "--force", remote, &dest],
-        GitOpts::default(),
-    )?;
-    Ok(())
-}
-
 pub fn new_patch_id() -> String {
     let raw = Uuid::new_v4().simple().to_string();
     format!("upl_{}", &raw[..10])

@@ -23,6 +23,9 @@ pub struct InlineRebuildOpts {
     pub push: bool,
     pub push_remote: Option<String>,
     pub verify: bool,
+    /// With `push`: push main also when uplink/state lacks something
+    /// origin's main has. It is still leased.
+    pub force: bool,
 }
 
 /// How `rebuild --continue` or `--abort` takes up a paused rebuild.
@@ -89,6 +92,8 @@ struct PausedRebuild {
     push: bool,
     push_remote: Option<String>,
     verify: bool,
+    #[serde(default)]
+    force: bool,
     resolved: Vec<ResolvedPatch>,
     /// None when the rebuild was interrupted after a resolution:
     /// `--continue` replays again.
@@ -225,6 +230,7 @@ pub fn rebuild_inline(repo: &Path, opts: InlineRebuildOpts) -> Result<InlineRebu
             push: opts.push,
             push_remote: opts.push_remote.clone(),
             verify: opts.verify,
+            force: opts.force,
             resolved: Vec::new(),
             stop: None,
         };
@@ -325,6 +331,9 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
     } else {
         None
     };
+    // An inline rebuild writes uplink/state only when it publishes.
+    let recorded_on = rev_parse(repo, STATE_BRANCH)?;
+    let upstream_start = rev_parse(repo, UPSTREAM_REF).unwrap_or_default();
     let replace: Vec<(String, String)> = paused
         .resolved
         .iter()
@@ -391,14 +400,19 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
         Some(base) => Some(main_changes(repo, &queue, base, &company_branch)?),
         None => None,
     };
-    let pushed = if paused.push {
+    let (pushed, main_push) = if paused.push {
         let remote = paused.push_remote.as_deref().unwrap_or("origin");
         // State first: a rejected state push leaves origin main alone.
-        push_state_branch(repo, remote, STATE_BRANCH)?;
-        push_branch_force(repo, remote, &company_branch)?;
-        Some(remote.to_string())
+        let main = super::push::push_operator_rebuild(
+            repo,
+            remote,
+            &recorded_on,
+            &upstream_start,
+            paused.force,
+        )?;
+        (Some(remote.to_string()), Some(main))
     } else {
-        None
+        (None, None)
     };
     if paused.original != company_branch {
         restore_checkout(repo, &paused.original, &paused.original_sha)?;
@@ -411,6 +425,7 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
             preview: false,
             tree_changed,
             changes,
+            main_push,
         },
         before,
         amended: paused.resolved_ids(),

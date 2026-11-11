@@ -58,7 +58,7 @@ git uplink drop <id> [--reason <text>]
 git uplink trim-deps [--dry-run] [--json]
 git uplink rebuild [--branch <name>] [--push] [--push-remote <remote>]
             [--preflight-result <path>] [--preflight-only] [--verify] [--json]
-            [--interactive] [--continue] [--abort]
+            [--interactive] [--continue] [--abort] [--force]
 git uplink resolve <id> [--message <text> | --message-file <path>]
             [--preflight-result <path>] [--preflight-only] [--push]
 git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
@@ -263,7 +263,7 @@ Operator fallback: a gated patch is fixed on its branches without a PR: `git swi
 - `--branch <name>`: Rebuild onto uplink/preview/\<name> instead of company main (preview; does not mutate the queue or push).
 - `--push`: Push uplink/state and the rebuilt branch after rebuild.
 
-  With --verify, only uplink/state is pushed, and only when a patch was gated: a pass leaves origin as it is. When origin's uplink/state moved before the push, verify records the gate again on the state that won. Main is not pushed.
+  uplink/state is pushed as a fast-forward. Main is pushed with a lease on origin's main, and only when uplink/state covers it; see --force. With --verify, only uplink/state is pushed, and only when a patch was gated: a pass leaves origin as it is. When origin's uplink/state moved before the push, verify records the gate again on the state that won. Main is not pushed.
 - `--push-remote <remote>`: Remote for --push, origin by default.
 - `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
 
@@ -280,6 +280,9 @@ Operator fallback: a gated patch is fixed on its branches without a PR: `git swi
 
   `--push` and `--verify` are kept from `rebuild -i`.
 - `--abort`: Put the checkout back and end the paused rebuild, changing nothing.
+- `--force`: With --push: replace main on origin also when uplink/state lacks something it has.
+
+  Without it, --push pushes main only when uplink/state already has everything origin's main has: every commit on it was written by a rebuild, or a rebuild of uplink/state as it was gives its tree. Otherwise uplink/state is pushed, main is not, and the command fails. --force drops what uplink/state lacks from main (record a failed import from its uplink/rescue/ branch first). The push is still leased on origin's main, fetched right before: a merge that lands meanwhile is never overwritten.
 
 ### `drop`
 

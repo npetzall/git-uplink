@@ -10211,6 +10211,58 @@ fn verify_push_publishes_nothing_when_main_passes() {
 }
 
 #[test]
+fn rebuild_push_refuses_to_drop_what_state_does_not_have() {
+    let race = rebuild_race(true);
+    let before = race.origin_main();
+
+    let out = uplink_cli(&race.runner, &["rebuild", "--push"]);
+
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--force"),
+        "{out:?}"
+    );
+    assert_eq!(race.origin_main(), before, "the merge stays on main");
+}
+
+#[test]
+fn rebuild_push_force_replaces_main_with_a_lease() {
+    let race = rebuild_race(true);
+
+    let out = uplink_cli(&race.runner, &["rebuild", "--push", "--force"]);
+
+    assert!(out.status.success(), "{out:?}");
+    let main = race.origin_main();
+    assert_eq!(main, rev_of(&race.runner, "main"));
+    assert!(
+        git_ok(&race.origin, &["show", &format!("{main}:UNIMPORTED.md")]).is_err(),
+        "--force drops what uplink/state does not have"
+    );
+}
+
+#[test]
+fn rebuild_push_force_never_overwrites_a_merge_that_lands_during_the_push() {
+    let race = rebuild_race(false);
+    let landed = land_merge(&race.company, "LANDED.md");
+    git(
+        &race.company,
+        &["push", "--quiet", "origin", "main:refs/landed/main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    move_ref_on_first_push(&race.origin, "refs/heads/main", &landed);
+
+    let out = uplink_cli(&race.runner, &["rebuild", "--push", "--force"]);
+
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("moved during the push"),
+        "{out:?}"
+    );
+    assert_eq!(race.origin_main(), landed);
+}
+
+#[test]
 fn rescue_keeps_a_failed_import_and_the_queue_it_saw_on_a_branch() {
     let race = import_race(false);
     // What the failed run recorded and could not push.

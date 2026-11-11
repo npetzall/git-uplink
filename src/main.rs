@@ -1111,6 +1111,7 @@ fn record_maybe_push<T>(
         &lease,
         &recorded_on,
         &upstream_start,
+        false,
     )?;
     eprint_main_push(main, &branch, &lease);
     let report = serde_json::json!({
@@ -2017,15 +2018,15 @@ fn cmd_trim_deps(repo: &Path, dry_run: bool, json: bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn cmd_rebuild(
-    repo: &Path,
-    branch: Option<String>,
-    push: bool,
-    push_remote: Option<String>,
-    preflight: ScriptVerdict,
-    verify: bool,
-    json: bool,
-) -> Result<(), Error> {
+fn cmd_rebuild(repo: &Path, opts: RebuildOpts, json: bool) -> Result<(), Error> {
+    let RebuildOpts {
+        branch,
+        push,
+        push_remote,
+        preflight,
+        verify,
+        force,
+    } = opts;
     let remote = push_remote.clone().unwrap_or_else(|| "origin".into());
     let result = if verify && push {
         // Verify publishes only a gated patch: a pass leaves origin as it
@@ -2042,6 +2043,7 @@ fn cmd_rebuild(
                     push_remote: None,
                     preflight: preflight.clone(),
                     verify: true,
+                    force: false,
                 },
             ) {
                 Err(Error::Conflict(err)) => Ok(Err(Error::Conflict(err))),
@@ -2063,6 +2065,7 @@ fn cmd_rebuild(
                 },
                 preflight,
                 verify,
+                force,
             },
         )
     };
@@ -2089,11 +2092,15 @@ fn cmd_rebuild(
         other => other?,
     };
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "rebuilt": true, "branch": result.branch })
-        );
-        return Ok(());
+        let mut value = serde_json::json!({ "rebuilt": true, "branch": result.branch });
+        if let Some(main) = result.main_push.filter(|_| !verify) {
+            value["push"] = serde_json::json!({ "main": main });
+        }
+        println!("{value}");
+        return match result.main_push.filter(|_| !verify) {
+            Some(main) => finish_main_push(main, &result.branch, &remote, true),
+            None => Ok(()),
+        };
     }
     if result.preview {
         println!("rebuild preview at {}", result.branch);
@@ -2109,10 +2116,35 @@ fn cmd_rebuild(
         }
         println!("{}", format_product_changes(changes, &result.branch, false));
     }
-    if push && !verify {
-        println!("pushed {} to {remote}", result.branch);
+    match result.main_push.filter(|_| !verify) {
+        Some(main) => finish_main_push(main, &result.branch, &remote, false),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+/// Reports what an operator's `rebuild --push` did with the company branch.
+/// Fails when it was not pushed; uplink/state was pushed either way.
+fn finish_main_push(main: MainPush, branch: &str, remote: &str, quiet: bool) -> Result<(), Error> {
+    match main {
+        MainPush::Pushed => {
+            if !quiet {
+                println!("pushed {branch} to {remote}");
+            }
+            Ok(())
+        }
+        MainPush::Unchanged => {
+            if !quiet {
+                println!("{branch} on {remote} already is this rebuild");
+            }
+            Ok(())
+        }
+        MainPush::Moved => Err(Error::msg(format!(
+            "uplink/state was pushed, {branch} was not: {branch} on {remote} moved during the push and was not overwritten. Run the rebuild again."
+        ))),
+        MainPush::Unrecorded | MainPush::Differs => Err(Error::msg(format!(
+            "uplink/state was pushed, {branch} was not: {branch} on {remote} has content uplink/state does not have (a merge not imported yet, or a push that bypassed import). Record it first (a failed import is on an uplink/rescue/ branch), or run again with --force to replace {branch} anyway; the push is still leased."
+        ))),
+    }
 }
 
 fn print_inline_rebuild(done: &InlineRebuild) -> Result<(), Error> {
@@ -2141,10 +2173,10 @@ fn print_inline_rebuild(done: &InlineRebuild) -> Result<(), Error> {
         }
         println!("{}", format_product_changes(changes, &result.branch, false));
     }
-    if let Some(remote) = &done.pushed {
-        println!("pushed {} to {remote}", result.branch);
+    match (&done.pushed, result.main_push) {
+        (Some(remote), Some(main)) => finish_main_push(main, &result.branch, remote, false),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 fn cmd_resolve(
@@ -2655,6 +2687,7 @@ fn run() -> Result<(), Error> {
             interactive,
             resume,
             abort,
+            force,
         } => {
             if preflight_only {
                 return finish_preflight_report(rebuild_preflight(&repo, verify)?, None);
@@ -2680,17 +2713,21 @@ fn run() -> Result<(), Error> {
                         push,
                         push_remote,
                         verify,
+                        force,
                     },
                 )?;
                 return print_inline_rebuild(&done);
             }
             cmd_rebuild(
                 &repo,
-                branch,
-                push,
-                push_remote,
-                script_verdict(preflight_result)?,
-                verify,
+                RebuildOpts {
+                    branch,
+                    push,
+                    push_remote,
+                    preflight: script_verdict(preflight_result)?,
+                    verify,
+                    force,
+                },
                 json,
             )
         }
