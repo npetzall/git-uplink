@@ -40,7 +40,7 @@ git uplink report <id> [--out <path>] [--extra-dir <path>] [--store-extras]
             [--extra-source <url>] [--assess-result <path>]
 git uplink status [--json]
 git uplink doctor [--json]
-git uplink approve <id> [--out <path>] [--reviewed <token>]
+git uplink approve <id> [--out <path>] [--reviewed <token>] [--push]
 git uplink submit <id> [--push] [--preflight-result <path>]
 git uplink submitted <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink waiting <id> --preflight-result <path> [--run-url <url>]
@@ -466,6 +466,9 @@ Record the to-upstream approval of a patch and write its receipt.
 - `--reviewed <token>`: Review token of the packet that was reviewed.
 
   `report` writes it to `.uplink/reports/<id>/review-token`. It names what the patch changes, the patch subject and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one, and its receipt is left as it is.
+- `--push`: Approve on origin's uplink/state and push the approval there.
+
+  Reads the queue and the patch from origin's uplink/state, not from .uplink/, and pushes the approval as a fast-forward; it never force-pushes. When origin moved, approve fetches it and approves again on top: the patch there must still have the reviewed token, and an approval that already covers it there is kept as it is. Local uplink/state and .uplink/ then match origin. Refused when local uplink/state has commits origin lacks.
 
 ### `waiting`
 

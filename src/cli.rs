@@ -959,6 +959,17 @@ pub enum Commands {
         /// its receipt is left as it is.
         #[arg(long, value_name = "token")]
         reviewed: Option<String>,
+        /// Approve on origin's uplink/state and push the approval there.
+        ///
+        /// Reads the queue and the patch from origin's uplink/state, not
+        /// from .uplink/, and pushes the approval as a fast-forward; it never
+        /// force-pushes. When origin moved, approve fetches it and approves
+        /// again on top: the patch there must still have the reviewed token,
+        /// and an approval that already covers it there is kept as it is.
+        /// Local uplink/state and .uplink/ then match origin. Refused when
+        /// local uplink/state has commits origin lacks.
+        #[arg(long)]
+        push: bool,
     },
     /// Build the export commit on uplink/upstream and print the PR request as JSON.
     ///

@@ -629,6 +629,65 @@ pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
     Ok(())
 }
 
+/// Commits the tree of `base` with `files` (path, contents) written into it,
+/// on top of `base`. Uses a temporary index: the working tree, `.uplink/`
+/// and every local branch stay as they are.
+pub fn commit_files_on(
+    repo: &Path,
+    base: &str,
+    files: &[(&str, &str)],
+    message: &str,
+) -> Result<String> {
+    let index = repo.join(format!(".git/uplink-index-{}", Uuid::new_v4()));
+    let index_opts = GitOpts {
+        extra_env: vec![(
+            "GIT_INDEX_FILE".into(),
+            index.to_string_lossy().into_owned(),
+        )],
+        ..GitOpts::default()
+    };
+    let outcome = (|| -> Result<String> {
+        git(repo, &["read-tree", base], index_opts.clone())?;
+        for (path, contents) in files {
+            let blob = git(
+                repo,
+                &["hash-object", "-w", "--stdin"],
+                GitOpts {
+                    input: Some(contents.as_bytes()),
+                    ..GitOpts::default()
+                },
+            )?
+            .stdout;
+            git(
+                repo,
+                &[
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    &format!("100644,{blob},{path}"),
+                ],
+                index_opts.clone(),
+            )?;
+        }
+        Ok(git(repo, &["write-tree"], index_opts.clone())?.stdout)
+    })();
+    let _ = fs::remove_file(&index);
+    let tree = outcome?;
+    Ok(git(
+        repo,
+        &["commit-tree", &tree, "-p", base, "-m", message],
+        GitOpts::default(),
+    )?
+    .stdout)
+}
+
+/// Pushes `commit` to `{branch}` on `remote` as a fast-forward. Never forced.
+pub fn push_commit_to(repo: &Path, remote: &str, commit: &str, branch: &str) -> Result<()> {
+    let dest = format!("{commit}:refs/heads/{branch}");
+    git(repo, &["push", remote, &dest], GitOpts::default())?;
+    Ok(())
+}
+
 /// Paths under `.uplink/` that differ from the committed `{branch}` tree.
 pub fn uplink_uncommitted_paths(repo: &Path, branch: &str) -> Result<Vec<String>> {
     let worktree = uplink_worktree_tree(repo, branch)?;

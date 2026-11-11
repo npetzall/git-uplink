@@ -400,12 +400,13 @@ jobs:
             echo "The packet job recorded no review token; not approving."
             exit 1
           fi
-          # Approves only the content the packet of this run showed.
-          receipt=$(git uplink approve "$PATCH_ID" --reviewed "$REVIEW_TOKEN")
+          # Approves only the content the packet of this run showed, and
+          # pushes the approval before anything can fail, so a re-run finds it
+          # and records no second one. This job holds no uplink-mutate: when
+          # uplink/state moved, approve fetches it and approves again on top,
+          # still only for the reviewed content. It never force-pushes.
+          receipt=$(git uplink approve "$PATCH_ID" --reviewed "$REVIEW_TOKEN" --push)
           printf '%s\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
-          # Publish the approval before anything can fail, so a re-run finds
-          # it and records no second one.
-          git uplink push
           # If uplink/upstream or uplink/hooks moved while this job waited for
           # approval, submit still uses a passing result for the unchanged
           # patch content and exports onto the current uplink/upstream. It

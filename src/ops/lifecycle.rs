@@ -104,80 +104,219 @@ pub fn approve_patch_reviewed(
 ) -> Result<Patch> {
     with_queue_lock(repo, || {
         let mut queue = read_queue_file(repo)?;
-        {
-            if queue.is_internal(id) || queue.is_tooling(id) {
+        check_approvable(&queue, id)?;
+        let token = review_token(repo, get_patch(&queue, id)?)?;
+        if reviewed.is_some_and(|reviewed| reviewed != token) {
+            return Err(changed_since_review(id));
+        }
+        let sha = match sha {
+            Some(value) if !value.is_empty() => value.to_string(),
+            _ => rev_parse(repo, STATE_BRANCH)?,
+        };
+        if record_approval(repo, &mut queue, id, sha, run_url, token)? {
+            write_queue_file(repo, &queue)?;
+            commit_queue(repo, &format!("uplink: approve {id}"))?;
+        }
+        Ok(get_patch(&queue, id)?.clone())
+    })
+}
+
+/// Refuses a patch that may not be approved for upstream at all.
+fn check_approvable(queue: &QueueState, id: &str) -> Result<()> {
+    if queue.is_internal(id) || queue.is_tooling(id) {
+        return Err(Error::msg(format!(
+            "{id} is internal-only and cannot be approved for upstream."
+        )));
+    }
+    super::submit::ensure_upstream_deps_merged(queue, get_patch(queue, id)?, "Approve")
+}
+
+/// Records the approval of `id` for `token` in `queue`. False when an
+/// approval already covers the patch, and nothing was recorded.
+fn record_approval(
+    repo: &Path,
+    queue: &mut QueueState,
+    id: &str,
+    sha: String,
+    run_url: Option<&str>,
+    token: String,
+) -> Result<bool> {
+    let patch = get_patch_mut(queue, id)?;
+    super::submit::ensure_assessed_ok(patch)?;
+    let kind = match patch.status {
+        PatchStatus::Queued | PatchStatus::Waiting | PatchStatus::Rejected => {
+            if patch.reviews_delta() {
+                "delta"
+            } else {
+                "initial"
+            }
+        }
+        PatchStatus::Approved | PatchStatus::Submitted => {
+            if patch
+                .last_approval()
+                .is_some_and(|approval| approval_covers(repo, approval, patch, &token))
+            {
+                return Ok(false);
+            }
+            // Replayed onto a moved upstream since the last approval.
+            "refresh"
+        }
+        _ => {
+            return Err(Error::msg(format!(
+                "{id} is {} and cannot be approved for contribution.",
+                patch.status
+            )));
+        }
+    };
+    if kind != "refresh" {
+        patch.status = PatchStatus::Approved;
+    }
+    let run_url = run_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(github_run_url_opt);
+    let version = patch.approvals.len() as u32 + 1;
+    patch.approvals.push(PatchApproval {
+        at: stamp(),
+        version,
+        kind: kind.into(),
+        sha,
+        patch_id_stable: patch.patch_id_stable.clone(),
+        run_url,
+        reviewed: Some(token),
+    });
+    add_event(
+        patch,
+        "approved",
+        match kind {
+            "delta" => "IP approved the delta since the previous contribution approval",
+            "refresh" => "IP approved the patch as replayed since the previous approval",
+            _ => "IP and contribution review passed; patch may leave the enterprise",
+        },
+    );
+    Ok(true)
+}
+
+/// How often [`approve_on_remote`] approves again after losing a push race.
+const APPROVE_PUSH_ATTEMPTS: u32 = 8;
+
+/// What [`approve_on_remote`] did.
+#[derive(Debug, Clone)]
+pub enum RemoteApproval {
+    /// The approval is on `remote` as `commit`, and local `uplink/state` and
+    /// `.uplink/` are at that commit.
+    Recorded {
+        patch: Box<Patch>,
+        receipt: String,
+        commit: String,
+    },
+    /// An approval on the remote already covers the patch as it is there.
+    /// Nothing was recorded or pushed.
+    Covered(PatchApproval),
+}
+
+/// Approves `id` on `uplink/state` of `remote` and pushes it there.
+///
+/// Works on the remote's `uplink/state` as fetched, not on `.uplink/`: the
+/// queue, the patch file and the review token are read from that commit,
+/// and the approval commit is built on it with a temporary index. The push
+/// is a fast-forward and never forced. When it loses a race (the remote
+/// moved), it fetches again and approves again on top, so `reviewed` is
+/// checked against the patch as the remote has it now.
+///
+/// `receipt` gets the `uplink/state` commit the approval is for and the
+/// review token, and returns the receipt text and the run URL. The receipt
+/// is committed at `receipt_path` when given. Once pushed, local
+/// `uplink/state` and `.uplink/` are moved to the pushed commit.
+///
+/// Refuses when `.uplink/` has uncommitted changes, or when local
+/// `uplink/state` has commits the remote lacks: moving it would lose them.
+pub fn approve_on_remote(
+    repo: &Path,
+    id: &str,
+    remote: &str,
+    reviewed: Option<&str>,
+    receipt_path: Option<&str>,
+    mut receipt: impl FnMut(&str, &str) -> (String, String),
+) -> Result<RemoteApproval> {
+    with_queue_lock(repo, || {
+        ensure_state_worktree(repo)?;
+        let uncommitted = uplink_uncommitted_paths(repo, STATE_BRANCH)?;
+        if !uncommitted.is_empty() {
+            return Err(Error::msg(format!(
+                ".uplink/ has uncommitted changes ({}); commit or reset them first",
+                uncommitted.join(", ")
+            )));
+        }
+        let mut last_error = None;
+        for attempt in 0..APPROVE_PUSH_ATTEMPTS {
+            let Some(base) = fetch_state_tracking(repo, remote, STATE_BRANCH)? else {
                 return Err(Error::msg(format!(
-                    "{id} is internal-only and cannot be approved for upstream."
+                    "Could not fetch {STATE_BRANCH} from {remote}."
+                )));
+            };
+            if has_ref(repo, STATE_BRANCH)?
+                && !is_ancestor(repo, &rev_parse(repo, STATE_BRANCH)?, &base)?
+            {
+                return Err(Error::msg(format!(
+                    "{STATE_BRANCH} has commits {remote} lacks; run `git uplink push`, then run this again"
                 )));
             }
-            super::submit::ensure_upstream_deps_merged(&queue, get_patch(&queue, id)?, "Approve")?;
-            let token = review_token(repo, get_patch(&queue, id)?)?;
+            let mut queue = queue_at(repo, &base)?;
+            check_approvable(&queue, id)?;
+            let text = show_at(repo, &base, &patch_path(id)?.to_string_lossy())?;
+            let token = crate::assess::review_token_for(repo, get_patch(&queue, id)?, &text)?;
             if reviewed.is_some_and(|reviewed| reviewed != token) {
                 return Err(changed_since_review(id));
             }
-            let patch = get_patch_mut(&mut queue, id)?;
-            super::submit::ensure_assessed_ok(patch)?;
-            let kind = match patch.status {
-                PatchStatus::Queued | PatchStatus::Waiting | PatchStatus::Rejected => {
-                    if patch.reviews_delta() {
-                        "delta"
-                    } else {
-                        "initial"
-                    }
-                }
-                PatchStatus::Approved | PatchStatus::Submitted => {
-                    if patch
-                        .last_approval()
-                        .is_some_and(|approval| approval_covers(repo, approval, patch, &token))
-                    {
-                        return Ok(patch.clone());
-                    }
-                    // Replayed onto a moved upstream since the last approval.
-                    "refresh"
-                }
-                _ => {
-                    return Err(Error::msg(format!(
-                        "{id} is {} and cannot be approved for contribution.",
-                        patch.status
-                    )));
-                }
-            };
-            if kind != "refresh" {
-                patch.status = PatchStatus::Approved;
+            let patch = get_patch(&queue, id)?;
+            if matches!(patch.status, PatchStatus::Approved | PatchStatus::Submitted)
+                && let Some(approval) = covering_approval_for(repo, patch, &text)
+            {
+                return Ok(RemoteApproval::Covered(approval.clone()));
             }
-            let sha = match sha {
-                Some(value) if !value.is_empty() => value.to_string(),
-                _ => rev_parse(repo, STATE_BRANCH)?,
-            };
-            let run_url = run_url
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .or_else(github_run_url_opt);
-            let version = patch.approvals.len() as u32 + 1;
-            let at = stamp();
-            patch.approvals.push(PatchApproval {
-                at: at.clone(),
-                version,
-                kind: kind.into(),
-                sha,
-                patch_id_stable: patch.patch_id_stable.clone(),
-                run_url,
-                reviewed: Some(token),
-            });
-            add_event(
-                patch,
-                "approved",
-                match kind {
-                    "delta" => "IP approved the delta since the previous contribution approval",
-                    "refresh" => "IP approved the patch as replayed since the previous approval",
-                    _ => "IP and contribution review passed; patch may leave the enterprise",
-                },
-            );
+            let (receipt_text, run_url) = receipt(&base, &token);
+            if !record_approval(repo, &mut queue, id, base.clone(), Some(&run_url), token)? {
+                let patch = get_patch(&queue, id)?;
+                let approval = patch
+                    .last_approval()
+                    .cloned()
+                    .ok_or_else(|| Error::msg(format!("{id} has no approval to show")))?;
+                return Ok(RemoteApproval::Covered(approval));
+            }
+            let queue_json = format!("{}\n", serde_json::to_string_pretty(&queue)?);
+            let mut receipt_body = receipt_text.clone();
+            if !receipt_body.ends_with('\n') {
+                receipt_body.push('\n');
+            }
+            let mut files = vec![(crate::types::QUEUE_PATH, queue_json.as_str())];
+            if let Some(path) = receipt_path {
+                files.push((path, receipt_body.as_str()));
+            }
+            let commit = crate::repo::commit_files_on(
+                repo,
+                &base,
+                &files,
+                &format!("uplink: approve {id}"),
+            )?;
+            match crate::repo::push_commit_to(repo, remote, &commit, STATE_BRANCH) {
+                Ok(()) => {
+                    apply_state_sha(repo, STATE_BRANCH, &commit)?;
+                    return Ok(RemoteApproval::Recorded {
+                        patch: Box::new(get_patch(&queue, id)?.clone()),
+                        receipt: receipt_text,
+                        commit,
+                    });
+                }
+                Err(err) if is_push_lease_rejected(&err) => {
+                    last_error = Some(err);
+                    thread::sleep(Duration::from_millis(40 * 2u64.pow(attempt)));
+                }
+                Err(err) => return Err(err),
+            }
         }
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: approve {id}"))?;
-        Ok(get_patch(&queue, id)?.clone())
+        Err(last_error.unwrap_or_else(|| Error::msg("push failed")))
     })
 }
 
