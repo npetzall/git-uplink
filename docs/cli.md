@@ -50,6 +50,8 @@ git uplink rejected <id> [--run-url <url>] [--cancelled] [--by <login>]
 git uplink sync [--merged-pr <id=sha>]...
 git uplink accept-upstream [--sha <sha>] [--fetch-only] [--preflight-result <path>]
             [--preflight-only]
+git uplink rescue --from <sha> --head <sha> [--pr <n>] [--pr-url <url>]
+            [--message-file <path>] [--note-file <path>] [--push-remote <remote>]
 git uplink gated <id> --pr-url <url> [--pr <n>] [--push-remote <remote>]
 git uplink merged <id> [--via <how>] [--sha <sha>]
 git uplink drop <id> [--reason <text>]
@@ -561,6 +563,20 @@ Record the company PR that gates a conflict.
 - `--pr-url <url>`: URL of the company pull request.
 - `--pr <n>`: Pull request number, read from the URL when omitted.
 - `--push-remote <remote>`: Remote to push uplink/state to. Default: `origin`.
+
+### `rescue`
+
+Keep a merged change that import could not record on a rescue branch.
+
+Import runs it when its job fails, whatever failed. It commits the change (`git diff --binary <from> <head>`), the pull request message, the note and where the change came from under `.uplink/rescue/import-<pr>-<run>/`, on top of local uplink/state, so the queue as the run saw it is kept too. It pushes that commit to `uplink/rescue/import-<pr>-<run>` on the remote and prints the branch. Nothing else changes; uplink/state is not pushed. Record the change from there by hand, then delete the branch.
+
+- `--from <sha>`: Base of the merged change.
+- `--head <sha>`: Head of the merged change.
+- `--pr <n>`: Number of the merged pull request.
+- `--pr-url <url>`: URL of the merged pull request.
+- `--message-file <path>`: File with the pull request's title and body.
+- `--note-file <path>`: File with what the failed run printed.
+- `--push-remote <remote>`: Remote to push the rescue branch to. Default: `origin`.
 
 ### `resolve`
 

@@ -8,9 +8,9 @@ use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
     AddOutcome, AdoptResume, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, MainPush,
-    Patch, PatchConflict, PatchIntent, PatchStatus, QueueState, RemoteApproval, SettingsFlags,
-    SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult, UpgradeResume,
-    stdin_is_tty,
+    Patch, PatchConflict, PatchIntent, PatchStatus, QueueState, RemoteApproval, RescueOpts,
+    SettingsFlags, SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult,
+    UpgradeResume, rescue_import, stdin_is_tty,
 };
 use git_uplink::{
     AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendResult, ApprovalReceipt, AssessPackage,
@@ -2192,6 +2192,32 @@ fn run() -> Result<(), Error> {
                 gate,
                 merged_as.as_deref(),
             )
+        }
+        Commands::Rescue {
+            from,
+            head,
+            pr,
+            pr_url,
+            message_file,
+            note_file,
+            push_remote,
+        } => {
+            // A file that cannot be read is not a reason to keep nothing.
+            let read = |path: Option<PathBuf>| path.and_then(|path| fs::read_to_string(path).ok());
+            let rescued = rescue_import(
+                &repo,
+                &RescueOpts {
+                    from,
+                    head,
+                    pr,
+                    pr_url,
+                    message: read(message_file),
+                    note: read(note_file),
+                    remote: push_remote,
+                },
+            )?;
+            println!("{} {}", rescued.branch, rescued.commit);
+            Ok(())
         }
         Commands::Adopt {
             branch,

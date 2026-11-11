@@ -296,7 +296,7 @@ pub fn approve_on_remote(
             }
             let commit = crate::repo::commit_files_on(
                 repo,
-                &base,
+                Some(&base),
                 &files,
                 &format!("uplink: approve {id}"),
             )?;

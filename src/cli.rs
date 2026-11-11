@@ -151,6 +151,7 @@ pub const GROUPS: &[(&str, &str, &[&str])] = &[
             "sync",
             "accept-upstream",
             "gated",
+            "rescue",
             "resolve",
             "transfer",
             "amend",
@@ -1142,6 +1143,39 @@ pub enum Commands {
         /// upstream fails.
         #[arg(long = "preflight-only", conflicts_with_all = ["preflight_result"])]
         preflight_only: bool,
+    },
+    /// Keep a merged change that import could not record on a rescue branch.
+    ///
+    /// Import runs it when its job fails, whatever failed. It commits the
+    /// change (`git diff --binary <from> <head>`), the pull request message,
+    /// the note and where the change came from under
+    /// `.uplink/rescue/import-<pr>-<run>/`, on top of local uplink/state, so
+    /// the queue as the run saw it is kept too. It pushes that commit to
+    /// `uplink/rescue/import-<pr>-<run>` on the remote and prints the branch.
+    /// Nothing else changes; uplink/state is not pushed. Record the change
+    /// from there by hand, then delete the branch.
+    Rescue {
+        /// Base of the merged change.
+        #[arg(long, value_name = "sha")]
+        from: String,
+        /// Head of the merged change.
+        #[arg(long, value_name = "sha")]
+        head: String,
+        /// Number of the merged pull request.
+        #[arg(long, value_name = "n")]
+        pr: Option<u64>,
+        /// URL of the merged pull request.
+        #[arg(long = "pr-url", value_name = "url")]
+        pr_url: Option<String>,
+        /// File with the pull request's title and body.
+        #[arg(long = "message-file", value_name = "path")]
+        message_file: Option<PathBuf>,
+        /// File with what the failed run printed.
+        #[arg(long = "note-file", value_name = "path")]
+        note_file: Option<PathBuf>,
+        /// Remote to push the rescue branch to.
+        #[arg(long = "push-remote", value_name = "remote", default_value = "origin")]
+        push_remote: String,
     },
     /// Record the company PR that gates a conflict.
     #[command(alias = "conflicted")]

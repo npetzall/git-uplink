@@ -9875,6 +9875,101 @@ fn import_push_does_not_push_a_main_that_would_lose_content() {
     assert_eq!(race.origin_main(), race.merged_as);
 }
 
+#[test]
+fn rescue_keeps_a_failed_import_and_the_queue_it_saw_on_a_branch() {
+    let race = import_race(false);
+    // What the failed run recorded and could not push.
+    retitle(&race.runner, &race.team.id, "Recorded by the failed run");
+    let local_state = rev_of(&race.runner, "uplink/state");
+    let state_before = origin_state(&race.origin);
+    let dir = temp_dir();
+    let message = dir.path().join("msg.md");
+    let note = dir.path().join("note.txt");
+    fs::write(&message, "Use SHA-256 for tokens\n\nReplace SHA-1.\n").unwrap();
+    fs::write(&note, "error: something nobody expected\n").unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args([
+            "rescue",
+            "--from",
+            &race.base,
+            "--head",
+            &race.merged_as,
+            "--pr",
+            "7",
+            "--message-file",
+            message.to_str().unwrap(),
+            "--note-file",
+            note.to_str().unwrap(),
+        ])
+        .current_dir(&race.runner)
+        .env("GITHUB_RUN_ID", "42")
+        .env("GITHUB_RUN_ATTEMPT", "2")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+
+    let branch = "uplink/rescue/import-7-42-2";
+    assert!(
+        String::from_utf8_lossy(&out.stdout).starts_with(branch),
+        "{out:?}"
+    );
+    let rescued = git_ok(
+        &race.origin,
+        &["rev-parse", &format!("refs/heads/{branch}")],
+    )
+    .unwrap();
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", &format!("{rescued}^")]).unwrap(),
+        local_state,
+        "on top of the queue as the run saw it"
+    );
+    assert_eq!(
+        origin_state(&race.origin),
+        state_before,
+        "uplink/state is not pushed"
+    );
+    let dir = ".uplink/rescue/import-7-42-2";
+    let show =
+        |file: &str| git_ok(&race.origin, &["show", &format!("{rescued}:{dir}/{file}")]).unwrap();
+    assert!(show("message.md").starts_with("Use SHA-256 for tokens"));
+    assert!(show("note.txt").contains("nobody expected"));
+    let info: serde_json::Value = serde_json::from_str(&show("rescue.json")).unwrap();
+    assert_eq!(info["pr"], 7);
+    assert_eq!(info["head"], race.merged_as.as_str());
+    // The change applies to its base again.
+    let check = temp_dir();
+    git(
+        Path::new("/tmp"),
+        &[
+            "clone",
+            "--quiet",
+            race.origin.to_str().unwrap(),
+            check.path().to_str().unwrap(),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        check.path(),
+        &["checkout", "--quiet", "--detach", &race.base],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let patch = check.path().join("change.patch");
+    fs::write(&patch, format!("{}\n", show("change.patch"))).unwrap();
+    git(
+        check.path(),
+        &["apply", patch.to_str().unwrap()],
+        GitOpts::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(check.path().join("src/tokens.js")).unwrap(),
+        TOKENS.replace("return sha1(value);", "return sha256(value);")
+    );
+}
+
 fn git_succeeds_in(repo: &Path, args: &[&str]) -> bool {
     git(repo, args, GitOpts::allow_fail()).unwrap().code == 0
 }

@@ -1220,6 +1220,40 @@ mod embed_tests {
     }
 
     #[test]
+    fn import_keeps_a_failed_import_and_never_overwrites_a_later_merge() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = files
+                .iter()
+                .find(|(p, _)| p.ends_with("uplink-import.yml"))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing uplink-import.yml"));
+            // add pushes uplink/state and main itself, main only with a
+            // lease on the merge.
+            assert!(
+                text.contains("MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}")
+                    && text.contains("--push --merged-as \"$MERGE_SHA\"")
+                    && !text.contains("git push origin main --force")
+                    && !text.contains("git uplink push"),
+                "{forge:?}\n{text}"
+            );
+            // Whatever failed, the change goes to a rescue branch, with
+            // plain git when git-uplink itself fails.
+            let rescue = steps_of(&text)
+                .into_iter()
+                .find(|step| step.contains("name: Rescue a failed import"))
+                .unwrap_or_else(|| panic!("{forge:?} has no rescue step\n{text}"));
+            assert!(
+                rescue.contains("if: failure() && steps.add.outcome != 'success'")
+                    && rescue.contains("git uplink rescue --from \"$FROM_SHA\"")
+                    && rescue.contains("git commit-tree")
+                    && rescue.contains("refs/heads/${branch}"),
+                "{forge:?}\n{rescue}"
+            );
+        }
+    }
+
+    #[test]
     fn submit_approves_only_the_packet_of_its_own_run() {
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
