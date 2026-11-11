@@ -169,23 +169,27 @@ pub fn record_on_remote_if<T>(
     })
 }
 
-/// What [`push_imported_main`] did with the company branch.
+/// What a leased push of the company branch did ([`push_imported_main`],
+/// [`push_rebuilt_main`], [`push_operator_rebuild`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MainPush {
-    /// The import did not rebuild it: nothing to push.
+    /// The command did not change it, or the remote already has it:
+    /// nothing to push.
     Unchanged,
-    /// Force-pushed with a lease on the merge commit.
+    /// Force-pushed with a lease: on the merge commit for an import, on the
+    /// remote branch as fetched right before otherwise.
     Pushed,
-    /// The remote branch is no longer the merge commit (a merge landed
-    /// after it), so the rebuilt branch was not pushed.
+    /// The remote branch is no longer what the lease names (a merge landed
+    /// meanwhile), so the rebuilt branch was not pushed.
     Moved,
     /// The rebuilt branch has another tree than the merge commit, so pushing
     /// it would change content, not only order. Not pushed.
     Differs,
-    /// The remote branch has commits no rebuild wrote (a merge that is not
-    /// imported yet), which the rebuild left out. Not pushed: that import
-    /// rebuilds from the recorded state and pushes the branch.
+    /// The remote branch has content uplink/state does not have (a merge
+    /// that is not imported yet, a push that bypassed import), which the
+    /// rebuild left out. Not pushed: that import rebuilds from the recorded
+    /// state and pushes the branch; an operator can `rebuild --push --force`.
     Unrecorded,
 }
 

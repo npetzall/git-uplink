@@ -540,9 +540,6 @@ pub(super) fn probe_report(
     Ok(report)
 }
 
-/// Replays the queue onto upstream and publishes the company branch.
-/// `check` is where the verdict of `preflight.sh` on the result comes from;
-/// `None` publishes without one. `force`: see [`RebuildOpts::verify`].
 /// The tree a rebuild of the queue on the `uplink/state` commit `state`
 /// gives on `upstream`: its active patches applied in rebuild order, in a
 /// temporary index, without touching the checkout. `None` when a patch is
@@ -601,6 +598,9 @@ pub fn rebuilt_tree_at(repo: &Path, state: &str, upstream: &str) -> Result<Optio
     outcome
 }
 
+/// Replays the queue onto upstream and publishes the company branch.
+/// `check` is where the verdict of `preflight.sh` on the result comes from;
+/// `None` publishes without one. `force`: see [`RebuildOpts::verify`].
 pub(super) fn rebuild_once(
     repo: &Path,
     check: Option<&ScriptVerdict>,
