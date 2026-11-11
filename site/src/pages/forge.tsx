@@ -12,8 +12,8 @@ const WORKFLOWS: [string, string, string, string][] = [
   [
     "Uplink import",
     "Pull request merged into main",
-    "Records the change as a queued patch, rebuilds main when an internal patch must stay on top, comments the patch id.",
-    "preflight, add, push",
+    "Records the change as a queued patch, rebuilds main when an internal patch must stay on top, comments the patch id. A failed import keeps the change on a rescue branch.",
+    "preflight, add, rescue",
   ],
   [
     "Uplink submit",

@@ -630,11 +630,12 @@ pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
 }
 
 /// Commits the tree of `base` with `files` (path, contents) written into it,
-/// on top of `base`. Uses a temporary index: the working tree, `.uplink/`
-/// and every local branch stay as they are.
+/// on top of `base`; without `base`, a root commit of only `files`. Uses a
+/// temporary index: the working tree, `.uplink/` and every local branch
+/// stay as they are.
 pub fn commit_files_on(
     repo: &Path,
-    base: &str,
+    base: Option<&str>,
     files: &[(&str, &str)],
     message: &str,
 ) -> Result<String> {
@@ -647,7 +648,10 @@ pub fn commit_files_on(
         ..GitOpts::default()
     };
     let outcome = (|| -> Result<String> {
-        git(repo, &["read-tree", base], index_opts.clone())?;
+        match base {
+            Some(base) => git(repo, &["read-tree", base], index_opts.clone())?,
+            None => git(repo, &["read-tree", "--empty"], index_opts.clone())?,
+        };
         for (path, contents) in files {
             let blob = git(
                 repo,
@@ -673,12 +677,11 @@ pub fn commit_files_on(
     })();
     let _ = fs::remove_file(&index);
     let tree = outcome?;
-    Ok(git(
-        repo,
-        &["commit-tree", &tree, "-p", base, "-m", message],
-        GitOpts::default(),
-    )?
-    .stdout)
+    let mut args = vec!["commit-tree", tree.as_str(), "-m", message];
+    if let Some(base) = base {
+        args.extend_from_slice(&["-p", base]);
+    }
+    Ok(git(repo, &args, GitOpts::default())?.stdout)
 }
 
 /// Pushes `commit` to `{branch}` on `remote` as a fast-forward. Never forced.
