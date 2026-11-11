@@ -1089,7 +1089,11 @@ fn record_maybe_push<T>(
     }
     let branch = read_queue(repo)?.config.internal_branch;
     let main_start = git_ok(repo, &["rev-parse", "--verify", "--quiet", &branch]).ok();
-    let upstream_start = git_ok(repo, &["rev-parse", "uplink/upstream"])?;
+    let upstream_start = git_ok(
+        repo,
+        &["rev-parse", "--verify", "--quiet", "uplink/upstream"],
+    )
+    .ok();
     let (value, recorded_on) = record_on_remote(repo, "origin", record)?;
     git_ok(
         repo,
@@ -1110,7 +1114,7 @@ fn record_maybe_push<T>(
         main_start.as_deref(),
         &lease,
         &recorded_on,
-        &upstream_start,
+        upstream_start.as_deref(),
         false,
     )?;
     eprint_main_push(main, &branch, &lease);

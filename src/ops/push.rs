@@ -239,7 +239,7 @@ pub fn push_rebuilt_main(
     main_start: Option<&str>,
     lease: &str,
     recorded_on: &str,
-    upstream_start: &str,
+    upstream_start: Option<&str>,
     force: bool,
 ) -> Result<MainPush> {
     let company_branch = read_queue_file(repo)?.config.internal_branch;
@@ -250,19 +250,7 @@ pub fn push_rebuilt_main(
     if main_start == Some(main.as_str()) || main == lease {
         return Ok(MainPush::Unchanged);
     }
-    // A commit counts as written by a rebuild only when its Uplink-Patch-Id
-    // names a patch uplink/state has: a message can carry the trailer too.
-    let known: HashSet<String> = queue_at(repo, recorded_on)?
-        .all_patches()
-        .map(|patch| patch.id.clone())
-        .collect();
-    let unrecorded = crate::repo::commits_with_patch_ids(
-        repo,
-        &["--first-parent", lease, "--not", UPSTREAM_REF],
-    )?
-    .into_iter()
-    .any(|(_, ids)| ids.is_empty() || ids.iter().any(|id| !known.contains(id)));
-    if unrecorded && !force && !recorded_in_history(repo, lease, recorded_on, upstream_start)? {
+    if !force && !covered_by_state(repo, lease, recorded_on, upstream_start)? {
         return Ok(MainPush::Unrecorded);
     }
     let lease_arg = format!("--force-with-lease=refs/heads/{company_branch}:{lease}");
@@ -276,6 +264,33 @@ pub fn push_rebuilt_main(
         Err(err) if is_push_lease_rejected(&err) => Ok(MainPush::Moved),
         Err(err) => Err(err),
     }
+}
+
+/// True when `uplink/state` has everything on `lease`, the remote company
+/// branch; see [`push_rebuilt_main`]. False without `uplink/upstream`, since
+/// neither check can tell then.
+fn covered_by_state(
+    repo: &Path,
+    lease: &str,
+    recorded_on: &str,
+    upstream_start: Option<&str>,
+) -> Result<bool> {
+    let Some(upstream_start) = upstream_start else {
+        return Ok(false);
+    };
+    // A commit counts as written by a rebuild only when its Uplink-Patch-Id
+    // names a patch uplink/state has: a message can carry the trailer too.
+    let known: HashSet<String> = queue_at(repo, recorded_on)?
+        .all_patches()
+        .map(|patch| patch.id.clone())
+        .collect();
+    let unrecorded = crate::repo::commits_with_patch_ids(
+        repo,
+        &["--first-parent", lease, "--not", upstream_start],
+    )?
+    .into_iter()
+    .any(|(_, ids)| ids.is_empty() || ids.iter().any(|id| !known.contains(id)));
+    Ok(!unrecorded || recorded_in_history(repo, lease, recorded_on, upstream_start)?)
 }
 
 /// How far back [`recorded_in_history`] looks in `uplink/state`.
@@ -330,7 +345,7 @@ pub fn push_operator_rebuild(
     repo: &Path,
     remote: &str,
     recorded_on: &str,
-    upstream_start: &str,
+    upstream_start: Option<&str>,
     force: bool,
 ) -> Result<MainPush> {
     push_state_branch(repo, remote, STATE_BRANCH)?;

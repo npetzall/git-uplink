@@ -10151,6 +10151,26 @@ fn transfer_push_does_not_trust_a_patch_id_it_does_not_know() {
 }
 
 #[test]
+fn rebuilt_main_is_not_pushed_when_upstream_is_unknown() {
+    let race = rebuild_race(false);
+    let lease = race.origin_main();
+    git(
+        &race.runner,
+        &["commit", "--quiet", "--allow-empty", "-m", "local"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let state = rev_of(&race.runner, "uplink/state");
+
+    let main =
+        git_uplink::push_rebuilt_main(&race.runner, "origin", None, &lease, &state, None, false)
+            .unwrap();
+
+    assert_eq!(main, git_uplink::MainPush::Unrecorded);
+    assert_eq!(race.origin_main(), lease);
+}
+
+#[test]
 fn transfer_push_never_overwrites_a_merge_that_lands_during_the_push() {
     let race = rebuild_race(false);
     let landed = land_merge(&race.company, "LANDED.md");

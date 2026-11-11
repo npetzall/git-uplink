@@ -333,7 +333,7 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
     };
     // An inline rebuild writes uplink/state only when it publishes.
     let recorded_on = rev_parse(repo, STATE_BRANCH)?;
-    let upstream_start = rev_parse(repo, UPSTREAM_REF).unwrap_or_default();
+    let upstream_start = rev_parse(repo, UPSTREAM_REF).ok();
     let replace: Vec<(String, String)> = paused
         .resolved
         .iter()
@@ -407,7 +407,7 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
             repo,
             remote,
             &recorded_on,
-            &upstream_start,
+            upstream_start.as_deref(),
             paused.force,
         )?;
         (Some(remote.to_string()), Some(main))
