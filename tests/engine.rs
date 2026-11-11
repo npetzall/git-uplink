@@ -9398,6 +9398,264 @@ fn submitted_push_replays_pr_fields_when_origin_state_moved() {
     );
 }
 
+/// Asha and Ben clone one origin. Asha imported and pushed a patch, and
+/// Ben's clone has it.
+struct ApproveRace {
+    _keep: (TempDir, TempDir, World),
+    origin: PathBuf,
+    asha: PathBuf,
+    ben: PathBuf,
+    patch: Patch,
+}
+
+fn approve_race() -> ApproveRace {
+    let world = setup_world();
+    let upstream = world.upstream.clone();
+    let origin = publish_origin(&world.company);
+    let (asha_keep, asha) = clone_company_from(&origin, &upstream);
+    let (ben_keep, ben) = clone_company_from(&origin, &upstream);
+    reset_from_origin(&asha).unwrap();
+    git(&asha, &["checkout", "-b", "feat/hash"], GitOpts::default()).unwrap();
+    write(
+        &asha,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(&asha, "use sha256");
+    let patch = add_landed_patch(
+        &asha,
+        AddPatchOpts {
+            message: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    push_to_origin(&asha);
+    reset_from_origin(&asha).unwrap();
+    reset_from_origin(&ben).unwrap();
+    ApproveRace {
+        _keep: (asha_keep, ben_keep, world),
+        origin,
+        asha,
+        ben,
+        patch,
+    }
+}
+
+fn push_to_origin(repo: &Path) {
+    push_queue(
+        repo,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+}
+
+/// Ben imports a notes patch on his clone. Not pushed.
+fn ben_records_notes(ben: &Path) {
+    git(ben, &["checkout", "-b", "feat/notes"], GitOpts::default()).unwrap();
+    write(ben, "NOTES.md", "from-ben\n");
+    commit_all(ben, "notes from ben");
+    add_landed_patch(
+        ben,
+        AddPatchOpts {
+            message: "Notes from Ben".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+fn origin_state(origin: &Path) -> String {
+    git_ok(origin, &["rev-parse", "refs/heads/uplink/state"]).unwrap()
+}
+
+#[test]
+fn approve_push_prints_what_approve_prints_and_pushes_a_fast_forward() {
+    let race = approve_race();
+    let id = race.patch.id.as_str();
+    let token = review_token(&race.asha, &race.patch).unwrap();
+    let before = origin_state(&race.origin);
+
+    let pushed = uplink_cli(&race.asha, &["approve", id, "--reviewed", &token, "--push"]);
+    assert!(pushed.status.success(), "{pushed:?}");
+    let plain = uplink_cli(&race.ben, &["approve", id, "--reviewed", &token]);
+    assert!(plain.status.success(), "{plain:?}");
+
+    // The same lines; only the commit and the time differ.
+    let shape = |out: &[u8]| -> Vec<String> {
+        String::from_utf8_lossy(out)
+            .lines()
+            .map(|line| {
+                if line.contains("Queue commit") || line.contains("| Recorded at |") {
+                    line.split('|').nth(1).unwrap_or_default().to_string()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect()
+    };
+    assert_eq!(shape(&pushed.stdout), shape(&plain.stdout));
+    assert_eq!(
+        String::from_utf8_lossy(&pushed.stderr),
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&pushed.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "{id} approved\nWrote .uplink/reports/{id}/approval.md"
+        )),
+        "{stderr}"
+    );
+
+    let after = origin_state(&race.origin);
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", &format!("{after}^")]).unwrap(),
+        before,
+        "one commit on top of origin's uplink/state, not a force-push"
+    );
+    let receipt = git_ok(
+        &race.origin,
+        &["show", &format!("{after}:.uplink/reports/{id}/approval.md")],
+    )
+    .unwrap();
+    assert_eq!(
+        receipt.trim_end(),
+        String::from_utf8_lossy(&pushed.stdout).trim_end()
+    );
+    assert_eq!(rev_of(&race.asha, "uplink/state"), after);
+    assert_eq!(
+        fs::read_to_string(race.asha.join(format!(".uplink/reports/{id}/approval.md")))
+            .unwrap()
+            .trim_end(),
+        receipt.trim_end(),
+        "the receipt is written locally too"
+    );
+    let approved = stored_patch(&race.asha, id);
+    assert_eq!(approved.status, PatchStatus::Approved);
+    assert_eq!(approved.approvals[0].sha, before);
+}
+
+#[test]
+fn approve_push_approves_again_when_origin_moves_during_the_push() {
+    let race = approve_race();
+    let id = race.patch.id.as_str();
+    let token = review_token(&race.asha, &race.patch).unwrap();
+    ben_records_notes(&race.ben);
+    // Ben's state waits beside origin's. The first push into origin moves
+    // uplink/state to it, so that push loses the race.
+    git(
+        &race.ben,
+        &["push", "--quiet", "origin", "uplink/state:refs/ben/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let ben_state = rev_of(&race.ben, "uplink/state");
+    let marker = git_dir_of(&race.origin).join("moved");
+    let hook = git_dir_of(&race.origin).join("hooks/pre-receive");
+    fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\ncat >/dev/null\nif [ ! -e '{m}' ]; then\n  touch '{m}'\n  unset GIT_QUARANTINE_PATH\n  git update-ref refs/heads/uplink/state {ben_state}\nfi\nexit 0\n",
+            m = marker.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let out = uplink_cli(&race.asha, &["approve", id, "--reviewed", &token, "--push"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(marker.exists(), "the first push lost the race");
+
+    let after = origin_state(&race.origin);
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", &format!("{after}^")]).unwrap(),
+        ben_state,
+        "approved again on top of Ben's state"
+    );
+    let queue = git_uplink::queue_at(&race.origin, &after).unwrap();
+    assert!(queue.all_patches().any(|p| p.subject() == "Notes from Ben"));
+    let approved = queue.all_patches().find(|p| p.id == id).unwrap();
+    assert_eq!(approved.approvals.len(), 1);
+    assert_eq!(approved.approvals[0].sha, ben_state);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!("`{ben_state}`")),
+        "the receipt names the state it was approved on: {out:?}"
+    );
+}
+
+#[test]
+fn approve_push_rechecks_the_reviewed_token_on_origin() {
+    let race = approve_race();
+    let id = race.patch.id.as_str();
+    let token = review_token(&race.asha, &race.patch).unwrap();
+    retitle(&race.ben, id, "Use SHA-256 everywhere");
+    push_to_origin(&race.ben);
+    let before = origin_state(&race.origin);
+
+    let out = uplink_cli(&race.asha, &["approve", id, "--reviewed", &token, "--push"]);
+
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("changed since the packet was reviewed"),
+        "{out:?}"
+    );
+    assert_eq!(origin_state(&race.origin), before);
+    assert!(
+        !race
+            .asha
+            .join(format!(".uplink/reports/{id}/approval.md"))
+            .exists()
+    );
+}
+
+#[test]
+fn approve_push_keeps_an_approval_origin_already_has() {
+    let race = approve_race();
+    let id = race.patch.id.as_str();
+    let token = review_token(&race.asha, &race.patch).unwrap();
+    let first = uplink_cli(&race.ben, &["approve", id, "--reviewed", &token, "--push"]);
+    assert!(first.status.success(), "{first:?}");
+    let before = origin_state(&race.origin);
+
+    let again = uplink_cli(&race.asha, &["approve", id, "--reviewed", &token, "--push"]);
+
+    assert!(again.status.success(), "{again:?}");
+    assert!(
+        String::from_utf8_lossy(&again.stdout).contains("is already approved"),
+        "{again:?}"
+    );
+    assert_eq!(origin_state(&race.origin), before, "no second approval");
+}
+
+#[test]
+fn approve_push_refuses_to_drop_unpushed_local_state() {
+    let race = approve_race();
+    let id = race.patch.id.as_str();
+    let token = review_token(&race.ben, &race.patch).unwrap();
+    ben_records_notes(&race.ben);
+    let local = rev_of(&race.ben, "uplink/state");
+    let before = origin_state(&race.origin);
+
+    let out = uplink_cli(&race.ben, &["approve", id, "--reviewed", &token, "--push"]);
+
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("git uplink push"),
+        "{out:?}"
+    );
+    assert_eq!(rev_of(&race.ben, "uplink/state"), local);
+    assert_eq!(origin_state(&race.origin), before);
+}
+
 #[test]
 fn gated_records_the_conflict_pr_on_the_patch() {
     let world = setup_world();

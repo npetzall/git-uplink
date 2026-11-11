@@ -8,8 +8,9 @@ use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
     AddOutcome, AdoptResume, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, Patch,
-    PatchConflict, PatchIntent, PatchStatus, QueueState, SettingsFlags, SubmitResult, SyncOpts,
-    SyncResult, TransferDirection, TransferResult, UpgradeResume, stdin_is_tty,
+    PatchConflict, PatchIntent, PatchStatus, QueueState, RemoteApproval, SettingsFlags,
+    SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult, UpgradeResume,
+    stdin_is_tty,
 };
 use git_uplink::{
     AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendResult, ApprovalReceipt, AssessPackage,
@@ -19,22 +20,23 @@ use git_uplink::{
     RestackAction, RestackOpts, RunKind, STATE_BRANCH, ScriptEcho, ScriptVerdict,
     TO_UPSTREAM_ENVIRONMENT, WaitingOutcome, accept_upstream_preflight, accept_upstream_with,
     add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps, already_approved,
-    amend_patch_with, amend_preflight, approve_patch_reviewed, assess_from_message,
-    assess_patch_file, assess_patch_for_packet, change_between, command_preflight, command_tested,
-    commit_queue, count_files, cutoff_marker, depends_on_from_message, doctor, drop_patch,
-    existing_patch_preflight, export_tested, fetch_pending_upstream, first_line,
-    format_approval_receipt, format_assess_markdown, format_contribution_packet_with_extras,
-    format_doctor_summary, format_init_summary, format_product_changes, format_status_table,
-    from_upstream_report_paths, git_ok, hooks_publish_hint, incoming_change_preflight, init,
-    load_groups_file, mark_merged, mark_rejected, mark_waiting, message_subject,
-    newly_ready_to_submit, parse_github_repo, parse_pull_request_url, patch_text,
-    public_subject_and_body, push_queue, read_queue, rebase_onto_main, rebase_plan, rebuild_inline,
-    rebuild_preflight, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin,
-    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
-    resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
-    split_subject_body, status_report, status_snapshot, store_assess_result, store_patch_extras,
-    strip_html_comments, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
-    trim_deps, upstream_pr_body, write_man_pages,
+    amend_patch_with, amend_preflight, approve_on_remote, approve_patch_reviewed,
+    assess_from_message, assess_patch_file, assess_patch_for_packet, change_between,
+    command_preflight, command_tested, commit_queue, count_files, cutoff_marker,
+    depends_on_from_message, doctor, drop_patch, existing_patch_preflight, export_tested,
+    fetch_pending_upstream, first_line, format_approval_receipt, format_assess_markdown,
+    format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
+    format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
+    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
+    mark_rejected, mark_waiting, message_subject, newly_ready_to_submit, parse_github_repo,
+    parse_pull_request_url, patch_text, public_subject_and_body, push_queue, read_queue,
+    rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, refuse_script_with_credentials,
+    report_paths, reset_from_origin, resolve_conflict_with, resolve_preflight, restack,
+    resume_rebuild, review_token, review_token_path, set_script_echo, split_subject_body,
+    status_report, status_snapshot, store_assess_result, store_patch_extras, strip_html_comments,
+    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, trim_deps,
+    upstream_pr_body, write_man_pages,
 };
 use git_uplink::{SelfEnv, self_available, self_check, self_list, self_update, self_use};
 
@@ -123,7 +125,17 @@ fn build_receipt(
     default_env: &str,
     reviewed: Option<&str>,
 ) -> Receipt {
-    let sha = state_sha(repo);
+    build_receipt_at(subject, env_var, default_env, reviewed, state_sha(repo))
+}
+
+/// [`build_receipt`] for the `uplink/state` commit `sha`.
+fn build_receipt_at(
+    subject: &str,
+    env_var: &str,
+    default_env: &str,
+    reviewed: Option<&str>,
+    sha: String,
+) -> Receipt {
     let run_url = github_run_url();
     let environment = env::var(env_var).ok();
     let actor = env::var("GITHUB_ACTOR").ok();
@@ -1528,7 +1540,11 @@ fn cmd_approve(
     id: &str,
     out: Option<PathBuf>,
     reviewed: Option<&str>,
+    push: bool,
 ) -> Result<(), Error> {
+    if push {
+        return cmd_approve_push(repo, id, out, reviewed);
+    }
     let queue = read_queue(repo)?;
     let patch = queue
         .all_patches()
@@ -1571,6 +1587,51 @@ fn cmd_approve(
     println!("{}", receipt.text);
     eprintln!("{} approved", patch.id);
     eprintln!("Wrote {}", dest.display());
+    Ok(())
+}
+
+/// `approve --push`: approves on origin's uplink/state and pushes it. Prints
+/// what `approve` without `--push` prints.
+fn cmd_approve_push(
+    repo: &Path,
+    id: &str,
+    out: Option<PathBuf>,
+    reviewed: Option<&str>,
+) -> Result<(), Error> {
+    let default_out = report_paths(id)?.2;
+    let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
+    // A receipt under .uplink/ is committed with the approval, as without
+    // --push; one elsewhere is only written here.
+    let in_state = dest
+        .to_str()
+        .filter(|path| !dest.is_absolute() && path.starts_with(".uplink/"));
+    let outcome = approve_on_remote(repo, id, "origin", reviewed, in_state, |base, token| {
+        let receipt = build_receipt_at(
+            id,
+            "UPLINK_TO_UPSTREAM_ENVIRONMENT",
+            TO_UPSTREAM_ENVIRONMENT,
+            Some(token),
+            base.to_string(),
+        );
+        (receipt.text, receipt.run_url)
+    })?;
+    match outcome {
+        RemoteApproval::Covered(approval) => {
+            let run = approval.run_url.as_deref().unwrap_or("no run recorded");
+            println!(
+                "{id} is already approved: approval {} ({}, {run}) covers it as it is now. No new approval is recorded.",
+                approval.version, approval.at
+            );
+        }
+        RemoteApproval::Recorded { patch, receipt, .. } => {
+            if in_state.is_none() {
+                write_markdown_file(repo, &dest, &receipt)?;
+            }
+            println!("{receipt}");
+            eprintln!("{} approved", patch.id);
+            eprintln!("Wrote {}", dest.display());
+        }
+    }
     Ok(())
 }
 
@@ -2228,9 +2289,12 @@ fn run() -> Result<(), Error> {
             )
         }
         Commands::Status { json } => cmd_status(&repo, json),
-        Commands::Approve { id, out, reviewed } => {
-            cmd_approve(&repo, &id, out, reviewed.as_deref())
-        }
+        Commands::Approve {
+            id,
+            out,
+            reviewed,
+            push,
+        } => cmd_approve(&repo, &id, out, reviewed.as_deref(), push),
         Commands::Submit {
             id,
             push,

@@ -663,11 +663,13 @@ mod embed_tests {
                 text.contains("jq -r '.coveredBy != null'"),
                 "{forge:?}\n{text}"
             );
-            // The approval is on origin before anything can fail after it.
-            let approve = text.find("git uplink approve \"$PATCH_ID\"").unwrap();
-            let push = text.find("git uplink push\n").unwrap();
+            // approve pushes the approval to origin before anything can fail
+            // after it.
+            let approve = text
+                .find("git uplink approve \"$PATCH_ID\" --reviewed \"$REVIEW_TOKEN\" --push)")
+                .unwrap();
             let submit = text.find("git uplink submit \"$PATCH_ID\"").unwrap();
-            assert!(approve < push && push < submit, "{forge:?}\n{text}");
+            assert!(approve < submit, "{forge:?}\n{text}");
             let action = files
                 .iter()
                 .find(|(p, _)| p == ".github/actions/uplink-assessment-hook/action.yml")
