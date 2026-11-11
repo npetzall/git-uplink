@@ -10472,6 +10472,119 @@ fn rescue_keeps_a_failed_import_and_the_queue_it_saw_on_a_branch() {
     );
 }
 
+/// The script of the rescue action, as the pack ships it.
+fn rescue_action_script() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("templates/github/.github/actions/uplink-rescue-import/action.yml");
+    let text = fs::read_to_string(path).unwrap();
+    let mut lines = text.lines().skip_while(|line| line.trim() != "run: |");
+    lines.next();
+    lines
+        .take_while(|line| line.is_empty() || line.starts_with("        "))
+        .map(|line| line.strip_prefix("        ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Runs the rescue action's script in `repo` without git-uplink on PATH, as
+/// when installing it failed. Returns the branch it wrote to GITHUB_OUTPUT.
+fn rescue_with_plain_git(repo: &Path, from: &str, head: &str, attempt: &str) -> String {
+    let temp = temp_dir();
+    let output = temp.path().join("output");
+    let script = temp.path().join("rescue.sh");
+    fs::write(&script, rescue_action_script()).unwrap();
+    let out = Command::new("bash")
+        .arg(&script)
+        .current_dir(repo)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", temp.path())
+        .env("RUNNER_TEMP", temp.path())
+        .env("GITHUB_OUTPUT", &output)
+        .env("GITHUB_STEP_SUMMARY", temp.path().join("summary"))
+        .env("GITHUB_SERVER_URL", "https://github.example")
+        .env("GITHUB_REPOSITORY", "company/product")
+        .env("GITHUB_RUN_ID", "42")
+        .env("GITHUB_RUN_ATTEMPT", attempt)
+        .env("PR_NUMBER", "7")
+        .env("PR_URL", "https://github.example/company/product/pull/7")
+        .env("TITLE", "Use SHA-256 for tokens")
+        .env("BODY", "Replace SHA-1.")
+        .env("FROM_SHA", from)
+        .env("HEAD_SHA", head)
+        .env("UPLINK_INTERNAL_TOKEN", "unused")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("keeping the change with plain git"),
+        "git-uplink must not be found: {out:?}"
+    );
+    fs::read_to_string(&output)
+        .unwrap()
+        .trim()
+        .strip_prefix("branch=")
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn rescue_action_falls_back_to_plain_git() {
+    let race = import_race(false);
+    let local_state = rev_of(&race.runner, "uplink/state");
+
+    let branch = rescue_with_plain_git(&race.runner, &race.base, &race.merged_as, "1");
+
+    assert_eq!(branch, "uplink/rescue/import-7-42-1-git");
+    let rescued = git_ok(
+        &race.origin,
+        &["rev-parse", &format!("refs/heads/{branch}")],
+    )
+    .unwrap();
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", &format!("{rescued}^")]).unwrap(),
+        local_state,
+        "on top of the queue as the run saw it"
+    );
+    let show = |file: &str| {
+        git_ok(
+            &race.origin,
+            &[
+                "show",
+                &format!("{rescued}:.uplink/rescue/import-7-42-1/{file}"),
+            ],
+        )
+        .unwrap()
+    };
+    assert!(show("message.md").starts_with("Use SHA-256 for tokens"));
+    assert!(show("note.txt").contains("/actions/runs/42"));
+    assert!(show("change.patch").contains("sha256"));
+
+    // A fresh checkout (the rescue job) has no local uplink/state: origin's.
+    git(
+        &race.runner,
+        &["checkout", "--quiet", "--detach"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &race.runner,
+        &["branch", "-D", "uplink/state"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let branch = rescue_with_plain_git(&race.runner, &race.base, &race.merged_as, "2");
+    let rescued = git_ok(
+        &race.origin,
+        &["rev-parse", &format!("refs/heads/{branch}")],
+    )
+    .unwrap();
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", &format!("{rescued}^")]).unwrap(),
+        origin_state(&race.origin)
+    );
+}
+
 fn git_succeeds_in(repo: &Path, args: &[&str]) -> bool {
     git(repo, args, GitOpts::allow_fail()).unwrap().code == 0
 }
