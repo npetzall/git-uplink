@@ -6,7 +6,8 @@
 # the optional company `.github/workflows/uplink-assessment-hook.yml` from
 # branch uplink/hooks, which reads that package, unless the assessment has
 # findings (an unmerged upstream dependency is one), an earlier run of this
-# workflow stored the hook's result and the patch is unchanged since, or an
+# workflow stored the hook's result and the patch's lines and public message
+# are unchanged since, or an
 # approval already covers the patch as it is now (the packet is then short
 # and links that approval). A failed
 # hook is noted at the top of assessment.md; it does not fail submit.
@@ -126,8 +127,8 @@ jobs:
               "$out/assessment.json" | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$fresh" = "true" ]; then
             source=$(jq -r '.storedExtras.source // "uplink/state"' "$out/assessment.json")
-            echo "Using company extras stored for the unchanged patch (${source}); not running the hook."
-            printf 'Company extras: stored for the unchanged patch (%s).\n' "$source" >> "$GITHUB_STEP_SUMMARY"
+            echo "Using company extras stored for the same lines and public message (${source}); not running the hook."
+            printf 'Company extras: stored for the same lines and public message (%s).\n' "$source" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

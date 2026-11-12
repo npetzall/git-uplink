@@ -101,7 +101,7 @@ git fetch origin uplink/state
 git show "origin/uplink/state:.uplink/reports/<id>/extras/10-company.md"
 ```
 
-Dispatch **Uplink submit** again for the same patch and the hook does not run: the assess job’s summary says the company extras are stored for the unchanged patch. If the patch changes (for example a conflict is resolved), the stored extras no longer match and the hook runs again.
+Dispatch **Uplink submit** again for the same patch and the hook does not run: the assess job’s summary says the company extras are stored for the same lines and public message. If either changes (for example a conflict is resolved, or an amend edits the message above the cutoff), the stored extras no longer match and the hook runs again.
 
 Then **Review deployments** → approve `to-upstream`. Full upstream merge and flow-back are [story 01](01-solo-fix.md).
 

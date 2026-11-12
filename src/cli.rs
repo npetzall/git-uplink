@@ -869,7 +869,8 @@ pub enum Commands {
         /// the `dependencies` check, which fails while an upstream-bound
         /// `Uplink-Depends-On` patch is not merged upstream, and its package
         /// says in `storedExtras` whether the assessment-hook result stored
-        /// with the patch is still for its content, and in `coveredBy` the
+        /// with the patch is still for its lines and public message, and in
+        /// `coveredBy` the
         /// approval that already covers it, if any. With them, the change
         /// between the two revisions is assessed as that patch.
         /// `--message[-file]` overrides the stored message, for example for a
@@ -913,7 +914,7 @@ pub enum Commands {
         /// Write the packet here instead of .uplink/reports/<id>/assessment.md.
         #[arg(long, value_name = "path")]
         out: Option<PathBuf>,
-        /// Directory of *.md files prepended to the packet. Without it, extras stored for the unchanged patch are used.
+        /// Directory of *.md files prepended to the packet. Without it, extras stored for the same lines and public message are used.
         #[arg(long = "extra-dir", value_name = "path")]
         extra_dir: Option<PathBuf>,
         /// Also store --extra-dir as the patch's extras for later packets.
