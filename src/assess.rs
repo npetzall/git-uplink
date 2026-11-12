@@ -1116,7 +1116,7 @@ pub fn format_contribution_packet_with_extras(
             &upstream_additions(repo, patch),
         )
     };
-    if extra_dir.is_none() && stored_extras_fresh(patch) {
+    if extra_dir.is_none() && stored_extras_fresh(repo, patch) {
         let stored = repo.join(extras_dir(&patch.id)?);
         if stored.is_dir() {
             return prepend_report_extras(&packet, Some(&stored));
@@ -1130,14 +1130,23 @@ pub fn extras_dir(id: &str) -> Result<String> {
     Ok(format!("{}/extras", report_paths(id)?.0))
 }
 
-/// Stored extras are reused while the patch content is unchanged. A delta
-/// review (see [`Patch::reviews_delta`]) always gets a fresh assessment.
-pub fn stored_extras_fresh(patch: &Patch) -> bool {
+/// Stored extras are reused while what leaves the company is unchanged: the
+/// patch has the [`review_token`] the hook read, so the same lines and public
+/// message. A delta review (see [`Patch::reviews_delta`]) always gets a fresh
+/// assessment.
+pub fn stored_extras_fresh(repo: &Path, patch: &Patch) -> bool {
+    stored_extras_fresh_for(patch, review_token(repo, patch).ok().as_deref())
+}
+
+/// [`stored_extras_fresh`] for the content `token` identifies.
+fn stored_extras_fresh_for(patch: &Patch, token: Option<&str>) -> bool {
     !patch.reviews_delta()
+        && token.is_some()
         && patch
             .extras
             .as_ref()
-            .is_some_and(|extras| patch.patch_id_stable.as_ref() == Some(&extras.patch_id_stable))
+            .and_then(|extras| extras.reviewed.as_deref())
+            == token
 }
 
 /// Replaces the stored extras for `patch` with the `*.md` files in `src` and
@@ -1155,6 +1164,7 @@ pub fn store_extras(
             patch.id
         )));
     };
+    let reviewed = review_token(repo, patch)?;
     let names = extra_markdown_names(src)?;
     let dest = repo.join(extras_dir(&patch.id)?);
     if dest.exists() {
@@ -1167,6 +1177,7 @@ pub fn store_extras(
     patch.extras = Some(PatchExtras {
         at: now_iso(),
         patch_id_stable: stable,
+        reviewed: Some(reviewed),
         source,
     });
     Ok(())
@@ -2004,7 +2015,21 @@ impl AssessPackage {
             },
             change_blob: hash_text(repo, change)?,
             stored_extras: patch.map(|patch| PackageStoredExtras {
-                fresh: stored_extras_fresh(patch),
+                // For what the hook reads: this report's public message and
+                // `change`, not the assessment stored with the patch.
+                fresh: stored_extras_fresh_for(
+                    patch,
+                    review_token_for(
+                        repo,
+                        &Patch {
+                            assess: Some(report.clone()),
+                            ..patch.clone()
+                        },
+                        change,
+                    )
+                    .ok()
+                    .as_deref(),
+                ),
                 source: patch
                     .extras
                     .as_ref()

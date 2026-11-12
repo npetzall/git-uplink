@@ -446,7 +446,7 @@ The PR title and body are the single commit message. Assess adds a co-author tra
 - `--internal-only`: Assess as an internal-only change: never exported, leak scan skipped.
 - `--patch <id>`: Assess a queued patch in its layer, with its stored message.
 
-  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. That assessment also has the `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream, and its package says in `storedExtras` whether the assessment-hook result stored with the patch is still for its content, and in `coveredBy` the approval that already covers it, if any. With them, the change between the two revisions is assessed as that patch. `--message[-file]` overrides the stored message, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
+  Without `--from` and `--head` the patch file in the queue is assessed as it is; nothing is applied. That assessment also has the `dependencies` check, which fails while an upstream-bound `Uplink-Depends-On` patch is not merged upstream, and its package says in `storedExtras` whether the assessment-hook result stored with the patch is still for its lines and public message, and in `coveredBy` the approval that already covers it, if any. With them, the change between the two revisions is assessed as that patch. `--message[-file]` overrides the stored message, for example for a conflict resolution or amend. The gate uses it on conflict-resolution PRs.
 - `--package <dir>`: Write the assessment package (assessment.json, assessment.md, change.patch) to this directory.
 - `--json`: Print assessment.json instead of the report.
 
@@ -462,7 +462,7 @@ Stored extras lead the packet while the patch content is unchanged (same stable 
 
 - `<id>`: Patch to report on.
 - `--out <path>`: Write the packet here instead of .uplink/reports/\<id>/assessment.md.
-- `--extra-dir <path>`: Directory of \*.md files prepended to the packet. Without it, extras stored for the unchanged patch are used.
+- `--extra-dir <path>`: Directory of \*.md files prepended to the packet. Without it, extras stored for the same lines and public message are used.
 - `--store-extras`: Also store --extra-dir as the patch's extras for later packets.
 - `--extra-source <url>`: Where the stored extras came from, such as the hook run URL.
 - `--assess-result <path>`: Store this assessment instead of assessing here: `assessment.json` of `assess --patch <id> --package`.

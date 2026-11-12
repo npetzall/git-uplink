@@ -331,12 +331,17 @@ pub struct PatchApproval {
 
 /// Company assessment-hook extras stored on `uplink/state` under
 /// `.uplink/reports/<id>/extras/`. They are reused for the packet while the
-/// patch content still matches `patch_id_stable`.
+/// patch still has the review token `reviewed`: the same lines and public
+/// message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchExtras {
     pub at: String,
     pub patch_id_stable: String,
+    /// The review token of the patch the hook read. Extras stored without
+    /// one are not reused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }

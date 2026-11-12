@@ -756,7 +756,7 @@ pub fn record_gated_pr(
 
 /// Stores company assessment-hook extras for patch `id` on `uplink/state` and
 /// marks them fresh for its current content. The packet reuses them until the
-/// patch changes.
+/// patch's lines or public message change.
 pub fn store_patch_extras(
     repo: &Path,
     id: &str,

@@ -6124,15 +6124,24 @@ fn the_package_says_whether_the_stored_hook_result_is_current() {
     assert_eq!(stored["fresh"], true);
     assert_eq!(stored["source"], run);
 
-    // The patch content changed since the hook ran.
-    let mut queue = git_uplink::read_queue(company).unwrap();
-    queue
-        .all_patches_mut()
-        .find(|p| p.id == id)
-        .unwrap()
-        .patch_id_stable = Some("0000000000000000000000000000000000000000".into());
-    write_queue(company, &queue).unwrap();
-    git_uplink::commit_queue(company, "uplink: other content").unwrap();
+    let set_message = |message: String| {
+        let mut queue = git_uplink::read_queue(company).unwrap();
+        queue
+            .all_patches_mut()
+            .find(|p| p.id == id)
+            .unwrap()
+            .commit_message = message;
+        write_queue(company, &queue).unwrap();
+        git_uplink::commit_queue(company, "uplink: other message").unwrap();
+    };
+    // Text below the cutoff does not leave the company.
+    set_message(format!(
+        "Use SHA-256 for tokens\n\n{DEFAULT_CUTOFF}\nTicket: PROJ-1"
+    ));
+    assert_eq!(stored_extras()["fresh"], true);
+
+    // The public message changed since the hook ran; the lines did not.
+    set_message("Use SHA-256 for tokens\n\nWhy it is safer.".into());
     assert_eq!(stored_extras()["fresh"], false);
 }
 
@@ -6227,7 +6236,7 @@ fn report_stores_an_assessment_only_for_the_patch_as_it_is_now() {
         stored.assess.as_ref().unwrap().at,
         package["at"].as_str().unwrap()
     );
-    assert!(stored_extras_fresh(&stored));
+    assert!(stored_extras_fresh(company, &stored));
     let mut queue = git_uplink::read_queue(company).unwrap();
     queue.all_patches_mut().find(|p| p.id == id).unwrap().extras = None;
     write_queue(company, &queue).unwrap();
@@ -9164,7 +9173,7 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
     .unwrap();
     // Import stores nothing: the hook has not seen the patch yet.
     assert!(patch.extras.is_none());
-    assert!(!stored_extras_fresh(&patch));
+    assert!(!stored_extras_fresh(company, &patch));
     let extras = temp_dir();
     write(
         extras.path(),
@@ -9180,7 +9189,11 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
         Some(&stored.patch_id_stable),
         patch.patch_id_stable.as_ref()
     );
-    assert!(stored_extras_fresh(&patch));
+    assert_eq!(
+        stored.reviewed.as_deref(),
+        Some(review_token(company, &patch).unwrap().as_str())
+    );
+    assert!(stored_extras_fresh(company, &patch));
     let dir = extras_dir(&patch.id).unwrap();
     let tracked = git_ok(
         company,
@@ -9192,11 +9205,17 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
     let packet = format_contribution_packet(company, &patch).unwrap();
     assert!(packet.starts_with("## Company"), "{packet}");
 
+    // Same lines, other public message: the hook read other text.
     let mut changed = patch.clone();
-    changed.patch_id_stable = Some("0000000000000000000000000000000000000000".into());
-    assert!(!stored_extras_fresh(&changed));
+    changed.assess.as_mut().unwrap().public_message = "Use SHA-256 for tokens\n\nWhy.".into();
+    assert!(!stored_extras_fresh(company, &changed));
     let packet = format_contribution_packet(company, &changed).unwrap();
     assert!(packet.starts_with("# Contribution packet"), "{packet}");
+
+    // Stored before extras recorded the review token.
+    let mut legacy = patch.clone();
+    legacy.extras.as_mut().unwrap().reviewed = None;
+    assert!(!stored_extras_fresh(company, &legacy));
 
     let mut amended = patch.clone();
     amended.status = PatchStatus::Queued;
@@ -9206,12 +9225,12 @@ fn stored_extras_lead_the_packet_until_the_patch_changes() {
         pr_url: None,
         submitted_at: None,
     });
-    assert!(!stored_extras_fresh(&amended));
+    assert!(!stored_extras_fresh(company, &amended));
 
     let rerun = temp_dir();
     write(rerun.path(), "20-rerun.md", "## Rerun\n");
     let refreshed = store_patch_extras(company, &patch.id, rerun.path(), None).unwrap();
-    assert!(stored_extras_fresh(&refreshed));
+    assert!(stored_extras_fresh(company, &refreshed));
     assert!(!company.join(&dir).join("10-company.md").exists());
     let packet = format_contribution_packet(company, &refreshed).unwrap();
     assert!(packet.starts_with("## Rerun"), "{packet}");
