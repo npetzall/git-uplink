@@ -10335,6 +10335,9 @@ fn rebuild_push_force_never_overwrites_a_merge_that_lands_during_the_push() {
     )
     .unwrap();
     move_ref_on_first_push(&race.origin, "refs/heads/main", &landed);
+    // A new message, so the rebuild writes a main origin does not have,
+    // whatever second it runs in.
+    retitle(&race.runner, &race.notes.id, "Internal notes, renamed");
 
     let out = uplink_cli(&race.runner, &["rebuild", "--push", "--force"]);
 
