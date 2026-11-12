@@ -23,9 +23,9 @@ demo_done() {
   echo "explore:    $HERE/enter.sh"
 }
 
-# Replaces this process with a shell in the demo's company clone, with the
-# demo's git-uplink on PATH, creating the demo first when it is missing.
-demo_enter() {
+# Creates the demo when it is missing, then moves into its company clone with
+# the demo's git-uplink first on PATH.
+demo_cd() {
   S="$HERE/scratch"
   if [ ! -d "$S/company" ] || [ ! -e "$S/bin/git-uplink" ]; then
     "$HERE/make-demo.sh"
@@ -33,7 +33,27 @@ demo_enter() {
   cd "$S/company" || exit 1
   PATH="$S/bin:$PATH"
   export PATH
-  echo "Entered the $(basename "$HERE") demo in $S/company"
-  echo "git uplink runs $S/bin/git-uplink. Type exit to leave."
-  exec "${SHELL:-/bin/sh}"
+}
+
+# Replaces this process with `git-uplink "$@"` in the demo's company clone.
+demo_run() {
+  demo_cd
+  exec git-uplink "$@"
+}
+
+# Replaces this process with a shell in the demo's company clone. The shell
+# reads no startup files: they may put another git-uplink ahead of the demo's
+# on PATH.
+demo_enter() {
+  demo_cd
+  NAME=$(basename "$HERE")
+  echo "Entered the $NAME demo in $S/company"
+  echo "git uplink runs $(command -v git-uplink)."
+  echo "Your shell startup files are skipped. Type exit to leave."
+  unset ENV
+  case "$(basename "${SHELL:-/bin/sh}")" in
+    zsh) PS1="uplink-demo:$NAME %~ %# " && export PS1 && exec zsh -f ;;
+    bash) PS1="uplink-demo:$NAME \\w \\$ " && export PS1 && exec bash --norc --noprofile ;;
+    *) PS1="uplink-demo:$NAME \$ " && export PS1 && exec /bin/sh ;;
+  esac
 }

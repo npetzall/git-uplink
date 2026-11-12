@@ -4,8 +4,6 @@
 # ./run-demo.sh --no-preflight-deps
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-if [ ! -d "$HERE/scratch/company" ] || [ ! -e "$HERE/scratch/bin/git-uplink" ]; then
-  "$HERE/make-demo.sh"
-fi
-cd "$HERE/scratch/company"
-exec "$HERE/scratch/bin/git-uplink" adopt --branch main-fork "$@"
+# shellcheck source=../lib.sh disable=SC1091
+. "$HERE/../lib.sh"
+demo_run adopt --branch main-fork "$@"
