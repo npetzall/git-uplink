@@ -868,6 +868,24 @@ pub fn push_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> 
     Ok(())
 }
 
+/// Pushes local `branch` with a lease: only while `remote` still has it at
+/// `expected`, or does not have it when `expected` is `None`. A caller that
+/// checked local descends from `expected` gets a fast-forward or nothing.
+pub fn push_branch_leased(
+    repo: &Path,
+    remote: &str,
+    branch: &str,
+    expected: Option<&str>,
+) -> Result<()> {
+    let lease = format!(
+        "--force-with-lease=refs/heads/{branch}:{}",
+        expected.unwrap_or_default()
+    );
+    let dest = format!("refs/heads/{branch}:refs/heads/{branch}");
+    git(repo, &["push", &lease, remote, &dest], GitOpts::default())?;
+    Ok(())
+}
+
 pub fn show_at(repo: &Path, sha: &str, path: &str) -> Result<String> {
     git_ok(
         repo,

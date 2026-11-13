@@ -18,7 +18,7 @@ The forge pack's `.github/actions/uplink-toolchain-hook` on `main` checks out `u
 
 ## How it is wired
 
-- `git uplink init` creates `uplink/hooks` locally with this file, a stub hook that only prints it, `preflight.sh`, and `uplink.toml` (the CLI's settings). `git uplink push` publishes it with `uplink/state`. `git uplink init --upgrade` adds files a newer pack brings, without changing the ones you have. `git uplink doctor` reports when it is missing, lacks the hook, or is not pushed.
+- `git uplink init` creates `uplink/hooks` locally with this file, a stub hook that only prints it, `preflight.sh`, and `uplink.toml` (the CLI's settings). `git uplink push` publishes it with `uplink/state`. `git uplink init --upgrade` adds files a newer pack brings, without changing the ones you have, and pushes them when answered Yes. `git uplink doctor` reports when it is missing, lacks the hook, or is not pushed.
 - Your hook is `.github/actions/uplink-toolchain-hook/action.yml` on `uplink/hooks`. Edit it there.
 
 ## Contract

@@ -1,16 +1,17 @@
 use std::env;
 use std::fs;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::FromArgMatches;
 use git_uplink::cli::{self, Cli, Commands};
 use git_uplink::{
-    AddOutcome, AdoptResume, ConflictCause, HOOKS_BRANCH, HooksPushAction, InitResult, MainPush,
-    Patch, PatchConflict, PatchIntent, PatchStatus, QueueState, RemoteApproval, RescueOpts,
-    SettingsFlags, SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult,
-    UpgradeResume, record_on_remote_if, rescue_import, stdin_is_tty,
+    AddOutcome, AdoptResume, ConflictCause, HOOKS_BRANCH, HooksPushAction, MainPush, Patch,
+    PatchConflict, PatchIntent, PatchStatus, QueueState, RemoteApproval, RescueOpts, SettingsFlags,
+    SubmitResult, SyncOpts, SyncResult, TransferDirection, TransferResult, UPGRADE_PREVIEW,
+    UpgradePublish, UpgradeResume, format_upgrade_changes, record_on_remote_if, rescue_import,
+    stdin_is_tty,
 };
 use git_uplink::{
     AddPatchOpts, AdoptBranchOpts, AdoptBranchResult, AmendResult, ApprovalReceipt, AssessPackage,
@@ -691,40 +692,83 @@ fn submit_artifact(
     Ok(())
 }
 
-/// What an `init --upgrade` that refreshed the tooling did, and how to
-/// publish it. `git uplink push` covers uplink/hooks too.
-fn upgrade_summary(result: &InitResult) -> String {
-    let branch = &result.queue.config.internal_branch;
-    let mut out = String::from("Tooling: updated");
-    if let Some(changes) = &result.changes {
-        if !changes.tooling.is_empty() {
-            out.push_str(&format!(", {} changed", count_files(changes.tooling.len())));
+/// What `init --upgrade` published, or how to publish it later.
+fn upgrade_publish_summary(publish: &UpgradePublish, branch: &str) -> String {
+    match publish {
+        UpgradePublish::Pushed { hooks, main } => {
+            let mut out = String::from("Pushed: uplink/state");
+            match hooks {
+                HooksPushAction::Pushed => out.push_str(", uplink/hooks"),
+                HooksPushAction::Absent | HooksPushAction::UpToDate => {}
+                HooksPushAction::Behind => {
+                    out.push_str("\nuplink/hooks: not pushed, origin's is ahead of it")
+                }
+                HooksPushAction::Diverged => {
+                    out.push_str("\nuplink/hooks: not pushed, it diverged from origin's")
+                }
+                HooksPushAction::Rejected(err) => out.push_str(&format!(
+                    "\nuplink/hooks: push refused: {}",
+                    err.lines().next().unwrap_or_default()
+                )),
+            }
+            match main {
+                None => {}
+                Some(MainPush::Pushed) => out.push_str(&format!(", company {branch}")),
+                Some(MainPush::Unchanged) => {
+                    out.push_str(&format!("\nCompany {branch}: origin already has it"))
+                }
+                Some(MainPush::Moved) => out.push_str(&format!(
+                    "\nCompany {branch}: not pushed, origin's moved meanwhile. The import of \
+what moved it rebuilds it, or run: git uplink rebuild --push"
+                )),
+                Some(other) => out.push_str(&format!(
+                    "\nCompany {branch}: not pushed ({}). Run: git uplink rebuild --push",
+                    serde_json::to_value(other)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_default()
+                )),
+            }
+            out
         }
-        out.push('\n');
-        out.push_str(&format_product_changes(changes, branch, true));
+        UpgradePublish::Kept { preview } => {
+            let mut out = String::from(
+                "Nothing was pushed. Local uplink/state and uplink/hooks hold what the upgrade changed.",
+            );
+            if let Some(preview) = preview {
+                out.push_str(&format!(
+                    "\nPreview: {preview} (company {branch} with the upgrade)"
+                ));
+            }
+            out.push_str(
+                "\nPublish: git uplink push\n         git uplink rebuild --push\n\
+Discard: git uplink reset",
+            );
+            out
+        }
+        UpgradePublish::PreviewFailed { error } => format!(
+            "The preview could not be built:\n  {}\n\
+Nothing was pushed. Local uplink/state holds the upgrade.\n\
+Fix the queue, then: git uplink rebuild --branch {UPGRADE_PREVIEW}\n\
+Publish: git uplink push\n         git uplink rebuild --push\n\
+Discard: git uplink reset",
+            error.lines().next().unwrap_or_default()
+        ),
+        UpgradePublish::Aborted { main, commits } => {
+            let mut out = format!(
+                "Aborted: origin's company {branch} ({main}) has {} commit(s) uplink/state does not have:",
+                commits.len()
+            );
+            for commit in commits {
+                out.push_str(&format!("\n  {} {}", commit.short, commit.subject));
+            }
+            out.push_str(
+                "\nNothing was pushed. Local uplink/state and uplink/hooks are origin's again.\n\
+Once they are imported, run the upgrade again; or run it in a terminal to adopt or overwrite them.",
+            );
+            out
+        }
     }
-    for (id, title) in &result.dropped {
-        out.push_str(&format!(
-            "\nDropped: {id} \"{title}\" (still in .uplink/patches/{id}.patch)"
-        ));
-    }
-    for (id, title) in &result.amended {
-        out.push_str(&format!("\nAmended: {id} \"{title}\""));
-    }
-    for patch in &result.overrides {
-        out.push_str(&format!(
-            "\nOverrides tooling: {} \"{}\" ({})",
-            patch.id,
-            patch.title,
-            patch.files.join(", ")
-        ));
-    }
-    out.push_str(&format!(
-        "\nCompany {branch} was rebuilt locally. Nothing was pushed.\n\
-Publish: git uplink push\n         \
-git uplink rebuild --push"
-    ));
-    out
 }
 
 struct InitArgs {
@@ -736,6 +780,8 @@ struct InitArgs {
     internal_branch: Option<String>,
     forge: Option<Forge>,
     upgrade: bool,
+    allow_reset: bool,
+    push_if_unchanged: bool,
     resume: Option<UpgradeResume>,
     adopt_groups: Option<Option<PathBuf>>,
     apply: bool,
@@ -793,6 +839,11 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
         internal_branch: args.internal_branch,
         forge: args.forge,
         upgrade: args.upgrade,
+        allow_reset: args.allow_reset,
+        push_if_unchanged: args.push_if_unchanged,
+        // The window draws on stdout and reads keys from stdin.
+        ask: (args.upgrade && stdin_is_tty() && std::io::stdout().is_terminal())
+            .then(git_uplink::terminal_upgrade_asker),
         resume: args.resume,
         adopt_groups,
         adopt_apply: args.apply,
@@ -826,16 +877,21 @@ fn cmd_init(repo: &Path, args: InitArgs) -> Result<(), Error> {
     } else if !hydrate {
         println!("{}", format_init_summary(&result.report));
         if args.upgrade && result.tooling_changed {
-            println!("{}", upgrade_summary(&result));
-        } else {
-            if args.resume == Some(UpgradeResume::Abort) {
-                println!("upgrade aborted; nothing was changed");
-            } else if args.upgrade {
-                println!("Tooling: already up-to-date");
+            println!("{}", format_upgrade_changes(&result));
+        } else if args.resume == Some(UpgradeResume::Abort) {
+            println!("upgrade aborted; nothing was changed");
+        } else if args.upgrade {
+            println!("Tooling: already up-to-date");
+        }
+        let branch = &result.queue.config.internal_branch;
+        match &result.publish {
+            Some(publish) => println!("{}", upgrade_publish_summary(publish, branch)),
+            None if !args.upgrade || !result.tooling_changed => {
+                if let Some(hint) = hooks_publish_hint(repo) {
+                    println!("{hint}");
+                }
             }
-            if let Some(hint) = hooks_publish_hint(repo) {
-                println!("{hint}");
-            }
+            None => {}
         }
     }
     if !result.report.ok {
@@ -2332,6 +2388,8 @@ fn run() -> Result<(), Error> {
             internal_branch,
             forge,
             upgrade,
+            allow_reset,
+            push_if_unchanged,
             resume,
             drop,
             abort,
@@ -2353,6 +2411,8 @@ fn run() -> Result<(), Error> {
                 internal_branch,
                 forge: forge.map(Forge::from),
                 upgrade,
+                allow_reset,
+                push_if_unchanged,
                 resume: match (resume, drop, abort) {
                     (true, _, _) => Some(UpgradeResume::Continue),
                     (_, true, _) => Some(UpgradeResume::Drop),

@@ -28,7 +28,7 @@ runs:
         rm -rf .uplink-hooks
         if ! probe=$(gh api "repos/${GH_REPO}/contents/${hook}?ref=uplink%2Fhooks" --jq .path 2>&1); then
           if grep -q "HTTP 404" <<<"$probe"; then
-            echo "::notice title=Uplink toolchain hook skipped::No ${hook} on uplink/hooks. Run git uplink init --upgrade, then git uplink push."
+            echo "::notice title=Uplink toolchain hook skipped::No ${hook} on uplink/hooks. Run git uplink init --upgrade and answer Yes to publish it."
             echo "status=skipped" >> "$GITHUB_OUTPUT"
             exit 0
           fi

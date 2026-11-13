@@ -98,14 +98,26 @@ git uplink rebuild --push`}</Code>
         <p>
           The pack and the binary are one version. Install the new release with{" "}
           <code>git uplink self-update</code> (see{" "}
-          <Link to="/install">Install</Link>), then, from a clean clone:
+          <Link to="/install">Install</Link>), then, in a clone of the company
+          repository:
         </p>
-        <Code>{`git uplink init --upgrade
-git uplink push
-git uplink rebuild --push`}</Code>
+        <Code>{`git uplink init --upgrade`}</Code>
         <p>
-          The upgrade lists any product file it would change (it never should),
-          replays patches that touch pack files, and stops the way{" "}
+          The upgrade builds <code>uplink/preview/upgrade</code> instead of
+          rebuilding <code>main</code>, lists any product file it would change
+          against origin's <code>main</code> (it never should), and asks{" "}
+          <em>Update remote?</em> Yes rebuilds <code>main</code> and pushes{" "}
+          <code>uplink/state</code>, <code>uplink/hooks</code> and{" "}
+          <code>main</code>, each with a lease. No pushes nothing and keeps the
+          preview. When the clone has local work, it offers a reset to origin
+          first, which deletes that work and untracked files. When origin's{" "}
+          <code>main</code> has commits <code>uplink/state</code> does not
+          record, it asks to adopt them, overwrite them or abort. Without a
+          terminal, <code>--allow-reset</code> and{" "}
+          <code>--push-if-unchanged</code> answer for it.
+        </p>
+        <p>
+          It replays patches that touch pack files, and stops the way{" "}
           <code>git rebase</code> does when one no longer applies:{" "}
           <code>--continue</code>, <code>--drop</code> or <code>--abort</code>.
           It also adds settings that <code>uplink.toml</code> on{" "}

@@ -42,7 +42,7 @@ When `init` creates `uplink/hooks` it asks for each setting in a terminal. A fla
 
 With a forge recorded, a missing or unparseable `uplink.toml` fails upstream-bound `assess` instead of scanning for nothing. So does one that still has `redact_keywords` or `internal_email_domains`, which an older release wrote: move their entries into `banned_words` and delete them.
 
-Moving from repository variables: run `git uplink init --upgrade`, answer the preflight question with `UPLINK_PREFLIGHT` and the banned words question with the values of both `UPLINK_REDACT_KEYWORDS` and `UPLINK_INTERNAL_DOMAINS`, run `git uplink push`, then delete the three variables. They are no longer read.",
+Moving from repository variables: run `git uplink init --upgrade`, answer the preflight question with `UPLINK_PREFLIGHT` and the banned words question with the values of both `UPLINK_REDACT_KEYWORDS` and `UPLINK_INTERNAL_DOMAINS`, answer Yes when it asks to update the remote, then delete the three variables. They are no longer read.",
     ),
     (
         "Preflight script preflight.sh",
@@ -299,16 +299,29 @@ pub enum Commands {
         /// and are read from queues that stored them.
         #[arg(long, value_enum, value_name = "forge")]
         forge: Option<ForgeArg>,
-        /// Refresh the tooling patch in its slot; re-run after upgrading the binary.
+        /// Refresh the tooling patch in its slot and publish it; re-run after upgrading the binary.
         ///
         /// Upgrade the binary first with `git uplink self-update`.
         ///
         /// Also creates `uplink/hooks` for queues initialized before it
         /// existed, and adds files a newer pack brings as one commit on top.
         ///
-        /// Company main is rebuilt locally and compared with origin's:
-        /// files of the pack are reported as tooling, any other file that
-        /// differs as product code, which an upgrade should not change.
+        /// Company main is not rebuilt locally. The upgrade builds
+        /// `uplink/preview/upgrade` and compares it with origin's: files of
+        /// the pack are reported as tooling, any other file that differs as
+        /// product code, which an upgrade should not change. Then it asks
+        /// `Update remote?` (or, when product code changes, `Do you want to
+        /// update remote with this change?`). Yes rebuilds company main and
+        /// pushes `uplink/state`, `uplink/hooks` and company main, each with
+        /// a lease: company main only while origin's is still the commit the
+        /// preview was compared with. No pushes nothing: local `uplink/state`
+        /// holds the upgrade, and the preview stays. When origin's
+        /// `uplink/state` moved meanwhile, the upgrade runs again on it.
+        ///
+        /// When origin's company main has commits `uplink/state` does not
+        /// record (a merge not imported yet), the upgrade asks first: Adopt
+        /// queues them as patches, Overwrite publishes company main without
+        /// them, Abort puts the local refs back to origin's.
         ///
         /// A queued patch that changes pack files is replayed on the new
         /// pack before anything is written. One the new pack makes empty is
@@ -317,14 +330,26 @@ pub enum Commands {
         /// pack with the failed apply, and `--continue`, `--drop` or
         /// `--abort` takes it from there.
         ///
-        /// Before anything moves, the upgrade refuses to start while work
-        /// unrelated to it is pending: changes or untracked files in the
-        /// checkout, `.uplink/` edits not on `uplink/state`, a local
-        /// `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of
-        /// origin's, or company main commits origin's main does not have.
-        /// Push that work, or discard it with `git uplink reset`.
+        /// Before anything moves, the upgrade checks for work unrelated to
+        /// it: changes or untracked files in the checkout, `.uplink/` edits
+        /// not on `uplink/state`, a local `uplink/state`, `uplink/upstream`
+        /// or `uplink/hooks` ahead of origin's, or company main commits
+        /// origin's main does not have. It asks whether to reset to origin,
+        /// losing that work, and goes on; No stops it. Without a terminal it
+        /// refuses unless `--allow-reset` is passed.
         #[arg(long)]
         upgrade: bool,
+        /// With `--upgrade`: when local work is pending, reset to origin
+        /// without asking, as `git uplink reset` does, and delete untracked
+        /// files in the checkout (`git clean -fd`). That work is lost.
+        #[arg(long = "allow-reset", requires = "upgrade")]
+        allow_reset: bool,
+        /// With `--upgrade`: publish without asking when the preview
+        /// changes tooling only and origin's company main has no commits
+        /// `uplink/state` lacks. Otherwise nothing is pushed, unless the
+        /// question is answered Yes in a terminal.
+        #[arg(long = "push-if-unchanged", requires = "upgrade")]
+        push_if_unchanged: bool,
         /// Continue a paused upgrade with the conflict resolved.
         ///
         /// Resolve the files, `git add` them, and what they hold becomes

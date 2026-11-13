@@ -13,7 +13,7 @@ use crate::git::{GitOpts, git, git_ok};
 use crate::progress::StepOutcome;
 use crate::repo::{
     COMPANY_REMOTE, fetch_state_tracking, has_ref, is_ancestor, path_exists_at, point_branch_at,
-    push_state_branch,
+    push_branch_leased,
 };
 use crate::settings::{SETTINGS_PATH, SettingKey, Settings, SettingsFile, settings_text_at};
 use crate::tooling::hooks_files;
@@ -313,15 +313,16 @@ pub enum HooksPushAction {
     Rejected(String),
 }
 
-/// Publish a local `uplink/hooks` that is new or ahead of `remote`. Never
-/// force-pushes and never moves the local branch. A refused push is reported,
+/// Publish a local `uplink/hooks` that is new or ahead of `remote`, with a
+/// lease on the branch as fetched. Never moves the local branch. A refused push is reported,
 /// not raised, so it cannot fail the `uplink/state` push that ran before it.
 pub fn push_hooks_branch(repo: &Path, remote: &str) -> Result<HooksPushAction> {
     if !has_ref(repo, HOOKS_REF)? {
         return Ok(HooksPushAction::Absent);
     }
     let local = git_ok(repo, &["rev-parse", HOOKS_REF])?;
-    let action = match fetch_state_tracking(repo, remote, HOOKS_BRANCH)? {
+    let remote_sha = fetch_state_tracking(repo, remote, HOOKS_BRANCH)?;
+    let action = match remote_sha.clone() {
         Some(remote_sha) if remote_sha == local => return Ok(HooksPushAction::UpToDate),
         None => HooksPushAction::Pushed,
         Some(remote_sha) if is_ancestor(repo, &remote_sha, &local)? => HooksPushAction::Pushed,
@@ -330,7 +331,7 @@ pub fn push_hooks_branch(repo: &Path, remote: &str) -> Result<HooksPushAction> {
         }
         Some(_) => return Ok(HooksPushAction::Diverged),
     };
-    match push_state_branch(repo, remote, HOOKS_BRANCH) {
+    match push_branch_leased(repo, remote, HOOKS_BRANCH, remote_sha.as_deref()) {
         Ok(()) => Ok(action),
         Err(err) => Ok(HooksPushAction::Rejected(err.to_string())),
     }

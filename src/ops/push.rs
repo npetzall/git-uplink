@@ -297,6 +297,41 @@ fn covered_by_state(
     Ok(!unrecorded || recorded_in_history(repo, lease, recorded_on, upstream_start)?)
 }
 
+/// The first-parent commits on `main` above `upstream_start` that
+/// `uplink/state` lacks, oldest first: none when
+/// [`covered_by_state`] holds. These are what a push of a rebuild of
+/// `recorded_on` would drop.
+pub(super) fn unrecorded_main_commits(
+    repo: &Path,
+    main: &str,
+    recorded_on: &str,
+    upstream_start: &str,
+) -> Result<Vec<UnrecordedCommit>> {
+    if covered_by_state(repo, main, recorded_on, Some(upstream_start))? {
+        return Ok(Vec::new());
+    }
+    let known: HashSet<String> = queue_at(repo, recorded_on)?
+        .all_patches()
+        .map(|patch| patch.id.clone())
+        .collect();
+    let mut commits = Vec::new();
+    for (sha, ids) in crate::repo::commits_with_patch_ids(
+        repo,
+        &["--first-parent", "--reverse", main, "--not", upstream_start],
+    )? {
+        if ids.is_empty() || ids.iter().any(|id| !known.contains(id)) {
+            let line = git_ok(repo, &["log", "-1", "--format=%h %s", &sha])?;
+            let (short, subject) = line.split_once(' ').unwrap_or((line.as_str(), ""));
+            commits.push(UnrecordedCommit {
+                short: short.to_string(),
+                subject: subject.to_string(),
+                sha,
+            });
+        }
+    }
+    Ok(commits)
+}
+
 /// How far back [`recorded_in_history`] looks in `uplink/state`.
 const RECORDED_HISTORY_DEPTH: &str = "20";
 

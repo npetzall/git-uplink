@@ -1091,11 +1091,11 @@ git push origin uplink/state uplink/upstream uplink/hooks`}</Command>
         <code>UPLINK_PREFLIGHT</code>, <code>UPLINK_REDACT_KEYWORDS</code>, and{" "}
         <code>UPLINK_INTERNAL_DOMAINS</code>? Run{" "}
         <code>git uplink init --upgrade</code>, answer with their values (both
-        lists go into the banned words), run <code>git uplink push</code>, then
-        delete the three variables. An <code>uplink.toml</code> that still has{" "}
-        <code>redact_keywords</code> or <code>internal_email_domains</code>{" "}
-        fails assess: move their entries into <code>banned_words</code> and
-        delete them.
+        lists go into the banned words), answer Yes when it asks to update the
+        remote, then delete the three variables. An <code>uplink.toml</code>{" "}
+        that still has <code>redact_keywords</code> or{" "}
+        <code>internal_email_domains</code> fails assess: move their entries
+        into <code>banned_words</code> and delete them.
       </p>
       <details className="rounded-lg border border-border px-4 py-2">
         <summary className="cursor-pointer text-sm text-foreground">

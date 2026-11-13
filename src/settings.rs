@@ -269,7 +269,7 @@ pub fn load_settings(repo: &Path, forge: Option<Forge>) -> Settings {
             problem: forge.map(|_| {
                 format!(
                     "{SETTINGS_PATH} is missing on uplink/hooks; run git uplink init --upgrade \
-to create it, then git uplink push"
+to create it and answer Yes to publish it"
                 )
             }),
             ..Settings::default()

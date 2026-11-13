@@ -190,9 +190,9 @@ function HooksView({ hooks }: { hooks: (typeof FORGES)[number]["hooks"] }) {
             <code>git uplink init</code> creates the branch locally and asks for
             the settings. <code>git uplink push</code> publishes it.{" "}
             <code>git uplink init --upgrade</code> adds files a newer release
-            brings and never changes one that is there.{" "}
-            <code>git uplink doctor</code> reports when it is missing or not
-            pushed.
+            brings, never changes one that is there, and publishes it when
+            answered Yes. <code>git uplink doctor</code> reports when it is
+            missing or not pushed.
           </li>
           <li>
             Change a file by editing it on <code>uplink/hooks</code>, through a

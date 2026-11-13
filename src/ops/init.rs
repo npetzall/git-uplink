@@ -12,6 +12,15 @@ pub struct InitOpts {
     pub upgrade: bool,
     /// With `upgrade`: what to do with the upgrade that paused on a patch.
     pub resume: Option<UpgradeResume>,
+    /// With `upgrade`: reset to origin, and clean the checkout, when local
+    /// work is pending, without asking.
+    pub allow_reset: bool,
+    /// With `upgrade`: publish without asking when the preview changes
+    /// tooling only and origin's main has nothing `uplink/state` lacks.
+    pub push_if_unchanged: bool,
+    /// With `upgrade`: answers the upgrade's questions. `None` answers them
+    /// No, and Abort for commits on origin's main that state lacks.
+    pub ask: Option<UpgradeAsker>,
     /// Groups from a groups file, shown in the terminal UI, or adopted as
     /// they are with `adopt_apply`.
     pub adopt_groups: Option<Vec<AdoptGroup>>,
@@ -37,28 +46,57 @@ pub struct InitOpts {
     pub ask_settings: bool,
 }
 
-/// Refuses an upgrade that would sweep unrelated work into its commits or
-/// throw it away: the upgrade resets `uplink/state`, `uplink/upstream` and
+/// What would stop an upgrade: work it would sweep into its commits or
+/// throw away. The upgrade resets `uplink/state`, `uplink/upstream` and
 /// `.uplink/` to origin's, commits all of `.uplink/`, and rebuilds company
 /// main. A ref origin does not have is not checked; `uplink/hooks` missing on
 /// origin is what an upgrade creates.
-fn upgrade_preflight(repo: &Path) -> Result<()> {
-    let mut problems = Vec::new();
-    let mut reset_fixes = false;
+#[derive(Debug, Default)]
+pub(super) struct PendingWork {
+    /// What `git uplink reset` and `git clean` would throw away.
+    pub problems: Vec<String>,
+    /// What a reset does not fix.
+    pub blocker: Option<String>,
+}
+
+impl PendingWork {
+    pub fn is_empty(&self) -> bool {
+        self.problems.is_empty() && self.blocker.is_none()
+    }
+
+    /// The refusal, naming what fixes it.
+    pub fn refusal(&self) -> Error {
+        let mut all = self.problems.clone();
+        all.extend(self.blocker.clone());
+        let mut message = format!(
+            "refusing to upgrade: work unrelated to the upgrade is pending.\n\n{}",
+            all.join("\n\n")
+        );
+        if !self.problems.is_empty() {
+            message.push_str(
+                "\n\nPublish local work with `git uplink push` (and push company main), \
+or discard it with `git uplink reset` and `git clean -fd`: answer Yes when the upgrade \
+offers that in a terminal, or pass --allow-reset.",
+            );
+        }
+        Error::msg(message)
+    }
+}
+
+pub(super) fn upgrade_preflight(repo: &Path) -> Result<PendingWork> {
+    let mut pending = PendingWork::default();
 
     let dirty = crate::gate::dirty_paths(repo)?;
     if !dirty.is_empty() {
-        problems.push(format!(
-            "The checkout has changes or untracked files; commit them or run \
-`git stash --include-untracked`:\n{}",
+        pending.problems.push(format!(
+            "The checkout has changes or untracked files:\n{}",
             indent_lines(&dirty)
         ));
     }
     if has_ref(repo, STATE_BRANCH)? {
         let uplink = uplink_uncommitted_paths(repo, STATE_BRANCH)?;
         if !uplink.is_empty() {
-            reset_fixes = true;
-            problems.push(format!(
+            pending.problems.push(format!(
                 ".uplink/ differs from {STATE_BRANCH}:\n{}",
                 indent_lines(&uplink)
             ));
@@ -68,34 +106,18 @@ fn upgrade_preflight(repo: &Path) -> Result<()> {
     // A missing origin, or a branch it lacks, fails the fetch: nothing to compare.
     for branch in [STATE_BRANCH, UPSTREAM_REF, HOOKS_BRANCH] {
         if let Some(problem) = ahead_of_origin(repo, branch)? {
-            reset_fixes = true;
-            problems.push(problem);
+            pending.problems.push(problem);
         }
     }
+    if let Some(problem) = main_ahead_of_origin(repo)? {
+        pending.problems.push(problem);
+    }
     if crate::hooks::hooks_checked_out(repo) {
-        problems.push(format!(
+        pending.blocker = Some(format!(
             "{HOOKS_BRANCH} is checked out; switch to another branch."
         ));
     }
-    if let Some(problem) = main_ahead_of_origin(repo)? {
-        reset_fixes = true;
-        problems.push(problem);
-    }
-
-    if problems.is_empty() {
-        return Ok(());
-    }
-    let mut message = format!(
-        "refusing to upgrade: work unrelated to the upgrade is pending.\n\n{}",
-        problems.join("\n\n")
-    );
-    if reset_fixes {
-        message.push_str(
-            "\n\nPublish local work with `git uplink push` (and push company main), \
-or discard it with `git uplink reset`, which also discards tracked changes in the checkout.",
-        );
-    }
-    Err(Error::msg(message))
+    Ok(pending)
 }
 
 fn indent_lines(lines: &[String]) -> String {
@@ -180,8 +202,8 @@ pub struct InitResult {
     pub queue: QueueState,
     pub tooling_changed: bool,
     pub report: InitReport,
-    /// What the rebuild of an `--upgrade` that changed the tooling changes
-    /// on company main.
+    /// What the preview of an `--upgrade` that changed the tooling changes
+    /// against origin's company main.
     pub changes: Option<MainChanges>,
     /// Patches `--upgrade` dropped, id and title: the new pack holds what
     /// they change, or they no longer apply on it and the operator chose to.
@@ -193,6 +215,9 @@ pub struct InitResult {
     pub overrides: Vec<ToolingOverride>,
     /// The preview built after adopting company main's history.
     pub preview: Option<RunPreview>,
+    /// What `--upgrade` published, or why it did not. `None` when there was
+    /// nothing to publish.
+    pub publish: Option<UpgradePublish>,
 }
 
 impl std::ops::Deref for InitResult {
@@ -213,6 +238,7 @@ pub(super) fn settled(queue: QueueState, progress: &StepProgress) -> InitResult 
         amended: Vec::new(),
         overrides: Vec::new(),
         preview: None,
+        publish: None,
     }
 }
 
@@ -626,27 +652,45 @@ pub(super) fn init_upgrade(
     opts: &InitOpts,
     progress: &mut StepProgress,
 ) -> Result<InitResult> {
-    if opts.resume.is_some() {
+    let mut upgraded = if opts.resume.is_some() {
         // The upgrade that paused did the steps before the tooling.
-        return upgrade_tooling(repo, opts.resume, progress);
-    }
-    if let Some(paused) = read_paused(repo)? {
-        return Err(Error::msg(format!(
-            "an upgrade is paused on {}. Continue it, drop the patch, or abort:\n  \
+        let result = upgrade_tooling(repo, opts.resume, progress)?;
+        if opts.resume == Some(UpgradeResume::Abort) {
+            return Ok(result);
+        }
+        Some(result)
+    } else {
+        if let Some(paused) = read_paused(repo)? {
+            return Err(Error::msg(format!(
+                "an upgrade is paused on {}. Continue it, drop the patch, or abort:\n  \
 git uplink init --upgrade --continue\n  \
 git uplink init --upgrade --drop\n  \
 git uplink init --upgrade --abort",
-            paused.patch_id
-        )));
+                paused.patch_id
+            )));
+        }
+        super::upgrade::preflight_step(repo, opts, progress)?;
+        None
+    };
+    for _ in 0..super::upgrade::UPGRADE_ATTEMPTS {
+        let result = match upgraded.take() {
+            Some(result) => result,
+            None => upgrade_once(repo, opts, progress)?,
+        };
+        match super::upgrade::publish(repo, opts, progress, result)? {
+            super::upgrade::Published::Done(result) => return Ok(*result),
+            super::upgrade::Published::Raced => super::upgrade::start_over(repo, progress)?,
+        }
     }
-    progress.run_step(
-        "upgrade-preflight",
-        "Check nothing unrelated is pending",
-        || {
-            upgrade_preflight(repo)?;
-            Ok(((), StepOutcome::pass("nothing unrelated to the upgrade")))
-        },
-    )?;
+    Err(Error::msg(format!(
+        "origin's {STATE_BRANCH} moved during each of {} upgrades; nothing was pushed. \
+Run git uplink init --upgrade again.",
+        super::upgrade::UPGRADE_ATTEMPTS
+    )))
+}
+
+/// The upgrade on origin's state as it is now, up to the tooling refresh.
+fn upgrade_once(repo: &Path, opts: &InitOpts, progress: &mut StepProgress) -> Result<InitResult> {
     progress.run_step("sync-origin-state", "Sync state from origin", || {
         try_replace_state_from_origin(repo)?;
         Ok((
@@ -706,7 +750,6 @@ fn upgrade_tooling(
             Ok(None) => {}
             Ok(Some(upgraded)) => {
                 result.tooling_changed = true;
-                result.changes = upgraded.changes;
                 result.dropped = upgraded.dropped;
                 result.amended = upgraded.amended;
                 result.overrides = upgraded.overrides;
@@ -842,7 +885,6 @@ fn resume_paused(repo: &Path, resume: UpgradeResume) -> Result<Option<PausedUpgr
 /// A tooling refresh that is ready to be written.
 struct ReadyUpgrade {
     plan: crate::tooling::ToolingPlan,
-    base: Option<ChangeBase>,
     dropped: Vec<(String, String)>,
     amended: Vec<AmendedPatch>,
     overrides: Vec<ToolingOverride>,
@@ -862,7 +904,6 @@ enum Prepared {
 
 /// What `--upgrade` did besides refreshing the tooling patch.
 struct Upgraded {
-    changes: Option<MainChanges>,
     dropped: Vec<(String, String)>,
     amended: Vec<(String, String)>,
     overrides: Vec<ToolingOverride>,
@@ -894,10 +935,8 @@ fn prepare_tooling_upgrade(repo: &Path, resume: Option<UpgradeResume>) -> Result
     };
     let queue = read_queue_file(repo)?;
     ensure_clean_worktree(repo, "an upgrade")?;
-    let base = ChangeBase::of_company(repo, &queue.config.internal_branch)?;
     let mut ready = ReadyUpgrade {
         plan,
-        base,
         dropped,
         amended,
         overrides: Vec::new(),
@@ -993,11 +1032,10 @@ fn prepare_tooling_upgrade(repo: &Path, resume: Option<UpgradeResume>) -> Result
 }
 
 /// Writes what [`prepare_tooling_upgrade`] settled, in one commit on
-/// uplink/state, and rebuilds.
+/// uplink/state. Company main is not rebuilt: the upgrade builds a preview.
 fn finish_tooling_upgrade(repo: &Path, ready: ReadyUpgrade) -> Result<Upgraded> {
     let ReadyUpgrade {
         plan,
-        base,
         dropped,
         amended,
         overrides,
@@ -1020,19 +1058,7 @@ fn finish_tooling_upgrade(repo: &Path, ready: ReadyUpgrade) -> Result<Upgraded> 
         }
         Ok(())
     })?;
-    rebuild_once(repo, None, false)?;
-    let queue = read_queue_file(repo)?;
-    let changes = match &base {
-        Some(base) => Some(main_changes(
-            repo,
-            &queue,
-            base,
-            &queue.config.internal_branch,
-        )?),
-        None => None,
-    };
     Ok(Upgraded {
-        changes,
         dropped,
         amended: amended
             .into_iter()

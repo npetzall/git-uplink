@@ -36,10 +36,10 @@ jobs:
               {
                 echo "> [!WARNING]"
                 echo "> \`uplink/hooks\` or its \`assessment-hook.md\` is missing on origin."
-                echo "> Run \`git uplink init --upgrade\`, then \`git uplink push\`."
+                echo "> Run \`git uplink init --upgrade\` and answer Yes to publish it."
                 echo "> \`git uplink doctor\` checks the branch (refs/heads/uplink/hooks)."
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "::error title=uplink/hooks missing::Run git uplink init --upgrade, then git uplink push."
+              echo "::error title=uplink/hooks missing::Run git uplink init --upgrade and answer Yes to publish it."
               exit 1
             fi
             echo "::error title=Could not read uplink/hooks::${guide}"
