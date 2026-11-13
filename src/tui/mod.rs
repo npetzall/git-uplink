@@ -192,47 +192,114 @@ fn clamp_top(top: usize, len: usize, height: usize) -> usize {
     top.min(len.saturating_sub(height))
 }
 
+/// A window that asks one question: a header box, a body that scrolls,
+/// and a row of buttons under it.
+#[derive(Debug, Clone)]
+pub struct ChoiceWindow {
+    /// Title of the header box.
+    pub title: String,
+    pub header: String,
+    /// Border color of the header box.
+    pub border: Color,
+    /// Title of the body box.
+    pub body_title: String,
+    pub body: String,
+    /// Title of the button box.
+    pub question: String,
+    /// Added to the key help under the buttons.
+    pub hint: Option<String>,
+    /// What Esc does, as the key help names it.
+    pub cancel_label: &'static str,
+}
+
+/// Shows `window` and asks to pick one of `options`. Esc and Ctrl+c
+/// return `cancel`, which is also highlighted first when it is a button.
+pub fn ask<T: Copy + PartialEq>(
+    window: &ChoiceWindow,
+    options: &[(Choice, T)],
+    cancel: T,
+) -> Result<T> {
+    let mut terminal = init_terminal();
+    let result = choice_loop(&mut terminal, window, options, cancel);
+    restore_terminal();
+    result
+}
+
 /// Shows a failing adopt group, with what `preflight.sh` printed or why it
 /// does not apply, and asks what to do with it. Esc aborts.
 pub fn choose_on_failure(
     failure: &AdoptFailure,
     options: &[(Choice, AdoptDecision)],
 ) -> Result<AdoptDecision> {
-    let mut terminal = init_terminal();
-    let result = failure_loop(&mut terminal, failure, options);
-    restore_terminal();
-    result
+    let can_amend = options.iter().any(|(choice, _)| choice.label == "Amend");
+    ask(
+        &failure_window(failure, can_amend),
+        options,
+        AdoptDecision::Abort,
+    )
 }
 
-/// Where the failure window drew what can be clicked or scrolled.
+fn failure_window(failure: &AdoptFailure, can_amend: bool) -> ChoiceWindow {
+    let what = match failure.kind {
+        AdoptFailureKind::Apply => "Does not apply",
+        AdoptFailureKind::Preflight => "Preflight failed",
+        AdoptFailureKind::Stack if failure.internal_only => "Does not apply on company main",
+        AdoptFailureKind::Stack => "Does not apply on origin's queue",
+        AdoptFailureKind::CompanyPreflight => "Preflight failed on company main",
+        AdoptFailureKind::Planned => "Stopped to amend",
+    };
+    let body_title = match failure.kind {
+        AdoptFailureKind::Apply | AdoptFailureKind::Stack | AdoptFailureKind::Planned => "Why",
+        AdoptFailureKind::Preflight | AdoptFailureKind::CompanyPreflight => "preflight.sh output",
+    };
+    ChoiceWindow {
+        title: format!("{what}: {}", failure.item),
+        header: format!(
+            "{} - {} - {}\n{}",
+            failure.id, failure.sha, failure.title, failure.message
+        ),
+        border: Color::Red,
+        body_title: body_title.to_string(),
+        body: failure.output.clone(),
+        question: "What now?".to_string(),
+        hint: (!can_amend)
+            .then(|| "Amend needs a checkout without uncommitted changes".to_string()),
+        cancel_label: "abort",
+    }
+}
+
+/// Where the window drew what can be clicked or scrolled.
 #[derive(Default)]
-struct FailureSpots {
-    output: Rect,
+struct ChoiceSpots {
+    body: Rect,
+    /// Lines of the body as wrapped to its width.
+    body_len: usize,
     buttons_at: (u16, u16),
     buttons: Vec<(u16, u16)>,
 }
 
-fn failure_loop(
+fn choice_loop<T: Copy + PartialEq>(
     terminal: &mut DefaultTerminal,
-    failure: &AdoptFailure,
-    options: &[(Choice, AdoptDecision)],
-) -> Result<AdoptDecision> {
-    let output: Vec<&str> = failure.output.lines().collect();
+    window: &ChoiceWindow,
+    options: &[(Choice, T)],
+    cancel: T,
+) -> Result<T> {
     let choices: Vec<Choice> = options.iter().map(|(choice, _)| *choice).collect();
-    let mut selected = 0;
+    let mut selected = initial_selection(options, cancel);
     // Starts at the end, where a failing script says why.
     let mut top = usize::MAX;
-    let mut spots = FailureSpots::default();
+    let mut spots = ChoiceSpots::default();
     loop {
         terminal.draw(|frame| {
-            spots = draw_failure(frame, failure, &output, &choices, selected, &mut top);
+            spots = draw_choice(frame, window, &choices, selected, &mut top);
         })?;
-        let height = spots.output.height as usize;
-        let shown = clamp_top(top, output.len(), height);
+        let height = spots.body.height as usize;
+        let lines = spots.body_len;
+        let shown = clamp_top(top, lines, height);
         match event::read()? {
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => top = shown.saturating_sub(3),
-                MouseEventKind::ScrollDown => top = clamp_top(shown + 3, output.len(), height),
+                MouseEventKind::ScrollDown => top = clamp_top(shown + 3, lines, height),
                 MouseEventKind::Down(MouseButton::Left) if mouse.row == spots.buttons_at.1 => {
                     if let Some(i) = button_at(&spots.buttons, spots.buttons_at.0, mouse.column) {
                         return Ok(options[i].1);
@@ -244,9 +311,9 @@ fn failure_loop(
                 let page = height.saturating_sub(1).max(1);
                 match key.code {
                     KeyCode::Up => top = shown.saturating_sub(1),
-                    KeyCode::Down => top = clamp_top(shown + 1, output.len(), height),
+                    KeyCode::Down => top = clamp_top(shown + 1, lines, height),
                     KeyCode::PageUp => top = shown.saturating_sub(page),
-                    KeyCode::PageDown => top = clamp_top(shown + page, output.len(), height),
+                    KeyCode::PageDown => top = clamp_top(shown + page, lines, height),
                     KeyCode::Home => top = 0,
                     KeyCode::End => top = usize::MAX,
                     code => {
@@ -254,7 +321,7 @@ fn failure_loop(
                         match next_selection(&choices, selected, code, ctrl) {
                             Selection::Move(i) => selected = i,
                             Selection::Picked(i) => return Ok(options[i].1),
-                            Selection::Cancel => return Ok(AdoptDecision::Abort),
+                            Selection::Cancel => return Ok(cancel),
                             Selection::Ignore => {}
                         }
                     }
@@ -265,82 +332,124 @@ fn failure_loop(
     }
 }
 
-fn draw_failure(
+/// The key help under the buttons.
+fn choice_hint(window: &ChoiceWindow) -> String {
+    let mut hint = format!(
+        "←/→ choose · Enter or click confirm · ↑/↓ PgUp/PgDn or wheel scroll · Esc {}",
+        window.cancel_label
+    );
+    if let Some(extra) = &window.hint {
+        hint.push_str(" · ");
+        hint.push_str(extra);
+    }
+    hint
+}
+
+/// The button highlighted first: the one that cancels, else the first.
+fn initial_selection<T: PartialEq>(options: &[(Choice, T)], cancel: T) -> usize {
+    options
+        .iter()
+        .position(|(_, value)| *value == cancel)
+        .unwrap_or(0)
+}
+
+/// `text` broken into lines of at most `columns`, at spaces where it can
+/// be. A line's leading spaces stay; a word wider than `columns` is cut.
+fn wrap_text(text: &str, columns: usize) -> Vec<String> {
+    let columns = columns.max(1);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if width(line) <= columns {
+            out.push(line.to_string());
+            continue;
+        }
+        let indent = &line[..line.len() - line.trim_start().len()];
+        let mut current = indent.to_string();
+        for word in line.trim_start().split(' ') {
+            let gap = usize::from(width(&current) > width(indent));
+            if width(&current) + gap + width(word) > columns && width(&current) > width(indent) {
+                out.push(std::mem::replace(&mut current, indent.to_string()));
+            } else if gap == 1 {
+                current.push(' ');
+            }
+            for c in word.chars() {
+                if width(&current) + width(&c.to_string()) > columns {
+                    out.push(std::mem::take(&mut current));
+                }
+                current.push(c);
+            }
+        }
+        out.push(current);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn draw_choice(
     frame: &mut Frame,
-    failure: &AdoptFailure,
-    output: &[&str],
+    window: &ChoiceWindow,
     choices: &[Choice],
     selected: usize,
     top: &mut usize,
-) -> FailureSpots {
+) -> ChoiceSpots {
+    let inner_width = frame.area().width.saturating_sub(2) as usize;
+    let header = wrap_text(&window.header, inner_width);
+    // The header never takes more than a third of the window.
+    let header_lines = (header.len() as u16).min((frame.area().height / 3).max(1));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(header_lines + 2),
             Constraint::Min(3),
             Constraint::Length(4),
         ])
         .split(frame.area());
-    let what = match failure.kind {
-        AdoptFailureKind::Apply => "Does not apply",
-        AdoptFailureKind::Preflight => "Preflight failed",
-        AdoptFailureKind::Stack if failure.internal_only => "Does not apply on company main",
-        AdoptFailureKind::Stack => "Does not apply on origin's queue",
-        AdoptFailureKind::CompanyPreflight => "Preflight failed on company main",
-        AdoptFailureKind::Planned => "Stopped to amend",
-    };
     frame.render_widget(
-        Paragraph::new(format!(
-            "{} - {} - {}\n{}",
-            failure.id, failure.sha, failure.title, failure.message
-        ))
-        .block(
+        Paragraph::new(header.join("\n")).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("{what}: {}", failure.item))
-                .border_style(Style::default().fg(Color::Red)),
+                .title(window.title.as_str())
+                .border_style(Style::default().fg(window.border)),
         ),
         chunks[0],
     );
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(match failure.kind {
-            AdoptFailureKind::Apply | AdoptFailureKind::Stack | AdoptFailureKind::Planned => "Why",
-            AdoptFailureKind::Preflight | AdoptFailureKind::CompanyPreflight => {
-                "preflight.sh output"
-            }
-        });
+        .title(window.body_title.as_str());
     let inner = block.inner(chunks[1]);
     let height = inner.height as usize;
-    *top = clamp_top(*top, output.len(), height);
-    let shown = output
+    let body = wrap_text(&window.body, inner.width as usize);
+    *top = clamp_top(*top, body.len(), height);
+    let shown = body
         .iter()
         .skip(*top)
         .take(height)
-        .copied()
+        .cloned()
         .collect::<Vec<_>>()
         .join("\n");
     frame.render_widget(Paragraph::new(shown).block(block), chunks[1]);
 
     let (line, spots) = buttons(choices, selected);
-    let mut hint =
-        "←/→ choose · Enter or click confirm · ↑/↓ PgUp/PgDn or wheel scroll · Esc abort"
-            .to_string();
-    if !choices.iter().any(|c| c.label == "Amend") {
-        hint.push_str(" · Amend needs a checkout without uncommitted changes");
-    }
-    let block = Block::default().borders(Borders::ALL).title("What now?");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(window.question.as_str());
     let inner_buttons = block.inner(chunks[2]);
     frame.render_widget(
         Paragraph::new(vec![
             line,
-            Line::styled(hint, Style::default().add_modifier(Modifier::DIM)),
+            Line::styled(
+                choice_hint(window),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
         ])
         .block(block),
         chunks[2],
     );
-    FailureSpots {
-        output: inner,
+    ChoiceSpots {
+        body: inner,
+        body_len: body.len(),
         buttons_at: (inner_buttons.x, inner_buttons.y),
         buttons: spots,
     }
@@ -358,6 +467,63 @@ mod tests {
         assert!(branch.contains("`git uplink adopt --branch <ref> --groups`"));
         assert!(branch.contains("--apply"));
         assert!(groups_file_hint(path, false).contains("`git uplink init --adopt-groups`"));
+    }
+
+    #[test]
+    fn a_failing_group_keeps_its_titles_and_hint() {
+        let failure = AdoptFailure {
+            kind: AdoptFailureKind::Preflight,
+            item: "group 2".into(),
+            group: 2,
+            id: "upl_1".into(),
+            sha: "abc1234".into(),
+            title: "Add notes".into(),
+            message: "preflight.sh failed".into(),
+            output: "boom".into(),
+            can_amend: false,
+            can_leave_out: true,
+            internal_only: false,
+        };
+        let window = failure_window(&failure, false);
+        assert_eq!(window.title, "Preflight failed: group 2");
+        assert_eq!(
+            window.header,
+            "upl_1 - abc1234 - Add notes\npreflight.sh failed"
+        );
+        assert_eq!(window.body_title, "preflight.sh output");
+        assert_eq!(window.question, "What now?");
+        assert_eq!(
+            choice_hint(&window),
+            "←/→ choose · Enter or click confirm · ↑/↓ PgUp/PgDn or wheel scroll · Esc abort \
+· Amend needs a checkout without uncommitted changes"
+        );
+        assert!(failure_window(&failure, true).hint.is_none());
+    }
+
+    #[test]
+    fn text_wraps_at_spaces_and_keeps_indentation() {
+        assert_eq!(wrap_text("short", 10), ["short"]);
+        assert_eq!(
+            wrap_text("one two three four", 9),
+            ["one two", "three", "four"]
+        );
+        assert_eq!(wrap_text("  ab cd ef", 6), ["  ab", "  cd", "  ef"]);
+        assert_eq!(wrap_text("abcdefgh", 3), ["abc", "def", "gh"]);
+        assert_eq!(wrap_text("a\n\nb", 5), ["a", "", "b"]);
+        assert_eq!(wrap_text("", 5), [""]);
+    }
+
+    #[test]
+    fn the_cancel_button_is_highlighted_first() {
+        let button = |label, key| Choice { label, key };
+        let yes_no = [(button("Yes", 'y'), true), (button("No", 'n'), false)];
+        assert_eq!(initial_selection(&yes_no, false), 1);
+        // A cancel value without a button highlights the first.
+        let failure = [
+            (button("Skip", 's'), AdoptDecision::Skip),
+            (button("Stop", 't'), AdoptDecision::Stop),
+        ];
+        assert_eq!(initial_selection(&failure, AdoptDecision::Abort), 0);
     }
 
     #[test]

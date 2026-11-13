@@ -46,10 +46,10 @@ use crate::repo::{
     ensure_configured_remotes, ensure_revs, ensure_state_worktree, ensure_upstream_ref,
     fetch_state_tracking, fetch_tracking_sha, fetch_upstream, fetch_upstream_remote, has_ref,
     is_ancestor, merge_base, new_patch_id, patch_already_applied_on, path_exists_at,
-    point_branch_at, promote_upstream, push_state_branch, queue_at, refresh_company_branch,
-    refresh_upstream_ref, replace_state_from_origin, restore_paths_from, rev_parse,
-    set_state_branch, show_at, stable_patch_id, stable_patch_id_from_contents, stamp, state_exists,
-    try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
+    point_branch_at, promote_upstream, push_branch_leased, push_state_branch, queue_at,
+    refresh_company_branch, refresh_upstream_ref, replace_state_from_origin, restore_paths_from,
+    rev_parse, set_state_branch, show_at, stable_patch_id, stable_patch_id_from_contents, stamp,
+    state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
 use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings, clean_list};
 use crate::types::{
@@ -77,6 +77,7 @@ mod status;
 mod submit;
 mod sync;
 mod transfer;
+mod upgrade;
 
 pub use add::*;
 pub use adopt_branch::*;
@@ -95,6 +96,7 @@ pub use status::*;
 pub use submit::*;
 pub use sync::*;
 pub use transfer::*;
+pub use upgrade::*;
 
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
     read_queue_file(repo)

@@ -345,7 +345,7 @@ fn script_source(
             None if queue.config.forge.is_some() => {
                 return Err(Error::msg(
                     "uplink/hooks is missing, so preflight has no preflight.sh to run; \
-run git uplink init --upgrade to create it, then git uplink push",
+run git uplink init --upgrade to create it and answer Yes to publish it",
                 ));
             }
             None => return Ok(None),

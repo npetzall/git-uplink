@@ -9,8 +9,9 @@ use git_uplink::{
     Patch, PatchIntent, PatchMessage, PatchStatus, PendingMerge, PreflightReport, PreviousMain,
     ProgressMode, PushOpts, QueueConfig, QueueState, RebaseState, RebuildOpts, Rejection, Result,
     STATE_BRANCH, ScriptVerdict, Settings, SettingsFlags, StepOutcome, SubmitResult, SyncOpts,
-    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, WaitingOutcome, accept_upstream,
-    accept_upstream_at, add_patch, amend_patch, amend_patch_with, amend_preflight, approve_patch,
+    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, UPGRADE_PREVIEW, UpgradeAnswer,
+    UpgradePublish, UpgradeQuestion, WaitingOutcome, accept_upstream, accept_upstream_at,
+    add_patch, amend_patch, amend_patch_with, amend_preflight, approve_patch,
     approve_patch_reviewed, assess_patch_for_packet, doctor, drop_patch, extras_dir,
     format_approval_receipt, format_approver_packet, format_contribution_packet,
     format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
@@ -637,6 +638,16 @@ fn init_upgrade_with_tooling_change_does_not_push() {
     .unwrap();
     assert!(upgraded.tooling_changed);
     guard.assert_untouched();
+    // Main stays as it was; the preview shows it with the new pack.
+    assert_eq!(
+        git_ok(&world.company, &["rev-parse", "main"]).unwrap(),
+        git_ok(&world.company, &["rev-parse", "origin/main"]).unwrap()
+    );
+    assert!(has_git_ref(&world.company, UPGRADE_PREVIEW));
+    assert!(matches!(
+        upgraded.publish,
+        Some(UpgradePublish::Kept { .. })
+    ));
 }
 
 #[test]
@@ -1659,9 +1670,11 @@ fn init_upgrade_cli_reports_a_tooling_refresh() {
             "Uplink init: ready\n\
 Tooling: updated\n\
 Product code: unchanged against {before}\n\
-Company main was rebuilt locally. Nothing was pushed.\n\
+Nothing was pushed. Local uplink/state and uplink/hooks hold what the upgrade changed.\n\
+Preview: uplink/preview/upgrade (company main with the upgrade)\n\
 Publish: git uplink push\n         \
-git uplink rebuild --push\n"
+git uplink rebuild --push\n\
+Discard: git uplink reset\n"
         )
     );
 }
@@ -1785,55 +1798,355 @@ fn init_upgrade_cli_reports_tooling_apart_from_product_code() {
         String::from_utf8(output.stdout).unwrap()
     };
     // The pack dropped the legacy workflow: tooling, not product code.
+    // Without a terminal nothing is asked, and nothing is pushed.
+    let origin_main = git_ok(company, &["rev-parse", "origin/main"]).unwrap();
     assert_eq!(
         run(&["init", "--upgrade"]),
         "Uplink init: ready\n\
 Tooling: updated, 1 file changed\n\
 Product code: unchanged against origin/main\n\
-Company main was rebuilt locally. Nothing was pushed.\n\
+Nothing was pushed. Local uplink/state and uplink/hooks hold what the upgrade changed.\n\
+Preview: uplink/preview/upgrade (company main with the upgrade)\n\
 Publish: git uplink push\n         \
-git uplink rebuild --push\n"
+git uplink rebuild --push\n\
+Discard: git uplink reset\n"
     );
-    assert!(!company.join(LEGACY_WORKFLOW).exists());
-    // Publishing rebuilds to the tree main has, so there is nothing to say again.
-    assert_eq!(
-        run(&["rebuild", "--push"]),
-        "rebuild complete; main unchanged\npushed main to origin\n"
-    );
+    assert!(company.join(LEGACY_WORKFLOW).exists());
     assert_eq!(
         git_ok(company, &["rev-parse", "main"]).unwrap(),
-        git_ok(company, &["rev-parse", "origin/main"]).unwrap()
+        origin_main
+    );
+    assert!(
+        !git_ok(company, &["ls-tree", "--name-only", "-r", UPGRADE_PREVIEW])
+            .unwrap()
+            .lines()
+            .any(|path| path == LEGACY_WORKFLOW)
+    );
+
+    // Local uplink/state holds that upgrade: reset it and publish in one go.
+    let origin_state = git_ok(company, &["rev-parse", "origin/uplink/state"]).unwrap();
+    assert_eq!(
+        run(&["init", "--upgrade", "--allow-reset", "--push-if-unchanged"]),
+        "Uplink init: ready\n\
+Tooling: updated, 1 file changed\n\
+Product code: unchanged against origin/main\n\
+Pushed: uplink/state, uplink/hooks, company main\n"
+    );
+    assert!(!company.join(LEGACY_WORKFLOW).exists());
+    assert!(!has_git_ref(company, UPGRADE_PREVIEW));
+    for branch in ["main", STATE_BRANCH, "uplink/hooks"] {
+        assert_eq!(
+            git_ok(company, &["rev-parse", branch]).unwrap(),
+            git_ok(
+                company,
+                &["ls-remote", "origin", &format!("refs/heads/{branch}")]
+            )
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap(),
+            "{branch}"
+        );
+    }
+    // Origin's state moved forward only.
+    assert!(git_succeeds_in(
+        company,
+        &["merge-base", "--is-ancestor", &origin_state, STATE_BRANCH],
+    ));
+    assert_eq!(
+        run(&["init", "--upgrade"]),
+        "Uplink init: ready\nTooling: already up-to-date\n"
     );
 }
 
-#[test]
-fn init_upgrade_warns_about_product_code_that_differs_from_origin() {
+/// Runs the upgrade answering each question with `answer`, and returns the
+/// result with the questions in the order they were asked.
+fn upgrade_answering(
+    company: &Path,
+    answer: impl Fn(&UpgradeQuestion) -> UpgradeAnswer + Send + Sync + 'static,
+) -> (Result<git_uplink::InitResult>, Vec<UpgradeQuestion>) {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = asked.clone();
+    let result = init(
+        company,
+        InitOpts {
+            upgrade: true,
+            interactive: Some(false),
+            ask: Some(std::sync::Arc::new(move |question: &UpgradeQuestion| {
+                log.lock().unwrap().push(question.clone());
+                Ok(answer(question))
+            })),
+            ..Default::default()
+        },
+    );
+    let asked = asked.lock().unwrap().clone();
+    (result, asked)
+}
+
+fn remote_sha(company: &Path, branch: &str) -> String {
+    git_ok(
+        company,
+        &["ls-remote", "origin", &format!("refs/heads/{branch}")],
+    )
+    .unwrap()
+    .split_whitespace()
+    .next()
+    .unwrap_or_default()
+    .to_string()
+}
+
+/// A published world due an upgrade whose origin main has a commit that
+/// was never queued, as a merge that is not imported yet.
+fn world_with_an_unrecorded_commit_on_main() -> World {
     let world = setup_uninitialized();
     init_with_recorded_urls(&world);
     let company = &world.company;
     publish_origin(company);
     install_older_pack(company, |dir| write(dir, LEGACY_WORKFLOW, "name: legacy\n"));
-    // Committed straight to origin's main, never queued: the rebuild drops it.
     write(company, "NOTES.md", "notes\n");
     commit_all(company, "add NOTES.md");
     push_main_and_state(company);
+    world
+}
+
+#[test]
+fn init_upgrade_aborts_on_main_commits_state_lacks_without_a_terminal() {
+    let world = world_with_an_unrecorded_commit_on_main();
+    let company = &world.company;
+    let state = remote_sha(company, STATE_BRANCH);
+    let main = remote_sha(company, "main");
 
     let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
-        .args(["init", "--upgrade"])
+        .args(["init", "--upgrade", "--push-if-unchanged"])
         .current_dir(company)
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let short = git_ok(company, &["rev-parse", "--short", "main"]).unwrap();
     assert!(
-        stdout.contains(
-            "Tooling: updated, 1 file changed\n\
-warning: product code changed in 1 file outside the tooling pack, against origin/main:\n  \
-D NOTES.md\n\
-Inspect with: git diff origin/main main -- NOTES.md\n"
-        ),
+        stdout.ends_with(&format!(
+            "Aborted: origin's company main (origin/main) has 1 commit(s) uplink/state does not have:\n  \
+{short} add NOTES.md\n\
+Nothing was pushed. Local uplink/state and uplink/hooks are origin's again.\n\
+Once they are imported, run the upgrade again; or run it in a terminal to adopt or overwrite them.\n"
+        )),
         "{stdout}"
     );
+    assert_eq!(remote_sha(company, STATE_BRANCH), state);
+    assert_eq!(remote_sha(company, "main"), main);
+    assert_eq!(
+        git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap(),
+        state
+    );
+    assert!(!has_git_ref(company, UPGRADE_PREVIEW));
+}
+
+#[test]
+fn init_upgrade_overwrites_main_commits_state_lacks_when_told() {
+    let world = world_with_an_unrecorded_commit_on_main();
+    let company = &world.company;
+    let (result, asked) = upgrade_answering(company, |question| match question {
+        UpgradeQuestion::Unrecorded { .. } => UpgradeAnswer::Overwrite,
+        _ => UpgradeAnswer::Yes,
+    });
+    let result = result.unwrap();
+    let [
+        UpgradeQuestion::Unrecorded { main, commits },
+        UpgradeQuestion::Publish { summary, changed },
+    ] = asked.as_slice()
+    else {
+        panic!("{asked:?}");
+    };
+    assert_eq!(main, "origin/main");
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].subject, "add NOTES.md");
+    assert!(changed);
+    assert!(
+        summary.contains(
+            "warning: product code changed in 1 file outside the tooling pack, against origin/main:\n  \
+D NOTES.md\n\
+Inspect with: git diff origin/main uplink/preview/upgrade -- NOTES.md"
+        ),
+        "{summary}"
+    );
+    assert!(matches!(
+        result.publish,
+        Some(UpgradePublish::Pushed {
+            main: Some(git_uplink::MainPush::Pushed),
+            ..
+        })
+    ));
+    assert_eq!(
+        remote_sha(company, "main"),
+        git_ok(company, &["rev-parse", "main"]).unwrap()
+    );
+    assert!(!company.join("NOTES.md").exists());
+}
+
+#[test]
+fn init_upgrade_adopts_main_commits_state_lacks_when_told() {
+    let world = world_with_an_unrecorded_commit_on_main();
+    let company = &world.company;
+    let (result, asked) = upgrade_answering(company, |question| match question {
+        UpgradeQuestion::Unrecorded { .. } => UpgradeAnswer::Adopt,
+        _ => UpgradeAnswer::Yes,
+    });
+    let result = result.unwrap();
+    let [
+        UpgradeQuestion::Unrecorded { .. },
+        UpgradeQuestion::Publish { summary, changed },
+    ] = asked.as_slice()
+    else {
+        panic!("{asked:?}");
+    };
+    // Queued now, so the rebuild keeps it.
+    assert!(!changed, "{summary}");
+    assert!(
+        result
+            .queue
+            .all_patches()
+            .any(|patch| patch.subject() == "add NOTES.md" && patch.status.is_active()),
+        "{:?}",
+        result.queue.patch_refs()
+    );
+    assert!(matches!(
+        result.publish,
+        Some(UpgradePublish::Pushed {
+            main: Some(git_uplink::MainPush::Pushed),
+            ..
+        })
+    ));
+    assert_eq!(
+        remote_sha(company, STATE_BRANCH),
+        git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap()
+    );
+    assert_eq!(
+        remote_sha(company, "main"),
+        git_ok(company, &["rev-parse", "main"]).unwrap()
+    );
+    assert!(company.join("NOTES.md").exists());
+    assert!(!company.join(LEGACY_WORKFLOW).exists());
+}
+
+#[test]
+fn init_upgrade_answered_no_pushes_nothing_and_keeps_the_preview() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    let refs = git_ok(company, &["ls-remote", "origin"]).unwrap();
+    let (result, asked) = upgrade_answering(company, |_| UpgradeAnswer::No);
+    let result = result.unwrap();
+    let [UpgradeQuestion::Publish { changed: false, .. }] = asked.as_slice() else {
+        panic!("{asked:?}");
+    };
+    assert!(matches!(result.publish, Some(UpgradePublish::Kept { .. })));
+    assert_eq!(git_ok(company, &["ls-remote", "origin"]).unwrap(), refs);
+    assert!(has_git_ref(company, UPGRADE_PREVIEW));
+    assert_eq!(
+        git_ok(company, &["rev-parse", "main"]).unwrap(),
+        remote_sha(company, "main")
+    );
+}
+
+#[test]
+fn init_upgrade_runs_again_when_origin_state_moves_before_its_push() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    let origin = PathBuf::from(git_ok(company, &["remote", "get-url", "origin"]).unwrap());
+    // Another job records on origin's state while the upgrade runs.
+    let other = git_ok(
+        company,
+        &[
+            "commit-tree",
+            "uplink/state^{tree}",
+            "-p",
+            "uplink/state",
+            "-m",
+            "uplink: another job",
+        ],
+    )
+    .unwrap();
+    git(
+        company,
+        &[
+            "push",
+            "--quiet",
+            "origin",
+            &format!("{other}:refs/heads/uplink/other"),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let moved = move_state_on_first_push(&origin, &other);
+
+    let (result, asked) = upgrade_answering(company, |_| UpgradeAnswer::Yes);
+    let result = result.unwrap();
+    assert!(moved.exists());
+    // Asked again on the state that won.
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(matches!(
+        result.publish,
+        Some(UpgradePublish::Pushed { .. })
+    ));
+    let state = remote_sha(company, STATE_BRANCH);
+    assert_eq!(
+        state,
+        git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap()
+    );
+    assert!(git_succeeds_in(
+        company,
+        &["merge-base", "--is-ancestor", &other, &state],
+    ));
+    assert_eq!(
+        remote_sha(company, "main"),
+        git_ok(company, &["rev-parse", "main"]).unwrap()
+    );
+}
+
+#[test]
+fn init_upgrade_reports_main_that_moved_before_its_push() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    let origin = PathBuf::from(git_ok(company, &["remote", "get-url", "origin"]).unwrap());
+    let merged = git_ok(
+        company,
+        &[
+            "commit-tree",
+            "main^{tree}",
+            "-p",
+            "main",
+            "-m",
+            "Merge pull request #7",
+        ],
+    )
+    .unwrap();
+    git(
+        company,
+        &[
+            "push",
+            "--quiet",
+            "origin",
+            &format!("{merged}:refs/heads/uplink/merged"),
+        ],
+        GitOpts::default(),
+    )
+    .unwrap();
+    move_ref_on_first_push(&origin, "refs/heads/main", &merged);
+
+    let (result, _) = upgrade_answering(company, |_| UpgradeAnswer::Yes);
+    let result = result.unwrap();
+    assert!(matches!(
+        result.publish,
+        Some(UpgradePublish::Pushed {
+            main: Some(git_uplink::MainPush::Moved),
+            ..
+        })
+    ));
+    assert_eq!(
+        remote_sha(company, STATE_BRANCH),
+        git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap()
+    );
+    assert_eq!(remote_sha(company, "main"), merged);
 }
 
 #[test]
@@ -2024,8 +2337,16 @@ fn init_upgrade_continue_drops_a_patch_resolved_to_the_new_pack() {
         .unwrap();
     assert_eq!(dropped.status, PatchStatus::Dropped);
     assert_back_on_clean_main(company);
+    // Main is not rebuilt; the preview has the new pack's template.
     assert_eq!(
-        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        format!(
+            "{}\n",
+            git_ok(
+                company,
+                &["show", &format!("{UPGRADE_PREVIEW}:{PR_TEMPLATE}")]
+            )
+            .unwrap()
+        ),
         template
     );
 }
@@ -2044,8 +2365,16 @@ fn init_upgrade_drop_drops_the_patch_it_paused_on() {
     );
     assert!(tooling_patch_path(company, &patch.id).is_file());
     assert_back_on_clean_main(company);
+    // Main is not rebuilt; the preview has the new pack's template.
     assert_eq!(
-        fs::read_to_string(company.join(PR_TEMPLATE)).unwrap(),
+        format!(
+            "{}\n",
+            git_ok(
+                company,
+                &["show", &format!("{UPGRADE_PREVIEW}:{PR_TEMPLATE}")]
+            )
+            .unwrap()
+        ),
         template
     );
 }
@@ -2323,9 +2652,57 @@ fn init_upgrade_refuses_untracked_files_in_the_checkout() {
     let company = &world.company;
     write(company, "scratch.txt", "mine\n");
     assert_upgrade_refused(company, "scratch.txt");
-    assert_upgrade_refused(company, "git stash --include-untracked");
+    assert_upgrade_refused(company, "--allow-reset");
     fs::remove_file(company.join("scratch.txt")).unwrap();
     assert!(upgrade(company).unwrap().tooling_changed);
+}
+
+#[test]
+fn init_upgrade_asks_to_reset_and_stops_on_no() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    write(company, "scratch.txt", "mine\n");
+    let (result, asked) = upgrade_answering(company, |_| UpgradeAnswer::No);
+    let err = result.unwrap_err().to_string();
+    assert!(err.starts_with("refusing to upgrade"), "{err}");
+    let [UpgradeQuestion::Reset { problems }] = asked.as_slice() else {
+        panic!("{asked:?}");
+    };
+    assert!(problems[0].contains("?? scratch.txt"), "{problems:?}");
+    assert!(company.join("scratch.txt").exists());
+}
+
+#[test]
+fn init_upgrade_allow_reset_discards_local_work_and_untracked_files() {
+    let world = published_world_due_an_upgrade();
+    let company = &world.company;
+    let state = remote_sha(company, STATE_BRANCH);
+    write(company, ".uplink/notes.txt", "local\n");
+    git_uplink::commit_queue(company, "uplink: local").unwrap();
+    write(company, "README.md", "edited\n");
+    write(company, "scratch.txt", "mine\n");
+    let result = init(
+        company,
+        InitOpts {
+            upgrade: true,
+            allow_reset: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(result.tooling_changed);
+    assert!(!company.join("scratch.txt").exists());
+    assert!(!company.join(".uplink/notes.txt").exists());
+    assert!(
+        git_ok(company, &["status", "--porcelain"])
+            .unwrap()
+            .is_empty()
+    );
+    // The upgrade is on top of origin's state, not the local commit.
+    assert_eq!(
+        git_ok(company, &["rev-parse", "uplink/state~1"]).unwrap(),
+        state
+    );
 }
 
 #[test]

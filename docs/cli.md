@@ -15,9 +15,10 @@ The binary is `git-uplink`, so Git treats it as `git uplink`. Use `git-uplink -h
 ```text
 git uplink init [--upstream <url>] [--contrib <url>] [--upstream-remote-name <name>]
             [--upstream-branch <branch>] [--contrib-remote-name <name>]
-            [--internal-branch <branch>] [--forge <forge>] [--upgrade] [--continue]
-            [--drop] [--abort] [--adopt-groups [<path>]] [--apply] [--write-groups]
-            [--no-preview] [--json] [--preflight <cmd>] [--banned-word <word>]...
+            [--internal-branch <branch>] [--forge <forge>] [--upgrade] [--allow-reset]
+            [--push-if-unchanged] [--continue] [--drop] [--abort]
+            [--adopt-groups [<path>]] [--apply] [--write-groups] [--no-preview] [--json]
+            [--preflight <cmd>] [--banned-word <word>]...
 git uplink add [--message <text> | --message-file <path>] [--from <ref>] [--head <ref>]
             [--internal-only] [--pr <n>] [--pr-url <url>] [--base-branch <branch>]
             [--depends-on <id>]... [--preflight-result <path>] [--gate] [--json]
@@ -101,17 +102,21 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
   The former names `ghec` and `example-github` are still accepted, and are read from queues that stored them.
   - `github`: The base GitHub pack, for github.com and GitHub Enterprise Cloud.
   - `try-it-on-github`: The base pack adjusted for the worked example.
-- `--upgrade`: Refresh the tooling patch in its slot; re-run after upgrading the binary.
+- `--upgrade`: Refresh the tooling patch in its slot and publish it; re-run after upgrading the binary.
 
   Upgrade the binary first with `git uplink self-update`.
 
   Also creates `uplink/hooks` for queues initialized before it existed, and adds files a newer pack brings as one commit on top.
 
-  Company main is rebuilt locally and compared with origin's: files of the pack are reported as tooling, any other file that differs as product code, which an upgrade should not change.
+  Company main is not rebuilt locally. The upgrade builds `uplink/preview/upgrade` and compares it with origin's: files of the pack are reported as tooling, any other file that differs as product code, which an upgrade should not change. Then it asks `Update remote?` (or, when product code changes, `Do you want to update remote with this change?`). Yes rebuilds company main and pushes `uplink/state`, `uplink/hooks` and company main, each with a lease: company main only while origin's is still the commit the preview was compared with. No pushes nothing: local `uplink/state` holds the upgrade, and the preview stays. When origin's `uplink/state` moved meanwhile, the upgrade runs again on it.
+
+  When origin's company main has commits `uplink/state` does not record (a merge not imported yet), the upgrade asks first: Adopt queues them as patches, Overwrite publishes company main without them, Abort puts the local refs back to origin's.
 
   A queued patch that changes pack files is replayed on the new pack before anything is written. One the new pack makes empty is dropped. One that no longer applies pauses the upgrade the way `git rebase` stops on a commit: the checkout is left on the new pack with the failed apply, and `--continue`, `--drop` or `--abort` takes it from there.
 
-  Before anything moves, the upgrade refuses to start while work unrelated to it is pending: changes or untracked files in the checkout, `.uplink/` edits not on `uplink/state`, a local `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of origin's, or company main commits origin's main does not have. Push that work, or discard it with `git uplink reset`.
+  Before anything moves, the upgrade checks for work unrelated to it: changes or untracked files in the checkout, `.uplink/` edits not on `uplink/state`, a local `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of origin's, or company main commits origin's main does not have. It asks whether to reset to origin, losing that work, and goes on; No stops it. Without a terminal it refuses unless `--allow-reset` is passed.
+- `--allow-reset`: With `--upgrade`: when local work is pending, reset to origin without asking, as `git uplink reset` does, and delete untracked files in the checkout (`git clean -fd`). That work is lost.
+- `--push-if-unchanged`: With `--upgrade`: publish without asking when the preview changes tooling only and origin's company main has no commits `uplink/state` lacks. Otherwise nothing is pushed, unless the question is answered Yes in a terminal.
 - `--continue`: Continue a paused upgrade with the conflict resolved.
 
   Resolve the files, `git add` them, and what they hold becomes the patch. A patch resolved to what the new pack has is dropped.
@@ -733,7 +738,7 @@ When `init` creates `uplink/hooks` it asks for each setting in a terminal. A fla
 
 With a forge recorded, a missing or unparseable `uplink.toml` fails upstream-bound `assess` instead of scanning for nothing. So does one that still has `redact_keywords` or `internal_email_domains`, which an older release wrote: move their entries into `banned_words` and delete them.
 
-Moving from repository variables: run `git uplink init --upgrade`, answer the preflight question with `UPLINK_PREFLIGHT` and the banned words question with the values of both `UPLINK_REDACT_KEYWORDS` and `UPLINK_INTERNAL_DOMAINS`, run `git uplink push`, then delete the three variables. They are no longer read.
+Moving from repository variables: run `git uplink init --upgrade`, answer the preflight question with `UPLINK_PREFLIGHT` and the banned words question with the values of both `UPLINK_REDACT_KEYWORDS` and `UPLINK_INTERNAL_DOMAINS`, answer Yes when it asks to update the remote, then delete the three variables. They are no longer read.
 
 ## Preflight script preflight.sh
 
