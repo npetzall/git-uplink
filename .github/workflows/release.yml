@@ -23,6 +23,7 @@ on:
       - .github/actionlint.yaml
       - .github/actionlint-sarif.tpl
       - .github/workflows/socket.yml
+      - .github/socket/**
       - .github/codeql/web.yml
       - .github/codeql/templates.yml
       - .github/codeql/github-scripts.yml
