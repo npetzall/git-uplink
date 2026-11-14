@@ -26,12 +26,18 @@ jobs:
           # For PRs, fetch one additional commit for proper diff analysis
           fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # No cache: this job holds secrets. The Socket CLI and every dependency
+      # come from .github/socket/uv.lock, with hashes, through sfw.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
+          enable-cache: false
 
-      - name: Install Socket CLI
-        run: pip install socketsecurity --upgrade
+      - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: firewall-free
+          firewall-version: v1.16.0
+          job-summary: errors
 
       - name: Run Socket Security Scan
         env:
@@ -40,7 +46,7 @@ jobs:
           EVENT_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || 0 }}
         run: |
           PR_NUMBER=$EVENT_NUMBER
-          socketcli \
+          sfw uv run --locked --project .github/socket socketcli \
             --target-path "$GITHUB_WORKSPACE" \
             --scm github \
             --pr-number "$PR_NUMBER" \

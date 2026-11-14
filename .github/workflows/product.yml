@@ -37,6 +37,7 @@ jobs:
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
+          firewall-version: v1.16.0
           job-summary: errors
       - name: pnpm audit
         run: sfw pnpm audit
@@ -97,6 +98,7 @@ jobs:
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
+          firewall-version: v1.16.0
           job-summary: errors
       - name: Apply web version
         run: sfw pnpm pkg set version="$PRODUCT_VERSION"
@@ -134,6 +136,7 @@ jobs:
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
+          firewall-version: v1.16.0
           job-summary: errors
       - name: Apply version
         run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
@@ -174,6 +177,7 @@ jobs:
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
+          firewall-version: v1.16.0
           job-summary: errors
       - name: Apply version
         run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
@@ -214,17 +218,14 @@ jobs:
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
+          firewall-version: v1.16.0
           job-summary: errors
       - name: Apply version
         run: python3 .github/update_version_in_cargo.py "$PRODUCT_VERSION"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: matrix.cross
-        id: cross-cache
-        with:
-          path: ~/.cargo/bin/cross
-          key: cross-49cd054de9b832dfc11a4895c72b0aef533b5c6a-${{ runner.os }}
+      # Built every run, never restored from actions/cache: any run on main
+      # can write a cache entry, and this job builds the released binaries.
       - name: Install cross
-        if: matrix.cross && steps.cross-cache.outputs.cache-hit != 'true'
+        if: matrix.cross
         run: sfw cargo install cross --locked --git https://github.com/cross-rs/cross --rev 49cd054de9b832dfc11a4895c72b0aef533b5c6a
       - name: Build release binary
         env:
@@ -274,6 +275,7 @@ jobs:
       - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
         with:
           mode: firewall-free
+          firewall-version: v1.16.0
           job-summary: errors
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
