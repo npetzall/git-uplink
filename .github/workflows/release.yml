@@ -65,6 +65,8 @@ jobs:
       needs.product.result == 'success' &&
       needs.version.outputs.next_version != needs.version.outputs.current_version
     runs-on: ubuntu-latest
+    # Deployment branches and reviewers are set on the environment (TODO.md).
+    environment: release
     permissions:
       contents: write
       actions: read
