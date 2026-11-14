@@ -24,6 +24,12 @@ Read the rule that applies before you change that area:
 
 - [`docs/rules/state-and-main.md`](docs/rules/state-and-main.md): pushing `uplink/state` and `main` from commands and workflows (no force on `uplink/state`, lease on `main`, record again on a lost race, rescue a failed import, and how to test races).
 
+## CI
+
+- Every `SocketDev/action` step sets `firewall-version` to the same sfw-free release tag, never `latest`: the action downloads sfw without a checksum. Dependabot does not track that input, so bump it deliberately, on every step at once, to a release at least 7 days old (the Dependabot cooldown).
+- No `actions/cache` in a job that holds secrets or whose output is released.
+- Python tools in CI come from a uv project with a locked `uv.lock` (like `.github/socket/`), run with `sfw uv run --locked`, never an unpinned `pip install`.
+
 ## Socket Firewall
 
 Prefix every `pnpm` and `cargo` command with `sfw` ([Socket Firewall Free](https://docs.socket.dev/docs/socket-firewall-free)). This includes install, build, test, fmt, and clippy.
