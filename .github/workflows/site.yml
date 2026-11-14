@@ -33,10 +33,9 @@ jobs:
         with:
           install: false
           cache: true
-      - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+      - uses: osseco/setup-sfw-free@e1cbeae80920eb20b289196bb420d5f45a45ead1 # v1.15.6-0.2.0
         with:
-          mode: firewall-free
-          job-summary: errors
+          cache: ${{ github.ref == 'refs/heads/main' && 'true' || 'restore' }}
       - if: inputs.scans
         run: sfw pnpm audit
       - run: sfw pnpm install --frozen-lockfile --filter git-uplink-site...
@@ -96,10 +95,9 @@ jobs:
         with:
           install: false
           cache: true
-      - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+      - uses: osseco/setup-sfw-free@e1cbeae80920eb20b289196bb420d5f45a45ead1 # v1.15.6-0.2.0
         with:
-          mode: firewall-free
-          job-summary: errors
+          cache: ${{ github.ref == 'refs/heads/main' && 'true' || 'restore' }}
       - run: sfw pnpm install --frozen-lockfile --filter git-uplink-site...
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
         if: inputs.pages
