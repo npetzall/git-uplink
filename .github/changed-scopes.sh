@@ -35,6 +35,7 @@ site_patterns=(
   'pnpm-(lock|workspace)\.yaml$'
   '\.github/changed-scopes\.sh$'
   '\.github/workflows/(pr|site|publish-site|codeql|zizmor|actionlint|socket)\.yml$'
+  '\.github/socket/'
   '\.github/actionlint(\.yaml|-sarif\.tpl)$'
   '\.github/codeql/site\.yml$'
 )
@@ -84,6 +85,7 @@ self_check() {
   expect_scopes false true "site/src/main.tsx"
   expect_scopes false true "docs/design.md"
   expect_scopes true true ".github/workflows/publish-site.yml"
+  expect_scopes true true ".github/socket/uv.lock"
   expect_scopes true false ".github/workflows/release.yml"
   expect_scopes true false ".github/dependabot.yml"
   expect_scopes true false "scripts/man.sh"

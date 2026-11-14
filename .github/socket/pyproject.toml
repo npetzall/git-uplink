@@ -1,0 +1,10 @@
+# The Socket CLI for socket.yml, locked with hashes in uv.lock.
+# Dependabot (uv ecosystem) proposes new versions.
+[project]
+name = "uplink-socket"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = ["socketsecurity==2.11.13"]
+
+[tool.uv]
+package = false

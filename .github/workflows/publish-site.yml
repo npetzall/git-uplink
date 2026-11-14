@@ -15,6 +15,7 @@ on:
       - .github/workflows/publish-site.yml
       - .github/workflows/codeql.yml
       - .github/workflows/socket.yml
+      - .github/socket/**
       - .github/workflows/zizmor.yml
       - .github/workflows/actionlint.yml
       - .github/actionlint.yaml
