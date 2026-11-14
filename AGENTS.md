@@ -24,6 +24,12 @@ Read the rule that applies before you change that area:
 
 - [`docs/rules/state-and-main.md`](docs/rules/state-and-main.md): pushing `uplink/state` and `main` from commands and workflows (no force on `uplink/state`, lease on `main`, record again on a lost race, rescue a failed import, and how to test races).
 
+## CI
+
+- sfw comes only from `osseco/setup-sfw-free`, pinned by full commit SHA with the release tag as a comment. The tag starts with the sfw-free version it installs (`v1.15.6-0.2.0`), and Dependabot bumps it. Every step passes `cache: ${{ github.ref == 'refs/heads/main' && 'true' || 'restore' }}`: `main` restores and saves, other branches only restore, and every restored binary is checked against the pinned sha256. Do not use `SocketDev/action` or the npm `sfw` wrapper: both install sfw unverified or follow the newest release.
+- No `actions/cache` in a job that holds secrets or whose output is released, unless what is restored is verified against a pinned hash before use, and the cache is saved only on `main` (as `setup-sfw-free` does).
+- Python tools in CI come from a uv project with a locked `uv.lock` (like `.github/socket/`), run with `sfw uv run --locked`, never an unpinned `pip install`.
+
 ## Socket Firewall
 
 Prefix every `pnpm` and `cargo` command with `sfw` ([Socket Firewall Free](https://docs.socket.dev/docs/socket-firewall-free)). This includes install, build, test, fmt, and clippy.
