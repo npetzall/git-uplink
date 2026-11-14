@@ -23,6 +23,18 @@ updates:
         patterns:
           - "*"
 
+  # The Socket CLI that socket.yml runs.
+  - package-ecosystem: "uv"
+    directory: "/.github/socket"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      socket-cli:
+        patterns:
+          - "*"
+
   - package-ecosystem: "github-actions"
     directories:
       - "/"
