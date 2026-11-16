@@ -8469,12 +8469,9 @@ fn preflight_shows_the_script_output_and_what_it_ran_on() {
     let report: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
     assert_eq!(report["ok"], true);
     assert_eq!(report["tested"][0], base.as_str());
-    let comment = report["comment"].as_str().unwrap();
-    assert!(
-        comment.starts_with("Uplink preflight passed.\n\nRan on:\n\n- uplink/upstream@"),
-        "{comment}"
-    );
-    assert!(!comment.contains("hello-from-preflight"), "{comment}");
+    // The forge words the comment.
+    assert!(report.get("comment").is_none(), "{stdout}");
+    assert!(!stdout.contains("hello-from-preflight"), "{stdout}");
 
     git(
         company,
@@ -8506,31 +8503,46 @@ fn preflight_shows_the_script_output_and_what_it_ran_on() {
         report["tested"],
         serde_json::json!([base, format!("Use SHA-256 for tokens ({head})")])
     );
-    assert!(
-        report["comment"]
-            .as_str()
-            .unwrap()
-            .starts_with("Uplink export preflight passed.\n\nRan on:"),
-        "{stdout}"
+    // A failure is still one JSON document, with the end of the output in
+    // it once. All of it is on stderr, in the log of the run named.
+    set_preflight_script(
+        company,
+        "i=0; while [ $i -lt 5000 ]; do echo \"line-$i of noise\"; i=$((i+1)); done; echo broke-in-preflight; exit 1",
     );
-
-    // A failure is still one JSON document, with the output in it.
-    set_preflight_script(company, "echo broke-in-preflight; exit 1");
-    let (ok, stdout, stderr) = run_uplink(company, &incoming);
-    assert!(!ok, "{stdout}{stderr}");
-    assert!(stderr.contains("broke-in-preflight"), "{stderr}");
+    let output = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+        .args(incoming)
+        .env("GITHUB_RUN_ID", "4242")
+        .current_dir(company)
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    );
+    assert!(!output.status.success(), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("line-0 of noise") && stderr.contains("broke-in-preflight"),
+        "{stderr}"
+    );
+    assert!(stdout.len() < 16 * 1024, "{}", stdout.len());
     let report: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
     assert_eq!(report["ok"], false);
-    assert_eq!(report["output"], "broke-in-preflight");
-    let comment = report["comment"].as_str().unwrap();
+    assert_eq!(report["stage"], "command");
+    assert_eq!(report["runId"], "4242");
+    assert!(report.get("comment").is_none(), "{stdout}");
+    let tail = report["output"].as_str().unwrap();
     assert!(
-        comment.contains("Uplink export preflight failed (command)"),
-        "{comment}"
+        tail.ends_with("line-4999 of noise\nbroke-in-preflight"),
+        "{tail}"
     );
     assert!(
-        comment.contains(&format!("Ran on:\n\n- {base}")),
-        "{comment}"
+        tail.starts_with("[... 4981 earlier lines in the job log ...]\n"),
+        "{tail}"
     );
+    let message = report["message"].as_str().unwrap();
+    assert!(!message.contains("noise"), "{message}");
+    assert_eq!(stdout.matches("broke-in-preflight").count(), 1, "{stdout}");
+    assert_eq!(report["tested"][0], base.as_str());
 }
 
 #[test]

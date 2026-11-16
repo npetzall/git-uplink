@@ -1719,7 +1719,10 @@ mod embed_tests {
                 "{action}"
             );
             assert!(!action.contains("elif"), "{action}");
-            assert!(action.contains(".comment // .message"), "{action}");
+            // The action words the comment; the report has no comment.
+            assert!(!action.contains(".comment"), "{action}");
+            assert!(action.contains("Uplink-Depends-On:"), "{action}");
+            assert!(action.contains(".runId"), "{action}");
             for (workflow, needs) in [
                 ("uplink-pr.yml", "needs: preflight"),
                 ("uplink-gate.yml", "needs: validate"),

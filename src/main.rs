@@ -1659,31 +1659,25 @@ fn tested_heading(result: &Result<Option<String>, Error>) -> &'static str {
     }
 }
 
-/// Prints `result` as the JSON `--preflight-result` reads. `comment` is the
-/// markdown the verdict is reported with: `passed` or the failure, then
-/// `tested`.
+/// Prints `result` as the JSON `--preflight-result` reads. The forge words
+/// its comment from it.
 fn print_preflight_report(
     result: Result<Option<String>, Error>,
     tested: Vec<String>,
     review_token: Option<String>,
-    passed: &str,
 ) -> Result<(), Error> {
-    let section = tested_section(tested_heading(&result), &tested);
-    let comment = match &result {
-        Ok(_) => Some(format!("{passed}\n\n{section}")),
-        Err(Error::Preflight(pre)) => Some(format!("{}\n{section}", preflight_comment(pre))),
-        Err(_) => None,
-    };
     let mut report = PreflightReport::of(result);
     report.tested = tested;
     report.review_token = review_token;
-    finish_preflight_report(report, comment.map(|text| format!("{}\n", text.trim_end())))
+    finish_preflight_report(report)
 }
 
-fn finish_preflight_report(report: PreflightReport, comment: Option<String>) -> Result<(), Error> {
+/// The report is short: what failed and how the output ended. The whole
+/// output is on stderr, in the log of run `runId`.
+fn finish_preflight_report(report: PreflightReport) -> Result<(), Error> {
     let mut value = serde_json::to_value(&report)?;
-    if let Some(comment) = comment {
-        value["comment"] = serde_json::Value::String(comment);
+    if let Some(run) = env::var("GITHUB_RUN_ID").ok().filter(|id| !id.is_empty()) {
+        value["runId"] = serde_json::Value::String(run);
     }
     println!("{value}");
     if report.ok {
@@ -1743,12 +1737,7 @@ fn cmd_preflight(
         None => Vec::new(),
     };
     if json {
-        return print_preflight_report(
-            result,
-            tested,
-            patch_token,
-            "Uplink export preflight passed.",
-        );
+        return print_preflight_report(result, tested, patch_token);
     }
     print!("{}", tested_section(tested_heading(&result), &tested));
     match result {
@@ -1771,7 +1760,7 @@ fn cmd_preflight_command(repo: &Path, hooks_ref: Option<&str>, json: bool) -> Re
     let result = command_preflight(&queue, repo, hooks_ref, &ScriptVerdict::Run);
     let tested = command_tested(repo);
     if json {
-        return print_preflight_report(result, tested, None, "Uplink preflight passed.");
+        return print_preflight_report(result, tested, None);
     }
     print!("{}", tested_section(tested_heading(&result), &tested));
     match result {
@@ -2738,7 +2727,7 @@ fn run() -> Result<(), Error> {
             }
             if preflight_only {
                 let report = accept_upstream_preflight(&repo, sha.as_deref())?;
-                return finish_preflight_report(report, None);
+                return finish_preflight_report(report);
             }
             cmd_accept_upstream(
                 &repo,
@@ -2770,7 +2759,7 @@ fn run() -> Result<(), Error> {
             force,
         } => {
             if preflight_only {
-                return finish_preflight_report(rebuild_preflight(&repo, verify)?, None);
+                return finish_preflight_report(rebuild_preflight(&repo, verify)?);
             }
             if resume || abort {
                 let resume = if abort {
@@ -2821,7 +2810,7 @@ fn run() -> Result<(), Error> {
         } => {
             let change = patch_message(message, message_file)?;
             if preflight_only {
-                return finish_preflight_report(resolve_preflight(&repo, &id, change)?, None);
+                return finish_preflight_report(resolve_preflight(&repo, &id, change)?);
             }
             cmd_resolve(&repo, &id, change, &script_verdict(preflight_result)?, push)
         }
@@ -2846,7 +2835,7 @@ fn run() -> Result<(), Error> {
             if preflight_only {
                 refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
                 let report = transfer_preflight(&repo, &id, direction, complete, change)?;
-                return finish_preflight_report(report, None);
+                return finish_preflight_report(report);
             }
             cmd_transfer(
                 &repo,
@@ -2871,7 +2860,7 @@ fn run() -> Result<(), Error> {
             if preflight_only {
                 refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
                 let report = amend_preflight(&repo, &id, change)?;
-                return finish_preflight_report(report, None);
+                return finish_preflight_report(report);
             }
             cmd_amend(
                 &repo,
