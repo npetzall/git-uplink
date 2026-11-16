@@ -638,6 +638,9 @@ fn build_command(cwd: &Path, args: &[&str], opts: &GitOpts<'_>, transport: &Tran
         .env("GIT_COMMITTER_EMAIL", BOT_EMAIL)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Untranslated messages: callers match git's stderr, for example a
+        // lost push race or a missing remote ref.
+        .env("LC_ALL", "C")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (key, value) in &opts.extra_env {
