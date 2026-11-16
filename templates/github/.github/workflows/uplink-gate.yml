@@ -64,7 +64,9 @@ jobs:
             -c "http.${GITHUB_SERVER_URL}/.extraheader=" \
             -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
             fetch origin "$BASE_REF" --depth=2
-          if git diff --name-only "$FROM_SHA" "$HEAD_SHA" | grep -E \
+          # --no-renames lists both sides of a rename, and -z keeps git from
+          # quoting unusual names, which would no longer match these paths.
+          if git diff --no-renames --name-only -z "$FROM_SHA" "$HEAD_SHA" | grep -zE \
             -q '^(\.github/workflows/uplink-.*\.yml|\.github/actions/(install-git-uplink|uplink-[^/]*)/|\.github/uplink/)'; then
             echo "Gated PRs must not change Uplink pack files (uplink-*.yml, install-git-uplink, uplink-* actions, .github/uplink/)."
             echo "Edit product workflows as needed. Change sidecars on main via git uplink init --upgrade."
@@ -72,7 +74,7 @@ jobs:
           fi
           # .uplink/ is Uplink's own state. It is not scanned by the
           # assessment, so it must not be part of gated work.
-          if git diff --name-only "$FROM_SHA" "$HEAD_SHA" | grep -q '^\.uplink/'; then
+          if git diff --no-renames --name-only -z "$FROM_SHA" "$HEAD_SHA" | grep -zq '^\.uplink/'; then
             echo "Gated PRs must not change files under .uplink/."
             exit 1
           fi
