@@ -1405,7 +1405,7 @@ and {rerun}, or run git uplink {cmd} in a terminal to amend it."
     match error {
         Some(err) => {
             let mut failure = PreflightError::new(
-                format!("{err}\n\n{hint}"),
+                format!("{}\n\n{hint}", err.summary()),
                 err.suggested_depends_on,
                 err.stage,
                 err.output,

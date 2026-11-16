@@ -117,8 +117,11 @@ pub struct PreflightReport {
     /// when no tree was built.
     pub token: Option<String>,
     pub stage: Option<String>,
+    /// What failed, without the script's output.
     pub message: Option<String>,
     pub suggested_depends_on: Vec<String>,
+    /// The end of what the script printed. All of it is in the log of the
+    /// run that ran it.
     pub output: Option<String>,
     /// What the script ran on, one line each: the base, then what was
     /// applied onto it. See [`export_tested`] and [`command_tested`].
@@ -166,8 +169,32 @@ pub struct FirstBad {
     pub token: String,
 }
 
-/// A job output holds 1 MiB; keep a report well under it.
-const REPORT_TEXT_LIMIT: usize = 48 * 1024;
+/// A workflow passes the report to a step in one environment variable,
+/// which Linux caps at 128 KiB. The script's whole output is in the log of
+/// the job that ran it; the report keeps what failed and how it ended.
+const REPORT_TEXT_LIMIT: usize = 4 * 1024;
+const OUTPUT_TAIL_LINES: usize = 20;
+
+/// The last lines of what the script printed, where a build reports its
+/// error, within [`REPORT_TEXT_LIMIT`].
+fn output_tail(output: &str) -> String {
+    let output = output.trim_end();
+    let lines: Vec<&str> = output.lines().collect();
+    let kept = lines.len().min(OUTPUT_TAIL_LINES);
+    let mut tail = lines[lines.len() - kept..].join("\n");
+    if tail.len() > REPORT_TEXT_LIMIT {
+        let mut start = tail.len() - REPORT_TEXT_LIMIT;
+        while !tail.is_char_boundary(start) {
+            start += 1;
+        }
+        tail = format!("[... line cut ...]{}", &tail[start..]);
+    }
+    let earlier = lines.len() - kept;
+    if earlier == 0 {
+        return tail;
+    }
+    format!("[... {earlier} earlier lines in the job log ...]\n{tail}")
+}
 
 /// `text` with its middle cut out when it is longer than the limit. The
 /// start says what failed and the end is where a build reports its error.
@@ -205,9 +232,9 @@ impl PreflightReport {
                 ok: false,
                 token: err.token.clone(),
                 stage: Some(err.stage.to_string()),
-                message: Some(clip(&err.to_string())),
+                message: Some(clip(err.summary())),
                 suggested_depends_on: err.suggested_depends_on.clone(),
-                output: err.output.as_deref().map(clip),
+                output: err.output.as_deref().map(output_tail),
                 ..Self::default()
             },
             Err(err) => Self {
@@ -1067,15 +1094,10 @@ pub(crate) fn export_preflight_with(
         } else {
             format!(" + {}", patch.depends_on.join(", "))
         };
-        let output_suffix = if output.is_empty() {
-            String::new()
-        } else {
-            format!("\n\n{output}")
-        };
         Err(Error::Preflight(
             PreflightError::new(
                 format!(
-                    "Export preflight failed on public upstream{extra} ({PREFLIGHT_SCRIPT_PATH}, exit {code}). No upstream PR should be opened until this passes.{}{output_suffix}",
+                    "Export preflight failed on public upstream{extra} ({PREFLIGHT_SCRIPT_PATH}, exit {code}). No upstream PR should be opened until this passes.{}",
                     format_suggestion(&suggested)
                 ),
                 suggested,
@@ -1243,14 +1265,9 @@ pub fn command_preflight(
         note_passed(&token);
         return Ok(Some(token));
     }
-    let output_suffix = if output.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n{output}")
-    };
     Err(Error::Preflight(
         PreflightError::new(
-            format!("Preflight failed ({PREFLIGHT_SCRIPT_PATH}, exit {code}).{output_suffix}"),
+            format!("Preflight failed ({PREFLIGHT_SCRIPT_PATH}, exit {code})."),
             Vec::new(),
             STAGE_COMMAND,
             if output.is_empty() {
@@ -1297,14 +1314,9 @@ pub(crate) fn rev_preflight(
         note_passed(&token);
         return Ok(token);
     }
-    let output_suffix = if output.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n{output}")
-    };
     Err(Error::Preflight(
         PreflightError::new(
-            format!("Preflight failed ({PREFLIGHT_SCRIPT_PATH}, exit {code}).{output_suffix}"),
+            format!("Preflight failed ({PREFLIGHT_SCRIPT_PATH}, exit {code})."),
             Vec::new(),
             STAGE_COMMAND,
             if output.is_empty() {
@@ -1325,16 +1337,7 @@ pub(crate) fn is_script_failure(err: &PreflightError) -> bool {
 /// The failure of the script on an upstream: `what` says which, and what
 /// follows from it.
 pub(crate) fn upstream_failure(what: &str, err: PreflightError) -> Error {
-    let output_suffix = match &err.output {
-        Some(output) => format!("\n\n{output}"),
-        None => String::new(),
-    };
-    let mut failure = PreflightError::new(
-        format!("{what}{output_suffix}"),
-        Vec::new(),
-        STAGE_COMMAND,
-        err.output,
-    );
+    let mut failure = PreflightError::new(what, Vec::new(), STAGE_COMMAND, err.output);
     failure.token = err.token;
     Error::Preflight(failure)
 }
@@ -1788,7 +1791,8 @@ diff --git a/my file b/my file
             panic!("expected a preflight error");
         };
         assert_eq!(replayed.stage, STAGE_COMMAND);
-        assert_eq!(replayed.to_string(), "tests failed");
+        assert_eq!(replayed.summary(), "tests failed");
+        assert_eq!(replayed.to_string(), "tests failed\n\nboom");
         assert_eq!(replayed.suggested_depends_on, ["upl_1"]);
         assert_eq!(replayed.output.as_deref(), Some("boom"));
 
@@ -1898,5 +1902,45 @@ diff --git a/my file b/my file
         assert!(cut.starts_with("HEAD") && cut.ends_with("TAIL"));
         assert!(cut.contains("[... output cut ...]"));
         assert_eq!(clip("short"), "short");
+    }
+
+    #[test]
+    fn the_report_keeps_the_end_of_the_output() {
+        assert_eq!(output_tail("one\ntwo\n"), "one\ntwo");
+        let many: String = (0..10_000).map(|i| format!("line {i}\n")).collect();
+        let tail = output_tail(&many);
+        assert!(
+            tail.starts_with("[... 9980 earlier lines in the job log ...]\nline 9980\n"),
+            "{tail}"
+        );
+        assert!(tail.ends_with("line 9999"), "{tail}");
+        let wide = format!("{}ÅEND", "é".repeat(1024 * 1024));
+        let tail = output_tail(&wide);
+        assert!(tail.len() <= REPORT_TEXT_LIMIT + 32, "{}", tail.len());
+        assert!(tail.ends_with("ÅEND"), "{tail}");
+
+        // Small whatever the script printed, with the output once.
+        let noise: String = (0..100_000)
+            .map(|i| format!("\u{1b}[31m\"{i}\"\u{1b}[0m\n"))
+            .collect();
+        let failure = || {
+            PreflightReport::of(Err(Error::Preflight(PreflightError::new(
+                "tests failed",
+                Vec::new(),
+                STAGE_COMMAND,
+                Some(noise.clone()),
+            ))))
+        };
+        let report = failure();
+        assert_eq!(report.message.as_deref(), Some("tests failed"));
+        let rebuild = PreflightReport::of_rebuild(RebuildReport {
+            upstream: Some(failure()),
+            built: Some(failure()),
+            first_bad: None,
+        });
+        for report in [report, rebuild] {
+            let json = serde_json::to_string(&report).unwrap();
+            assert!(json.len() < 16 * 1024, "{}", json.len());
+        }
     }
 }

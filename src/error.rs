@@ -58,11 +58,21 @@ impl PreflightError {
         self.token = Some(token.into());
         self
     }
+
+    /// What failed, without the script's output.
+    pub fn summary(&self) -> &str {
+        &self.message
+    }
 }
 
+/// The summary, then what the script printed.
 impl fmt::Display for PreflightError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(&self.message)?;
+        match self.output.as_deref().filter(|output| !output.is_empty()) {
+            Some(output) => write!(f, "\n\n{output}"),
+            None => Ok(()),
+        }
     }
 }
 
