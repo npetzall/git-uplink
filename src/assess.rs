@@ -1782,6 +1782,72 @@ pub fn assess_from_message(
     message: &str,
     intent: PatchIntent,
 ) -> Result<AssessReport> {
+    assess_range(repo, queue, from_ref, head_ref, message, intent, None)
+}
+
+/// [`assess_from_message`] for a new commit of the existing `patch` (an
+/// amend, a resolution, a transfer). That commit is the bot's, so the
+/// original author is the patch's, not HEAD's.
+pub fn assess_rewrite(
+    repo: &Path,
+    queue: &QueueState,
+    patch: &Patch,
+    from_ref: &str,
+    head_ref: &str,
+    message: &str,
+    intent: PatchIntent,
+) -> Result<AssessReport> {
+    let author = original_author_of(patch);
+    assess_range(
+        repo,
+        queue,
+        from_ref,
+        head_ref,
+        message,
+        intent,
+        Some(author),
+    )
+}
+
+/// The person who first wrote `patch`: the original author its assessment
+/// recorded, unless that is a bot (an earlier rewrite recorded its own
+/// commit) and the patch has a person among its authors to take instead.
+pub fn original_author_of(patch: &Patch) -> (Option<String>, Option<String>) {
+    let stored = patch
+        .assess
+        .as_ref()
+        .map(|report| {
+            (
+                report.original_author.clone(),
+                report.original_email.clone(),
+            )
+        })
+        .unwrap_or_default();
+    if let (Some(name), Some(email)) = &stored
+        && !is_bot(name, email)
+    {
+        return stored;
+    }
+    patch
+        .source
+        .authors
+        .iter()
+        .find_map(|person| parse_person(Some(person)))
+        .map(|(name, email)| (Some(name), Some(email)))
+        .unwrap_or(stored)
+}
+
+/// Assesses `from_ref..head_ref` with `message`, taking the original author
+/// from `author`, or from the commit at `head_ref` when it is None.
+fn assess_range(
+    repo: &Path,
+    queue: &QueueState,
+    from_ref: &str,
+    head_ref: &str,
+    message: &str,
+    intent: PatchIntent,
+    author: Option<(Option<String>, Option<String>)>,
+) -> Result<AssessReport> {
     message_subject(message, &cutoff_marker(queue))?;
     let shas = ensure_revs(repo, &[from_ref, head_ref])?;
     let from_ref = shas[0].as_str();
@@ -1805,12 +1871,11 @@ pub fn assess_from_message(
             binaries: binary_files(repo, from_ref, head_ref)?,
         })
     };
-    Ok(assess_export(
-        queue,
-        message,
-        head_author(repo, head_ref)?,
-        export,
-    ))
+    let author = match author {
+        Some(author) => author,
+        None => head_author(repo, head_ref)?,
+    };
+    Ok(assess_export(queue, message, author, export))
 }
 
 /// Assesses an upstream-bound `patch` from its patch file `patch_text` as it
@@ -1825,20 +1890,10 @@ pub fn assess_patch_file(
     patch_text: &str,
     intent: PatchIntent,
 ) -> AssessReport {
-    let author = patch
-        .assess
-        .as_ref()
-        .map(|stored| {
-            (
-                stored.original_author.clone(),
-                stored.original_email.clone(),
-            )
-        })
-        .unwrap_or_default();
     let mut report = assess_export(
         queue,
         &patch.commit_message,
-        author,
+        original_author_of(patch),
         (!intent.is_internal_only()).then(|| export_diff(patch_text)),
     );
     if !intent.is_internal_only() {
@@ -2442,6 +2497,33 @@ HcmV?d00001
 
     fn empty_queue() -> QueueState {
         QueueState::empty(crate::types::QueueConfig::default())
+    }
+
+    #[test]
+    fn original_author_is_the_stored_one_unless_a_bot_recorded_it() {
+        let mut patch = authored_patch("x", &["Asha <asha@corp.example>"]);
+        assert_eq!(
+            original_author_of(&patch),
+            (Some("Asha".into()), Some("asha@corp.example".into()))
+        );
+        let report = |name: &str, email: &str| AssessReport {
+            at: String::new(),
+            ok: true,
+            public_message: String::new(),
+            co_author: None,
+            original_author: Some(name.into()),
+            original_email: Some(email.into()),
+            cutoff_found: false,
+            checks: Vec::new(),
+        };
+        patch.assess = Some(report("Cleo", "cleo@corp.example"));
+        assert_eq!(original_author_of(&patch).0.as_deref(), Some("Cleo"));
+        patch.assess = Some(report("Uplink Bot", crate::git::BOT_EMAIL));
+        assert_eq!(original_author_of(&patch).0.as_deref(), Some("Asha"));
+        patch.source.authors.clear();
+        assert_eq!(original_author_of(&patch).0.as_deref(), Some("Uplink Bot"));
+        patch.assess = None;
+        assert_eq!(original_author_of(&patch), (None, None));
     }
 
     #[test]

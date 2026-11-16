@@ -294,9 +294,10 @@ git uplink rebuild --abort, then git uplink drop {} (or git uplink merged {} whe
         )));
     }
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(&stop.id));
-    let report = assess_from_message(
+    let report = assess_rewrite(
         repo,
         &queue,
+        &patch,
         &stop.onto,
         "HEAD",
         &patch.commit_message.clone(),

@@ -22,8 +22,8 @@ use git_uplink::{
     TO_UPSTREAM_ENVIRONMENT, WaitingOutcome, accept_upstream_preflight, accept_upstream_with,
     add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps, already_approved,
     amend_patch_with, amend_preflight, approve_on_remote, approve_patch_reviewed,
-    assess_from_message, assess_patch_file, assess_patch_for_packet, change_between,
-    command_preflight, command_tested, commit_queue, count_files, cutoff_marker,
+    assess_from_message, assess_patch_file, assess_patch_for_packet, assess_rewrite,
+    change_between, command_preflight, command_tested, commit_queue, count_files, cutoff_marker,
     depends_on_from_message, doctor, drop_patch, existing_patch_preflight, export_tested,
     fetch_pending_upstream, first_line, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
@@ -1482,14 +1482,12 @@ fn cmd_assess(
         } => {
             let from = from.as_deref().unwrap_or("main");
             let head = head.as_deref().unwrap_or("HEAD");
-            let report = assess_from_message(
-                repo,
-                &queue,
-                from,
-                head,
-                &message,
-                PatchIntent::from_internal_only(internal_only),
-            )?;
+            let intent = PatchIntent::from_internal_only(internal_only);
+            // A change to a queued patch (`--patch`) keeps its original author.
+            let report = match &patch {
+                Some(stored) => assess_rewrite(repo, &queue, stored, from, head, &message, intent)?,
+                None => assess_from_message(repo, &queue, from, head, &message, intent)?,
+            };
             let change = change_between(repo, from, head)?;
             (report, strip_html_comments(&message), patch, change)
         }

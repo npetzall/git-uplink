@@ -8,11 +8,11 @@ use std::time::Duration;
 use crate::adopt::{self, AdoptGroup};
 use crate::assess::{
     AssessPackage, IncomingCommitRow, IncomingMergeRow, IncomingPacket, approval_covers,
-    assert_assess_ok, assess_from_message, assess_patch_file, company_commit_message,
-    covering_approval, covering_approval_for, cutoff_marker, depends_on_from_message,
-    format_incoming_packet, from_upstream_report_paths, merge_authors, message_subject,
-    patch_authors, patch_text, report_paths, resolution_authors, review_token, store_extras,
-    strip_html_comments,
+    assert_assess_ok, assess_from_message, assess_patch_file, assess_rewrite,
+    company_commit_message, covering_approval, covering_approval_for, cutoff_marker,
+    depends_on_from_message, format_incoming_packet, from_upstream_report_paths, merge_authors,
+    message_subject, patch_authors, patch_text, report_paths, resolution_authors, review_token,
+    store_extras, strip_html_comments,
 };
 use crate::error::{ConflictError, Error, Result};
 use crate::gate::{
