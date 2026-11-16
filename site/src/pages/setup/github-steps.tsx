@@ -302,6 +302,39 @@ const STATE_RULESET = `{
   ]
 }`;
 
+const STATE_WRITERS_RULESET = `{
+  "name": "Uplink: state writers",
+  "target": "branch",
+  "enforcement": "disabled",
+  "bypass_actors": [
+    { "actor_id": {{internalAppId}}, "actor_type": "Integration", "bypass_mode": "always" },
+    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }
+  ],
+  "conditions": { "ref_name": { "include": ["refs/heads/uplink/state"], "exclude": [] } },
+  "rules": [
+    { "type": "creation" },
+    { "type": "update" }
+  ]
+}`;
+
+const HOOKS_RULESET = `{
+  "name": "Uplink: hooks branch",
+  "target": "branch",
+  "enforcement": "disabled",
+  "bypass_actors": [],
+  "conditions": { "ref_name": { "include": ["refs/heads/uplink/hooks"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "pull_request", "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": true,
+        "required_review_thread_resolution": false } }
+  ]
+}`;
+
 const UPSTREAM_RULESET = `{
   "name": "Uplink: upstream branch",
   "target": "branch",
@@ -748,8 +781,10 @@ gh secret set UPLINK_CONTRIB_TOKEN --repo {{ghRepo}} --env abandon-contrib`}</Co
               Create these under{" "}
               <strong>Settings → Rules → Rulesets → New branch ruleset</strong>{" "}
               with <strong>Enforcement status: Disabled</strong>. You push{" "}
-              <code>main</code> yourself in step 10; step 11 turns them on.
-              Create <strong>Uplink: pack files</strong> under{" "}
+              <code>main</code> yourself in step 10, which the company main
+              ruleset would refuse; step 11 turns them on. The sample files in
+              the pack ship active instead. Create{" "}
+              <strong>Uplink: pack files</strong> under{" "}
               <strong>New push ruleset</strong> instead.
             </p>
             <RulesetList />
@@ -781,6 +816,12 @@ ${PACK_RULESET}
 EOF`}</Command>
             <Command>{`${API} -X POST repos/{{companyRepo}}/rulesets --input - <<'EOF'
 ${STATE_RULESET}
+EOF`}</Command>
+            <Command>{`${API} -X POST repos/{{companyRepo}}/rulesets --input - <<'EOF'
+${STATE_WRITERS_RULESET}
+EOF`}</Command>
+            <Command>{`${API} -X POST repos/{{companyRepo}}/rulesets --input - <<'EOF'
+${HOOKS_RULESET}
 EOF`}</Command>
             <Command>{`${API} -X POST repos/{{companyRepo}}/rulesets --input - <<'EOF'
 ${UPSTREAM_RULESET}
@@ -1045,14 +1086,20 @@ function BypassExplainer() {
           <strong>Internal App</strong> (<code>Integration</code>, id{" "}
           <V>{"{{internalAppId}}"}</V>): rebuilds and force-pushes{" "}
           <code>main</code> and <code>uplink/upstream</code>, and creates and
-          deletes the gated branches. It needs bypass on every ruleset except
-          the state and hooks branches. A ruleset can only list an App that is
+          deletes the gated branches, and records every change on{" "}
+          <code>uplink/state</code>. It needs bypass on every ruleset except the
+          state branch and hooks branch. A ruleset can only list an App that is
           installed on the repository, which step 2 did.
         </li>
         <li>
+          <strong>Admin role</strong> (<code>RepositoryRole</code> 5): bypasses
+          the pack files and state writers rulesets, so operators can run{" "}
+          <code>init --upgrade</code> and <code>git uplink push</code>.
+        </li>
+        <li>
           <strong>GitHub Actions</strong> (<code>GITHUB_TOKEN</code>) needs no
-          bypass. It only reads, comments, labels, and fast-forwards{" "}
-          <code>uplink/state</code>, which its ruleset allows.
+          bypass. It only reads, comments and labels; it never pushes{" "}
+          <code>uplink/state</code>.
         </li>
         <li>People never bypass. They merge through pull requests.</li>
       </ul>
