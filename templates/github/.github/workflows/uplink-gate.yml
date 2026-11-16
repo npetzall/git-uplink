@@ -101,10 +101,11 @@ jobs:
         run: |
           # Internal-only patches never leave the company: skip the upstream
           # assessment and run only the preflight script, as for
-          # transfer-to-internal. If the queue cannot be read, assess.
+          # transfer-to-internal. The queue comes only from uplink/state,
+          # never from the PR head; if it cannot be read, assess.
           is_internal() {
             local queue
-            queue=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json 2>/dev/null) || return 1
+            queue=$(git show uplink/state:.uplink/queue.json 2>/dev/null) || return 1
             jq -e --arg id "$1" 'any(.internal[]?; .id == $id)' <<<"$queue" >/dev/null
           }
           # The result goes to the comment job; the next step fails on it.
@@ -258,7 +259,7 @@ jobs:
           # the company, so it has no upstream assessment and no hook.
           is_internal() {
             local queue
-            queue=$(git show uplink/state:.uplink/queue.json 2>/dev/null || cat .uplink/queue.json 2>/dev/null) || return 1
+            queue=$(git show uplink/state:.uplink/queue.json 2>/dev/null) || return 1
             jq -e --arg id "$1" 'any(.internal[]?; .id == $id)' <<<"$queue" >/dev/null
           }
           if [[ "$BASE_REF" == uplink/amend/* ]]; then
