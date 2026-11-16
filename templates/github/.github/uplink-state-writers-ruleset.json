@@ -1,5 +1,5 @@
 {
-  "name": "Uplink state writers",
+  "name": "Uplink: state writers",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": [

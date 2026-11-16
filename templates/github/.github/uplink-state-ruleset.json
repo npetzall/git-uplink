@@ -1,5 +1,5 @@
 {
-  "name": "Uplink state branch",
+  "name": "Uplink: state branch",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": [],
