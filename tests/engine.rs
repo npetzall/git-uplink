@@ -5515,7 +5515,7 @@ fn a_patch_that_does_not_apply_at_all_opens_a_draft_on_an_empty_work_commit() {
         "src/tokens.js",
         &TOKENS.replace("return 3600;", "return 7200;"),
     );
-    commit_all(company, "longer ttl");
+    commit_as(company, "Asha", "asha@corp.example", "longer ttl");
     let ttl_patch = add_landed_patch(
         company,
         AddPatchOpts {
@@ -5593,6 +5593,10 @@ fn a_patch_that_does_not_apply_at_all_opens_a_draft_on_an_empty_work_commit() {
     .unwrap();
     let resolved = patch_of(company, &ttl_patch.id);
     assert_eq!(resolved.depends_on, vec![docs_patch.id.clone()]);
+    assert_eq!(
+        resolved.assess.as_ref().unwrap().original_author.as_deref(),
+        Some("Asha")
+    );
     assert_eq!(resolved.status, PatchStatus::Queued);
     assert_eq!(resolved.subject(), "Keep a longer TTL");
     assert!(
@@ -11818,6 +11822,48 @@ fn transfer_complete_takes_depends_on_from_the_merged_pr() {
 }
 
 #[test]
+fn transfer_complete_keeps_the_original_author() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/notes"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "NOTES.md", "internal-notes\n");
+    commit_as(company, "Asha", "asha@corp.example", "internal notes");
+    let notes = add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Internal notes".into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    set_preflight_script(company, "grep -q ready NOTES.md");
+    let gated = transfer_patch(company, &notes.id, TransferDirection::ToUpstream, false).unwrap();
+    let work = gated.work_branch.unwrap();
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "NOTES.md", "internal-notes\nready\n");
+    commit_as(company, "Ben", "ben@corp.example", "make preflight pass");
+    let done = transfer_patch(company, &notes.id, TransferDirection::ToUpstream, true).unwrap();
+    assert!(done.transferred, "{done:?}");
+    let moved = patch_of(company, &notes.id);
+    assert_eq!(
+        moved.assess.as_ref().unwrap().original_author.as_deref(),
+        Some("Asha")
+    );
+    assert!(
+        moved.events.last().unwrap().detail.contains("by Ben"),
+        "{:?}",
+        moved.events.last()
+    );
+}
+
+#[test]
 fn transfer_complete_takes_the_title_and_message_of_the_merged_pr() {
     let world = setup_world();
     let company = &world.company;
@@ -13560,6 +13606,88 @@ fn amend_complete_refuses_an_unknown_or_internal_dependency_and_keeps_the_branch
         assert_eq!(rev_of(company, &base), before);
     }
     assert!(patch_of(company, &ttl.id).depends_on.is_empty());
+}
+
+#[test]
+fn amend_complete_keeps_the_original_author_and_records_who_amended() {
+    let world = setup_world();
+    let company = &world.company;
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_as(company, "Asha", "asha@corp.example", "longer ttl");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        patch.assess.as_ref().unwrap().original_author.as_deref(),
+        Some("Asha")
+    );
+
+    amend_patch(company, &patch.id, false, None).unwrap();
+    let base = format!("uplink/amend/{}", patch.id);
+    let work = format!("{base}-work");
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 5400;"),
+    );
+    commit_as(company, "Ben", "ben@corp.example", "address review");
+    git(company, &["checkout", "--quiet", &base], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["merge", "--no-ff", "--no-edit", &work],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let done = amend_patch(company, &patch.id, true, None).unwrap();
+    assert!(done.changed, "{done:?}");
+
+    let after = patch_of(company, &patch.id);
+    let assess = after.assess.as_ref().unwrap();
+    assert_eq!(assess.original_author.as_deref(), Some("Asha"));
+    assert_eq!(assess.original_email.as_deref(), Some("asha@corp.example"));
+    assert_eq!(
+        after.source.authors,
+        ["Asha <asha@corp.example>", "Ben <ben@corp.example>"]
+    );
+    let event = after.events.last().unwrap();
+    assert!(
+        event.detail.contains("by Ben <ben@corp.example>"),
+        "{event:?}"
+    );
+
+    // The gate's `assess --patch --from --head` reads the head commit, the
+    // bot's on main, and reports the patch's author all the same.
+    let output = uplink_cli(
+        company,
+        &[
+            "assess", "--patch", &patch.id, "--from", "main^", "--head", "main", "--json",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let package: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(package["originalAuthor"], "Asha", "{package}");
+
+    // Who wrote or amended it stays in the company.
+    let exported = format!(
+        "{}{}",
+        git_uplink::export_commit_message(&after),
+        git_uplink::upstream_pr_body(&after)
+    );
+    for person in ["Asha", "asha@corp.example", "Ben", "ben@corp.example"] {
+        assert!(!exported.contains(person), "{person} in {exported}");
+    }
 }
 
 #[test]

@@ -74,6 +74,16 @@ pub(super) fn rewrite_event_detail(status: PatchStatus, how: &str) -> String {
     }
 }
 
+/// `how`, naming `people` (`Name <email>`) when there are any: the authors
+/// a gated rewrite added. The detail stays in the queue; it is never exported.
+pub(super) fn with_people(how: &str, people: &[String]) -> String {
+    if people.is_empty() {
+        how.to_string()
+    } else {
+        format!("{how} by {}", people.join(", "))
+    }
+}
+
 /// Ids of the patches [`approval_stale`] is true for, in queue order.
 pub fn stale_approvals(repo: &Path, queue: &QueueState) -> Vec<String> {
     queue

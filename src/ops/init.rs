@@ -858,9 +858,10 @@ fn resume_paused(repo: &Path, resume: UpgradeResume) -> Result<Option<PausedUpgr
             if rev_parse(repo, "HEAD")? == paused.onto {
                 paused.dropped.push(patch);
             } else {
-                let assess = assess_from_message(
+                let assess = assess_rewrite(
                     repo,
                     &queue,
+                    stored,
                     &paused.onto,
                     "HEAD",
                     &stored.commit_message.clone(),

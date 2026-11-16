@@ -180,9 +180,10 @@ pub(super) fn assess_transfer_to_upstream(
     from_ref: &str,
     head_ref: &str,
 ) -> Result<AssessReport> {
-    let report = assess_from_message(
+    let report = assess_rewrite(
         repo,
         queue,
+        patch,
         from_ref,
         head_ref,
         &patch.commit_message.clone(),
@@ -556,7 +557,10 @@ pub(super) fn complete_transfer(
     let mut patch = validate_transfer(&queue, id, direction)?;
     assert_resolution_clean(repo)?;
     let onto = recover_onto(repo, kind, id, &head)?;
+    // The people this rewrite adds, for its event.
+    let known = patch.source.authors.len();
     merge_authors(&mut patch.source.authors, resolution_authors(repo, &onto)?);
+    let movers = patch.source.authors[known..].to_vec();
     let message = company_commit_message(&queue, &patch);
     let before = rev_parse(repo, "HEAD")?;
     commit_resolution(repo, &onto, &message)?;
@@ -608,7 +612,7 @@ pub(super) fn complete_transfer(
     let mut queue = read_queue_file(repo)?;
     let (pr_close_url, pr_close_number, pr_close_branch) =
         pr_close_from_patch(get_patch(&queue, id)?, direction);
-    record_transfer(&mut queue, id, direction, stable, assess_report)?;
+    record_transfer(&mut queue, id, direction, stable, assess_report, &movers)?;
     {
         let current = get_patch_mut(&mut queue, id)?;
         current.commit_message = updated.commit_message;
@@ -659,9 +663,10 @@ fn change_message(
         direction.to_internal(),
         &updated.depends_on,
     )?;
-    let report = assess_from_message(
+    let report = assess_rewrite(
         repo,
         queue,
+        patch,
         onto,
         "HEAD",
         &raw_message,
@@ -678,6 +683,7 @@ fn record_transfer(
     direction: TransferDirection,
     stable: String,
     assess_report: Option<AssessReport>,
+    movers: &[String],
 ) -> Result<()> {
     move_patch(queue, id, direction.to_internal())?;
     let current = get_patch_mut(queue, id)?;
@@ -694,7 +700,10 @@ fn record_transfer(
     add_event(
         current,
         "transferred",
-        format!("Moved {} after gated work", direction.as_str()),
+        with_people(
+            &format!("Moved {} after gated work", direction.as_str()),
+            movers,
+        ),
     );
     Ok(())
 }

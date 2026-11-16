@@ -204,7 +204,10 @@ fn complete_amend(
     let onto = rev_parse(repo, &format!("{original}^"))?;
 
     let original_authors = patch.source.authors.clone();
+    // The people this rewrite adds, for its event.
+    let known = patch.source.authors.len();
     merge_authors(&mut patch.source.authors, resolution_authors(repo, &onto)?);
+    let amenders = patch.source.authors[known..].to_vec();
     let (updated, raw_message) = with_message(&patch, new_message)?;
 
     let before = rev_parse(repo, "HEAD")?;
@@ -219,7 +222,7 @@ fn complete_amend(
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
     let checked = (|| -> Result<AssessReport> {
         check_message_dependencies(&queue, id, intent.is_internal_only(), &updated.depends_on)?;
-        let report = assess_from_message(repo, &queue, &onto, "HEAD", &raw_message, intent)?;
+        let report = assess_rewrite(repo, &queue, &patch, &onto, "HEAD", &raw_message, intent)?;
         if !intent.is_internal_only() {
             assert_assess_ok(&report, updated.subject())?;
         }
@@ -309,7 +312,10 @@ fn complete_amend(
         let rel = patch_path(id)?.to_string_lossy().into_owned();
         current.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
         current.status = status_after_rewrite(repo, current);
-        let detail = rewrite_event_detail(current.status, "Amended through the gated amend PR");
+        let detail = rewrite_event_detail(
+            current.status,
+            &with_people("Amended through the gated amend PR", &amenders),
+        );
         add_event(current, "amended", detail);
     }
     write_queue_file(repo, &queue)?;

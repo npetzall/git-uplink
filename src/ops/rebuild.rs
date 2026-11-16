@@ -954,7 +954,10 @@ fn resolve_once(
         .as_ref()
         .and_then(|c| c.onto.clone())
         .unwrap_or(recover_onto(repo, GateKind::Conflict, id, &head)?);
+    // The people this rewrite adds, for its event.
+    let known = patch.source.authors.len();
     merge_authors(&mut patch.source.authors, resolution_authors(repo, &onto)?);
+    let resolvers = patch.source.authors[known..].to_vec();
     let (updated, raw_message) = with_message(&patch, change)?;
     let before = rev_parse(repo, "HEAD")?;
     commit_resolution(repo, &onto, &company_commit_message(&queue, &patch))?;
@@ -964,7 +967,7 @@ fn resolve_once(
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
     let checked = (|| -> Result<AssessReport> {
         check_message_dependencies(&queue, id, intent.is_internal_only(), &updated.depends_on)?;
-        let report = assess_from_message(repo, &queue, &onto, "HEAD", &raw_message, intent)?;
+        let report = assess_rewrite(repo, &queue, &patch, &onto, "HEAD", &raw_message, intent)?;
         if !intent.is_internal_only() {
             assert_assess_ok(&report, updated.subject())?;
         }
@@ -990,7 +993,8 @@ fn resolve_once(
         let rel = patch_path(id)?.to_string_lossy().into_owned();
         patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
         patch.status = status_after_rewrite(repo, patch);
-        let detail = rewrite_event_detail(patch.status, "Conflict resolved");
+        let detail =
+            rewrite_event_detail(patch.status, &with_people("Conflict resolved", &resolvers));
         add_event(patch, "amended", detail);
     }
     if checks.is_probe() {
