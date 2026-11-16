@@ -36,8 +36,9 @@
 # dependencies is unmerged. Such a run waits on `to-upstream` like any other.
 #
 # Empty UPLINK_*_AUTH defaults to app.
-# Origin reads and uplink/state fast-forwards use the Actions token
-# (UPLINK_INTERNAL_TOKEN). The contrib commit is created through the Git
+# Origin reads use the Actions token. uplink/state fast-forwards (the packet,
+# the approval, submitted, rejected) use the internal App or PAT, as
+# UPLINK_INTERNAL_TOKEN. The contrib commit is created through the Git
 # Database API with UPLINK_CONTRIB_* (contents write on the fork); GitHub signs
 # it, and it is Verified only for a GitHub App token.
 # The public pull request is POST /repos/{parent}/pulls with UPLINK_UPSTREAM_*
@@ -160,7 +161,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     concurrency:
       group: uplink-mutate
       queue: max
@@ -194,10 +195,23 @@ jobs:
           name: uplink-packet-extras
           path: ${{ runner.temp }}/uplink-packet-extras
 
+      # uplink/state is written only by the internal App (or the PAT's
+      # machine user), never GITHUB_TOKEN; see uplink-state-writers-ruleset.json.
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
       - name: Write approver packet
         id: packet
         env:
-          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
           HOOK_STATUS: ${{ needs.assess.outputs.hook_status }}
           HOOK_RUN_URL: ${{ needs.assess.outputs.hook_run_url }}
@@ -322,7 +336,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       deployments: write
     environment:
       name: to-upstream
@@ -388,10 +402,23 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
+      # uplink/state is written only by the internal App (or the PAT's
+      # machine user), never GITHUB_TOKEN; see uplink-state-writers-ruleset.json.
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
       - name: Record approval, export, and record the public PR
         env:
           GH_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
-          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           UPLINK_CONTRIB_TOKEN: ${{ steps.contrib-app.outputs.token || secrets.UPLINK_CONTRIB_TOKEN }}
           UPLINK_TO_UPSTREAM_ENVIRONMENT: to-upstream
           PATCH_ID: ${{ inputs.patch_id }}
@@ -479,7 +506,7 @@ jobs:
     if: always() && github.ref == 'refs/heads/main' && needs.packet.outputs.waiting == 'true' && (needs.submit.result == 'failure' || needs.submit.result == 'cancelled')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       actions: read
     concurrency:
       group: uplink-mutate
@@ -497,10 +524,23 @@ jobs:
           signer: ${{ vars.UPLINK_SIGNER }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # uplink/state is written only by the internal App (or the PAT's
+      # machine user), never GITHUB_TOKEN; see uplink-state-writers-ruleset.json.
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
       - name: Record the rejection
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
           PATCH_ID: ${{ inputs.patch_id }}
           SUBMIT_RESULT: ${{ needs.submit.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

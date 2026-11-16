@@ -1006,6 +1006,20 @@ function RulesetList() {
         .
       </li>
       <li>
+        <strong>Uplink: state writers</strong> (<code>uplink/state</code>):
+        nobody may create or update it. The workflows trust what they read
+        there, so anyone who could push it could change what CI runs. Bypass:
+        the internal App, which records every change, and the admin role, for
+        operators. Imported disabled; set it to Active after adding the App.
+        Sample:{" "}
+        <a
+          href={`${GITHUB_BLOB}/templates/github/.github/uplink-state-writers-ruleset.json`}
+        >
+          uplink-state-writers-ruleset.json
+        </a>
+        .
+      </li>
+      <li>
         <strong>Uplink: upstream branch</strong> (<code>uplink/upstream</code>
         ): nobody may create, update, force-push or delete it. It is the
         accepted public base, and only <strong>Uplink sync</strong> moves it.
