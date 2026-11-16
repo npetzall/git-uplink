@@ -28,7 +28,7 @@ pub(crate) fn operator_identity(cwd: &Path) -> Option<(String, String)> {
 
 /// Settings forced on every call: the bot identity, no signing, and output
 /// that uplink parses (diffs, patches) free of the operator's colors,
-/// prefixes and sign-offs. Hooks never run on the bot's commits.
+/// prefixes and sign-offs. Hooks and an fsmonitor never run.
 const FIXED_CONFIG: &[(&str, &str)] = &[
     ("user.name", BOT_NAME),
     ("user.email", BOT_EMAIL),
@@ -42,6 +42,7 @@ const FIXED_CONFIG: &[(&str, &str)] = &[
     ("diff.mnemonicPrefix", "false"),
     ("diff.relative", "false"),
     ("core.hooksPath", "/dev/null"),
+    ("core.fsmonitor", "false"),
     ("format.signOff", "false"),
 ];
 
