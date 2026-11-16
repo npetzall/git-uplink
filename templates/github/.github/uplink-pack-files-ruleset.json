@@ -1,7 +1,7 @@
 {
   "name": "Uplink pack files",
   "target": "push",
-  "enforcement": "disabled",
+  "enforcement": "active",
   "bypass_actors": [
     {
       "actor_id": 5,

@@ -1010,7 +1010,7 @@ function RulesetList() {
         nobody may create or update it. The workflows trust what they read
         there, so anyone who could push it could change what CI runs. Bypass:
         the internal App, which records every change, and the admin role, for
-        operators. Imported disabled; set it to Active after adding the App.
+        operators. The sample ships active: add the App when you import it.
         Sample:{" "}
         <a
           href={`${GITHUB_BLOB}/templates/github/.github/uplink-state-writers-ruleset.json`}

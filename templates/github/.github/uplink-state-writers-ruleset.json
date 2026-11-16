@@ -1,7 +1,7 @@
 {
   "name": "Uplink state writers",
   "target": "branch",
-  "enforcement": "disabled",
+  "enforcement": "active",
   "bypass_actors": [
     {
       "actor_id": 5,
