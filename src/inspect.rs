@@ -100,7 +100,7 @@ pub fn check_remote_reachable(
     let spec = format!("refs/heads/{branch}");
     match git(
         repo,
-        &["ls-remote", "--heads", remote, &spec],
+        &["ls-remote", "--heads", "--end-of-options", remote, &spec],
         GitOpts::default(),
     ) {
         Ok(result) if result.code == 0 && !result.stdout.trim().is_empty() => {

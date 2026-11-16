@@ -164,7 +164,7 @@ fn network_remote_index(args: &[&str]) -> Option<usize> {
     let mut i = 1;
     while i < args.len() {
         let arg = args[i];
-        if arg == "--" {
+        if arg == "--" || arg == "--end-of-options" {
             return (i + 1 < args.len()).then_some(i + 1);
         }
         if arg.starts_with('-') {
@@ -265,7 +265,7 @@ fn http_origin(url: &str) -> Option<String> {
     }
 }
 
-fn shell_quote(value: &str) -> String {
+pub(crate) fn shell_quote(value: &str) -> String {
     if value
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~'))
@@ -839,6 +839,16 @@ mod tests {
         assert_eq!(
             network_remote_index(&["clone", "--quiet", "/tmp/repo.git", "/tmp/dest"]),
             Some(2)
+        );
+        assert_eq!(
+            network_remote_index(&[
+                "fetch",
+                "--quiet",
+                "--end-of-options",
+                "--upload-pack=x",
+                "+refs/heads/main:refs/remotes/x/main",
+            ]),
+            Some(3)
         );
         assert_eq!(network_remote_index(&["commit", "-m", "msg"]), None);
         assert_eq!(network_remote_index(&["remote", "get-url", "origin"]), None);
