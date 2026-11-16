@@ -574,6 +574,60 @@ impl Default for QueueConfig {
     }
 }
 
+impl QueueConfig {
+    /// Refuses remote and branch names that git would read as options or a
+    /// shell would split. They come from `uplink/state`, which any
+    /// collaborator who can push may have written.
+    pub fn validate(&self) -> crate::error::Result<()> {
+        for (field, name) in [
+            ("upstreamRemote", &self.upstream_remote),
+            ("contribRemote", &self.contrib_remote),
+        ] {
+            if !is_safe_remote_name(name) {
+                return Err(crate::error::Error::msg(format!(
+                    "queue.json {field} {name:?} is not a valid remote name \
+(letters, digits, '.', '_' and '-', not starting with '-')."
+                )));
+            }
+        }
+        for (field, name) in [
+            ("upstreamBranch", &self.upstream_branch),
+            ("internalBranch", &self.internal_branch),
+        ] {
+            if !is_safe_branch_name(name) {
+                return Err(crate::error::Error::msg(format!(
+                    "queue.json {field} {name:?} is not a valid branch name \
+(letters, digits, '.', '_', '-' and '/', as `git check-ref-format --branch` allows)."
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_safe_remote_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// `git check-ref-format --branch` rules, on the characters a shell leaves alone.
+fn is_safe_branch_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+        && !name.contains("..")
+        && !name.ends_with(".lock")
+        && name
+            .split('/')
+            .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
+        && !name.ends_with('.')
+}
+
 /// The company main the latest rebuild replaced. Earlier ones are earlier
 /// revisions of the file on `uplink/state`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

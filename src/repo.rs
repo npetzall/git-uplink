@@ -356,7 +356,14 @@ pub fn fetch_upstream_remote(repo: &Path, queue: &QueueState) -> Result<String> 
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
     git(
         repo,
-        &["fetch", "--quiet", "--prune", remote, &spec],
+        &[
+            "fetch",
+            "--quiet",
+            "--prune",
+            "--end-of-options",
+            remote,
+            &spec,
+        ],
         GitOpts::default(),
     )?;
     git_ok(repo, &["rev-parse", &format!("{remote}/{branch}")])
@@ -398,9 +405,17 @@ fn has_remote(repo: &Path, name: &str) -> bool {
 
 pub fn ensure_remote(repo: &Path, name: &str, url: &str) -> Result<()> {
     if has_remote(repo, name) {
-        git(repo, &["remote", "set-url", name, url], GitOpts::default())?;
+        git(
+            repo,
+            &["remote", "set-url", "--end-of-options", name, url],
+            GitOpts::default(),
+        )?;
     } else {
-        git(repo, &["remote", "add", name, url], GitOpts::default())?;
+        git(
+            repo,
+            &["remote", "add", "--end-of-options", name, url],
+            GitOpts::default(),
+        )?;
     }
     Ok(())
 }
@@ -500,7 +515,14 @@ pub fn refresh_upstream_ref(repo: &Path, remote: &str) -> Result<()> {
         return Ok(());
     }
     let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/remotes/{remote}/{UPSTREAM_REF}");
-    let args = ["fetch", "--quiet", "--prune", remote, spec.as_str()];
+    let args = [
+        "fetch",
+        "--quiet",
+        "--prune",
+        "--end-of-options",
+        remote,
+        spec.as_str(),
+    ];
     // C locale so the "couldn't find remote ref" message is not translated.
     let fetched = git(
         repo,
@@ -687,7 +709,11 @@ pub fn commit_files_on(
 /// Pushes `commit` to `{branch}` on `remote` as a fast-forward. Never forced.
 pub fn push_commit_to(repo: &Path, remote: &str, commit: &str, branch: &str) -> Result<()> {
     let dest = format!("{commit}:refs/heads/{branch}");
-    git(repo, &["push", remote, &dest], GitOpts::default())?;
+    git(
+        repo,
+        &["push", "--end-of-options", remote, &dest],
+        GitOpts::default(),
+    )?;
     Ok(())
 }
 
@@ -735,7 +761,17 @@ Run `git uplink init --upstream <url> --contrib <url>` to create a queue."
         )));
     }
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-    if !git_succeeds(repo, &["fetch", "--quiet", "--prune", remote, &spec])? {
+    if !git_succeeds(
+        repo,
+        &[
+            "fetch",
+            "--quiet",
+            "--prune",
+            "--end-of-options",
+            remote,
+            &spec,
+        ],
+    )? {
         if branch == STATE_BRANCH {
             return Err(not_initialized_error());
         }
@@ -769,7 +805,17 @@ pub fn apply_state_sha(repo: &Path, branch: &str, sha: &str) -> Result<()> {
 /// Fetch `uplink/state` into a remote-tracking ref without moving the local branch.
 pub fn fetch_state_tracking(repo: &Path, remote: &str, branch: &str) -> Result<Option<String>> {
     let spec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-    if !git_succeeds(repo, &["fetch", "--quiet", "--prune", remote, &spec])? {
+    if !git_succeeds(
+        repo,
+        &[
+            "fetch",
+            "--quiet",
+            "--prune",
+            "--end-of-options",
+            remote,
+            &spec,
+        ],
+    )? {
         return Ok(None);
     }
     Ok(Some(git_ok(
@@ -864,7 +910,11 @@ pub fn path_exists_at(repo: &Path, sha: &str, path: &str) -> Result<bool> {
 
 pub fn push_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> {
     let dest = format!("refs/heads/{branch}:refs/heads/{branch}");
-    git(repo, &["push", remote, &dest], GitOpts::default())?;
+    git(
+        repo,
+        &["push", "--end-of-options", remote, &dest],
+        GitOpts::default(),
+    )?;
     Ok(())
 }
 
@@ -882,7 +932,11 @@ pub fn push_branch_leased(
         expected.unwrap_or_default()
     );
     let dest = format!("refs/heads/{branch}:refs/heads/{branch}");
-    git(repo, &["push", &lease, remote, &dest], GitOpts::default())?;
+    git(
+        repo,
+        &["push", &lease, "--end-of-options", remote, &dest],
+        GitOpts::default(),
+    )?;
     Ok(())
 }
 

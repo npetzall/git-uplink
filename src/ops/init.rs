@@ -312,6 +312,7 @@ pub fn init(repo: &Path, opts: InitOpts) -> Result<InitResult> {
     let forge = opts.forge.ok_or_else(missing_forge_error)?;
     let mut config = config_from_opts(&opts);
     config.forge = Some(forge);
+    config.validate()?;
     let created = init_repo_with_progress(repo, config, &mut progress)?;
     // Before adoption: assessing adopted patches reads uplink.toml.
     ensure_hooks_step(repo, &created, HooksMode::Create, &opts, &mut progress)?;

@@ -46,7 +46,9 @@ pub fn read_queue(repo: &Path) -> Result<QueueState> {
 pub fn parse_queue(raw: &str) -> Result<QueueState> {
     let mut value: serde_json::Value = serde_json::from_str(raw)?;
     migrate_legacy_messages(&mut value);
-    Ok(serde_json::from_value(value)?)
+    let queue: QueueState = serde_json::from_value(value)?;
+    queue.config.validate()?;
+    Ok(queue)
 }
 
 /// Rewrites state written before a patch had only a commit message:
@@ -580,6 +582,36 @@ mod tests {
         assert!(assess.get("publicSubject").is_none(), "{assess}");
         assert!(assess.get("commitMessage").is_none(), "{assess}");
         assert_eq!(assess["publicMessage"], "Use SHA-256\n\nWhy.");
+    }
+
+    #[test]
+    fn parse_queue_refuses_option_and_shell_names() {
+        let queue = QueueState::empty(QueueConfig::default());
+        let raw = serde_json::to_string(&queue).unwrap();
+        parse_queue(&raw).unwrap();
+        for (field, bad) in [
+            ("upstreamRemote", "--upload-pack=touch X;"),
+            ("contribRemote", "-c"),
+            ("contribRemote", "a b"),
+            ("internalBranch", "main; curl x|sh"),
+            ("internalBranch", "--orphan"),
+            ("upstreamBranch", "a..b"),
+            ("upstreamBranch", "$(id)"),
+            ("internalBranch", ""),
+        ] {
+            let mut value = serde_json::to_value(&queue).unwrap();
+            value["config"][field] = bad.into();
+            let err = parse_queue(&value.to_string()).unwrap_err().to_string();
+            assert!(err.contains(field), "{field}={bad:?}: {err}");
+        }
+        for (field, good) in [
+            ("internalBranch", "release/1.0"),
+            ("upstreamRemote", "up_2.x"),
+        ] {
+            let mut value = serde_json::to_value(&queue).unwrap();
+            value["config"][field] = good.into();
+            parse_queue(&value.to_string()).unwrap();
+        }
     }
 
     fn patch_deps(id: &str, deps: &[&str]) -> Patch {

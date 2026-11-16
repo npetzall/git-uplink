@@ -86,7 +86,7 @@ pub fn rebase_plan(repo: &Path, head: &str, fetch: bool) -> Result<RebasePlan> {
     }
     match fork_point(repo, &plan.head, &upstream, &state_sha)? {
         Ok(fork) => {
-            let onto = format!("{COMPANY_REMOTE}/{}", plan.branch);
+            let onto = crate::git::shell_quote(&format!("{COMPANY_REMOTE}/{}", plan.branch));
             (plan.state, plan.command) = if is_ancestor(repo, &fork, &plan.target)? {
                 (RebaseState::Behind, Some(format!("git rebase {onto}")))
             } else {

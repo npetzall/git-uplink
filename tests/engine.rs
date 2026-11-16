@@ -3928,6 +3928,23 @@ fn preflight_missing_revs_not_on_origin_fails_clearly() {
 }
 
 #[test]
+fn sync_refuses_a_remote_name_that_git_reads_as_an_option() {
+    let world = setup_world();
+    let company = &world.company;
+    let marker = company.join("PWNED");
+    let path = company.join(".uplink/queue.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    value["config"]["upstreamRemote"] = format!("--upload-pack=touch {};", marker.display()).into();
+    fs::write(&path, value.to_string()).unwrap();
+    git_uplink::commit_queue(company, "uplink: hostile remote").unwrap();
+
+    let err = sync(company).unwrap_err().to_string();
+    assert!(err.contains("upstreamRemote"), "{err}");
+    assert!(!marker.exists(), "the upload-pack command ran");
+}
+
+#[test]
 fn sync_skips_rebuilding_main_when_upstream_is_unchanged() {
     let world = setup_world();
     let company = &world.company;
