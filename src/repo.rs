@@ -518,16 +518,7 @@ pub fn ensure_upstream_ref(repo: &Path) -> Result<()> {
     }
     let spec = format!("+refs/heads/{UPSTREAM_REF}:refs/heads/{UPSTREAM_REF}");
     let args = ["fetch", "--quiet", COMPANY_REMOTE, spec.as_str()];
-    // C locale so the "couldn't find remote ref" message is not translated.
-    let fetched = git(
-        repo,
-        &args,
-        GitOpts {
-            allow_fail: true,
-            extra_env: vec![("LC_ALL".into(), "C".into())],
-            ..GitOpts::default()
-        },
-    )?;
+    let fetched = git(repo, &args, GitOpts::allow_fail())?;
     // An origin without uplink/upstream is fine; any other failure is real.
     if fetched.code != 0 && !fetched.stderr.contains("couldn't find remote ref") {
         return Err(Error::Git(crate::git::GitError::new(&args, fetched)));
@@ -550,16 +541,7 @@ pub fn refresh_upstream_ref(repo: &Path, remote: &str) -> Result<()> {
         remote,
         spec.as_str(),
     ];
-    // C locale so the "couldn't find remote ref" message is not translated.
-    let fetched = git(
-        repo,
-        &args,
-        GitOpts {
-            allow_fail: true,
-            extra_env: vec![("LC_ALL".into(), "C".into())],
-            ..GitOpts::default()
-        },
-    )?;
+    let fetched = git(repo, &args, GitOpts::allow_fail())?;
     if fetched.code != 0 {
         // A remote without the branch is fine. Any other failure is not:
         // init would go on to seed uplink/upstream from public upstream,
