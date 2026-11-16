@@ -1675,6 +1675,44 @@ mod embed_tests {
             );
             assert_eq!(rules(&state), ["deletion", "non_fast_forward"]);
             assert_eq!(state["bypass_actors"], serde_json::json!([]));
+            // Only the internal App and admins write it; any job that pushes
+            // it uses that App, never its own GITHUB_TOKEN.
+            let writers = ruleset("uplink-state-writers-ruleset.json");
+            assert_eq!(
+                writers["conditions"]["ref_name"]["include"],
+                serde_json::json!(["refs/heads/uplink/state"])
+            );
+            assert_eq!(rules(&writers), ["creation", "update"]);
+            assert_eq!(
+                writers["bypass_actors"][0]["actor_type"], "RepositoryRole",
+                "{forge:?} keep the admin role for operators"
+            );
+            for (path, body) in &files {
+                if !path.starts_with(".github/workflows/") {
+                    continue;
+                }
+                let text = String::from_utf8_lossy(body);
+                let jobs = text.split_once("\njobs:\n").map_or("", |(_, jobs)| jobs);
+                let mut job = String::new();
+                for line in jobs.lines().chain(["  end:"]) {
+                    let is_job = line.starts_with("  ")
+                        && !line.starts_with("   ")
+                        && line.trim_end().ends_with(':');
+                    if is_job && !job.is_empty() {
+                        assert!(
+                            !(job.contains("      contents: write")
+                                && job.contains(
+                                    "UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}"
+                                )),
+                            "{forge:?} {path}: a job with contents write must push uplink/state \
+with the internal App, not GITHUB_TOKEN:\n{job}"
+                        );
+                        job.clear();
+                    }
+                    job.push_str(line);
+                    job.push('\n');
+                }
+            }
             // Only sync writes uplink/upstream, with the internal App.
             let upstream = ruleset("uplink-upstream-ruleset.json");
             assert_eq!(

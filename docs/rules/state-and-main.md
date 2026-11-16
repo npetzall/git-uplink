@@ -9,6 +9,7 @@ A change that reached the company (a merged pull request, an approval, a recorde
 ## `uplink/state`
 
 1. **Never force-push it.** Push it only as a fast-forward. The ruleset `uplink-state-ruleset.json` refuses anything else.
+   - **Push it with the internal App or PAT, never `GITHUB_TOKEN`.** `uplink-state-writers-ruleset.json` lets only the internal App and admins update it. A job that pushes it mints the internal App token and passes `steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN` as `UPLINK_INTERNAL_TOKEN`; its own `GITHUB_TOKEN` stays `contents: read`.
 2. **The command that writes it pushes it.** Use `--push` (or `--push-remote`) on the command, not a separate `git uplink push` or `git push` step afterwards. The command knows what it recorded and can do it again.
 3. **On a lost race, record again on the state that won.** Fetch origin's `uplink/state`, move local `uplink/state` and `.uplink/` to it, and run the whole change again, checks included (for example the review token). Do not restack local commits onto origin when the change also rebuilt `main`: the rebuild has to start from the state that won. The change must be safe to run twice (an import records a pull request once; an approval that already covers the patch is kept).
 4. **Work on origin's state, not the checkout, when the job holds no lock.** `approve --push` reads the queue and the patch from `origin/uplink/state` and builds its commit with a temporary index (`commit_files_on`), so nothing local can be stale.
