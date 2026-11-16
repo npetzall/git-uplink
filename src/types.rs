@@ -782,13 +782,20 @@ impl QueueState {
 impl<'de> Deserialize<'de> for QueueState {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wire = QueueStateWire::deserialize(deserializer)?;
+        // An older binary would drop what it does not know when it writes
+        // the queue back.
+        if wire.version > QUEUE_VERSION {
+            return Err(serde::de::Error::custom(format!(
+                "queue.json is version {}; this git uplink reads up to version {QUEUE_VERSION}. Upgrade git uplink.",
+                wire.version
+            )));
+        }
         Ok(wire.into_queue())
     }
 }
 
 #[derive(Deserialize)]
 struct QueueStateWire {
-    #[allow(dead_code)]
     version: u32,
     config: QueueConfig,
     #[serde(rename = "lastSync", default)]
