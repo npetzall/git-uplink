@@ -658,7 +658,7 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
         if !body.ends_with('\n') {
             body.push('\n');
         }
-        fs::write(&abs, body)?;
+        crate::queue::write_atomic(&abs, body)?;
         let mut queue = read_queue_file(repo)?;
         queue.pending_upstream = Some(PendingUpstream {
             sha: reconciliation.pending_sha.clone(),

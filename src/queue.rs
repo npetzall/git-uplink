@@ -106,19 +106,27 @@ pub fn migrate_legacy_messages(value: &mut serde_json::Value) {
     }
 }
 
-/// Temp file for [`write_queue`]; `commit_queue` never stages `*.tmp`.
-const QUEUE_TMP_PATH: &str = ".uplink/queue.json.tmp";
-
-/// Writes `queue.json` via a temp file and rename so a crash never leaves it truncated.
-pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
-    fs::create_dir_all(repo.join(PATCH_DIR))?;
-    let body = format!("{}\n", serde_json::to_string_pretty(queue)?);
-    let tmp = repo.join(QUEUE_TMP_PATH);
+/// Writes `path` via a new temp file beside it and a rename, so a crash never
+/// leaves it truncated and a symlink at `path` is replaced, not written
+/// through. `commit_queue` never stages the `*.tmp` file.
+pub fn write_atomic(path: &Path, body: impl AsRef<[u8]>) -> Result<()> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| Error::msg(format!("cannot write {}", path.display())))?;
+    let tmp = path.with_file_name(format!(
+        "{}.{}.tmp",
+        name.to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
     let written = (|| -> std::io::Result<()> {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(body.as_bytes())?;
+        // create_new fails on anything already there, a symlink included.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        file.write_all(body.as_ref())?;
         file.sync_all()?;
-        fs::rename(&tmp, repo.join(QUEUE_PATH))
+        fs::rename(&tmp, path)
     })();
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
@@ -126,9 +134,15 @@ pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
     Ok(written?)
 }
 
+pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
+    fs::create_dir_all(repo.join(PATCH_DIR))?;
+    let body = format!("{}\n", serde_json::to_string_pretty(queue)?);
+    write_atomic(&repo.join(QUEUE_PATH), body)
+}
+
 pub fn write_previous_main(repo: &Path, previous: &PreviousMain) -> Result<()> {
     let body = format!("{}\n", serde_json::to_string_pretty(previous)?);
-    Ok(fs::write(repo.join(PREVIOUS_MAIN_PATH), body)?)
+    write_atomic(&repo.join(PREVIOUS_MAIN_PATH), body)
 }
 
 pub fn active_upstream(queue: &QueueState) -> Vec<&Patch> {
@@ -899,7 +913,33 @@ mod tests {
         let raw = fs::read_to_string(repo.join(QUEUE_PATH)).unwrap();
         let read: QueueState = serde_json::from_str(&raw).unwrap();
         assert_eq!(read.upstream.len(), 1);
-        assert!(!repo.join(QUEUE_TMP_PATH).exists());
+        let leftover: Vec<_> = fs::read_dir(repo.join(".uplink"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftover.is_empty(), "{leftover:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_replaces_a_symlink_instead_of_writing_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("script.sh");
+        fs::write(&target, "echo hi\n").unwrap();
+        let link = dir.path().join("upl_x.patch");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        write_atomic(&link, "patch text\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "echo hi\n");
+        assert!(
+            !fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&link).unwrap(), "patch text\n");
     }
 
     #[test]

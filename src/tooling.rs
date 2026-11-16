@@ -129,7 +129,7 @@ pub fn commit_tooling_refresh(
     ensure_uplink_dirs(repo)?;
     let mut queue = read_queue_file(repo)?;
     let patch_rel = patch_path(&id)?;
-    fs::write(repo.join(&patch_rel), &formatted)?;
+    crate::queue::write_atomic(&repo.join(&patch_rel), &formatted)?;
 
     let assess = assess_from_message(
         repo,

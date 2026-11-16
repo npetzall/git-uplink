@@ -271,7 +271,7 @@ fn complete_amend(
 
     fs::create_dir_all(repo.join(".uplink/patches"))?;
     let patch_abs = repo.join(patch_path(id)?);
-    fs::write(&patch_abs, format_patch_at_head(repo)?)?;
+    crate::queue::write_atomic(&patch_abs, format_patch_at_head(repo)?)?;
     {
         let current = get_patch_mut(&mut queue, id)?;
         current.commit_message = updated.commit_message.clone();

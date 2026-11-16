@@ -798,7 +798,7 @@ fn candidate(ctx: &Ctx<'_>, run: &BranchRun, queue: &QueueState) -> Result<Candi
                     if let Some(parent) = abs.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    fs::write(&abs, format!("{text}\n"))?;
+                    crate::queue::write_atomic(&abs, format!("{text}\n"))?;
                 }
             }
             Ok(Candidate {

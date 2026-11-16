@@ -1043,7 +1043,7 @@ fn finish_tooling_upgrade(repo: &Path, ready: ReadyUpgrade) -> Result<Upgraded> 
         overrides,
     } = ready;
     for patch in &amended {
-        fs::write(repo.join(patch_path(&patch.id)?), &patch.contents)?;
+        crate::queue::write_atomic(&repo.join(patch_path(&patch.id)?), &patch.contents)?;
     }
     crate::tooling::commit_tooling_refresh(repo, plan, |queue| {
         for (id, _) in &dropped {
