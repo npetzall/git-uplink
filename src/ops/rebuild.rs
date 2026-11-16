@@ -1,4 +1,4 @@
-use super::message::{commit_message_change, with_message};
+use super::message::{check_message_dependencies, commit_message_change, with_message};
 use super::*;
 
 #[derive(Debug, Clone, Default)]
@@ -963,6 +963,7 @@ fn resolve_once(
     // branch is put back as it was so the resolution can be fixed.
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
     let checked = (|| -> Result<AssessReport> {
+        check_message_dependencies(&queue, id, intent.is_internal_only(), &updated.depends_on)?;
         let report = assess_from_message(repo, &queue, &onto, "HEAD", &raw_message, intent)?;
         if !intent.is_internal_only() {
             assert_assess_ok(&report, updated.subject())?;
@@ -983,6 +984,7 @@ fn resolve_once(
         let patch = get_patch_mut(&mut queue, id)?;
         patch.commit_message = updated.commit_message;
         patch.source.authors = updated.source.authors;
+        patch.depends_on = updated.depends_on;
         patch.assess = Some(report);
         patch.conflict = None;
         let rel = patch_path(id)?.to_string_lossy().into_owned();

@@ -1,4 +1,4 @@
-use super::message::{commit_message_change, with_message};
+use super::message::{check_message_dependencies, commit_message_change, with_message};
 use super::transfer::{PreviewOutcome, apply_queue_preview, not_previewed};
 use super::*;
 use crate::gate::cut_amend_work;
@@ -218,6 +218,7 @@ fn complete_amend(
 
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
     let checked = (|| -> Result<AssessReport> {
+        check_message_dependencies(&queue, id, intent.is_internal_only(), &updated.depends_on)?;
         let report = assess_from_message(repo, &queue, &onto, "HEAD", &raw_message, intent)?;
         if !intent.is_internal_only() {
             assert_assess_ok(&report, updated.subject())?;
@@ -235,7 +236,8 @@ fn complete_amend(
 
     let unchanged = tree_of(repo, "HEAD")? == tree_of(repo, &original)?
         && updated.commit_message.clone() == patch.commit_message.clone()
-        && updated.source.authors == original_authors;
+        && updated.source.authors == original_authors
+        && updated.depends_on == patch.depends_on;
     if unchanged {
         git(
             repo,
@@ -271,6 +273,7 @@ fn complete_amend(
         let current = get_patch_mut(&mut queue, id)?;
         current.commit_message = updated.commit_message.clone();
         current.source.authors = updated.source.authors.clone();
+        current.depends_on = updated.depends_on.clone();
     }
     let verdict = checks.verdict();
     let layer_checks = if intent.is_internal_only() {

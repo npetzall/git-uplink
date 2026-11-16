@@ -83,7 +83,7 @@ While an adoption runs, and while it is paused, `uplink/state` is locked: every 
     (
         "Gated PRs",
         "\
-`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch subject (the first line of the stored message) and whose body (`bodyFile`) is the rest of the message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title, a blank line and the PR body as `--message-file`.",
+`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch subject (the first line of the stored message) and whose body (`bodyFile`) is the rest of the message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. The body also has an `Uplink-Depends-On` line for each dependency the stored message does not name. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title, a blank line and the PR body as `--message-file`, and its `Uplink-Depends-On` lines replace the patch's dependencies.",
     ),
     (
         "Credentials and identity",

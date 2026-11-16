@@ -396,13 +396,15 @@ git commit -am "Address review on <id>"
 git push`}</Code>
         <p>
           The PR title is the subject of the patch's commit message and the
-          description its body. Edit them if the message should change. The{" "}
-          <strong>Uplink gate</strong> check assesses the whole amended patch
-          with that message. A company-only patch is not assessed and needs no
-          IP approval; the check runs only the preflight script. Mark the PR
-          ready, get it reviewed, and merge it. The patch keeps its id and{" "}
-          <code>main</code> is rebuilt. If it was already submitted and the
-          change touches the lines the patch adds or removes, or the public
+          description its body. Edit them if the message should change. The
+          description lists the patch's <code>Uplink-Depends-On</code> lines; on
+          merge they replace its dependencies, so add or remove a line to change
+          them. The <strong>Uplink gate</strong> check assesses the whole
+          amended patch with that message. A company-only patch is not assessed
+          and needs no IP approval; the check runs only the preflight script.
+          Mark the PR ready, get it reviewed, and merge it. The patch keeps its
+          id and <code>main</code> is rebuilt. If it was already submitted and
+          the change touches the lines the patch adds or removes, or the public
           message, the patch is queued again and goes to IP as a small delta.
           After approval, the same public PR is updated. Close the PR without
           merging to cancel.

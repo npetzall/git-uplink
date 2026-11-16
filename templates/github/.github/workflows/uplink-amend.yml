@@ -6,7 +6,8 @@
 # and including the patch, which becomes the protected base
 # uplink/amend/<id>. A -work branch one empty commit ahead is pushed and a
 # draft PR is opened. Commit the change on -work and edit the PR title and
-# description (they become the subject and body of the patch message). Merging runs
+# description (they become the subject and body of the patch message, and its
+# Uplink-Depends-On lines the patch's dependencies). Merging runs
 # git uplink amend --complete, which re-assesses the patch and rebuilds
 # company main. If preflight.sh fails on the rebuilt tree, the first patch
 # it fails on (found with git bisect) gets a conflict PR, as in sync. For a
