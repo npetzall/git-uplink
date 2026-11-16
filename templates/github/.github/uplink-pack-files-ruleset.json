@@ -1,5 +1,5 @@
 {
-  "name": "Uplink pack files",
+  "name": "Uplink: pack files",
   "target": "push",
   "enforcement": "active",
   "bypass_actors": [
