@@ -1666,6 +1666,14 @@ mod embed_tests {
                     .map(|r| r["type"].as_str().unwrap().to_string())
                     .collect()
             };
+            // Every ruleset ships active, so a missing bypass fails a push
+            // instead of leaving the ruleset off.
+            for (path, body) in &files {
+                if path.starts_with(".github/uplink-") && path.ends_with("-ruleset.json") {
+                    let set: serde_json::Value = serde_json::from_slice(body).unwrap();
+                    assert_eq!(set["enforcement"], "active", "{forge:?} {path}");
+                }
+            }
             // `git uplink push` only fast-forwards uplink/state, so nothing
             // needs to bypass a ban on force-push and deletion.
             let state = ruleset("uplink-state-ruleset.json");
