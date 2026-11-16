@@ -105,6 +105,16 @@ fn is_credential_env(name: &str) -> bool {
     ) || (name.starts_with("UPLINK_") && (name.ends_with("_TOKEN") || name.ends_with("_KEY")))
 }
 
+/// The runner's command files. They are dropped from the environment of
+/// `preflight.sh` too: through them the script could set `PATH` or
+/// `BASH_ENV` for the later steps of its job, or add job outputs.
+fn is_runner_command_file(name: &str) -> bool {
+    matches!(
+        name,
+        "GITHUB_ENV" | "GITHUB_OUTPUT" | "GITHUB_PATH" | "GITHUB_STATE" | "GITHUB_STEP_SUMMARY"
+    )
+}
+
 /// What `preflight.sh` said about one tree. `preflight --json` and
 /// `--preflight-only` print it in a job without credentials;
 /// `--preflight-result` reads it back, so the command that holds the
@@ -507,7 +517,8 @@ impl<'a> PreflightScript<'a> {
     }
 
     /// Runs `script` with `sh -c` in `cwd`, the path of `preflight.sh` as
-    /// its `$1`, without the credentials a job can hold.
+    /// its `$1`, without the credentials a job can hold or the runner's
+    /// command files.
     fn shell(&self, cwd: &Path, script: &str, echo: &mut dyn Write) -> (i32, String) {
         // One pipe for stdout and stderr keeps their lines in order.
         let mut cmd = Command::new("sh");
@@ -517,7 +528,10 @@ impl<'a> PreflightScript<'a> {
             .stdin(Stdio::null())
             .stdout(Stdio::piped());
         for (name, _) in env::vars_os() {
-            if name.to_str().is_some_and(is_credential_env) {
+            if name
+                .to_str()
+                .is_some_and(|name| is_credential_env(name) || is_runner_command_file(name))
+            {
                 cmd.env_remove(name);
             }
         }
@@ -1697,6 +1711,22 @@ diff --git a/my file b/my file
         }
         for name in ["UPLINK_SRC", "UPLINK_VERSION", "PATH", "HOME", "MY_TOKEN"] {
             assert!(!is_credential_env(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn runner_command_file_names() {
+        for name in [
+            "GITHUB_ENV",
+            "GITHUB_OUTPUT",
+            "GITHUB_PATH",
+            "GITHUB_STATE",
+            "GITHUB_STEP_SUMMARY",
+        ] {
+            assert!(is_runner_command_file(name), "{name}");
+        }
+        for name in ["GITHUB_WORKSPACE", "GITHUB_SHA", "PATH", "RUNNER_TEMP"] {
+            assert!(!is_runner_command_file(name), "{name}");
         }
     }
 
