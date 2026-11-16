@@ -628,6 +628,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_queue_refuses_a_newer_version() {
+        let queue = QueueState::empty(QueueConfig::default());
+        let mut value = serde_json::to_value(&queue).unwrap();
+        value["version"] = (crate::types::QUEUE_VERSION + 1).into();
+        let err = parse_queue(&value.to_string()).unwrap_err().to_string();
+        assert!(err.contains("Upgrade git uplink"), "{err}");
+    }
+
     fn patch_deps(id: &str, deps: &[&str]) -> Patch {
         let mut patch = patch(id);
         patch.depends_on = deps.iter().map(|s| (*s).to_string()).collect();
