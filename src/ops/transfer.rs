@@ -1,4 +1,4 @@
-use super::message::{commit_message_change, with_message};
+use super::message::{check_message_dependencies, commit_message_change, with_message};
 use super::*;
 
 #[derive(Debug, Clone)]
@@ -577,6 +577,7 @@ pub(super) fn complete_transfer(
         let current = get_patch_mut(&mut preview, id)?;
         current.commit_message = updated.commit_message.clone();
         current.source.authors = updated.source.authors.clone();
+        current.depends_on = updated.depends_on.clone();
     }
     let checked = transfer_checks(
         repo,
@@ -612,6 +613,7 @@ pub(super) fn complete_transfer(
         let current = get_patch_mut(&mut queue, id)?;
         current.commit_message = updated.commit_message;
         current.source.authors = updated.source.authors;
+        current.depends_on = updated.depends_on;
     }
     write_queue_file(repo, &queue)?;
     commit_queue(
@@ -651,6 +653,12 @@ fn change_message(
     if change.is_none() {
         return Ok((updated, None));
     }
+    check_message_dependencies(
+        queue,
+        &patch.id,
+        direction.to_internal(),
+        &updated.depends_on,
+    )?;
     let report = assess_from_message(
         repo,
         queue,

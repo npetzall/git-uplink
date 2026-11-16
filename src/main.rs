@@ -29,15 +29,16 @@ use git_uplink::{
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
     format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    mark_rejected, mark_waiting, message_subject, newly_ready_to_submit, parse_github_repo,
-    parse_pull_request_url, patch_text, public_subject_and_body, push_imported_main, push_queue,
-    push_rebuilt_main, read_queue, rebase_onto_main, rebase_plan, rebuild_inline,
-    rebuild_preflight, rebuild_with, record_gated_pr, record_on_remote, record_pull_request,
-    refresh_from_origin, refuse_script_with_credentials, report_paths, reset_from_origin,
-    resolve_conflict_with, resolve_preflight, restack, resume_rebuild, review_token,
-    review_token_path, set_script_echo, split_subject_body, status_report, status_snapshot,
-    store_assess_result, store_patch_extras, strip_html_comments, submit_patch_with, sync_with,
-    transfer_patch_with, transfer_preflight, trim_deps, upstream_pr_body, write_man_pages,
+    mark_rejected, mark_waiting, message_subject, newly_ready_to_submit, parse_depends_on,
+    parse_github_repo, parse_pull_request_url, patch_text, public_subject_and_body,
+    push_imported_main, push_queue, push_rebuilt_main, read_queue, rebase_onto_main, rebase_plan,
+    rebuild_inline, rebuild_preflight, rebuild_with, record_gated_pr, record_on_remote,
+    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
+    reset_from_origin, resolve_conflict_with, resolve_preflight, restack, resume_rebuild,
+    review_token, review_token_path, set_script_echo, split_subject_body, status_report,
+    status_snapshot, store_assess_result, store_patch_extras, strip_html_comments,
+    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, trim_deps,
+    upstream_pr_body, write_man_pages,
 };
 use git_uplink::{SelfEnv, self_available, self_check, self_list, self_update, self_use};
 
@@ -526,11 +527,28 @@ fn resolve_artifact(
 }
 
 /// The description of a gated PR: the stored message without its subject,
-/// which is the PR title. On merge the title, a blank line and the
-/// description become the commit message again.
+/// which is the PR title, and an `Uplink-Depends-On` line for each
+/// dependency the message does not name (adopt records them without one).
+/// On merge the title, a blank line and the description become the commit
+/// message again, and its `Uplink-Depends-On` lines the dependencies.
 fn patch_body(patch: &Patch) -> String {
     let (_, body) = split_subject_body(&patch.commit_message);
-    format!("{body}\n")
+    let named = parse_depends_on(&patch.commit_message);
+    let missing: Vec<String> = patch
+        .depends_on
+        .iter()
+        .filter(|id| !named.contains(id))
+        .map(|id| format!("Uplink-Depends-On: {id}"))
+        .collect();
+    if missing.is_empty() {
+        return format!("{body}\n");
+    }
+    let lines = missing.join("\n");
+    if body.trim().is_empty() {
+        format!("{lines}\n")
+    } else {
+        format!("{}\n\n{lines}\n", body.trim_end())
+    }
 }
 
 /// The closing part of every gated PR comment.
@@ -3009,6 +3027,25 @@ mod tests {
         assert_eq!(
             patch_body(&patch),
             "Why.\n\n----- Uplink: internal below this line -----\nPROJ-1\n"
+        );
+    }
+
+    #[test]
+    fn gated_pr_body_names_every_dependency_once() {
+        let patch: Patch = serde_json::from_value(serde_json::json!({
+            "id": "upl_x",
+            "commitMessage": "Use SHA-256\n\nWhy.\nUplink-Depends-On: upl_0123456789",
+            "status": "queued",
+            "dependsOn": ["upl_0123456789", "upl_abcdefabcd"],
+            "createdAt": "t",
+            "updatedAt": "t",
+            "source": {},
+            "events": [],
+        }))
+        .unwrap();
+        assert_eq!(
+            patch_body(&patch),
+            "Why.\nUplink-Depends-On: upl_0123456789\n\nUplink-Depends-On: upl_abcdefabcd\n"
         );
     }
 

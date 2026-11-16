@@ -5485,6 +5485,30 @@ fn a_patch_that_does_not_apply_at_all_opens_a_draft_on_an_empty_work_commit() {
     let world = setup_world();
     let company = &world.company;
     let upstream = &world.upstream;
+    // Named by the resolution message's Uplink-Depends-On line.
+    git(
+        company,
+        &["checkout", "-b", "feat/docs"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "docs/tokens.md", "Tokens expire.\n");
+    commit_all(company, "document tokens");
+    let docs_patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Document tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
     git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
     write(
         company,
@@ -5559,12 +5583,16 @@ fn a_patch_that_does_not_apply_at_all_opens_a_draft_on_an_empty_work_commit() {
         company,
         &ttl_patch.id,
         Some(git_uplink::PatchMessage {
-            message: "Keep a longer TTL\n\nTokens moved out of upstream.".into(),
+            message: format!(
+                "Keep a longer TTL\n\nTokens moved out of upstream.\nUplink-Depends-On: {}",
+                docs_patch.id
+            ),
         }),
         &ScriptVerdict::Run,
     )
     .unwrap();
     let resolved = patch_of(company, &ttl_patch.id);
+    assert_eq!(resolved.depends_on, vec![docs_patch.id.clone()]);
     assert_eq!(resolved.status, PatchStatus::Queued);
     assert_eq!(resolved.subject(), "Keep a longer TTL");
     assert!(
@@ -11757,6 +11785,39 @@ fn transfer_complete_applies_work_and_moves_the_patch() {
 }
 
 #[test]
+fn transfer_complete_takes_depends_on_from_the_merged_pr() {
+    let world = setup_world();
+    let company = &world.company;
+    let ttl = add_ttl_patch(company);
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let notes = add_internal_notes(company);
+    set_preflight_script(company, "grep -q ready NOTES.md");
+    let gated = transfer_patch(company, &notes.id, TransferDirection::ToUpstream, false).unwrap();
+    let work = gated.work_branch.unwrap();
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    write(company, "NOTES.md", "internal-notes\nready\n");
+    commit_all(company, "make preflight pass");
+    let done = transfer_patch_with(
+        company,
+        &notes.id,
+        TransferDirection::ToUpstream,
+        true,
+        Some(git_uplink::PatchMessage {
+            message: format!("Public notes\n\nUplink-Depends-On: {}", ttl.id),
+        }),
+        &ScriptVerdict::Run,
+    )
+    .unwrap();
+    assert!(done.transferred, "{done:?}");
+    assert_eq!(patch_of(company, &notes.id).depends_on, vec![ttl.id]);
+}
+
+#[test]
 fn transfer_complete_takes_the_title_and_message_of_the_merged_pr() {
     let world = setup_world();
     let company = &world.company;
@@ -13319,6 +13380,186 @@ fn amend_complete_refuses_a_leaking_message_and_keeps_the_branch() {
     assert!(matches!(err, Error::Assess(_)), "{err}");
     assert_eq!(rev_of(company, &base), before);
     assert_eq!(patch_of(company, &patch.id).subject(), patch.subject());
+}
+
+/// Two independent upstream patches on `src/tokens.js`: `hash` (sha1 →
+/// sha256), then `ttl` (3600 → 7200), cut from main after `hash` landed.
+fn hash_then_ttl(company: &Path) -> (Patch, Patch) {
+    git(
+        company,
+        &["checkout", "-b", "feat/hash"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "use sha256");
+    let hash = add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Use SHA-256 for tokens".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(company, &["checkout", "-b", "feat/ttl"], GitOpts::default()).unwrap();
+    let hashed = fs::read_to_string(company.join("src/tokens.js")).unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &hashed.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "longer ttl");
+    let ttl = add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(ttl.depends_on.is_empty());
+    (hash, ttl)
+}
+
+/// `tokens.js` with both patches and a comment on the line `hash` added, so
+/// the amended `ttl` no longer applies on upstream without `hash`.
+fn ttl_on_the_hash_line() -> String {
+    TOKENS
+        .replace("return sha1(value);", "return sha256(value); // hashed")
+        .replace("return 3600;", "return 7200;")
+}
+
+#[test]
+fn amend_complete_takes_depends_on_from_the_pr_message() {
+    let world = setup_world();
+    let company = &world.company;
+    let (hash, ttl) = hash_then_ttl(company);
+    amend_patch(company, &ttl.id, false, None).unwrap();
+    amend_on_work_and_squash(company, &ttl.id, "src/tokens.js", &ttl_on_the_hash_line());
+    let base = format!("uplink/amend/{}", ttl.id);
+    let before = rev_of(company, &base);
+
+    let err = amend_patch(
+        company,
+        &ttl.id,
+        true,
+        Some(PatchMessage {
+            message: "Extend TTL\n".into(),
+        }),
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::Preflight(_)), "{err}");
+    assert_eq!(rev_of(company, &base), before);
+
+    let done = amend_patch(
+        company,
+        &ttl.id,
+        true,
+        Some(PatchMessage {
+            message: format!("Extend TTL\n\nUplink-Depends-On: {}\n", hash.id),
+        }),
+    )
+    .unwrap();
+    assert!(done.changed);
+    assert_eq!(patch_of(company, &ttl.id).depends_on, vec![hash.id]);
+}
+
+#[test]
+fn amend_complete_with_only_a_depends_on_change_is_recorded_and_can_drop_it() {
+    let world = setup_world();
+    let company = &world.company;
+    let (hash, ttl) = hash_then_ttl(company);
+    let base = format!("uplink/amend/{}", ttl.id);
+    let merge_work = || {
+        git(company, &["checkout", "--quiet", &base], GitOpts::default()).unwrap();
+        git(
+            company,
+            &["merge", "--no-ff", "--no-edit", &format!("{base}-work")],
+            GitOpts::default(),
+        )
+        .unwrap();
+    };
+
+    amend_patch(company, &ttl.id, false, None).unwrap();
+    merge_work();
+    let done = amend_patch(
+        company,
+        &ttl.id,
+        true,
+        Some(PatchMessage {
+            message: format!("Extend TTL\n\nUplink-Depends-On: {}\n", hash.id),
+        }),
+    )
+    .unwrap();
+    assert!(done.changed, "{done:?}");
+    assert_eq!(patch_of(company, &ttl.id).depends_on, vec![hash.id.clone()]);
+
+    amend_patch(company, &ttl.id, false, None).unwrap();
+    merge_work();
+    let done = amend_patch(
+        company,
+        &ttl.id,
+        true,
+        Some(PatchMessage {
+            message: "Extend TTL\n".into(),
+        }),
+    )
+    .unwrap();
+    assert!(done.changed, "{done:?}");
+    assert!(patch_of(company, &ttl.id).depends_on.is_empty());
+}
+
+#[test]
+fn amend_complete_refuses_an_unknown_or_internal_dependency_and_keeps_the_branch() {
+    let world = setup_world();
+    let company = &world.company;
+    let notes = add_internal_notes(company);
+    git(
+        company,
+        &["checkout", "--quiet", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let ttl = add_ttl_patch(company);
+    amend_patch(company, &ttl.id, false, None).unwrap();
+    amend_on_work_and_squash(
+        company,
+        &ttl.id,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 5400;"),
+    );
+    let base = format!("uplink/amend/{}", ttl.id);
+    let before = rev_of(company, &base);
+    for (dep, expected) in [
+        ("upl_0123456789", "upl_0123456789"),
+        (notes.id.as_str(), "internal-only"),
+        (ttl.id.as_str(), "itself"),
+    ] {
+        let err = amend_patch(
+            company,
+            &ttl.id,
+            true,
+            Some(PatchMessage {
+                message: format!("Extend TTL\n\nUplink-Depends-On: {dep}\n"),
+            }),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains(expected), "{err}");
+        assert_eq!(rev_of(company, &base), before);
+    }
+    assert!(patch_of(company, &ttl.id).depends_on.is_empty());
 }
 
 #[test]
