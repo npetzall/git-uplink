@@ -163,18 +163,7 @@ pub(super) fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
 pub(super) fn restore_uplink_from_state(repo: &Path) -> Result<()> {
     let queue_ref = STATE_BRANCH;
     if has_ref(repo, queue_ref)? {
-        git(
-            repo,
-            &[
-                "restore",
-                "--source",
-                queue_ref,
-                "--worktree",
-                "--",
-                ".uplink",
-            ],
-            GitOpts::default(),
-        )?;
+        crate::repo::restore_state_worktree(repo, queue_ref)?;
     }
     Ok(())
 }

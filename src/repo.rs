@@ -15,7 +15,34 @@ pub(crate) const UPSTREAM_REF: &str = "uplink/upstream";
 pub(crate) const COMPANY_REMOTE: &str = "origin";
 
 pub fn ensure_uplink_dirs(repo: &Path) -> Result<()> {
+    for dir in [".uplink", PATCH_DIR] {
+        if fs::symlink_metadata(repo.join(dir)).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Err(Error::msg(format!(
+                "{dir} is a symlink; git uplink does not write through symlinks. Remove it."
+            )));
+        }
+    }
     fs::create_dir_all(repo.join(PATCH_DIR))?;
+    Ok(())
+}
+
+/// Refuses a symlink among `paths` at `source`. Anyone who can push may
+/// have written `uplink/state`, and a restored symlink would turn a later
+/// write or read of `.uplink/` into one of any file.
+fn refuse_state_symlinks(repo: &Path, source: &str, paths: &[&str]) -> Result<()> {
+    let mut args = vec!["ls-tree", "-r", "-z", "--full-tree", source, "--"];
+    args.extend_from_slice(paths);
+    let listing = git_ok(repo, &args)?;
+    for entry in listing.split('\0') {
+        if let Some((meta, path)) = entry.split_once('\t')
+            && meta.starts_with("120000 ")
+        {
+            return Err(Error::msg(format!(
+                "{source} has a symlink at {path}. git uplink does not restore \
+symlinks under .uplink/; remove it from {source} with a new commit."
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -206,7 +233,7 @@ pub fn write_product_patch(
     } else {
         format!("{formatted}\n")
     };
-    fs::write(repo.join(&file), body)?;
+    crate::queue::write_atomic(&repo.join(&file), body)?;
     Ok(file)
 }
 
@@ -262,7 +289,7 @@ pub fn apply_patch_file(
         if let Some(parent) = patch_file_abs.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(patch_file_abs, body)?;
+        crate::queue::write_atomic(patch_file_abs, body)?;
     }
     Ok(ApplyOutcome::Applied)
 }
@@ -571,7 +598,8 @@ fn ensure_uplink_excluded(repo: &Path) -> Result<()> {
     Ok(())
 }
 
-fn restore_state_worktree(repo: &Path, source: &str) -> Result<()> {
+pub(crate) fn restore_state_worktree(repo: &Path, source: &str) -> Result<()> {
+    refuse_state_symlinks(repo, source, &[".uplink"])?;
     git(
         repo,
         &["restore", "--source", source, "--worktree", "--", ".uplink"],
@@ -898,8 +926,10 @@ pub fn restore_paths_from(repo: &Path, source: &str, paths: &[String]) -> Result
     if paths.is_empty() {
         return Ok(());
     }
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    refuse_state_symlinks(repo, source, &paths)?;
     let mut args = vec!["restore", "--source", source, "--worktree", "--"];
-    args.extend(paths.iter().map(String::as_str));
+    args.extend_from_slice(&paths);
     git(repo, &args, GitOpts::default())?;
     Ok(())
 }

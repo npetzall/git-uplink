@@ -3944,6 +3944,26 @@ fn sync_refuses_a_remote_name_that_git_reads_as_an_option() {
     assert!(!marker.exists(), "the upload-pack command ran");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_symlink_under_uplink_on_the_state_branch_is_not_restored() {
+    let world = setup_world();
+    let company = &world.company;
+    let readme = fs::read_to_string(company.join("README.md")).unwrap();
+    fs::create_dir_all(company.join(".uplink/reports")).unwrap();
+    std::os::unix::fs::symlink("../../README.md", company.join(".uplink/reports/x.md")).unwrap();
+    git_uplink::commit_queue(company, "uplink: hostile symlink").unwrap();
+
+    fs::remove_dir_all(company.join(".uplink")).unwrap();
+    let err = sync(company).unwrap_err().to_string();
+    assert!(err.contains("symlink at .uplink/reports/x.md"), "{err}");
+    assert!(fs::symlink_metadata(company.join(".uplink/reports/x.md")).is_err());
+    assert_eq!(
+        fs::read_to_string(company.join("README.md")).unwrap(),
+        readme
+    );
+}
+
 #[test]
 fn sync_skips_rebuilding_main_when_upstream_is_unchanged() {
     let world = setup_world();

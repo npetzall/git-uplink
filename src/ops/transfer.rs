@@ -573,7 +573,7 @@ pub(super) fn complete_transfer(
             }
         };
     fs::create_dir_all(repo.join(".uplink/patches"))?;
-    fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
+    crate::queue::write_atomic(&repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
 
     let mut preview = queue.clone();
     move_patch(&mut preview, id, direction.to_internal())?;

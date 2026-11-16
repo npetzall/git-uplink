@@ -982,7 +982,7 @@ fn resolve_once(
         }
     };
     fs::create_dir_all(repo.join(".uplink/patches"))?;
-    fs::write(repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
+    crate::queue::write_atomic(&repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
     {
         let patch = get_patch_mut(&mut queue, id)?;
         patch.commit_message = updated.commit_message;
