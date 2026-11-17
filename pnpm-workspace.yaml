@@ -28,3 +28,10 @@ allowBuilds:
 overrides:
   katex: 0.19.0
   lodash-es: 4.18.1
+
+audit:
+  ignore:
+    # picomatch ReDoS from a crafted extglob pattern. Only build and test
+    # tools (vite, vitest, tailwind) use it, with patterns from our own
+    # config; nothing ships in site/ or web/. No patched version yet.
+    - GHSA-fc5q-39xc-vjpf
