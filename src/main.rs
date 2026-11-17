@@ -2449,11 +2449,17 @@ fn cmd_amend(
     verdict: &ScriptVerdict,
     push: bool,
 ) -> Result<(), Error> {
-    if complete {
+    let start = if complete {
         refuse_script_here(repo, verdict, None)?;
-    }
+        Some(checkout_pin(repo)?)
+    } else {
+        None
+    };
     // A completion whose rebuild stopped on a patch is recorded too.
     let (amended, push) = record_maybe_push(repo, push, || {
+        if let Some(start) = &start {
+            start.restore(repo)?;
+        }
         match amend_patch_with(repo, id, complete, change.clone(), verdict) {
             Err(Error::Conflict(err)) if complete => Ok(Err(Error::Conflict(err))),
             other => other.map(Ok),
