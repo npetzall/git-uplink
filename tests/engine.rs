@@ -18923,3 +18923,133 @@ fn amend_push_records_again_on_a_moved_state_from_the_merged_base() {
         "internal\nreviewed"
     );
 }
+
+/// Drops the PR files a gated start wrote under `.uplink/`: the start and
+/// the completion run in separate jobs, so the completion never has them.
+fn clear_gated_pr_files(repo: &Path) {
+    let reports = repo.join(".uplink/reports");
+    for dir in fs::read_dir(&reports).unwrap().flatten() {
+        for name in ["conflict", "transfer", "amend", "split", "merge"] {
+            let _ = fs::remove_file(dir.path().join(format!("{name}.md")));
+            let _ = fs::remove_file(dir.path().join(format!("{name}-comment.md")));
+        }
+    }
+}
+
+#[test]
+fn resolve_push_records_again_on_a_moved_state_from_the_merged_base() {
+    let race = rebuild_race(false);
+    let hash = race.hash.id.clone();
+    write(
+        &race.upstream,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha512(value);"),
+    );
+    commit_all(&race.upstream, "upstream hasher");
+    let upstream_sha = rev_of(&race.upstream, "HEAD");
+    race.cli_json(&["sync", "--push"]);
+    let accepted = race.cli_json(&["accept-upstream", "--sha", &upstream_sha, "--push"]);
+    assert_eq!(accepted["conflict"]["id"], hash.as_str(), "{accepted}");
+    clear_gated_pr_files(&race.runner);
+    let base = format!("uplink/conflict/{hash}");
+    let work = format!("{base}-work");
+    git(
+        &race.runner,
+        &["checkout", "--quiet", "-f", &work],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        &race.runner,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(&race.runner, "resolve");
+    git(
+        &race.runner,
+        &["checkout", "--quiet", &base],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &race.runner,
+        &["merge", "--squash", &work],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &race.runner,
+        &["commit", "-m", "Resolve (#10)"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    reset_from_origin(&race.ben).unwrap();
+    let (ben_state, marker) = race.ben_wins_the_state_push();
+
+    let json = race.cli_json(&["resolve", &hash, "--push"]);
+
+    assert!(marker.exists(), "the first state push lost the race");
+    assert_eq!(json["push"]["main"], "pushed", "{json}");
+    let state = origin_state(&race.origin);
+    assert!(git_succeeds_in(
+        &race.origin,
+        &["merge-base", "--is-ancestor", &ben_state, &state]
+    ));
+    let queue = git_uplink::queue_at(&race.origin, &state).unwrap();
+    let resolved = queue.all_patches().find(|p| p.id == hash).unwrap();
+    assert_ne!(resolved.status, PatchStatus::Conflict);
+    let main = race.origin_main();
+    let tokens = git_ok(&race.origin, &["show", &format!("{main}:src/tokens.js")]).unwrap();
+    assert!(tokens.contains("sha256"), "{tokens}");
+}
+
+#[test]
+fn transfer_complete_push_records_again_on_a_moved_state_from_the_merged_base() {
+    let race = rebuild_race(false);
+    let notes = race.notes.id.clone();
+    set_preflight_script(&race.runner, "grep -q ready NOTES.md");
+    let gated = race.cli_json(&["transfer", &notes, "--to-upstream"]);
+    assert_eq!(gated["gated"], true, "{gated}");
+    clear_gated_pr_files(&race.runner);
+    let base = format!("uplink/transfer-to-upstream/{notes}");
+    let work = format!("{base}-work");
+    git(
+        &race.runner,
+        &["checkout", "--quiet", "-f", &work],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&race.runner, "NOTES.md", "internal\nready\n");
+    commit_all(&race.runner, "make preflight pass");
+    git(
+        &race.runner,
+        &["checkout", "--quiet", &base],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &race.runner,
+        &["merge", "--squash", &work],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        &race.runner,
+        &["commit", "-m", "Transfer (#11)"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let (ben_state, marker) = race.ben_wins_the_state_push();
+
+    let json = race.cli_json(&["transfer", &notes, "--to-upstream", "--complete", "--push"]);
+
+    assert!(marker.exists(), "the first state push lost the race");
+    assert_eq!(json["push"]["main"], "pushed", "{json}");
+    let state = origin_state(&race.origin);
+    assert!(git_succeeds_in(
+        &race.origin,
+        &["merge-base", "--is-ancestor", &ben_state, &state]
+    ));
+    let queue = git_uplink::queue_at(&race.origin, &state).unwrap();
+    assert!(queue.is_upstream(&notes), "the transfer is on origin");
+}
