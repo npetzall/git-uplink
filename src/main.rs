@@ -2412,8 +2412,10 @@ fn cmd_resolve(
     verdict: &ScriptVerdict,
     push: bool,
 ) -> Result<(), Error> {
+    let start = checkout_pin(repo)?;
     // The rebuild stopping on another patch is recorded too: Ok(false).
     let ((before, resolved), push) = record_maybe_push(repo, push, || {
+        start.restore(repo)?;
         let before = read_queue(repo)?;
         match resolve_conflict_with(repo, id, change.clone(), verdict) {
             Ok(_) => Ok((before, true)),
@@ -2495,9 +2497,10 @@ fn cmd_amend(
     }
 }
 
-/// The merged gate base a completion starts from. A lost race records
-/// again on the state that won, after the first attempt rebuilt and checked
-/// out `main`; each attempt starts from this checkout again.
+/// The merged gate base a completion (amend, split, merge, resolve,
+/// transfer) starts from. A lost race records again on the state that won,
+/// after the first attempt rebuilt and checked out `main`; each attempt
+/// starts from this checkout again.
 struct CheckoutPin {
     branch: String,
     sha: String,
@@ -2652,7 +2655,15 @@ fn cmd_transfer(
     push: bool,
 ) -> Result<(), Error> {
     refuse_script_here(repo, verdict, None)?;
+    let start = if complete {
+        Some(checkout_pin(repo)?)
+    } else {
+        None
+    };
     let (result, push) = record_maybe_push(repo, push, || {
+        if let Some(start) = &start {
+            start.restore(repo)?;
+        }
         transfer_patch_with(repo, id, direction, complete, change.clone(), verdict)
     })?;
     print_transfer_artifact(repo, &result, push.as_ref())?;
