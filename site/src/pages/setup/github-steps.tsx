@@ -148,6 +148,11 @@ const VARIABLES = [
     "false",
     "true rebases and pushes every open pull request branch a rebuild of main leaves behind. The committer becomes the bot and commit signatures are lost",
   ],
+  [
+    "UPLINK_PREFLIGHT_TIMEOUT_MINUTES",
+    "60",
+    "Minutes a preflight job may run preflight.sh. Most hold the uplink-mutate lock meanwhile, so every other mutation waits; one that times out records nothing",
+  ],
 ];
 
 const APPS = [

@@ -33,6 +33,7 @@ jobs:
     name: Preflight main as rebuilt (no credentials)
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(vars.UPLINK_PREFLIGHT_TIMEOUT_MINUTES || '60') }}
     permissions:
       contents: read
     outputs:

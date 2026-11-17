@@ -1049,6 +1049,14 @@ mod embed_tests {
                         && !probing.contains(": write"),
                     "{forge:?} {workflow} {probe} must be read-only\n{probing}"
                 );
+                // Most of these hold uplink-mutate while the script runs: a
+                // stuck build must not hold it for GitHub's six hours.
+                assert!(
+                    probing.contains(
+                        "    timeout-minutes: ${{ fromJSON(vars.UPLINK_PREFLIGHT_TIMEOUT_MINUTES || '60') }}\n"
+                    ),
+                    "{forge:?} {workflow} {probe} must time out after UPLINK_PREFLIGHT_TIMEOUT_MINUTES"
+                );
                 let recording = job(workflow, record);
                 assert!(
                     recording.contains(&format!("needs: {probe}"))
@@ -1114,8 +1122,13 @@ mod embed_tests {
                     "UPLINK_REDACT_KEYWORDS",
                     "UPLINK_INTERNAL_DOMAINS",
                 ] {
+                    // The whole name: UPLINK_PREFLIGHT_TIMEOUT_MINUTES is another.
+                    let used = text.match_indices(variable).any(|(i, _)| {
+                        !text[i + variable.len()..]
+                            .starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric())
+                    });
                     assert!(
-                        !text.contains(variable),
+                        !used,
                         "{forge:?} {path} still uses {variable}; it lives on uplink/hooks now"
                     );
                 }
