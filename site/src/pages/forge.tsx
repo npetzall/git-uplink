@@ -40,6 +40,18 @@ const WORKFLOWS: [string, string, string, string][] = [
     "amend, gated",
   ],
   [
+    "Uplink split",
+    "Developer dispatch; split PR closed",
+    "Opens a draft split PR before the patch, then turns each commit of the merged PR into a patch.",
+    "split, gated",
+  ],
+  [
+    "Uplink merge",
+    "Developer dispatch; merge PR closed",
+    "Opens a draft merge PR with the patches as one commit, then folds it into one patch and drops the rest.",
+    "merge, gated",
+  ],
+  [
     "Uplink transfer",
     "Developer dispatch; transfer PR closed",
     "Moves a patch between the internal and upstream queues, through a transfer PR when it needs changes.",
@@ -47,7 +59,7 @@ const WORKFLOWS: [string, string, string, string][] = [
   ],
   [
     "Uplink gate",
-    "Pull request into a conflict, amend or transfer base",
+    "Pull request into a conflict, amend, split, merge or transfer base",
     "Assesses and preflights what the gated PR would make the patch. On an upstream amend or transfer that passes, runs the assessment hook as advice.",
     "assess, preflight",
   ],
@@ -105,9 +117,10 @@ export function ForgePage() {
           </li>
           <li>
             <strong>Gates</strong> every change to a patch through a pull
-            request: conflicts, amends and transfers each get a draft PR from a{" "}
-            <code>-work</code> branch, checked by <strong>Uplink gate</strong>.
-            Merging it finishes the change; closing it cancels.
+            request: conflicts, amends, splits, merges and transfers each get a
+            draft PR from a <code>-work</code> branch, checked by{" "}
+            <strong>Uplink gate</strong>. Merging it finishes the change;
+            closing it cancels.
           </li>
         </ul>
         <p>

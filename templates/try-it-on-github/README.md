@@ -19,10 +19,12 @@ The workflows themselves are identical. The setup sets the repository variables 
 | `uplink-verify.yml` — Uplink verify | **Actions → Uplink verify** when `main` is broken; runs `preflight.sh` on `main` as rebuilt and opens a gated PR for the first patch it fails on | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; label `uplink:conflict` |
 | `uplink-transfer.yml` — Uplink transfer | **Actions → Uplink transfer** to move a patch between queues | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; labels `uplink:transfer-to-upstream`, `uplink:transfer-to-internal` |
 | `uplink-amend.yml` — Uplink amend | **Actions → Uplink amend** with a patch id opens a draft PR to revise it; merging updates the patch (and re-submits a submitted one) | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; label `uplink:amend` |
+| `uplink-split.yml` — Uplink split | **Actions → Uplink split** with a patch id opens a draft PR; rewrite its work branch into one commit per part and merge to turn each into a patch | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; label `uplink:split` |
+| `uplink-merge.yml` — Uplink merge | **Actions → Uplink merge** with patch ids opens a draft PR with them as one change; merging folds them into one patch and drops the rest | `UPLINK_INTERNAL_TOKEN`, `UPLINK_UPSTREAM_TOKEN`; label `uplink:merge` |
 | `uplink-abandon.yml` — Uplink abandon contrib | Dispatched by transfer after moving a submitted patch to internal; waits on `abandon-contrib` | `UPLINK_CONTRIB_TOKEN` on Environment `abandon-contrib`; `UPLINK_UPSTREAM_TOKEN` |
-| `uplink-gate.yml` — Uplink gate | Required check on gated conflict, transfer, and amend PRs | `preflight.sh` on `uplink/hooks` |
+| `uplink-gate.yml` — Uplink gate | Required check on gated conflict, transfer, amend, split, and merge PRs | `preflight.sh` on `uplink/hooks` |
 
-The internal token opens the gated conflict, transfer, and amend PRs, so it needs **Pull requests: read and write** besides Contents and Workflows.
+The internal token opens the gated conflict, transfer, amend, split, and merge PRs, so it needs **Pull requests: read and write** besides Contents and Workflows.
 
 The contrib token needs **Contents: read and write** and **Workflows: read and write** on the fork: GitHub refuses a commit that changes `.github/workflows/` without Workflows.
 

@@ -361,6 +361,8 @@ pub enum GateKind {
     TransferToUpstream,
     TransferToInternal,
     Amend,
+    Split,
+    Merge,
 }
 
 impl GateKind {
@@ -370,6 +372,8 @@ impl GateKind {
             Self::TransferToUpstream => "transfer-to-upstream",
             Self::TransferToInternal => "transfer-to-internal",
             Self::Amend => "amend",
+            Self::Split => "split",
+            Self::Merge => "merge",
         }
     }
 
@@ -379,6 +383,8 @@ impl GateKind {
             Self::TransferToUpstream => "uplink/transfer-to-upstream",
             Self::TransferToInternal => "uplink/transfer-to-internal",
             Self::Amend => "uplink/amend",
+            Self::Split => "uplink/split",
+            Self::Merge => "uplink/merge",
         }
     }
 
@@ -396,6 +402,8 @@ impl GateKind {
             Self::TransferToUpstream => "uplink:transfer-to-upstream",
             Self::TransferToInternal => "uplink:transfer-to-internal",
             Self::Amend => "uplink:amend",
+            Self::Split => "uplink:split",
+            Self::Merge => "uplink:merge",
         }
     }
 }

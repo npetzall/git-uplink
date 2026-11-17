@@ -71,6 +71,13 @@ pub fn amend_preflight(
 }
 
 fn validate_amend(queue: &QueueState, id: &str) -> Result<Patch> {
+    validate_rewrite(queue, id, "amended")
+}
+
+/// The patch `id`, when a gated rewrite (amend, split, merge) may change
+/// it: not tooling, not in conflict, still active. `what` is the rewrite
+/// in the past tense, for the error.
+pub(super) fn validate_rewrite(queue: &QueueState, id: &str, what: &str) -> Result<Patch> {
     if queue.is_tooling(id) {
         return Err(Error::msg(format!(
             "{id} is tooling; change it with git uplink init --upgrade"
@@ -79,10 +86,10 @@ fn validate_amend(queue: &QueueState, id: &str) -> Result<Patch> {
     let patch = get_patch(queue, id)?.clone();
     match patch.status {
         PatchStatus::Conflict => Err(Error::msg(format!(
-            "{id} is in conflict; resolve it before amending"
+            "{id} is in conflict; resolve it before it is {what}"
         ))),
         PatchStatus::Merged | PatchStatus::Dropped => Err(Error::msg(format!(
-            "{id} cannot be amended while status is {}",
+            "{id} cannot be {what} while status is {}",
             patch.status
         ))),
         _ => Ok(patch),

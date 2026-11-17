@@ -236,8 +236,8 @@ const GATED_RULESET = `{
     { "actor_id": {{internalAppId}}, "actor_type": "Integration", "bypass_mode": "always" }
   ],
   "conditions": { "ref_name": {
-    "include": ["refs/heads/uplink/conflict/**", "refs/heads/uplink/transfer-to-upstream/**", "refs/heads/uplink/transfer-to-internal/**", "refs/heads/uplink/amend/**"],
-    "exclude": ["refs/heads/uplink/conflict/*-work", "refs/heads/uplink/transfer-to-upstream/*-work", "refs/heads/uplink/transfer-to-internal/*-work", "refs/heads/uplink/amend/*-work"] } },
+    "include": ["refs/heads/uplink/conflict/**", "refs/heads/uplink/transfer-to-upstream/**", "refs/heads/uplink/transfer-to-internal/**", "refs/heads/uplink/amend/**", "refs/heads/uplink/split/**", "refs/heads/uplink/merge/**"],
+    "exclude": ["refs/heads/uplink/conflict/*-work", "refs/heads/uplink/transfer-to-upstream/*-work", "refs/heads/uplink/transfer-to-internal/*-work", "refs/heads/uplink/amend/*-work", "refs/heads/uplink/split/*-work", "refs/heads/uplink/merge/*-work"] } },
   "rules": [
     { "type": "creation" },
     { "type": "deletion" },
@@ -269,9 +269,11 @@ const PACK_RULESET = `{
           ".github/workflows/uplink-amend.yml",
           ".github/workflows/uplink-gate.yml",
           ".github/workflows/uplink-import.yml",
+          ".github/workflows/uplink-merge.yml",
           ".github/workflows/uplink-pr.yml",
           ".github/workflows/uplink-rebase.yml",
           ".github/workflows/uplink-resolve.yml",
+          ".github/workflows/uplink-split.yml",
           ".github/workflows/uplink-submit.yml",
           ".github/workflows/uplink-sync-daily.yml",
           ".github/workflows/uplink-sync-hourly.yml",
@@ -991,11 +993,11 @@ function RulesetList() {
       </li>
       <li>
         <strong>Uplink: gated bases</strong> (<code>uplink/conflict/**</code>,{" "}
-        <code>uplink/transfer-to-*/**</code>, <code>uplink/amend/**</code>,
-        excluding <code>*-work</code>): pull request with one approval, required
-        check <code>Uplink gate</code>, no direct creation, deletion, or
-        force-push. Bypass: the internal App, which creates and deletes these
-        branches.
+        <code>uplink/transfer-to-*/**</code>, <code>uplink/amend/**</code>,{" "}
+        <code>uplink/split/**</code>, <code>uplink/merge/**</code>, excluding{" "}
+        <code>*-work</code>): pull request with one approval, required check{" "}
+        <code>Uplink gate</code>, no direct creation, deletion, or force-push.
+        Bypass: the internal App, which creates and deletes these branches.
       </li>
       <li>
         <strong>Uplink: pack files</strong> (push ruleset, every branch): nobody
