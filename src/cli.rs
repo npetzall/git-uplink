@@ -965,11 +965,19 @@ pub enum Commands {
         #[arg(long)]
         push: bool,
     },
-    /// Show the queue.
+    /// Show the queue on origin/uplink/state as last fetched.
+    ///
+    /// Reads `origin/uplink/state` with git. Local branches and the
+    /// `.uplink/` folder are not read. Nothing is fetched unless `--refresh`
+    /// is given.
     Status {
         /// Print the queue status as JSON, for machines.
         #[arg(long)]
         json: bool,
+        /// Fetch origin's tracking refs first, as `git uplink refresh` does.
+        /// No local branch is moved.
+        #[arg(long)]
+        refresh: bool,
     },
     /// Check the setup of this clone.
     ///
@@ -1683,9 +1691,10 @@ pub enum Commands {
     },
     /// Start the embedded operator dashboard on 127.0.0.1 and open a browser.
     ///
-    /// Serves the local operator UI for this checkout. It reads
-    /// `.uplink/queue.json` from `uplink/state` in the directory you started
-    /// in, and can also inspect `origin/uplink/state` after a fetch. The UI is
+    /// Serves the local operator UI for this checkout. It reads the queue on
+    /// `origin/uplink/state` as last fetched, with git; local branches and
+    /// the `.uplink/` folder are not read. Its Refresh button fetches
+    /// origin's tracking refs, as `git uplink refresh` does. The UI is
     /// embedded in the binary.
     #[command(name = "web-ui")]
     WebUi {

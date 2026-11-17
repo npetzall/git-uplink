@@ -1,35 +1,38 @@
 use super::*;
 
-pub struct StatusSnapshot {
+/// The queue as origin has it: `origin/uplink/state` as last fetched. Read
+/// with git; the `.uplink/` folder and local branches are never read.
+#[derive(Debug)]
+pub struct OriginStatus {
+    /// `origin/uplink/state`.
+    pub state_ref: String,
+    pub state_sha: String,
     pub queue: QueueState,
-    pub company_head: String,
+    /// The company branch on origin, as last fetched.
+    pub company_head: Option<String>,
+    /// `origin/uplink/upstream`, as last fetched.
     pub upstream_head: Option<String>,
-    pub product_files: std::collections::BTreeMap<String, String>,
-    pub state: StateStatus,
     /// Approved or submitted patches that changed since their last approval.
     pub stale_approvals: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StateStatus {
-    pub branch: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub local: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ahead: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub behind: Option<u32>,
-    pub uncommitted: Vec<String>,
+/// The working queue in `.uplink/` and the product files at HEAD, for
+/// inspecting what a command did in this clone. Commands show the queue
+/// with [`origin_status`] instead.
+pub struct WorkingSnapshot {
+    pub queue: QueueState,
+    pub company_head: String,
+    pub upstream_head: Option<String>,
+    pub product_files: std::collections::BTreeMap<String, String>,
+    /// Approved or submitted patches that changed since their last approval.
+    pub stale_approvals: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusReport {
+    pub state_ref: String,
+    pub state_sha: String,
     pub counts: QueueCounts,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tooling: Option<Patch>,
@@ -37,13 +40,12 @@ pub struct StatusReport {
     pub internal: Vec<Patch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<LastSync>,
-    pub state: StateStatus,
     /// Approved or submitted patches that changed since their last
     /// approval; `submit` refuses them until they are approved again.
     pub stale_approvals: Vec<String>,
 }
 
-pub fn status_snapshot(repo: &Path) -> Result<StatusSnapshot> {
+pub fn working_snapshot(repo: &Path) -> Result<WorkingSnapshot> {
     let queue = read_queue_file(repo)?;
     let company_head = rev_parse(repo, &queue.config.internal_branch)?;
     let upstream_head = if has_ref(repo, "uplink/upstream")? {
@@ -62,103 +64,79 @@ pub fn status_snapshot(repo: &Path) -> Result<StatusSnapshot> {
             git_ok(repo, &["show", &format!("HEAD:{file}")])?,
         );
     }
-    let state = state_status(repo)?;
     let stale_approvals = stale_approvals(repo, &queue);
-    Ok(StatusSnapshot {
+    Ok(WorkingSnapshot {
         stale_approvals,
         queue,
         company_head,
         upstream_head,
         product_files,
-        state,
     })
 }
 
-pub(super) fn state_status(repo: &Path) -> Result<StateStatus> {
-    state_status_at(repo, true)
+fn optional_rev(repo: &Path, git_ref: &str) -> Result<Option<String>> {
+    if has_ref(repo, git_ref)? {
+        Ok(Some(rev_parse(repo, git_ref)?))
+    } else {
+        Ok(None)
+    }
 }
 
-pub fn state_status_at(repo: &Path, fetch: bool) -> Result<StateStatus> {
-    let branch = STATE_BRANCH.to_string();
-    let local = if has_ref(repo, &branch)? {
-        Some(rev_parse(repo, &branch)?)
-    } else {
-        None
+/// The queue on `origin/uplink/state` as last fetched. Fetches nothing and
+/// moves no branch; `refresh_from_origin` fetches.
+pub fn origin_status(repo: &Path) -> Result<OriginStatus> {
+    let state_ref = format!("{COMPANY_REMOTE}/{STATE_BRANCH}");
+    let Some(state_sha) = optional_rev(repo, &state_ref)? else {
+        return Err(Error::msg(format!(
+            "no {state_ref}; run `git uplink refresh` to fetch it"
+        )));
     };
-    let uncommitted = uplink_uncommitted_paths(repo, &branch)?;
-    let remote = if fetch {
-        fetch_state_tracking(repo, COMPANY_REMOTE, &branch)?
-    } else {
-        let tracking = format!("{COMPANY_REMOTE}/{branch}");
-        if has_ref(repo, &tracking)? {
-            Some(rev_parse(repo, &tracking)?)
-        } else {
-            None
-        }
-    };
-    let (remote_ref, ahead, behind) = if let Some(remote_sha) = remote.as_deref() {
-        let remote_ref = format!("{COMPANY_REMOTE}/{branch}");
-        let (ahead, behind) = match local.as_deref() {
-            Some(local_sha) => ahead_behind(repo, local_sha, remote_sha)?,
-            None => (
-                0,
-                git_ok(repo, &["rev-list", "--count", remote_sha])?
-                    .trim()
-                    .parse()
-                    .unwrap_or(0),
-            ),
-        };
-        (Some(remote_ref), Some(ahead), Some(behind))
-    } else {
-        (None, None, None)
-    };
-    Ok(StateStatus {
-        branch,
-        local,
-        remote,
-        remote_ref,
-        ahead,
-        behind,
-        uncommitted,
+    let queue = queue_at(repo, &state_ref)?;
+    let company_head = optional_rev(
+        repo,
+        &format!("{COMPANY_REMOTE}/{}", queue.config.internal_branch),
+    )?;
+    let upstream_head = optional_rev(repo, &format!("{COMPANY_REMOTE}/{UPSTREAM_REF}"))?;
+    let stale_approvals = stale_approvals_at(repo, &state_ref, &queue);
+    Ok(OriginStatus {
+        state_ref,
+        state_sha,
+        queue,
+        company_head,
+        upstream_head,
+        stale_approvals,
     })
 }
 
-pub fn status_report(snapshot: &StatusSnapshot) -> StatusReport {
+pub fn status_report(status: &OriginStatus) -> StatusReport {
     StatusReport {
-        counts: summarize_queue(&snapshot.queue),
-        tooling: snapshot.queue.tooling.clone(),
-        upstream: snapshot.queue.upstream.clone(),
-        internal: snapshot.queue.internal.clone(),
-        last_sync: snapshot.queue.last_sync.clone(),
-        state: snapshot.state.clone(),
-        stale_approvals: snapshot.stale_approvals.clone(),
+        state_ref: status.state_ref.clone(),
+        state_sha: status.state_sha.clone(),
+        counts: summarize_queue(&status.queue),
+        tooling: status.queue.tooling.clone(),
+        upstream: status.queue.upstream.clone(),
+        internal: status.queue.internal.clone(),
+        last_sync: status.queue.last_sync.clone(),
+        stale_approvals: status.stale_approvals.clone(),
     }
 }
 
-pub fn format_status_table(snapshot: &StatusSnapshot) -> String {
+pub fn format_status_table(status: &OriginStatus) -> String {
     let mut out = String::new();
-    let state = &snapshot.state;
-    let local_short = state.local.as_deref().map(short_sha).unwrap_or("(none)");
-    let sync = match (state.ahead, state.behind) {
-        (Some(0), Some(0)) => "up to date".to_string(),
-        (Some(ahead), Some(behind)) => format!("ahead {ahead}  behind {behind}"),
-        _ => "no origin tracking".to_string(),
-    };
-    let _ = writeln!(out, "{}  {local_short}  {sync}", state.branch);
-    if !state.uncommitted.is_empty() {
-        let _ = writeln!(out, "uncommitted:");
-        for path in &state.uncommitted {
-            let _ = writeln!(out, "  {path}");
-        }
-    }
+    let _ = writeln!(
+        out,
+        "{}  {}  (as last fetched)",
+        status.state_ref,
+        short_sha(&status.state_sha)
+    );
     let _ = writeln!(out);
     let _ = writeln!(
         out,
         "{:<12}  {:<10}  {:<14}  title  link",
         "id", "status", "queue"
     );
-    for patch in snapshot.queue.all_patches() {
-        let layer = crate::queue::layer_label(&snapshot.queue, &patch.id);
+    for patch in status.queue.all_patches() {
+        let layer = crate::queue::layer_label(&status.queue, &patch.id);
         let link = patch
             .upstream
             .as_ref()
@@ -173,14 +151,14 @@ pub fn format_status_table(snapshot: &StatusSnapshot) -> String {
             patch.subject()
         );
     }
-    if !snapshot.stale_approvals.is_empty() {
+    if !status.stale_approvals.is_empty() {
         let _ = writeln!(
             out,
             "needs approval before submit (content changed since the last approval): {}",
-            snapshot.stale_approvals.join(", ")
+            status.stale_approvals.join(", ")
         );
     }
-    if let Some(sync) = &snapshot.queue.last_sync {
+    if let Some(sync) = &status.queue.last_sync {
         let _ = writeln!(out, "last sync: {} @ {}", sync.result, sync.at);
         if let Some(msg) = &sync.message {
             let _ = writeln!(out, "{msg}");

@@ -15,13 +15,11 @@ use tokio::net::TcpListener;
 
 use crate::assess::{FileDelta, revision_delta};
 use crate::ops::{
-    QueueCounts, StateStatus, approval_stale_at, ready_to_submit_ids, refresh_from_origin,
-    stale_approvals_at, state_status_at, summarize_queue,
+    QueueCounts, approval_stale_at, origin_status, ready_to_submit_ids, refresh_from_origin,
+    summarize_queue,
 };
 use crate::queue::{get_patch, patch_path, require_path_component, submit_layers};
-use crate::repo::{
-    COMPANY_REMOTE, FileRevision, file_history, has_ref, queue_at, rev_parse, show_at,
-};
+use crate::repo::{COMPANY_REMOTE, FileRevision, file_history, has_ref, queue_at, show_at};
 use crate::types::{LastSync, Patch, QueueState, STATE_BRANCH};
 
 #[derive(RustEmbed)]
@@ -33,51 +31,14 @@ struct AppState {
     repo: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueueSource {
-    /// The local `uplink/state` branch, read with git.
-    Local,
-    /// `origin/uplink/state` as last fetched.
-    Remote,
-}
-
-impl QueueSource {
-    fn parse(value: Option<&str>) -> Self {
-        match value.map(str::trim) {
-            Some("remote") => Self::Remote,
-            _ => Self::Local,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Remote => "remote",
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct StatusQuery {
-    source: Option<String>,
-    fetch: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct PatchQuery {
-    source: Option<String>,
-}
-
 #[derive(Deserialize)]
 struct FileQuery {
-    source: Option<String>,
     sha: Option<String>,
     path: String,
 }
 
 #[derive(Deserialize)]
 struct DiffQuery {
-    source: Option<String>,
     from: String,
     to: String,
 }
@@ -87,7 +48,10 @@ struct DiffQuery {
 struct StatusResponse {
     present: bool,
     cwd: String,
-    source: String,
+    /// `origin/uplink/state`, the only queue the UI reads.
+    state_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state_sha: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,8 +68,6 @@ struct StatusResponse {
     internal: Option<Vec<Patch>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_sync: Option<LastSync>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    state: Option<StateStatus>,
     /// Approved or submitted patches that changed since their last approval.
     #[serde(skip_serializing_if = "Option::is_none")]
     stale_approvals: Option<Vec<String>>,
@@ -119,7 +81,6 @@ struct StatusResponse {
 #[serde(rename_all = "camelCase")]
 struct SubmitStreamResponse {
     present: bool,
-    source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     layers: Vec<Vec<StreamNodeBody>>,
@@ -142,7 +103,6 @@ struct StreamNodeBody {
 #[serde(rename_all = "camelCase")]
 struct PatchResponse {
     present: bool,
-    source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -306,16 +266,16 @@ fn launch_browser(url: &str) {
     }
 }
 
-/// Fetching from origin is opt-in: a plain `GET /api/status` never touches the network.
-fn wants_fetch(value: Option<&str>) -> bool {
-    matches!(value.map(str::trim), Some("1" | "true" | "yes"))
+fn state_ref() -> String {
+    format!("{COMPANY_REMOTE}/{STATE_BRANCH}")
 }
 
-fn missing_status(cwd: String, source: QueueSource, error: String) -> StatusResponse {
+fn missing_status(cwd: String, error: String) -> StatusResponse {
     StatusResponse {
         present: false,
         cwd,
-        source: source.as_str().into(),
+        state_ref: state_ref(),
+        state_sha: None,
         error: Some(error),
         company_head: None,
         upstream_head: None,
@@ -324,61 +284,19 @@ fn missing_status(cwd: String, source: QueueSource, error: String) -> StatusResp
         upstream: None,
         internal: None,
         last_sync: None,
-        state: None,
         stale_approvals: None,
         ready_to_submit: None,
     }
 }
 
-fn source_ref(source: QueueSource) -> String {
-    match source {
-        QueueSource::Local => STATE_BRANCH.to_string(),
-        QueueSource::Remote => format!("{COMPANY_REMOTE}/{STATE_BRANCH}"),
-    }
-}
-
-fn maybe_fetch(repo: &Path, fetch: bool) {
-    if !fetch {
-        return;
-    }
-    if refresh_from_origin(repo).is_err() {
-        let _ = state_status_at(repo, true);
-    }
-}
-
-/// The queue on the source branch, read with git. The `.uplink/` folder and
-/// its uncommitted edits are never read, and no branch is created or moved.
-fn queue_for_source(repo: &Path, source: QueueSource) -> crate::error::Result<QueueState> {
-    let git_ref = source_ref(source);
+/// The queue on `origin/uplink/state` as last fetched, read with git. The
+/// `.uplink/` folder and local branches are never read, and nothing is fetched.
+fn origin_queue(repo: &Path) -> crate::error::Result<QueueState> {
+    let git_ref = state_ref();
     if !has_ref(repo, &git_ref)? {
         return Err(crate::error::Error::msg(format!("no {git_ref} branch")));
     }
     queue_at(repo, &git_ref)
-}
-
-fn optional_rev(repo: &Path, git_ref: &str) -> Option<String> {
-    if has_ref(repo, git_ref).ok()? {
-        rev_parse(repo, git_ref).ok()
-    } else {
-        None
-    }
-}
-
-fn company_head(repo: &Path, queue: &QueueState, source: QueueSource) -> Option<String> {
-    let branch = &queue.config.internal_branch;
-    let git_ref = match source {
-        QueueSource::Local => branch.clone(),
-        QueueSource::Remote => format!("{COMPANY_REMOTE}/{branch}"),
-    };
-    optional_rev(repo, &git_ref)
-}
-
-fn upstream_head(repo: &Path, source: QueueSource) -> Option<String> {
-    let git_ref = match source {
-        QueueSource::Local => "uplink/upstream".to_string(),
-        QueueSource::Remote => format!("{COMPANY_REMOTE}/uplink/upstream"),
-    };
-    optional_rev(repo, &git_ref)
 }
 
 fn is_uplink_path(path: &str) -> bool {
@@ -405,12 +323,7 @@ fn is_valid_sha(sha: &str) -> bool {
     matches!(sha.len(), 40 | 64) && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn read_uplink_file(
-    repo: &Path,
-    source: QueueSource,
-    sha: Option<&str>,
-    path: &str,
-) -> crate::error::Result<String> {
+fn read_uplink_file(repo: &Path, sha: Option<&str>, path: &str) -> crate::error::Result<String> {
     if !is_uplink_path(path) {
         return Err(crate::error::Error::msg("path must be under .uplink/"));
     }
@@ -419,55 +332,50 @@ fn read_uplink_file(
     }
     let git_ref = match sha {
         Some(sha) => sha.to_string(),
-        None => source_ref(source),
+        None => state_ref(),
     };
     show_at(repo, &git_ref, path)
 }
 
-fn patch_revisions(repo: &Path, source: QueueSource, id: &str) -> Vec<FileRevision> {
+fn patch_revisions(repo: &Path, id: &str) -> Vec<FileRevision> {
     let path = patch_path(id)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    file_history(repo, &source_ref(source), &path).unwrap_or_default()
+    file_history(repo, &state_ref(), &path).unwrap_or_default()
 }
 
-fn build_status(repo: &Path, source: QueueSource, fetch: bool) -> StatusResponse {
+fn build_status(repo: &Path) -> StatusResponse {
     let cwd = repo.display().to_string();
-    maybe_fetch(repo, fetch);
-    let queue = match queue_for_source(repo, source) {
-        Ok(queue) => queue,
-        Err(err) => {
-            return missing_status(cwd, source, err.to_string());
-        }
+    let status = match origin_status(repo) {
+        Ok(status) => status,
+        Err(err) => return missing_status(cwd, err.to_string()),
     };
-    let state = state_status_at(repo, false).ok();
-    let counts = summarize_queue(&queue);
+    let queue = &status.queue;
     StatusResponse {
         present: true,
         cwd,
-        source: source.as_str().into(),
+        state_ref: status.state_ref.clone(),
+        state_sha: Some(status.state_sha.clone()),
         error: None,
-        company_head: company_head(repo, &queue, source),
-        upstream_head: upstream_head(repo, source),
-        counts: Some(counts),
+        company_head: status.company_head.clone(),
+        upstream_head: status.upstream_head.clone(),
+        counts: Some(summarize_queue(queue)),
         tooling: queue.tooling.clone(),
         upstream: Some(queue.upstream.clone()),
         internal: Some(queue.internal.clone()),
         last_sync: queue.last_sync.clone(),
-        state,
-        stale_approvals: Some(stale_approvals_at(repo, &source_ref(source), &queue)),
-        ready_to_submit: Some(ready_to_submit_ids(&queue)),
+        ready_to_submit: Some(ready_to_submit_ids(queue)),
+        stale_approvals: Some(status.stale_approvals),
     }
 }
 
-fn build_submit_stream(repo: &Path, source: QueueSource) -> SubmitStreamResponse {
+fn build_submit_stream(repo: &Path) -> SubmitStreamResponse {
     let body = |error: Option<String>, layers| SubmitStreamResponse {
         present: true,
-        source: source.as_str().into(),
         error,
         layers,
     };
-    let queue = match queue_for_source(repo, source) {
+    let queue = match origin_queue(repo) {
         Ok(queue) => queue,
         Err(err) => {
             return SubmitStreamResponse {
@@ -480,7 +388,7 @@ fn build_submit_stream(repo: &Path, source: QueueSource) -> SubmitStreamResponse
         Ok(layers) => layers,
         Err(err) => return body(Some(err.to_string()), Vec::new()),
     };
-    let git_ref = source_ref(source);
+    let git_ref = state_ref();
     let layers = layers
         .into_iter()
         .map(|column| {
@@ -500,67 +408,56 @@ fn build_submit_stream(repo: &Path, source: QueueSource) -> SubmitStreamResponse
     body(None, layers)
 }
 
-fn build_patch(repo: &Path, id: &str, source: QueueSource) -> PatchResponse {
-    let queue = match queue_for_source(repo, source) {
+fn build_patch(repo: &Path, id: &str) -> PatchResponse {
+    let queue = match origin_queue(repo) {
         Ok(queue) => queue,
         Err(err) => {
-            return missing_patch(source, err.to_string());
+            return missing_patch(err.to_string());
         }
     };
     let patch = match get_patch(&queue, id) {
         Ok(patch) => patch.clone(),
         Err(err) => {
-            return missing_patch(source, err.to_string());
+            return missing_patch(err.to_string());
         }
     };
-    let revisions = patch_revisions(repo, source, id);
+    let revisions = patch_revisions(repo, id);
     let path = match patch_path(id) {
         Ok(path) => path.to_string_lossy().into_owned(),
         Err(err) => {
-            return missing_patch(source, err.to_string());
+            return missing_patch(err.to_string());
         }
     };
     let default_sha = revisions.first().map(|r| r.sha.as_str());
-    let patch_file = read_uplink_file(repo, source, default_sha, &path).ok();
+    let patch_file = read_uplink_file(repo, default_sha, &path).ok();
     PatchResponse {
         present: true,
-        source: source.as_str().into(),
         error: None,
         layer: Some(crate::queue::layer_label(&queue, id).to_string()),
-        approval_stale: approval_stale_at(repo, &source_ref(source), &queue, &patch),
+        approval_stale: approval_stale_at(repo, &state_ref(), &queue, &patch),
         patch: Some(patch),
         revisions,
         patch_file,
     }
 }
 
-async fn status(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<StatusQuery>,
-) -> Json<StatusResponse> {
-    let source = QueueSource::parse(query.source.as_deref());
-    let fetch = wants_fetch(query.fetch.as_deref());
+async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
     let repo = state.repo.clone();
     let cwd = repo.display().to_string();
     Json(
-        tokio::task::spawn_blocking(move || build_status(&repo, source, fetch))
+        tokio::task::spawn_blocking(move || build_status(&repo))
             .await
-            .unwrap_or_else(|err| missing_status(cwd, source, format!("status worker: {err}"))),
+            .unwrap_or_else(|err| missing_status(cwd, format!("status worker: {err}"))),
     )
 }
 
-async fn submit_stream(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<PatchQuery>,
-) -> Json<SubmitStreamResponse> {
-    let source = QueueSource::parse(query.source.as_deref());
+async fn submit_stream(State(state): State<Arc<AppState>>) -> Json<SubmitStreamResponse> {
     let repo = state.repo.clone();
     Json(
-        tokio::task::spawn_blocking(move || build_submit_stream(&repo, source))
+        tokio::task::spawn_blocking(move || build_submit_stream(&repo))
             .await
             .unwrap_or_else(|err| SubmitStreamResponse {
                 present: false,
-                source: source.as_str().into(),
                 error: Some(format!("submit stream worker: {err}")),
                 layers: Vec::new(),
             }),
@@ -576,10 +473,9 @@ async fn refresh(State(state): State<Arc<AppState>>) -> Result<Response, ApiErro
     Ok(Json(result).into_response())
 }
 
-fn missing_patch(source: QueueSource, error: String) -> PatchResponse {
+fn missing_patch(error: String) -> PatchResponse {
     PatchResponse {
         present: false,
-        source: source.as_str().into(),
         error: Some(error),
         layer: None,
         patch: None,
@@ -592,18 +488,16 @@ fn missing_patch(source: QueueSource, error: String) -> PatchResponse {
 async fn patch_detail(
     State(state): State<Arc<AppState>>,
     PathParam(id): PathParam<String>,
-    Query(query): Query<PatchQuery>,
 ) -> Response {
-    let source = QueueSource::parse(query.source.as_deref());
     if let Err(err) = require_path_component(&id) {
         return (
             StatusCode::BAD_REQUEST,
-            Json(missing_patch(source, err.to_string())),
+            Json(missing_patch(err.to_string())),
         )
             .into_response();
     }
     let repo = state.repo.clone();
-    match tokio::task::spawn_blocking(move || build_patch(&repo, &id, source)).await {
+    match tokio::task::spawn_blocking(move || build_patch(&repo, &id)).await {
         Ok(body) => {
             let status = if body.present {
                 StatusCode::OK
@@ -614,7 +508,7 @@ async fn patch_detail(
         }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(missing_patch(source, format!("patch worker: {err}"))),
+            Json(missing_patch(format!("patch worker: {err}"))),
         )
             .into_response(),
     }
@@ -631,14 +525,11 @@ async fn patch_diff(
     if !is_valid_sha(&query.from) || !is_valid_sha(&query.to) {
         return Err(ApiError::bad_request("invalid sha"));
     }
-    let source = QueueSource::parse(query.source.as_deref());
     let repo = state.repo.clone();
     let (from, to) = (query.from.clone(), query.to.clone());
     let files = tokio::task::spawn_blocking(move || {
-        let older =
-            read_uplink_file(&repo, source, Some(&from), &path).map_err(ApiError::not_found)?;
-        let newer =
-            read_uplink_file(&repo, source, Some(&to), &path).map_err(ApiError::not_found)?;
+        let older = read_uplink_file(&repo, Some(&from), &path).map_err(ApiError::not_found)?;
+        let newer = read_uplink_file(&repo, Some(&to), &path).map_err(ApiError::not_found)?;
         revision_delta(&repo, &older, &newer).map_err(ApiError::internal)
     })
     .await
@@ -658,11 +549,10 @@ async fn file_at(
     if query.sha.as_deref().is_some_and(|sha| !is_valid_sha(sha)) {
         return Err(ApiError::bad_request("invalid sha"));
     }
-    let source = QueueSource::parse(query.source.as_deref());
     let sha = query.sha.clone();
     let path = query.path.clone();
     let content =
-        tokio::task::spawn_blocking(move || read_uplink_file(&repo, source, sha.as_deref(), &path))
+        tokio::task::spawn_blocking(move || read_uplink_file(&repo, sha.as_deref(), &path))
             .await
             .map_err(|err| ApiError::internal(format!("file worker: {err}")))?
             .map_err(ApiError::not_found)?;
@@ -754,23 +644,13 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn status_fetch_is_opt_in() {
-        for value in [None, Some(""), Some("0"), Some("false"), Some("bogus")] {
-            assert!(!wants_fetch(value), "{value:?}");
-        }
-        for value in ["1", "true", "yes", " 1 "] {
-            assert!(wants_fetch(Some(value)), "{value}");
-        }
-    }
-
     #[tokio::test]
     async fn foreign_host_is_forbidden() {
         let app = test_app(PathBuf::from("/tmp"));
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/status?fetch=0")
+                    .uri("/api/status")
                     .header(header::HOST, "evil.example")
                     .body(Body::empty())
                     .unwrap(),
@@ -798,7 +678,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
-    /// A repo whose `uplink/state` branch has `files` committed.
+    /// A repo whose `uplink/state` branch has `files` committed, with
+    /// `origin/uplink/state` at the same commit.
     fn state_repo(repo: &Path, files: &[(&str, &str)]) {
         use crate::git::git_ok;
         git_ok(repo, &["init", "-q", "-b", STATE_BRANCH]).unwrap();
@@ -820,6 +701,11 @@ mod tests {
                 "-m",
                 "state",
             ],
+        )
+        .unwrap();
+        git_ok(
+            repo,
+            &["update-ref", "refs/remotes/origin/uplink/state", "HEAD"],
         )
         .unwrap();
     }
@@ -991,8 +877,7 @@ mod tests {
         ]);
         let app = test_app(repo.to_path_buf());
 
-        let uri =
-            format!("/api/patches/upl_abcdefghij/diff?source=remote&from={first}&to={second}");
+        let uri = format!("/api/patches/upl_abcdefghij/diff?from={first}&to={second}");
         let response = app.clone().oneshot(local_request(&uri)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = json_body(response).await;
@@ -1073,7 +958,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_source_reads_the_state_branch_not_the_folder() {
+    async fn status_reads_origin_not_the_folder() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
         state_repo(
@@ -1097,7 +982,7 @@ mod tests {
             .unwrap();
         let body = json_body(response).await;
         assert_eq!(body["present"], true, "{body}");
-        assert_eq!(body["source"], "local");
+        assert_eq!(body["stateRef"], "origin/uplink/state");
         assert_eq!(body["upstream"][0]["id"], "upl_a");
         assert_eq!(body["readyToSubmit"], serde_json::json!(["upl_a"]));
 
@@ -1178,42 +1063,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_and_remote_tabs_read_their_own_ref() {
+    async fn local_state_commits_are_not_shown() {
         use crate::git::git_ok;
 
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
-        let local = queue_json(serde_json::json!([
+        let origin = queue_json(serde_json::json!([
             queued("upl_a", &[]),
             queued("upl_b", &["upl_a"]),
         ]));
-        state_repo(repo, &[(".uplink/queue.json", &local)]);
+        state_repo(repo, &[(".uplink/queue.json", &origin)]);
         let mut merged = queued("upl_a", &[]);
         merged["status"] = "merged".into();
-        let remote = queue_json(serde_json::json!([merged, queued("upl_b", &[])]));
-        std::fs::write(repo.join(".uplink/queue.json"), remote).unwrap();
-        let commit = [
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "commit",
-            "-q",
-            "-am",
-            "remote",
-        ];
-        git_ok(repo, &commit).unwrap();
-        let remote_sha = git_ok(repo, &["rev-parse", "HEAD"]).unwrap();
+        let local = queue_json(serde_json::json!([merged, queued("upl_b", &[])]));
+        std::fs::write(repo.join(".uplink/queue.json"), local).unwrap();
         git_ok(
             repo,
             &[
-                "update-ref",
-                "refs/remotes/origin/uplink/state",
-                remote_sha.trim(),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-am",
+                "local",
             ],
         )
         .unwrap();
-        git_ok(repo, &["reset", "-q", "--hard", "HEAD~1"]).unwrap();
         let app = test_app(repo.to_path_buf());
         let get = |uri: &'static str| {
             let app = app.clone();
@@ -1225,15 +1102,9 @@ mod tests {
             serde_json::json!(["upl_a"])
         );
         assert_eq!(
-            get("/api/status?source=remote").await["readyToSubmit"],
-            serde_json::json!(["upl_b"])
-        );
-        assert_eq!(
             stream_ids(&get("/api/submit-stream").await),
             vec![vec!["upl_a"], vec!["upl_b"]]
         );
-        let remote = get("/api/submit-stream?source=remote").await;
-        assert_eq!(remote["source"], "remote");
-        assert_eq!(stream_ids(&remote), vec![vec!["upl_b"]]);
+        assert_eq!(get("/api/patches/upl_a").await["patch"]["status"], "queued");
     }
 }

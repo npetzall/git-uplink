@@ -1,8 +1,5 @@
 import type { FileDelta } from "./patch";
 
-/** `local` is the uplink/state branch in this repository; `remote` is origin/uplink/state. Both are read with git. */
-export type QueueSource = "local" | "remote";
-
 export type PatchSource = {
   /** Internal authors, `Name <email>`. Co-authors on company main; never exported. */
   authors?: string[];
@@ -68,15 +65,6 @@ export type Patch = {
   kind?: string;
 };
 
-export type StateStatus = {
-  branch: string;
-  local?: string;
-  remote?: string;
-  remoteRef?: string;
-  ahead?: number;
-  behind?: number;
-};
-
 /** Queued, waiting, submitted, merged and rejected count the upstream layer; internal counts queued internal patches; active counts queued patches in every layer. */
 export type StatusCounts = {
   queued: number;
@@ -91,7 +79,9 @@ export type StatusCounts = {
 export type StatusResponse = {
   present: boolean;
   cwd: string;
-  source: string;
+  /** `origin/uplink/state`, read as last fetched; the only queue the UI shows. */
+  stateRef: string;
+  stateSha?: string;
   error?: string;
   companyHead?: string;
   upstreamHead?: string;
@@ -105,7 +95,6 @@ export type StatusResponse = {
     result: string;
     message?: string;
   };
-  state?: StateStatus;
   /** Approved or submitted patches that changed since their last approval. */
   staleApprovals?: string[];
   /** Queued upstream patches submit can take now, in queue order. */
@@ -125,7 +114,6 @@ export type StreamNode = {
 
 export type SubmitStreamResponse = {
   present: boolean;
-  source: string;
   error?: string;
   /** Column 0 has no open dependencies; a patch in column N goes once its dependencies are merged. */
   layers: StreamNode[][];
@@ -139,7 +127,6 @@ export type FileRevision = {
 
 export type PatchResponse = {
   present: boolean;
-  source: string;
   error?: string;
   layer?: string;
   patch?: Patch;
@@ -155,27 +142,13 @@ export type FileResponse = {
   content: string;
 };
 
-export function parseSource(value: string | null): QueueSource {
-  return value === "remote" ? "remote" : "local";
-}
-
-export async function loadSubmitStream(
-  source: QueueSource,
-): Promise<SubmitStreamResponse> {
-  const params = new URLSearchParams({ source });
-  const response = await fetch(`/api/submit-stream?${params}`);
+export async function loadSubmitStream(): Promise<SubmitStreamResponse> {
+  const response = await fetch("/api/submit-stream");
   return response.json();
 }
 
-export async function loadStatus(
-  source: QueueSource,
-  fetchRemote: boolean,
-): Promise<StatusResponse> {
-  const params = new URLSearchParams({
-    source,
-    fetch: fetchRemote ? "1" : "0",
-  });
-  const response = await fetch(`/api/status?${params}`);
+export async function loadStatus(): Promise<StatusResponse> {
+  const response = await fetch("/api/status");
   return response.json();
 }
 
@@ -189,23 +162,13 @@ export async function refreshRemote(): Promise<void> {
   }
 }
 
-export async function loadPatch(
-  id: string,
-  source: QueueSource,
-): Promise<PatchResponse> {
-  const params = new URLSearchParams({ source });
-  const response = await fetch(
-    `/api/patches/${encodeURIComponent(id)}?${params}`,
-  );
+export async function loadPatch(id: string): Promise<PatchResponse> {
+  const response = await fetch(`/api/patches/${encodeURIComponent(id)}`);
   return response.json();
 }
 
-export async function loadFile(
-  path: string,
-  source: QueueSource,
-  sha?: string,
-): Promise<string> {
-  const params = new URLSearchParams({ source, path });
+export async function loadFile(path: string, sha?: string): Promise<string> {
+  const params = new URLSearchParams({ path });
   if (sha) {
     params.set("sha", sha);
   }
@@ -220,11 +183,10 @@ export async function loadFile(
 /** What changed in a patch between two revisions of its patch file, file by file. */
 export async function loadPatchDiff(
   id: string,
-  source: QueueSource,
   from: string,
   to: string,
 ): Promise<FileDelta[]> {
-  const params = new URLSearchParams({ source, from, to });
+  const params = new URLSearchParams({ from, to });
   const response = await fetch(
     `/api/patches/${encodeURIComponent(id)}/diff?${params}`,
   );

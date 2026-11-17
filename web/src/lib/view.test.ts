@@ -3,7 +3,6 @@ import {
   parseShown,
   parseView,
   patchSubject,
-  sourceBranch,
   viewSearch,
   visiblePatches,
 } from "./view";
@@ -17,26 +16,18 @@ describe("parseView", () => {
   });
 });
 
-describe("sourceBranch", () => {
-  it("names the branch each source reads", () => {
-    expect(sourceBranch("local")).toBe("local uplink/state");
-    expect(sourceBranch("remote")).toBe("origin/uplink/state");
-  });
-});
-
 describe("viewSearch", () => {
   it("leaves the defaults out", () => {
-    expect(viewSearch("local", "queue")).toBe("");
-    expect(viewSearch("remote", "queue")).toBe("?source=remote");
-    expect(viewSearch("local", "stream")).toBe("?view=stream");
-    expect(viewSearch("remote", "ready")).toBe("?source=remote&view=ready");
-    expect(viewSearch("local", "queue", [])).toBe("");
+    expect(viewSearch("queue")).toBe("");
+    expect(viewSearch("stream")).toBe("?view=stream");
+    expect(viewSearch("ready")).toBe("?view=ready");
+    expect(viewSearch("queue", [])).toBe("");
   });
 
   it("writes shown finished statuses in a fixed order", () => {
-    expect(
-      viewSearch("local", "queue", ["internal-dropped", "upstream-merged"]),
-    ).toBe("?show=upstream-merged%2Cinternal-dropped");
+    expect(viewSearch("queue", ["internal-dropped", "upstream-merged"])).toBe(
+      "?show=upstream-merged%2Cinternal-dropped",
+    );
   });
 });
 
