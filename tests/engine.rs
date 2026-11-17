@@ -18894,3 +18894,32 @@ fn split_of_a_submitted_patch_keeps_its_public_pr_on_the_first_part() {
     let queue = git_uplink::read_queue(company).unwrap();
     assert!(queue.is_upstream(&second.id));
 }
+
+#[test]
+fn amend_push_records_again_on_a_moved_state_from_the_merged_base() {
+    let race = rebuild_race(false);
+    let notes = race.notes.id.clone();
+    race.cli_json(&["amend", &notes]);
+    // The start and the completion run in separate jobs: the PR files the
+    // start wrote are not in the completion's checkout.
+    let reports = race.runner.join(format!(".uplink/reports/{notes}"));
+    fs::remove_file(reports.join("amend.md")).unwrap();
+    fs::remove_file(reports.join("amend-comment.md")).unwrap();
+    amend_on_work_and_squash(&race.runner, &notes, "NOTES.md", "internal\nreviewed\n");
+    let (ben_state, marker) = race.ben_wins_the_state_push();
+
+    let json = race.cli_json(&["amend", &notes, "--complete", "--push"]);
+
+    assert!(marker.exists(), "the first state push lost the race");
+    assert_eq!(json["push"]["main"], "pushed", "{json}");
+    let state = origin_state(&race.origin);
+    assert!(git_succeeds_in(
+        &race.origin,
+        &["merge-base", "--is-ancestor", &ben_state, &state]
+    ));
+    let main = race.origin_main();
+    assert_eq!(
+        git_ok(&race.origin, &["show", &format!("{main}:NOTES.md")]).unwrap(),
+        "internal\nreviewed"
+    );
+}
