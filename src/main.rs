@@ -24,13 +24,13 @@ use git_uplink::{
     amend_patch_with, amend_preflight, approve_on_remote, approve_patch_reviewed,
     assess_from_message, assess_patch_file, assess_patch_for_packet, assess_rewrite,
     change_between, command_preflight, command_tested, commit_queue, count_files, cutoff_marker,
-    depends_on_from_message, doctor, drop_patch, existing_patch_preflight, export_tested,
-    fetch_pending_upstream, first_line, format_approval_receipt, format_assess_markdown,
+    doctor, drop_patch, existing_patch_preflight, export_tested, fetch_pending_upstream,
+    first_line, format_approval_receipt, format_assess_markdown,
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
     format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
-    hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    mark_rejected, mark_waiting, message_subject, newly_ready_to_submit, origin_status,
-    parse_depends_on, parse_github_repo, parse_pull_request_url, patch_text,
+    hooks_publish_hint, incoming_change_preflight, incoming_depends_on, init, load_groups_file,
+    mark_merged, mark_rejected, mark_waiting, message_subject, newly_ready_to_submit,
+    origin_status, parse_depends_on, parse_github_repo, parse_pull_request_url, patch_text,
     public_subject_and_body, push_imported_main, push_queue, push_rebuilt_main, read_queue,
     rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
     record_gated_pr, record_on_remote, record_pull_request, refresh_from_origin,
@@ -1718,7 +1718,7 @@ fn cmd_preflight(
     } else if incoming.internal_only {
         (incoming_change_preflight(repo, incoming), Vec::new(), None)
     } else {
-        let depends_on = depends_on_from_message(&incoming.message, &incoming.depends_on);
+        let depends_on = incoming_depends_on(&queue, &incoming).unwrap_or_default();
         let title = first_line(&strip_html_comments(&incoming.message)).to_string();
         let head = incoming.head_ref.clone();
         let result = incoming_change_preflight(repo, incoming);
@@ -2648,6 +2648,7 @@ fn run() -> Result<(), Error> {
             message_file,
             depends_on,
             internal_only,
+            amends,
             command_only,
             hooks,
             json,
@@ -2666,6 +2667,7 @@ fn run() -> Result<(), Error> {
                     message,
                     hooks_ref: hooks,
                     internal_only,
+                    amends,
                 },
                 json,
             )

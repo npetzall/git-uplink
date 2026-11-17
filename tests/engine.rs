@@ -3734,6 +3734,7 @@ fn add_and_preflight_materialize_uplink_upstream_from_origin() {
             message: "Use SHA-256 for tokens".into(),
             hooks_ref: None,
             internal_only: false,
+            amends: None,
         },
     )
     .unwrap();
@@ -3866,6 +3867,7 @@ fn preflight_fetches_missing_from_and_head_from_origin() {
             message: "Use SHA-256 for tokens".into(),
             hooks_ref: None,
             internal_only: false,
+            amends: None,
         },
     )
     .expect("preflight should fetch missing --from/--head from origin");
@@ -3887,6 +3889,7 @@ fn preflight_missing_revs_without_origin_fails_clearly() {
             message: "missing".into(),
             hooks_ref: None,
             internal_only: false,
+            amends: None,
         },
     )
     .unwrap_err();
@@ -3917,6 +3920,7 @@ fn preflight_missing_revs_not_on_origin_fails_clearly() {
             message: "missing".into(),
             hooks_ref: None,
             internal_only: false,
+            amends: None,
         },
     )
     .unwrap_err();
@@ -8395,6 +8399,7 @@ fn incoming_preflight_reads_depends_on_from_the_message() {
             message: format!("Log token hashes\n\nUplink-Depends-On: {}\n", hash_patch.id),
             hooks_ref: None,
             internal_only: false,
+            amends: None,
         },
     )
     .unwrap();
@@ -11483,6 +11488,7 @@ fn incoming_preflight_skips_internal_only() {
             message: "Vendor telemetry".into(),
             hooks_ref: None,
             internal_only: true,
+            amends: None,
         },
     )
     .unwrap();
@@ -11533,6 +11539,7 @@ fn incoming_preflight_fails_when_candidate_needs_internal() {
             message: "Log company hasher".into(),
             hooks_ref: None,
             internal_only: false,
+            amends: None,
         },
     )
     .unwrap_err();
@@ -11541,6 +11548,89 @@ fn incoming_preflight_fails_when_candidate_needs_internal() {
         text.contains("internal omitted") || text.contains("does not apply"),
         "{text}"
     );
+}
+
+/// The gate preflights an amend PR as the whole amended patch: on top of the
+/// queued version it changes the same lines twice, in its place it applies.
+#[test]
+fn incoming_preflight_of_an_amend_replaces_the_patch_it_amends() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/sha256"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(value);"),
+    );
+    commit_all(company, "sha256");
+    let amended = add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Use SHA-256 for tokens".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    git(
+        company,
+        &["checkout", "-b", "feat/later", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS
+            .replace("return sha1(value);", "return sha256(value);")
+            .replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "ttl");
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Longer token ttl".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Review feedback on the first patch, from the commit before it.
+    git(
+        company,
+        &["checkout", "-b", "feat/amend", "main~2"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return sha1(value);", "return sha256(String(value));"),
+    );
+    commit_all(company, "amended sha256");
+    let from = git_ok(company, &["rev-parse", "main~2"]).unwrap();
+    let head = git_ok(company, &["rev-parse", "HEAD"]).unwrap();
+    let incoming = |amends: Option<String>| IncomingPreflight {
+        from_ref: from.clone(),
+        head_ref: head.clone(),
+        depends_on: Vec::new(),
+        message: "Use SHA-256 for tokens".into(),
+        hooks_ref: None,
+        internal_only: false,
+        amends,
+    };
+
+    let err = preflight_incoming_change(company, incoming(None)).unwrap_err();
+    assert!(err.to_string().contains("internal omitted"), "{err}");
+    preflight_incoming_change(company, incoming(Some(amended.id.clone()))).unwrap();
+
+    let err = preflight_incoming_change(company, incoming(Some("upl_missing".into()))).unwrap_err();
+    assert!(err.to_string().contains("not an upstream patch"), "{err}");
 }
 
 #[test]
@@ -13122,6 +13212,7 @@ fn preflight_sh_runs_in_the_export_tree_and_reaches_its_siblings() {
             message: "Use SHA-256 for tokens".into(),
             hooks_ref: None,
             internal_only: false,
+            amends: None,
         },
     )
     .unwrap_err();
@@ -13268,6 +13359,7 @@ fn preflight_keeps_uncommitted_work_and_rebuild_refuses_it() {
             message: "Use SHA-256 for tokens".into(),
             hooks_ref: None,
             internal_only: false,
+            amends: None,
         },
     )
     .unwrap();

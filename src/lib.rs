@@ -84,9 +84,9 @@ pub use ops::{
 pub use preflight::{
     FirstBad, IncomingPreflight, PreflightReport, RebuildReport, ScriptEcho, ScriptVerdict,
     assert_export_preflight, command_preflight, command_tested, existing_patch_preflight,
-    export_preflight, export_tested, incoming_change_preflight, preflight_existing_patch,
-    preflight_incoming_change, refuse_script_with_credentials, run_preflight_command_in,
-    set_script_echo,
+    export_preflight, export_tested, incoming_change_preflight, incoming_depends_on,
+    preflight_existing_patch, preflight_incoming_change, refuse_script_with_credentials,
+    run_preflight_command_in, set_script_echo,
 };
 pub use progress::{ProgressMode, StepOutcome, StepProgress, format_step_line};
 pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};

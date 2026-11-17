@@ -1243,6 +1243,9 @@ pub struct IncomingPreflight {
     /// Read `preflight.sh` from this revision instead of `uplink/hooks`.
     pub hooks_ref: Option<String>,
     pub internal_only: bool,
+    /// The queued upstream patch the change amends: it takes that patch's
+    /// place in the upstream layer instead of following it.
+    pub amends: Option<String>,
 }
 
 /// Runs `preflight.sh` on the checkout `cwd` is in, from its root, with
@@ -1419,15 +1422,31 @@ pub fn assert_upstream_layer_applies(repo: &Path, queue: &QueueState) -> Result<
     with_upstream_worktree(repo, |dir| apply_upstream_layer(dir, repo, queue, None))
 }
 
-/// Applies tooling + active upstream patches in order onto `dir`. `before`
-/// names the candidate that will follow, for the error message.
+/// The change preflight tests on the upstream layer, and the queued patch it
+/// amends, which it replaces there.
+struct LayerCandidate<'a> {
+    file: &'a Path,
+    title: &'a str,
+    amends: Option<&'a str>,
+}
+
+/// Applies tooling + active upstream patches in order onto `dir`, then
+/// `candidate`, or `candidate` in place of the patch it amends: on top of
+/// the old version an amend would apply the same change twice.
 fn apply_upstream_layer(
     dir: &Path,
     repo: &Path,
     queue: &QueueState,
-    before: Option<&str>,
+    candidate: Option<&LayerCandidate>,
 ) -> Result<()> {
+    let amends = candidate.and_then(|c| c.amends);
+    let mut amended = false;
     for patch in apply_order_upstream_layer(queue)? {
+        if let Some(candidate) = candidate.filter(|_| amends == Some(patch.id.as_str())) {
+            apply_candidate(dir, candidate)?;
+            amended = true;
+            continue;
+        }
         if patch.status == PatchStatus::Conflict {
             return Err(Error::msg(format!(
                 "Queue is blocked on conflict in {}; cannot preflight the upstream layer.",
@@ -1436,8 +1455,9 @@ fn apply_upstream_layer(
         }
         let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, patch.subject())?;
         if result == ApplyOutcome::Conflict {
-            let before = before
-                .map(|title| format!(" before \"{title}\""))
+            let before = candidate
+                .filter(|_| !amended)
+                .map(|c| format!(" before \"{}\"", c.title))
                 .unwrap_or_default();
             return Err(Error::Preflight(PreflightError::new(
                 format!(
@@ -1450,32 +1470,69 @@ fn apply_upstream_layer(
             )));
         }
     }
+    match (candidate, amends) {
+        (Some(_), Some(id)) if !amended => Err(Error::msg(format!(
+            "{id} is not an active upstream patch; cannot preflight an amend of it."
+        ))),
+        (Some(candidate), None) => apply_candidate(dir, candidate),
+        _ => Ok(()),
+    }
+}
+
+fn apply_candidate(dir: &Path, candidate: &LayerCandidate) -> Result<()> {
+    let title = candidate.title;
+    if apply_abs(dir, candidate.file, title)? == ApplyOutcome::Conflict {
+        return Err(Error::Preflight(PreflightError::new(
+            format!(
+                "Patch \"{title}\" does not apply onto tooling + queued upstream (internal omitted). \
+Rewrite it so it does not need internal changes, promote the internal patch upstream with depends-on, \
+or label the PR uplink:internal-only."
+            ),
+            Vec::new(),
+            "apply",
+            None,
+        )));
+    }
     Ok(())
 }
 
+/// Applies the upstream layer with `candidate_abs` on it, in place of the
+/// patch `amends` names, if any.
 pub fn assert_upstream_layer_preflight(
     repo: &Path,
     queue: &QueueState,
     candidate_abs: &Path,
     title: &str,
+    amends: Option<&str>,
 ) -> Result<()> {
+    let candidate = LayerCandidate {
+        file: candidate_abs,
+        title,
+        amends,
+    };
     with_upstream_worktree(repo, |dir| {
-        apply_upstream_layer(dir, repo, queue, Some(title))?;
-        let applied = apply_abs(dir, candidate_abs, title)?;
-        if applied == ApplyOutcome::Conflict {
-            return Err(Error::Preflight(PreflightError::new(
-                format!(
-                    "Patch \"{title}\" does not apply onto tooling + queued upstream (internal omitted). \
-Rewrite it so it does not need internal changes, promote the internal patch upstream with depends-on, \
-or label the PR uplink:internal-only."
-                ),
-                Vec::new(),
-                "apply",
-                None,
-            )));
-        }
-        Ok(())
+        apply_upstream_layer(dir, repo, queue, Some(&candidate))
     })
+}
+
+/// The dependencies of an incoming change: its message trailers and
+/// `--depends-on`, and for an amend those of the patch it amends, which
+/// `amend --complete` keeps.
+pub fn incoming_depends_on(queue: &QueueState, opts: &IncomingPreflight) -> Result<Vec<String>> {
+    let mut depends_on = depends_on_from_message(&opts.message, &opts.depends_on);
+    if let Some(amends) = opts.amends.as_deref() {
+        let Some(amended) = queue.upstream.iter().find(|p| p.id == amends) else {
+            return Err(Error::msg(format!(
+                "{amends} is not an upstream patch; cannot preflight an amend of it."
+            )));
+        };
+        for dep in &amended.depends_on {
+            if !depends_on.contains(dep) {
+                depends_on.push(dep.clone());
+            }
+        }
+    }
+    Ok(depends_on)
 }
 
 pub fn preflight_incoming_change(repo: &Path, opts: IncomingPreflight) -> Result<()> {
@@ -1493,7 +1550,7 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
         "upl_preflight_{}",
         &Uuid::new_v4().simple().to_string()[..8]
     );
-    let depends_on = depends_on_from_message(&opts.message, &opts.depends_on);
+    let depends_on = incoming_depends_on(&queue, &opts)?;
     let patch = Patch {
         id: id.clone(),
         status: PatchStatus::Queued,
@@ -1526,7 +1583,13 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
             &ScriptVerdict::Run,
         )?;
         // Keep the token: the script passed on that tree, whatever follows.
-        match assert_upstream_layer_preflight(repo, &queue, &candidate_abs, patch.subject()) {
+        match assert_upstream_layer_preflight(
+            repo,
+            &queue,
+            &candidate_abs,
+            patch.subject(),
+            opts.amends.as_deref(),
+        ) {
             Err(Error::Preflight(err)) => Err(Error::Preflight(match &token {
                 Some(token) => err.with_token(token),
                 None => err,
