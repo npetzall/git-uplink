@@ -1,0 +1,486 @@
+# GitHub forge pack (`git uplink init --forge github`).
+# Installs git-uplink from a GitHub release.
+# Empty UPLINK_*_AUTH defaults to app.
+#
+# Dispatch starts a merge of patches into one. They must be in one lane, and
+# none may depend on a patch between the first and the last of them. The
+# merged patch keeps the id of the one with an open public PR, or else of the
+# first in apply order, and takes the first one's place. Two open public PRs
+# are refused: dispatch Uplink abandon contrib for the ones not to keep,
+# then merge again. The queue is replayed on uplink/upstream up to the first
+# patch, which becomes the protected base uplink/merge/<id>; a -work branch
+# with all of them applied as one commit is pushed (with conflict markers
+# where one needs a patch it now comes before) and a draft PR is opened with
+# their messages joined. Resolve, edit the title and description into one
+# message, and merge: git uplink merge --complete squashes it into the
+# patch, re-assesses it, drops the others, and rebuilds company main. A
+# follow-on conflict gets a conflict PR, as in sync. For a patch with a
+# public PR Uplink submit is dispatched. The description keeps one
+# Uplink-Gate-Base comment per patch: complete refuses when one changed
+# since the PR was opened. Closing without merging deletes both branches
+# and leaves the queue unchanged. Closed-PR jobs load YAML from the default
+# branch so *-work cannot replace this sidecar.
+name: Uplink merge
+run-name: Uplink merge ${{ inputs.patch_ids || github.event.pull_request.base.ref }}
+
+on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data
+  workflow_dispatch:
+    inputs:
+      patch_ids:
+        description: Patch ids to merge, separated by spaces (upl_… upl_…)
+        required: true
+  pull_request_target:
+    types: [closed]
+    branches:
+      - "uplink/merge/**"
+
+concurrency:
+  group: uplink-mutate
+  queue: max
+
+permissions: {}
+
+jobs:
+  start:
+    name: Start merge
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+          permission-pull-requests: write
+
+      - name: Read upstream and contrib from the queue
+        id: queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
+          parse_owner_repo() {
+            local url=$1 owner repo
+            if [[ "$url" =~ github.com[:/]([^/]+)/(.+)$ ]]; then
+              owner=${BASH_REMATCH[1]}
+              repo=${BASH_REMATCH[2]}
+              repo=${repo%.git}
+              repo=${repo%/}
+              printf '%s\n%s\n' "$owner" "$repo"
+              return 0
+            fi
+            echo "Could not parse GitHub owner/repo from queue URL" >&2
+            return 1
+          }
+          upstream_url=$(jq -r '.config.upstreamUrl // empty' <<<"$queue")
+          contrib_url=$(jq -r '.config.contribUrl // empty' <<<"$queue")
+          if [ -z "$upstream_url" ] || [ -z "$contrib_url" ]; then
+            echo "queue.json is missing upstreamUrl or contribUrl" >&2
+            exit 1
+          fi
+          mapfile -t upstream < <(parse_owner_repo "$upstream_url")
+          mapfile -t contrib < <(parse_owner_repo "$contrib_url")
+          same_owner=false
+          upstream_lc=$(printf '%s' "${upstream[0]}" | tr '[:upper:]' '[:lower:]')
+          contrib_lc=$(printf '%s' "${contrib[0]}" | tr '[:upper:]' '[:lower:]')
+          if [ "$upstream_lc" = "$contrib_lc" ]; then
+            same_owner=true
+          fi
+          {
+            echo "upstream_owner=${upstream[0]}"
+            echo "upstream_repo=${upstream[1]}"
+            echo "contrib_owner=${contrib[0]}"
+            echo "contrib_repo=${contrib[1]}"
+            echo "same_owner=${same_owner}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ steps.queue.outputs.upstream_owner }}
+          repositories: ${{ steps.queue.outputs.upstream_repo }}
+          permission-contents: read
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: main
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+
+      - name: Cut merge branches and open the draft PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          PATCH_IDS: ${{ inputs.patch_ids }}
+        run: |
+          read -r -a ids <<<"$PATCH_IDS"
+          if [ "${#ids[@]}" -lt 2 ]; then
+            echo "::error::Name at least two patch ids to merge."
+            exit 1
+          fi
+          git uplink init
+          queue=$(git show uplink/state:.uplink/queue.json)
+          closed=()
+          for id in "${ids[@]}"; do
+            if [[ ! "$id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+              echo "Invalid patch id: $id"
+              exit 1
+            fi
+            # Never cut a second gate for a patch: one gated PR at a time.
+            open=$(git ls-remote --heads origin "refs/heads/uplink/*/${id}" | awk '{print $2}')
+            if [ -n "$open" ]; then
+              echo "::error::${id} already has a gated PR in progress (${open#refs/heads/}). Merge or close it first."
+              exit 1
+            fi
+            # A public PR that is no longer open (abandoned) does not count.
+            pr_url=$(jq -r --arg id "$id" '[.upstream[]?, .internal[]?] | map(select(.id == $id))[0].upstream.prUrl // empty' <<<"$queue")
+            if [ -n "$pr_url" ]; then
+              state=$(GH_TOKEN="$UPLINK_UPSTREAM_TOKEN" gh pr view "$pr_url" --json state --jq .state)
+              if [ "$state" != "OPEN" ]; then
+                closed+=(--pr-closed "$id")
+              fi
+            fi
+          done
+
+          merge_json=$(git uplink merge "${ids[@]}" "${closed[@]}")
+          base=$(jq -r '.base // empty' <<<"$merge_json")
+          work=$(jq -r '.work // empty' <<<"$merge_json")
+          if [ -z "$base" ] || [ -z "$work" ]; then
+            echo "merge recorded no base/work branches"
+            exit 1
+          fi
+          git push origin "refs/heads/${base}:refs/heads/${base}"
+          git push origin "refs/heads/${work}:refs/heads/${work}"
+          title=$(jq -r '.gh.prCreate.title' <<<"$merge_json")
+          body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$merge_json")
+          comment_file=$(jq -r '.gh.prCreate.commentFile' <<<"$merge_json")
+          label=$(jq -r '.gh.prCreate.labels[0]' <<<"$merge_json")
+          gh label create "$label" --description "Uplink gated merge of patches" --color 0E8A16 || true
+          # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
+          # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
+          url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --draft --title "$title" --base "$base" --head "$work" --body-file "$body_file")
+          gh pr edit "$url" --add-label "$label"
+          gh pr comment "$url" --body-file "$comment_file"
+          echo "Merge PR: $url" >> "$GITHUB_STEP_SUMMARY"
+
+  # preflight.sh builds and runs product code (public upstream's included),
+  # so it runs in this job: read-only token, no App token, no Environment,
+  # no credentials in the checkout. The job that holds the write tokens
+  # takes the result and never runs the script.
+  complete-preflight:
+    name: Preflight the merge (no credentials)
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.run.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch what preflight reads
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git uplink init
+
+      - name: Run company toolchain hook
+        uses: $/.github/actions/uplink-toolchain-hook
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No token in this step: git uplink refuses to run preflight.sh in a
+      # CI job step that holds one.
+      - name: Run preflight.sh
+        id: run
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          id="${BASE_REF#uplink/merge/}"
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > "$RUNNER_TEMP/uplink-merge-msg.txt"
+          expect=()
+          while read -r line; do
+            [ -n "$line" ] && expect+=(--expect "$line")
+          done < <(printf '%s\n' "${BODY:-}" | sed -nE 's/.*Uplink-Gate-Base: ([A-Za-z0-9_-]+=[^ ]+).*/\1/p')
+          report=$(git uplink merge "$id" --complete "${expect[@]}" \
+            --message-file "$RUNNER_TEMP/uplink-merge-msg.txt" --preflight-only) || true
+          if ! jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "git uplink printed no preflight result"
+            exit 1
+          fi
+          echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+
+  complete:
+    name: Complete merge
+    needs: complete-preflight
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+          permission-pull-requests: write
+
+      - name: Read upstream and contrib from the queue
+        id: queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/.uplink/queue.json?ref=uplink%2Fstate" --jq .content)
+          queue=$(printf '%s' "$content" | tr -d '\n' | base64 -d)
+          parse_owner_repo() {
+            local url=$1 owner repo
+            if [[ "$url" =~ github.com[:/]([^/]+)/(.+)$ ]]; then
+              owner=${BASH_REMATCH[1]}
+              repo=${BASH_REMATCH[2]}
+              repo=${repo%.git}
+              repo=${repo%/}
+              printf '%s\n%s\n' "$owner" "$repo"
+              return 0
+            fi
+            echo "Could not parse GitHub owner/repo from queue URL" >&2
+            return 1
+          }
+          upstream_url=$(jq -r '.config.upstreamUrl // empty' <<<"$queue")
+          contrib_url=$(jq -r '.config.contribUrl // empty' <<<"$queue")
+          if [ -z "$upstream_url" ] || [ -z "$contrib_url" ]; then
+            echo "queue.json is missing upstreamUrl or contribUrl" >&2
+            exit 1
+          fi
+          mapfile -t upstream < <(parse_owner_repo "$upstream_url")
+          mapfile -t contrib < <(parse_owner_repo "$contrib_url")
+          same_owner=false
+          upstream_lc=$(printf '%s' "${upstream[0]}" | tr '[:upper:]' '[:lower:]')
+          contrib_lc=$(printf '%s' "${contrib[0]}" | tr '[:upper:]' '[:lower:]')
+          if [ "$upstream_lc" = "$contrib_lc" ]; then
+            same_owner=true
+          fi
+          {
+            echo "upstream_owner=${upstream[0]}"
+            echo "upstream_repo=${upstream[1]}"
+            echo "contrib_owner=${contrib[0]}"
+            echo "contrib_repo=${contrib[1]}"
+            echo "same_owner=${same_owner}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint upstream GitHub App token
+        id: upstream-app
+        if: ${{ vars.UPLINK_UPSTREAM_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_UPSTREAM_APP_ID }}
+          private-key: ${{ secrets.UPLINK_UPSTREAM_APP_PRIVATE_KEY }}
+          owner: ${{ steps.queue.outputs.upstream_owner }}
+          repositories: ${{ steps.queue.outputs.upstream_repo }}
+          permission-contents: read
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.event.pull_request.base.ref }}
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+
+      - name: Merge patches and rebuild main
+        id: merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          UPLINK_INTERNAL_TOKEN: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+          UPLINK_UPSTREAM_TOKEN: ${{ steps.upstream-app.outputs.token || secrets.UPLINK_UPSTREAM_TOKEN }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          PREFLIGHT_REPORT: ${{ needs.complete-preflight.outputs.report }}
+        run: |
+          git uplink init
+          printf '%s' "$PREFLIGHT_REPORT" > "$RUNNER_TEMP/uplink-preflight.json"
+          id="${BASE_REF#uplink/merge/}"
+          if [ -z "$id" ] || [ "$id" = "$BASE_REF" ] || [[ "$id" == *-work ]]; then
+            echo "Could not parse patch id from $BASE_REF"
+            exit 1
+          fi
+          {
+            printf '%s\n\n' "$TITLE"
+            printf '%s\n' "${BODY:-}"
+          } > "$RUNNER_TEMP/uplink-merge-msg.txt"
+          expect=()
+          while read -r line; do
+            [ -n "$line" ] && expect+=(--expect "$line")
+          done < <(printf '%s\n' "${BODY:-}" | sed -nE 's/.*Uplink-Gate-Base: ([A-Za-z0-9_-]+=[^ ]+).*/\1/p')
+
+          # --push pushes uplink/state (a fast-forward; on a lost race it runs
+          # again on the state that won), then main with a lease, only when
+          # that drops no merge waiting for its import.
+          merge_json=$(git uplink merge "$id" --complete "${expect[@]}" \
+            --message-file "$RUNNER_TEMP/uplink-merge-msg.txt" \
+            --preflight-result "$RUNNER_TEMP/uplink-preflight.json" --push)
+
+          echo "ready_to_submit=$(jq -c '.readyToSubmit // []' <<<"$merge_json")" >> "$GITHUB_OUTPUT"
+          # The merged patch has a public PR. queued: IP approves the delta.
+          if jq -e '.public == true' <<<"$merge_json" >/dev/null; then
+            runs=$(gh run list --workflow="Uplink submit" --limit 20 --json databaseId,displayTitle,status 2>/dev/null || echo '[]')
+            echo "$runs" | jq -r --arg title "Uplink submit $id" \
+              '.[] | select((.displayTitle // "") == $title and (.status == "waiting" or .status == "in_progress")) | .databaseId' \
+              | while read -r run_id; do
+              if [ -n "$run_id" ]; then
+                gh run cancel "$run_id" || true
+              fi
+            done
+            gh workflow run "Uplink submit" --ref main -f "patch_id=$id"
+          fi
+
+          if jq -e '.conflict != null' <<<"$merge_json" >/dev/null; then
+            conflict_id=$(jq -r '.conflict.id // empty' <<<"$merge_json")
+            conflict_branch=$(jq -r '.conflict.branch // empty' <<<"$merge_json")
+            work_branch=$(jq -r '.conflict.workBranch // empty' <<<"$merge_json")
+            if [ -z "$conflict_id" ] || [ "$conflict_id" = "null" ]; then
+              echo "merge recorded a follow-on conflict but no conflict patch id was present"
+              git push origin --delete "$BASE_REF" || true
+              git push origin --delete "${BASE_REF}-work" || true
+              exit 1
+            fi
+            if git show-ref --verify --quiet "refs/heads/${conflict_branch}"; then
+              git push origin "refs/heads/${conflict_branch}:refs/heads/${conflict_branch}" --force
+            fi
+            if [ -n "$work_branch" ] && git show-ref --verify --quiet "refs/heads/${work_branch}"; then
+              git push origin "refs/heads/${work_branch}:refs/heads/${work_branch}" --force
+            fi
+
+            title=$(jq -r '.gh.prCreate.title' <<<"$merge_json")
+            body_file=$(jq -r '.gh.prCreate.bodyFile' <<<"$merge_json")
+            comment_file=$(jq -r '.gh.prCreate.commentFile' <<<"$merge_json")
+            head=$(jq -r '.gh.prCreate.head' <<<"$merge_json")
+            base=$(jq -r '.gh.prCreate.base' <<<"$merge_json")
+            existing=$(gh pr list --head "$head" --base "$base" --state open --json url --jq '.[0].url')
+            if [ -z "$existing" ]; then
+              gh label create uplink:conflict --description "Uplink sync conflict; resolve via the gated work PR" --color B60205 || true
+              # The internal bot opens the PR: GITHUB_TOKEN may not create PRs, and a
+              # bot-opened PR triggers the Uplink gate check. The Actions token labels it.
+              url=$(GH_TOKEN="$UPLINK_INTERNAL_TOKEN" gh pr create --draft --title "$title" --base "$base" --head "$head" --body-file "$body_file")
+              gh pr edit "$url" --add-label uplink:conflict
+              gh pr comment "$url" --body-file "$comment_file"
+            else
+              url="$existing"
+            fi
+            git uplink gated "$conflict_id" --pr-url "$url"
+          fi
+
+          git push origin --delete "$BASE_REF" || true
+          git push origin --delete "${BASE_REF}-work" || true
+
+      - name: Dispatch Uplink submit for patches that became ready
+        if: ${{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.merge.outputs.ready_to_submit != '' && steps.merge.outputs.ready_to_submit != '[]' }}
+        uses: $/.github/actions/uplink-dispatch-submit
+        with:
+          patch-ids: ${{ steps.merge.outputs.ready_to_submit }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # A rebuild writes every commit of main again. Tell the open pull
+      # requests it left behind how to rebase; a failure here is not a
+      # failure of the job.
+      - name: Tell open pull requests about a rebuilt main
+        continue-on-error: true
+        uses: $/.github/actions/uplink-rebase-comment
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}
+
+  cleanup:
+    name: Abort merge
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == false && !endsWith(github.event.pull_request.base.ref, '-work')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Mint internal GitHub App token
+        id: internal-app
+        if: ${{ vars.UPLINK_INTERNAL_AUTH != 'pat' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.UPLINK_INTERNAL_APP_ID }}
+          private-key: ${{ secrets.UPLINK_INTERNAL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-workflows: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN }}
+
+      - name: Delete merge branches
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git push origin --delete "$BASE_REF" || true
+          git push origin --delete "$HEAD_REF" || true
+          if [[ "$BASE_REF" != *-work ]]; then
+            git push origin --delete "${BASE_REF}-work" || true
+          fi

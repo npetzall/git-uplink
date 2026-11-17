@@ -12,16 +12,17 @@ use git_uplink::{
     TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, UPGRADE_PREVIEW, UpgradeAnswer,
     UpgradePublish, UpgradeQuestion, WaitingOutcome, accept_upstream, accept_upstream_at,
     add_patch, amend_patch, amend_patch_with, amend_preflight, approve_patch,
-    approve_patch_reviewed, assess_patch_for_packet, doctor, drop_patch, extras_dir,
-    format_approval_receipt, format_approver_packet, format_contribution_packet,
+    approve_patch_reviewed, assess_patch_for_packet, complete_merge_with, doctor, drop_patch,
+    extras_dir, format_approval_receipt, format_approver_packet, format_contribution_packet,
     format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
     git_ok, init, init_repo, load_extra_markdown, load_groups_file, mark_merged, mark_rejected,
-    mark_waiting, newly_ready_to_submit, origin_status, parse_depends_on, preflight_existing_patch,
-    preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan, rebuild, rebuild_with,
-    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, review_token, store_patch_extras, stored_extras_fresh, strip_html_comments,
-    submit_patch, submit_patch_with, summarize_queue, sync, sync_with, transfer_patch,
-    transfer_patch_with, transfer_preflight, trim_deps, working_snapshot, write_queue,
+    mark_waiting, merge_patches, newly_ready_to_submit, origin_status, parse_depends_on,
+    preflight_existing_patch, preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan,
+    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
+    reset_from_origin, resolve_conflict, review_token, split_patch_with, split_preflight,
+    store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with,
+    summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight,
+    trim_deps, working_snapshot, write_queue,
 };
 use tempfile::TempDir;
 
@@ -18421,4 +18422,475 @@ fn adopt_stops_to_amend_a_group_marked_so() {
         stored[0].stop_to_amend && stored[0].amended.is_some(),
         "{stored:?}"
     );
+}
+
+/// Lands an internal patch named `message` that writes each `(file, contents)`.
+fn add_internal_files(
+    company: &Path,
+    branch: &str,
+    message: &str,
+    files: &[(&str, &str)],
+) -> Patch {
+    git(
+        company,
+        &["checkout", "-B", branch, "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    for (file, contents) in files {
+        write(company, file, contents);
+    }
+    commit_all(company, message);
+    add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: message.into(),
+            internal_only: true,
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+/// Rewrites the split work branch into one commit per `(message, file,
+/// contents)` from the base, squash-merges it into the base as the gated PR
+/// would, and returns the work branch's head. Leaves HEAD on the base.
+fn split_on_work_and_squash(company: &Path, id: &str, parts: &[(&str, &str, &str)]) -> String {
+    let base = format!("uplink/split/{id}");
+    let work = format!("{base}-work");
+    git(
+        company,
+        &["checkout", "--quiet", "-B", &work, &base],
+        GitOpts::default(),
+    )
+    .unwrap();
+    for (message, file, contents) in parts {
+        write(company, file, contents);
+        commit_all(company, message);
+    }
+    let head = rev_of(company, "HEAD");
+    git(company, &["checkout", "--quiet", &base], GitOpts::default()).unwrap();
+    git(company, &["merge", "--squash", &work], GitOpts::default()).unwrap();
+    git(company, &["commit", "-m", "Split (#8)"], GitOpts::default()).unwrap();
+    head
+}
+
+fn expect_of(company: &Path, id: &str) -> String {
+    let patch = patch_of(company, id);
+    format!("{id}={}", patch.patch_id_stable.as_deref().unwrap_or("-"))
+}
+
+#[test]
+fn split_start_cuts_the_base_before_the_patch_and_the_work_with_it() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_files(
+        company,
+        "feat/two",
+        "Two notes",
+        &[("A.md", "a\n"), ("B.md", "b\n")],
+    );
+    let state_before = rev_of(company, STATE_BRANCH);
+    let started = split_patch_with(company, &patch.id, None, &[], &ScriptVerdict::Run).unwrap();
+    assert!(!started.completed);
+    let base = started.base_branch.unwrap();
+    let work = started.work_branch.unwrap();
+    assert_eq!(base, format!("uplink/split/{}", patch.id));
+    assert_eq!(rev_of(company, &base), started.onto.unwrap());
+    assert_eq!(rev_of(company, &format!("{work}^")), rev_of(company, &base));
+    assert_eq!(
+        git_ok(company, &["show", &format!("{work}:B.md")]).unwrap(),
+        "b"
+    );
+    assert_eq!(started.expect, vec![expect_of(company, &patch.id)]);
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+}
+
+#[test]
+fn split_complete_turns_each_commit_into_a_chained_patch() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_files(
+        company,
+        "feat/two",
+        "Two notes",
+        &[("A.md", "a\n"), ("B.md", "b\n")],
+    );
+    let dependent = add_internal_files(
+        company,
+        "feat/three",
+        &format!("Third note\n\nUplink-Depends-On: {}", patch.id),
+        &[("C.md", "c\n")],
+    );
+    assert_eq!(dependent.depends_on, vec![patch.id.clone()]);
+    let expect = vec![expect_of(company, &patch.id)];
+    split_patch_with(company, &patch.id, None, &[], &ScriptVerdict::Run).unwrap();
+    let head = split_on_work_and_squash(
+        company,
+        &patch.id,
+        &[
+            ("Note A", "A.md", "a\n"),
+            ("Note B\n\nThe second part.", "B.md", "b\n"),
+        ],
+    );
+
+    let done = split_patch_with(
+        company,
+        &patch.id,
+        Some(&head),
+        &expect,
+        &ScriptVerdict::Run,
+    )
+    .unwrap();
+    assert!(done.completed, "{done:?}");
+    assert!(!done.content_changed, "{done:?}");
+    assert_eq!(done.parts.len(), 2);
+    assert_eq!(done.parts[0], patch.id);
+    let first = patch_of(company, &done.parts[0]);
+    let second = patch_of(company, &done.parts[1]);
+    assert_eq!(first.subject(), "Note A");
+    assert_eq!(second.subject(), "Note B");
+    assert_eq!(second.status, PatchStatus::Queued);
+    assert_eq!(second.depends_on, vec![patch.id.clone()]);
+    assert_eq!(
+        patch_of(company, &dependent.id).depends_on,
+        vec![second.id.clone()]
+    );
+    let queue = git_uplink::read_queue(company).unwrap();
+    let order: Vec<&str> = queue.internal.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(
+        order,
+        vec![patch.id.as_str(), second.id.as_str(), dependent.id.as_str()]
+    );
+    let first_patch = git_ok(
+        company,
+        &[
+            "show",
+            &format!("{STATE_BRANCH}:.uplink/patches/{}.patch", first.id),
+        ],
+    )
+    .unwrap();
+    assert!(
+        first_patch.contains("A.md") && !first_patch.contains("B.md"),
+        "{first_patch}"
+    );
+    assert_eq!(
+        git_ok(company, &["log", "-3", "--format=%s", "main"]).unwrap(),
+        "Third note\nNote B\nNote A"
+    );
+    assert_eq!(git_ok(company, &["show", "main:B.md"]).unwrap(), "b");
+}
+
+#[test]
+fn split_complete_refuses_one_commit_and_a_patch_changed_since() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_files(
+        company,
+        "feat/two",
+        "Two notes",
+        &[("A.md", "a\n"), ("B.md", "b\n")],
+    );
+    let expect = vec![expect_of(company, &patch.id)];
+    split_patch_with(company, &patch.id, None, &[], &ScriptVerdict::Run).unwrap();
+    let head = split_on_work_and_squash(company, &patch.id, &[("Both", "A.md", "a\n")]);
+    write(company, "B.md", "b\n");
+    let err = split_patch_with(
+        company,
+        &patch.id,
+        Some(&head),
+        &expect,
+        &ScriptVerdict::Run,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("at least two commits"), "{err}");
+
+    let stale = vec![format!("{}=0000", patch.id)];
+    let err =
+        split_patch_with(company, &patch.id, Some(&head), &stale, &ScriptVerdict::Run).unwrap_err();
+    assert!(
+        err.to_string().contains("changed after this PR was opened"),
+        "{err}"
+    );
+    assert_eq!(patch_of(company, &patch.id).status, PatchStatus::Queued);
+}
+
+#[test]
+fn split_complete_is_probed_then_recorded_without_running_the_script() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_files(
+        company,
+        "feat/two",
+        "Two notes",
+        &[("A.md", "a\n"), ("B.md", "b\n")],
+    );
+    let expect = vec![expect_of(company, &patch.id)];
+    let marker = set_counting_preflight_script(company, "test -f B.md");
+    split_patch_with(company, &patch.id, None, &[], &ScriptVerdict::Run).unwrap();
+    let head = split_on_work_and_squash(
+        company,
+        &patch.id,
+        &[("Note A", "A.md", "a\n"), ("Note B", "B.md", "b\n")],
+    );
+    let base_head = rev_of(company, "HEAD");
+    let state = rev_of(company, STATE_BRANCH);
+    let before = runs_of(&marker);
+
+    let report = split_preflight(company, &patch.id, &head, &expect).unwrap();
+    assert!(report.ok && report.token.is_some(), "{report:?}");
+    assert_eq!(rev_of(company, "HEAD"), base_head);
+    assert_eq!(rev_of(company, STATE_BRANCH), state);
+    let probed = runs_of(&marker);
+    assert!(probed > before);
+
+    let done = split_patch_with(
+        company,
+        &patch.id,
+        Some(&head),
+        &expect,
+        &ScriptVerdict::Reported(report),
+    )
+    .unwrap();
+    assert_eq!(done.parts.len(), 2);
+    assert_eq!(runs_of(&marker), probed, "split must not run preflight.sh");
+}
+
+/// Squash-merges the merge work branch into its base, as the gated PR would.
+/// Leaves HEAD on the base.
+fn merge_work_and_squash(company: &Path, target: &str) {
+    let base = format!("uplink/merge/{target}");
+    let work = format!("{base}-work");
+    git(company, &["checkout", "--quiet", &base], GitOpts::default()).unwrap();
+    git(company, &["merge", "--squash", &work], GitOpts::default()).unwrap();
+    git(company, &["commit", "-m", "Merge (#9)"], GitOpts::default()).unwrap();
+}
+
+#[test]
+fn merge_complete_folds_the_patches_into_the_first_and_drops_the_rest() {
+    let world = setup_world();
+    let company = &world.company;
+    let a = add_internal_files(company, "feat/a", "Note A", &[("A.md", "a\n")]);
+    let b = add_internal_files(company, "feat/b", "Note B", &[("B.md", "b\n")]);
+    let c = add_internal_files(
+        company,
+        "feat/c",
+        &format!("Note C\n\nUplink-Depends-On: {}", b.id),
+        &[("C.md", "c\n")],
+    );
+    let started = merge_patches(company, &[b.id.clone(), a.id.clone()], &[]).unwrap();
+    assert_eq!(started.target, a.id);
+    assert_eq!(started.members, vec![a.id.clone(), b.id.clone()]);
+    assert!(started.conflicts.is_empty(), "{started:?}");
+    let base = started.base_branch.clone().unwrap();
+    let work = started.work_branch.clone().unwrap();
+    assert_eq!(base, format!("uplink/merge/{}", a.id));
+    assert_eq!(rev_of(company, &format!("{work}^")), rev_of(company, &base));
+    assert_eq!(
+        git_ok(company, &["show", &format!("{work}:B.md")]).unwrap(),
+        "b"
+    );
+    let message = started.message.clone().unwrap();
+    assert!(message.starts_with("Note A\n\nNote B"), "{message}");
+
+    merge_work_and_squash(company, &a.id);
+    let done = complete_merge_with(
+        company,
+        &a.id,
+        &started.expect,
+        Some(PatchMessage {
+            message: "Notes A and B\n\nBoth notes.".into(),
+        }),
+        &ScriptVerdict::Run,
+    )
+    .unwrap();
+    assert!(done.completed);
+    let merged = patch_of(company, &a.id);
+    assert_eq!(merged.subject(), "Notes A and B");
+    assert!(merged.depends_on.is_empty(), "{:?}", merged.depends_on);
+    assert_eq!(patch_of(company, &b.id).status, PatchStatus::Dropped);
+    assert_eq!(patch_of(company, &c.id).depends_on, vec![a.id.clone()]);
+    let stored = git_ok(
+        company,
+        &[
+            "show",
+            &format!("{STATE_BRANCH}:.uplink/patches/{}.patch", a.id),
+        ],
+    )
+    .unwrap();
+    assert!(
+        stored.contains("A.md") && stored.contains("B.md"),
+        "{stored}"
+    );
+    assert_eq!(
+        git_ok(company, &["log", "-2", "--format=%s", "main"]).unwrap(),
+        "Note C\nNotes A and B"
+    );
+}
+
+#[test]
+fn merge_start_leaves_conflict_markers_when_a_patch_between_is_needed() {
+    let world = setup_world();
+    let company = &world.company;
+    let a = add_internal_files(company, "feat/a", "Note A", &[("X.md", "one\n")]);
+    let _b = add_internal_files(company, "feat/b", "Note B", &[("X.md", "two\n")]);
+    let c = add_internal_files(company, "feat/c", "Note C", &[("X.md", "three\n")]);
+    let started = merge_patches(company, &[a.id.clone(), c.id.clone()], &[]).unwrap();
+    assert_eq!(started.conflicts, vec!["X.md".to_string()]);
+    let work = started.work_branch.unwrap();
+    let text = git_ok(company, &["show", &format!("{work}:X.md")]).unwrap();
+    assert!(text.contains("<<<<<<<"), "{text}");
+}
+
+#[test]
+fn merge_start_refuses_two_lanes_a_dependency_between_and_two_open_public_prs() {
+    let world = setup_world();
+    let company = &world.company;
+    let internal = add_internal_files(company, "feat/a", "Note A", &[("A.md", "a\n")]);
+    let upstream = add_ttl_patch(company);
+    let err = merge_patches(company, &[internal.id.clone(), upstream.id.clone()], &[]).unwrap_err();
+    assert!(err.to_string().contains("same lane"), "{err}");
+
+    let between = add_internal_files(company, "feat/b", "Note B", &[("B.md", "b\n")]);
+    let needs = add_internal_files(
+        company,
+        "feat/c",
+        &format!("Note C\n\nUplink-Depends-On: {}", between.id),
+        &[("C.md", "c\n")],
+    );
+    let err = merge_patches(company, &[internal.id.clone(), needs.id.clone()], &[]).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains(&format!("depends on {}", between.id)),
+        "{err}"
+    );
+
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    for patch in queue.internal.iter_mut() {
+        if patch.id == internal.id || patch.id == between.id {
+            patch.upstream = Some(git_uplink::PatchUpstream {
+                contrib_branch: format!("uplink/{}", patch.id),
+                pr_number: Some(1),
+                pr_url: Some("https://github.com/acme/widget/pull/1".into()),
+                submitted_at: None,
+            });
+        }
+    }
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: test public prs").unwrap();
+    let pair = [internal.id.clone(), between.id.clone()];
+    let err = merge_patches(company, &pair, &[]).unwrap_err();
+    assert!(err.to_string().contains("open public PR"), "{err}");
+    let started = merge_patches(company, &pair, std::slice::from_ref(&internal.id)).unwrap();
+    assert_eq!(
+        started.target, between.id,
+        "the open public PR keeps its id"
+    );
+}
+
+#[test]
+fn split_push_records_again_on_a_moved_state_from_the_merged_base() {
+    let race = rebuild_race(false);
+    let notes = race.notes.id.clone();
+    let expect = expect_of(&race.runner, &notes);
+    race.cli_json(&["split", &notes]);
+    // The start and the completion run in separate jobs: the PR files the
+    // start wrote are not in the completion's checkout.
+    let reports = race.runner.join(format!(".uplink/reports/{notes}"));
+    fs::remove_file(reports.join("split.md")).unwrap();
+    fs::remove_file(reports.join("split-comment.md")).unwrap();
+    let head = split_on_work_and_squash(
+        &race.runner,
+        &notes,
+        &[
+            ("Internal notes", "NOTES.md", "internal\n"),
+            ("More notes", "MORE.md", "more\n"),
+        ],
+    );
+    let (ben_state, marker) = race.ben_wins_the_state_push();
+
+    let json = race.cli_json(&[
+        "split",
+        &notes,
+        "--complete",
+        "--head",
+        &head,
+        "--expect",
+        &expect,
+        "--push",
+    ]);
+
+    assert!(marker.exists(), "the first state push lost the race");
+    assert_eq!(json["push"]["main"], "pushed", "{json}");
+    assert_eq!(json["parts"].as_array().unwrap().len(), 2, "{json}");
+    let state = origin_state(&race.origin);
+    assert!(git_succeeds_in(
+        &race.origin,
+        &["merge-base", "--is-ancestor", &ben_state, &state]
+    ));
+    let queue = git_uplink::queue_at(&race.origin, &state).unwrap();
+    let second = json["parts"][1].as_str().unwrap();
+    assert!(queue.is_internal(second), "the split is on origin");
+    let main = race.origin_main();
+    assert_eq!(
+        git_ok(&race.origin, &["show", &format!("{main}:MORE.md")]).unwrap(),
+        "more"
+    );
+}
+
+#[test]
+fn split_of_a_submitted_patch_keeps_its_public_pr_on_the_first_part() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_ttl_patch(company);
+    let mut queue = git_uplink::read_queue(company).unwrap();
+    let stored = queue.all_patches_mut().find(|p| p.id == patch.id).unwrap();
+    stored.status = PatchStatus::Submitted;
+    stored.upstream = Some(git_uplink::PatchUpstream {
+        contrib_branch: format!("uplink/{}", patch.id),
+        pr_number: Some(7),
+        pr_url: Some("https://github.com/acme/widget/pull/7".into()),
+        submitted_at: None,
+    });
+    write_queue(company, &queue).unwrap();
+    git_uplink::commit_queue(company, "uplink: test submitted").unwrap();
+    let expect = vec![expect_of(company, &patch.id)];
+    split_patch_with(company, &patch.id, None, &[], &ScriptVerdict::Run).unwrap();
+    let head = split_on_work_and_squash(
+        company,
+        &patch.id,
+        &[
+            (
+                "Extend TTL",
+                "src/tokens.js",
+                &TOKENS.replace("return 3600;", "return 7200;"),
+            ),
+            (
+                "Document the TTL",
+                "docs/ttl.md",
+                "Tokens live two hours.\n",
+            ),
+        ],
+    );
+
+    let done = split_patch_with(
+        company,
+        &patch.id,
+        Some(&head),
+        &expect,
+        &ScriptVerdict::Run,
+    )
+    .unwrap();
+    let first = patch_of(company, &done.parts[0]);
+    let second = patch_of(company, &done.parts[1]);
+    assert!(
+        first.upstream.is_some(),
+        "the public PR stays on the first part"
+    );
+    assert!(first.reviews_delta(), "{:?}", first.status);
+    assert!(second.upstream.is_none());
+    assert_eq!(second.status, PatchStatus::Queued);
+    let queue = git_uplink::read_queue(company).unwrap();
+    assert!(queue.is_upstream(&second.id));
 }

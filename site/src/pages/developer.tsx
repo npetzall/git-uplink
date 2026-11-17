@@ -25,6 +25,8 @@ const SCENARIOS = [
   ["main-moved", "Main moved under my PR"],
   ["conflict", "My change conflicts with upstream"],
   ["amend", "Change a patch that is already queued or submitted"],
+  ["split", "Split a patch into several"],
+  ["merge", "Merge patches into one"],
   ["transfer", "Move a change between internal and upstream"],
   ["where-is-it", "Where is my change?"],
 ];
@@ -51,10 +53,10 @@ export function DeveloperPage() {
             The <Link to="/forge">forge</Link> imports, syncs, submits, rebases,
             and opens the pull requests you work in. Setup, upgrades, and
             repairs are the <Link to="/operator">operator&apos;s</Link>. You use
-            pull requests, labels, the PR body, and three workflows you
-            dispatch: <strong>Uplink amend</strong>,{" "}
-            <strong>Uplink transfer</strong>, and <strong>Uplink submit</strong>
-            .
+            pull requests, labels, the PR body, and the workflows you dispatch:{" "}
+            <strong>Uplink amend</strong>, <strong>Uplink split</strong>,{" "}
+            <strong>Uplink merge</strong>, <strong>Uplink transfer</strong>, and{" "}
+            <strong>Uplink submit</strong>.
           </li>
           <li>
             <strong>
@@ -69,8 +71,8 @@ export function DeveloperPage() {
             <strong>A forge workflow failed? Talk to your operator.</strong>{" "}
             Send the link to the failed run. A failed check on your own pull
             request (assess, preflight, Uplink gate) is yours to fix in the pull
-            request. A failed import, sync, submit, resolve, amend, transfer or
-            rebase run is the{" "}
+            request. A failed import, sync, submit, resolve, amend, split,
+            merge, transfer or rebase run is the{" "}
             <Link to="/operator#forge-failed">operator&apos;s</Link>. Don&apos;t
             work around it with <code>git uplink</code> or a push.
           </li>
@@ -411,6 +413,62 @@ git push`}</Code>
         </p>
       </Section>
 
+      <Section id="split" title="Split a patch into several">
+        <p>
+          Use this to break a large upstream patch into smaller public PRs, or
+          to pull a company-only part out of an upstream patch. Dispatch{" "}
+          <strong>Uplink split</strong> with the patch id. You get a draft PR
+          labelled <code>uplink:split</code> from{" "}
+          <code>uplink/split/&lt;id&gt;-work</code>. Its base is the queue just
+          before your patch, and the work branch holds the patch as one commit.
+          Rewrite it into one commit per part, oldest first:
+        </p>
+        <Code>{`git fetch origin
+git switch uplink/split/<id>-work
+git reset HEAD~1
+git add <the first part's files>
+git commit -m "First part"
+git add -A
+git commit -m "Second part"
+git push --force-with-lease`}</Code>
+        <p>
+          Each commit's message becomes that part's message, its first line the
+          subject. The <strong>Uplink gate</strong> check assesses every part
+          with its own message. Merge the PR with any merge method. The first
+          part keeps the patch id, and its public PR if it has one; the others
+          are new patches right after it. Each part depends on the one before
+          it, so upstream parts go out one at a time; amend a part to drop a
+          dependency it does not need. A patch that depended on the whole patch
+          depends on the last part. To move a part to company-only, transfer it
+          afterwards. Keep the <code>Uplink-Gate-Base</code> comment in the
+          description: the merge is refused when the patch changed since the PR
+          was opened. Close the PR without merging to cancel.
+        </p>
+      </Section>
+
+      <Section id="merge" title="Merge patches into one">
+        <p>
+          Dispatch <strong>Uplink merge</strong> with the patch ids, separated
+          by spaces. They must be in the same queue (transfer one first
+          otherwise). The merged patch keeps the id of the one with an open
+          public PR, or else of the first, and takes the first one's place. If
+          more than one has an open public PR, dispatch{" "}
+          <strong>Uplink abandon contrib</strong> for the ones you do not want
+          to keep, then merge again.
+        </p>
+        <p>
+          You get a draft PR labelled <code>uplink:merge</code> from{" "}
+          <code>uplink/merge/&lt;id&gt;-work</code>, with the patches applied as
+          one commit and their messages joined in the title and description.
+          When a patch needs another patch that it now comes before, the work
+          branch has conflict markers: resolve them on the work branch. Edit the
+          title and description into one message, then merge. The other patches
+          are dropped, and whatever depended on them depends on the merged
+          patch. Keep the <code>Uplink-Gate-Base</code> comments in the
+          description. Close the PR without merging to cancel.
+        </p>
+      </Section>
+
       <Section
         id="transfer"
         title="Move a change between internal and upstream"
@@ -456,8 +514,9 @@ git push`}</Code>
             public PR link.
           </li>
           <li>
-            A conflict, amend, or transfer is an open pull request labelled{" "}
-            <code>uplink:conflict</code>, <code>uplink:amend</code>, or{" "}
+            A conflict, amend, split, merge, or transfer is an open pull request
+            labelled <code>uplink:conflict</code>, <code>uplink:amend</code>,{" "}
+            <code>uplink:split</code>, <code>uplink:merge</code>, or{" "}
             <code>uplink:transfer-to-…</code>.
           </li>
           <li>

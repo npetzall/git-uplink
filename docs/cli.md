@@ -2,7 +2,7 @@
 
 # CLI reference
 
-Three roles meet in a repository git uplink manages. The operator sets it up and keeps it healthy: `init`, `init --upgrade`, adopting existing history, troubleshooting, and repairs by hand. The forge, the workflows of the pack `init` installs, runs the rest: it imports merged PRs, syncs upstream, submits contributions, rebases PRs, and opens gated PRs for conflicts, amends and transfers. Developers do not run git uplink: they branch from company `main`, open PRs, merge them, and work in the gated PRs the forge opens. They start the amend, transfer and submit workflows; they never push main.
+Three roles meet in a repository git uplink manages. The operator sets it up and keeps it healthy: `init`, `init --upgrade`, adopting existing history, troubleshooting, and repairs by hand. The forge, the workflows of the pack `init` installs, runs the rest: it imports merged PRs, syncs upstream, submits contributions, rebases PRs, and opens gated PRs for conflicts, amends, splits, merges and transfers. Developers do not run git uplink: they branch from company `main`, open PRs, merge them, and work in the gated PRs the forge opens. They start the amend, split, merge, transfer and submit workflows; they never push main.
 
 `add` records a merged PR as a queued patch on `uplink/state`. `add` records a merged PR as a queued patch on `uplink/state`. `assess` uses the PR title and body as the single commit message (its first line is the patch subject), adds a co-author trailer, strips the internal section before contrib export, and scans for company affiliation.
 
@@ -67,6 +67,11 @@ git uplink transfer <id> (--to-upstream | --to-internal) [--complete]
             [--preflight-only] [--push]
 git uplink amend <id> [--complete] [--message <text> | --message-file <path>]
             [--preflight-result <path>] [--preflight-only] [--push]
+git uplink split <id> [--complete] [--head <sha>] [--expect <id=stable>]...
+            [--preflight-result <path>] [--preflight-only] [--push]
+git uplink merge <id>... [--pr-closed <id>]... [--complete] [--expect <id=stable>]...
+            [--message <text> | --message-file <path>] [--preflight-result <path>]
+            [--preflight-only] [--push]
 git uplink web-ui [--port <port>] [--no-open]
 git uplink self-update [<version>] [--no-switch]
 git uplink self-use <version>
@@ -686,6 +691,58 @@ Without `--complete` it replays the queue on `uplink/upstream` up to and includi
 
   Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
 
+### `split`
+
+Split a patch into several through a gated PR from uplink/split/\<id>-work.
+
+The forge runs it when a developer dispatches Uplink split; the developer rewrites `uplink/split/<id>-work` into one commit per part and merges the split PR, which runs `--complete`. Conflicted, merged, dropped, and tooling patches cannot be split.
+
+Without `--complete` it replays the queue on `uplink/upstream` up to the patch, cuts protected `uplink/split/<id>` there (before the patch), and cuts `uplink/split/<id>-work` with the patch as one commit. The queue is not touched. It prints `base`, `work`, `expect` and `gh.prCreate` (`draft: true`, label `uplink:split`); the body carries one `Uplink-Gate-Base` comment per `expect` entry.
+
+`--complete` runs on the merged base (or `-work`). It reads the commits from the base to `--head`, the PR's head commit, so the merge method does not matter: each commit is one part and its message the part's message. At least two commits and no merge commits. The first part keeps the id, its public PR and its history; the others are new queued patches in the same lane, right after it. Every part keeps the patch's dependencies and depends on the part before it, and a patch that depended on the patch depends on the last part. Each part is assessed (an upstream part must pass), the last part's export is preflighted, and `main` is rebuilt; a follow-on conflict prints like `resolve`. `--complete` refuses when the patch changed since the PR was opened (`--expect`). The JSON has `parts`, `contentChanged` (the parts do not add up to the patch), `public` and `readyToSubmit`.
+
+- `<id>`: Patch to split.
+- `--complete`: Turn the commits of the merged split PR into patches.
+- `--head <sha>`: The split PR's head commit: the last part.
+- `--expect <id=stable>`: `<id>=<stable patch id>` the PR was opened for, from its `Uplink-Gate-Base` comment.
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of this command with `--preflight-only` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the result is not a pass. The checkout is left changed, so use a clone made for it.
+- `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
+
+  As `amend --push`: uplink/state is pushed as a fast-forward and recorded again on a lost race, then main with a lease. The JSON has `push.state` and `push.main`.
+
+### `merge`
+
+Merge patches into one through a gated PR from uplink/merge/\<id>-work.
+
+The forge runs it when a developer dispatches Uplink merge; the developer resolves any conflict on `uplink/merge/<id>-work`, edits the PR title and description, and merges the merge PR, which runs `--complete`.
+
+The patches must be active, in one lane (transfer one first otherwise), and none may depend on a patch between the first and the last of them. The merged patch keeps the id of the one with an open public PR, or else of the first in apply order, and takes the first one's place. Two open public PRs are refused: abandon the ones not to keep first, and name them with `--pr-closed`.
+
+Without `--complete` it takes the patch ids, replays the queue on `uplink/upstream` up to the first of them, cuts protected `uplink/merge/<id>` there, and cuts `uplink/merge/<id>-work` with all of them applied as one commit; a patch that does not apply leaves conflict markers in it. The queue is not touched. It prints `id` (the target), `members`, `base`, `work`, `expect`, `conflicts` and `gh.prCreate` (`draft: true`, label `uplink:merge`; the title and body join the messages, and the body carries one `Uplink-Gate-Base` comment per `expect` entry).
+
+`--complete` takes the target id and runs on the merged base (or `-work`). It squashes the work into the target, takes `--message[-file]` as its message, re-assesses it, drops the other patches, and points every dependency on them at the target. Its `Uplink-Depends-On` lines replace the dependencies, without the merged patches. Then `main` is rebuilt, as after `amend --complete`. `--complete` refuses when a patch changed since the PR was opened (`--expect`, once per patch). The JSON has `public` and `readyToSubmit`.
+
+- `<id>`: Patches to merge; with --complete, the target only.
+- `--pr-closed <id>`: A patch whose public PR is closed, so it counts as private.
+- `--complete`: Fold the merged merge PR into the target.
+- `--expect <id=stable>`: `<id>=<stable patch id>` the PR was opened for, from its `Uplink-Gate-Base` comments.
+- `--message <text>`: New commit message, as the PR title and body.
+- `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
+- `--preflight-result <path>`: Take the verdict of preflight.sh from this file instead of running it.
+
+  The file is the output of this command with `--preflight-only` from a job without credentials. It is used only when it is for the tree this command builds; otherwise the command fails and preflight has to run again.
+- `--preflight-only`: Run preflight.sh on what this command would test, print the result as JSON, change nothing.
+
+  For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the result is not a pass. The checkout is left on the squashed work, so use a clone made for it.
+- `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
+
+  As `amend --push`: uplink/state is pushed as a fast-forward and recorded again on a lost race, then main with a lease. The JSON has `push.state` and `push.main`.
+
 ### `rebase`
 
 Rebase the current branch onto company main after a rebuild replaced it.
@@ -782,7 +839,7 @@ While an adoption runs, and while it is paused, `uplink/state` is locked: every 
 
 ## Gated PRs
 
-`sync`, `resolve`, `transfer`, and `amend` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch subject (the first line of the stored message) and whose body (`bodyFile`) is the rest of the message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. The body also has an `Uplink-Depends-On` line for each dependency the stored message does not name. On merge, `resolve`, `transfer --complete` and `amend --complete` take the PR title, a blank line and the PR body as `--message-file`, and its `Uplink-Depends-On` lines replace the patch's dependencies.
+`sync`, `resolve`, `transfer`, `amend`, `split`, and `merge` print JSON (`gh.prCreate`, `gh.prClose`) for the company PR that gates a conflict or a change, and exit 0. Callers use the JSON, not the process status, to open company PRs. `gh.prCreate` opens a draft (`draft: true`) whose title is the patch subject (the first line of the stored message) and whose body (`bodyFile`) is the rest of the message. Instructions and diagnostics are in `commentFile`, for a comment on the PR. The `-work` branch is at least one commit ahead of the base, an empty one when the patch does not apply at all. The body also has an `Uplink-Depends-On` line for each dependency the stored message does not name. On merge, `resolve`, `transfer --complete`, `amend --complete` and `merge --complete` take the PR title, a blank line and the PR body as `--message-file`, and its `Uplink-Depends-On` lines replace the patch's dependencies.
 
 ## Credentials and identity
 

@@ -101,6 +101,16 @@ const BRANCHES = [
     role: "Protected amend base: upstream plus the queue up to and including the patch. The -work branch starts one empty commit ahead so the draft PR opens at once. Merging runs amend --complete; closing aborts.",
   },
   {
+    ref: "uplink/split/<id>",
+    where: "Private forge",
+    role: "Protected split base: upstream plus the queue up to the patch. The -work branch holds the patch as one commit, rewritten into one commit per part. Merging runs split --complete with the PR head; closing aborts.",
+  },
+  {
+    ref: "uplink/merge/<id>",
+    where: "Private forge",
+    role: "Protected merge base: upstream plus the queue up to the first merged patch. The -work branch holds the patches as one commit. Merging runs merge --complete; closing aborts.",
+  },
+  {
     ref: "uplink/hooks",
     where: "Private forge",
     role: "Orphan branch, company-only: uplink.toml, preflight.sh, the toolchain hook and the assessment hook. Never queued, replayed, or contributed. Changed through a reviewed pull request.",
@@ -387,6 +397,8 @@ const FLOWS = [
     "transfer PR, when changes are needed",
   ],
   ["Amend", "developer dispatch", "uplink-amend.yml", "the draft PR"],
+  ["Split", "developer dispatch", "uplink-split.yml", "the draft PR"],
+  ["Merge", "developer dispatch", "uplink-merge.yml", "the draft PR"],
   [
     "Withdraw",
     "transfer to-internal of a submitted patch",
@@ -429,8 +441,22 @@ const GATE_CHECKS = [
     "internal, moving",
     "Export preflight with the PR title and description as the message",
   ],
+  [
+    "uplink/split/<id>",
+    "upstream",
+    "Assess each commit, a part, with its own message",
+  ],
+  [
+    "uplink/merge/<id>",
+    "upstream",
+    "Assess the merged change with the PR title and description",
+  ],
   ["uplink/transfer-to-internal/<id>", "upstream, moving", "preflight.sh only"],
-  ["uplink/conflict/<id>, uplink/amend/<id>", "internal", "preflight.sh only"],
+  [
+    "uplink/conflict/<id>, uplink/amend/<id>, uplink/split/<id>, uplink/merge/<id>",
+    "internal",
+    "preflight.sh only",
+  ],
 ];
 
 const GATE_CHART = `
@@ -470,6 +496,18 @@ const GATES = [
     "git uplink amend",
     "draft PR into uplink/amend/<id>",
     "git uplink amend --complete",
+  ],
+  [
+    "Split",
+    "git uplink split",
+    "draft PR into uplink/split/<id>",
+    "git uplink split --complete",
+  ],
+  [
+    "Merge",
+    "git uplink merge",
+    "draft PR into uplink/merge/<id>",
+    "git uplink merge --complete",
   ],
   [
     "Withdraw contribution",

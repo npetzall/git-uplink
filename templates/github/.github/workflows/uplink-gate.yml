@@ -20,6 +20,8 @@ on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is
       - "uplink/transfer-to-upstream/**"
       - "uplink/transfer-to-internal/**"
       - "uplink/amend/**"
+      - "uplink/split/**"
+      - "uplink/merge/**"
 
 concurrency:
   group: uplink-gate-${{ github.event.pull_request.number }}
@@ -124,6 +126,43 @@ jobs:
             run_preflight --command-only
           elif [[ "$BASE_REF" == uplink/amend/* ]] && is_internal "${BASE_REF#uplink/amend/}"; then
             run_preflight --command-only
+          elif [[ "$BASE_REF" == uplink/split/* ]] && is_internal "${BASE_REF#uplink/split/}"; then
+            run_preflight --command-only
+          elif [[ "$BASE_REF" == uplink/merge/* ]] && is_internal "${BASE_REF#uplink/merge/}"; then
+            run_preflight --command-only
+          elif [[ "$BASE_REF" == uplink/split/* ]]; then
+            # Each commit becomes a part on merge, and its message the part's
+            # message: assess each as split --complete will. Export preflight
+            # runs after merge, on the last part.
+            id="${BASE_REF#uplink/split/}"
+            mapfile -t parts < <(git rev-list --reverse --no-merges "${FROM_SHA}..${HEAD_SHA}")
+            if [ "$(git rev-list --count --merges "${FROM_SHA}..${HEAD_SHA}")" != 0 ]; then
+              echo "A split has no merge commits: each commit is one part."
+              exit 1
+            fi
+            if [ "${#parts[@]}" -lt 2 ]; then
+              echo "A split needs at least two commits, one per part."
+              exit 1
+            fi
+            for part in "${parts[@]}"; do
+              git log -1 --format=%B "$part" > /tmp/uplink-msg.txt
+              git uplink assess --patch "$id" \
+                --message-file /tmp/uplink-msg.txt \
+                --from "${part}^" \
+                --head "$part"
+            done
+          elif [[ "$BASE_REF" == uplink/merge/* ]]; then
+            # The base is the queue before the first merged patch; the PR title
+            # and description become the merged patch's message: assess both,
+            # as merge --complete will after merge.
+            {
+              printf '%s\n\n' "$TITLE"
+              printf '%s\n' "${BODY:-}"
+            } > /tmp/uplink-msg.txt
+            git uplink assess --patch "${BASE_REF#uplink/merge/}" \
+              --message-file /tmp/uplink-msg.txt \
+              --from "$FROM_SHA" \
+              --head "$HEAD_SHA"
           elif [[ "$BASE_REF" == uplink/conflict/* ]]; then
             # The resolution is new code, and the PR title and description
             # become the patch message on merge: assess both, as resolve will

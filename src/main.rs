@@ -40,6 +40,10 @@ use git_uplink::{
     strip_html_comments, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
     trim_deps, upstream_pr_body, write_man_pages,
 };
+use git_uplink::{
+    MergeResult, SplitResult, complete_merge_with, gate_base_comments, merge_patches,
+    merge_preflight, split_patch_with, split_preflight,
+};
 use git_uplink::{SelfEnv, self_available, self_check, self_list, self_update, self_use};
 
 const VERSION: &str = concat!(
@@ -627,6 +631,163 @@ fn print_amend_artifact(
                 "head": work,
                 "base": base,
                 "labels": [git_uplink::GateKind::Amend.label()],
+                "draft": true
+            }
+        }
+    });
+    println!("{value}");
+    Ok(())
+}
+
+/// The comment on the split PR: what to do with it.
+fn split_comment(id: &str, work: &str, base: &str) -> String {
+    format!(
+        "Uplink split for `{id}`. Rewrite `{work}` into one commit per part, oldest first: each commit's message becomes that part's message (its first line the subject), and each part depends on the one before it. The first part keeps `{id}`. Mark this PR ready and merge it into `{base}`. Closing without merging leaves the patch unchanged.\n\nKeep the `{key}` comment in the description: it tells the merge which patch this PR was opened for.\n",
+        key = git_uplink::GATE_BASE_KEY
+    )
+}
+
+/// The comment on the merge PR: what to do with it.
+fn merge_comment(result: &MergeResult, work: &str, base: &str) -> String {
+    let others: Vec<String> = result
+        .members
+        .iter()
+        .filter(|id| **id != result.target)
+        .map(|id| format!("`{id}`"))
+        .collect();
+    let conflicts = if result.conflicts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nThe patches do not apply cleanly in this order. Resolve the conflict markers in: {}\n",
+            result
+                .conflicts
+                .iter()
+                .map(|file| format!("`{file}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    format!(
+        "Uplink merge of {} into `{target}`. Fix `{work}` if needed, edit the title and description into one message, mark this PR ready, and merge it into `{base}`. The other patches are then dropped. Closing without merging leaves them all unchanged.{conflicts}\n\nKeep the `{key}` comments in the description: they tell the merge which patches this PR was opened for.\n\n{MESSAGE_NOTE}",
+        others.join(", "),
+        target = result.target,
+        key = git_uplink::GATE_BASE_KEY
+    )
+}
+
+fn print_split_artifact(
+    repo: &Path,
+    result: &SplitResult,
+    push: Option<&serde_json::Value>,
+) -> Result<(), Error> {
+    if result.completed {
+        let mut value = resolve_artifact(repo, &result.id, &result.queue, false)?;
+        value["completed"] = serde_json::Value::Bool(true);
+        value["parts"] = serde_json::json!(result.parts);
+        value["contentChanged"] = serde_json::Value::Bool(result.content_changed);
+        value["readyToSubmit"] = serde_json::json!(result.ready_to_submit);
+        if let Some(push) = push {
+            value["push"] = push.clone();
+        }
+        println!("{value}");
+        return Ok(());
+    }
+    let patch = result
+        .queue
+        .all_patches()
+        .find(|p| p.id == result.id)
+        .ok_or_else(|| Error::msg(format!("unknown patch {}", result.id)))?;
+    let base = result.base_branch.clone().unwrap_or_default();
+    let work = result.work_branch.clone().unwrap_or_default();
+    let body = format!(
+        "{}\n{}",
+        patch_body(patch).trim_end(),
+        gate_base_comments(&result.expect)
+    );
+    let (body_file, comment_file) = write_gated_pr_files(
+        repo,
+        &result.id,
+        "split",
+        &body,
+        &split_comment(&result.id, &work, &base),
+    )?
+    .ok_or_else(|| Error::msg(format!("invalid patch id {}", result.id)))?;
+    let value = serde_json::json!({
+        "id": result.id,
+        "completed": false,
+        "gated": true,
+        "base": base,
+        "work": work,
+        "onto": result.onto,
+        "expect": result.expect,
+        "gh": {
+            "prCreate": {
+                "title": format!("Split: {}", patch.subject()),
+                "bodyFile": body_file,
+                "commentFile": comment_file,
+                "head": work,
+                "base": base,
+                "labels": [git_uplink::GateKind::Split.label()],
+                "draft": true
+            }
+        }
+    });
+    println!("{value}");
+    Ok(())
+}
+
+fn print_merge_artifact(
+    repo: &Path,
+    result: &MergeResult,
+    push: Option<&serde_json::Value>,
+) -> Result<(), Error> {
+    if result.completed {
+        let mut value = resolve_artifact(repo, &result.target, &result.queue, false)?;
+        value["completed"] = serde_json::Value::Bool(true);
+        value["members"] = serde_json::json!(result.members);
+        value["readyToSubmit"] = serde_json::json!(result.ready_to_submit);
+        if let Some(push) = push {
+            value["push"] = push.clone();
+        }
+        println!("{value}");
+        return Ok(());
+    }
+    let base = result.base_branch.clone().unwrap_or_default();
+    let work = result.work_branch.clone().unwrap_or_default();
+    let message = result.message.clone().unwrap_or_default();
+    let (title, rest) = split_subject_body(&message);
+    let body = format!(
+        "{}\n\n{}",
+        rest.trim_end(),
+        gate_base_comments(&result.expect)
+    );
+    let (body_file, comment_file) = write_gated_pr_files(
+        repo,
+        &result.target,
+        "merge",
+        body.trim_start(),
+        &merge_comment(result, &work, &base),
+    )?
+    .ok_or_else(|| Error::msg(format!("invalid patch id {}", result.target)))?;
+    let value = serde_json::json!({
+        "id": result.target,
+        "members": result.members,
+        "completed": false,
+        "gated": true,
+        "base": base,
+        "work": work,
+        "onto": result.onto,
+        "expect": result.expect,
+        "conflicts": result.conflicts,
+        "gh": {
+            "prCreate": {
+                "title": title,
+                "bodyFile": body_file,
+                "commentFile": comment_file,
+                "head": work,
+                "base": base,
+                "labels": [git_uplink::GateKind::Merge.label()],
                 "draft": true
             }
         }
@@ -2328,6 +2489,153 @@ fn cmd_amend(
     }
 }
 
+/// The merged gate base a completion starts from. A lost race records
+/// again on the state that won, after the first attempt rebuilt and checked
+/// out `main`; each attempt starts from this checkout again.
+struct CheckoutPin {
+    branch: String,
+    sha: String,
+}
+
+impl CheckoutPin {
+    fn restore(&self, repo: &Path) -> Result<(), Error> {
+        let branch = git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        let sha = git_ok(repo, &["rev-parse", "HEAD"])?;
+        if branch != self.branch || sha != self.sha {
+            git_ok(
+                repo,
+                &["checkout", "-f", "--quiet", "-B", &self.branch, &self.sha],
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn checkout_pin(repo: &Path) -> Result<CheckoutPin, Error> {
+    Ok(CheckoutPin {
+        branch: git_ok(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
+        sha: git_ok(repo, &["rev-parse", "HEAD"])?,
+    })
+}
+
+fn cmd_split(
+    repo: &Path,
+    id: &str,
+    head: Option<&str>,
+    expect: &[String],
+    verdict: &ScriptVerdict,
+    push: bool,
+) -> Result<(), Error> {
+    let start = if head.is_some() {
+        refuse_script_here(repo, verdict, None)?;
+        Some(checkout_pin(repo)?)
+    } else {
+        None
+    };
+    let (split, push) = record_maybe_push(repo, push, || {
+        if let Some(start) = &start {
+            start.restore(repo)?;
+        }
+        match split_patch_with(repo, id, head, expect, verdict) {
+            Err(Error::Conflict(err)) if head.is_some() => Ok(Err(Error::Conflict(err))),
+            other => other.map(Ok),
+        }
+    })?;
+    match split {
+        Ok(result) => {
+            print_split_artifact(repo, &result, push.as_ref())?;
+            if !result.completed {
+                eprintln!(
+                    "SPLIT {} on {}",
+                    result.id,
+                    result.work_branch.as_deref().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        Err(Error::Conflict(_)) => print_follow_on_conflict(repo, id, push.as_ref()),
+        Err(err) => Err(err),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_merge(
+    repo: &Path,
+    ids: &[String],
+    pr_closed: &[String],
+    complete: bool,
+    expect: &[String],
+    change: Option<PatchMessage>,
+    verdict: &ScriptVerdict,
+    push: bool,
+) -> Result<(), Error> {
+    let target = ids.first().cloned().unwrap_or_default();
+    if complete {
+        if ids.len() != 1 {
+            return Err(Error::msg(
+                "merge --complete takes the target id only; the others come from --expect",
+            ));
+        }
+        refuse_script_here(repo, verdict, None)?;
+    }
+    let start = if complete {
+        Some(checkout_pin(repo)?)
+    } else {
+        None
+    };
+    let (merged, push) = record_maybe_push(repo, push, || {
+        if let Some(start) = &start {
+            start.restore(repo)?;
+        }
+        let result = if complete {
+            complete_merge_with(repo, &target, expect, change.clone(), verdict)
+        } else {
+            merge_patches(repo, ids, pr_closed)
+        };
+        match result {
+            Err(Error::Conflict(err)) if complete => Ok(Err(Error::Conflict(err))),
+            other => other.map(Ok),
+        }
+    })?;
+    match merged {
+        Ok(result) => {
+            print_merge_artifact(repo, &result, push.as_ref())?;
+            if !result.completed {
+                eprintln!(
+                    "MERGE {} into {} on {}",
+                    result.members.join(", "),
+                    result.target,
+                    result.work_branch.as_deref().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        Err(Error::Conflict(_)) => print_follow_on_conflict(repo, &target, push.as_ref()),
+        Err(err) => Err(err),
+    }
+}
+
+/// A completed gate whose rebuild stopped on a patch: prints it like
+/// `resolve`, for the workflow to open the conflict PR.
+fn print_follow_on_conflict(
+    repo: &Path,
+    id: &str,
+    push: Option<&serde_json::Value>,
+) -> Result<(), Error> {
+    let queue = read_queue(repo)?;
+    let mut value = resolve_artifact(repo, id, &queue, true)?;
+    value["completed"] = serde_json::Value::Bool(true);
+    value["changed"] = serde_json::Value::Bool(true);
+    if let Some(push) = push {
+        value["push"] = push.clone();
+    }
+    println!("{value}");
+    if let Some(conflict) = find_conflict(&queue) {
+        eprint_conflict(conflict);
+    }
+    Ok(())
+}
+
 fn cmd_transfer(
     repo: &Path,
     id: &str,
@@ -2868,6 +3176,63 @@ fn run() -> Result<(), Error> {
                 &repo,
                 &id,
                 complete,
+                change,
+                &script_verdict(preflight_result)?,
+                push,
+            )
+        }
+        Commands::Split {
+            id,
+            complete,
+            head,
+            expect,
+            preflight_result,
+            preflight_only,
+            push,
+        } => {
+            let head = head.filter(|_| complete);
+            if preflight_only {
+                refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
+                let report = split_preflight(&repo, &id, head.as_deref().unwrap_or(""), &expect)?;
+                return finish_preflight_report(report);
+            }
+            cmd_split(
+                &repo,
+                &id,
+                head.as_deref(),
+                &expect,
+                &script_verdict(preflight_result)?,
+                push,
+            )
+        }
+        Commands::Merge {
+            ids,
+            pr_closed,
+            complete,
+            expect,
+            message,
+            message_file,
+            preflight_result,
+            preflight_only,
+            push,
+        } => {
+            let change = patch_message(message, message_file)?;
+            if preflight_only {
+                if ids.len() != 1 {
+                    return Err(Error::msg(
+                        "merge --complete takes the target id only; the others come from --expect",
+                    ));
+                }
+                refuse_script_here(&repo, &ScriptVerdict::Run, None)?;
+                let report = merge_preflight(&repo, &ids[0], &expect, change)?;
+                return finish_preflight_report(report);
+            }
+            cmd_merge(
+                &repo,
+                &ids,
+                &pr_closed,
+                complete,
+                &expect,
                 change,
                 &script_verdict(preflight_result)?,
                 push,

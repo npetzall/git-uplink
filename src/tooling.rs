@@ -942,6 +942,18 @@ mod embed_tests {
                 "git uplink amend ",
             ),
             (
+                "uplink-split.yml",
+                "complete-preflight",
+                "complete",
+                "git uplink split ",
+            ),
+            (
+                "uplink-merge.yml",
+                "complete-preflight",
+                "complete",
+                "git uplink merge ",
+            ),
+            (
                 "uplink-transfer.yml",
                 "start-preflight",
                 "start",
@@ -1378,6 +1390,8 @@ mod embed_tests {
             for (workflow, command) in [
                 ("uplink-resolve.yml", "git uplink resolve \"$id\""),
                 ("uplink-amend.yml", "git uplink amend \"$id\" --complete"),
+                ("uplink-split.yml", "git uplink split \"$id\" --complete"),
+                ("uplink-merge.yml", "git uplink merge \"$id\" --complete"),
                 ("uplink-transfer.yml", "git uplink transfer \"$PATCH_ID\""),
                 ("uplink-transfer.yml", "git uplink transfer \"$id\""),
                 ("uplink-sync.yml", "git uplink sync "),
@@ -1461,6 +1475,8 @@ mod embed_tests {
                 "uplink-resolve.yml",
                 "uplink-transfer.yml",
                 "uplink-amend.yml",
+                "uplink-split.yml",
+                "uplink-merge.yml",
             ] {
                 let text = files
                     .iter()
@@ -1821,6 +1837,8 @@ with the internal App, not GITHUB_TOKEN:\n{job}"
             ("uplink-transfer.yml", "complete"),
             ("uplink-resolve.yml", "resolve"),
             ("uplink-amend.yml", "complete"),
+            ("uplink-split.yml", "complete"),
+            ("uplink-merge.yml", "complete"),
         ];
         for forge in [Forge::Github, Forge::TryItOnGithub] {
             let files = composed_files(forge).unwrap();
