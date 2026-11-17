@@ -16,12 +16,12 @@ use git_uplink::{
     format_approval_receipt, format_approver_packet, format_contribution_packet,
     format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
     git_ok, init, init_repo, load_extra_markdown, load_groups_file, mark_merged, mark_rejected,
-    mark_waiting, newly_ready_to_submit, parse_depends_on, preflight_existing_patch,
+    mark_waiting, newly_ready_to_submit, origin_status, parse_depends_on, preflight_existing_patch,
     preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan, rebuild, rebuild_with,
     record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
-    resolve_conflict, review_token, status_snapshot, store_patch_extras, stored_extras_fresh,
-    strip_html_comments, submit_patch, submit_patch_with, summarize_queue, sync, sync_with,
-    transfer_patch, transfer_patch_with, transfer_preflight, trim_deps, write_queue,
+    resolve_conflict, review_token, store_patch_extras, stored_extras_fresh, strip_html_comments,
+    submit_patch, submit_patch_with, summarize_queue, sync, sync_with, transfer_patch,
+    transfer_patch_with, transfer_preflight, trim_deps, working_snapshot, write_queue,
 };
 use tempfile::TempDir;
 
@@ -3509,7 +3509,7 @@ fn add_records_the_patch_and_rebuilds_upstream_under_internal() {
     assert_ne!(main_after, main_before_upstream);
     assert_ne!(main_after, main_after_internal);
     assert!(!tree_has_uplink(company, "main"));
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     assert!(snapshot.queue.is_internal(&internal.id));
     assert!(snapshot.queue.is_upstream(&patch.id));
     assert!(
@@ -3563,7 +3563,7 @@ fn add_refuses_when_the_change_is_not_on_main() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("not on company main yet"), "{err}");
-    assert!(status_snapshot(company).unwrap().queue.upstream.is_empty());
+    assert!(working_snapshot(company).unwrap().queue.upstream.is_empty());
 }
 
 #[test]
@@ -3613,7 +3613,7 @@ fn add_from_explicit_range_does_not_require_company_main() {
         main_before
     );
     assert!(
-        status_snapshot(company)
+        working_snapshot(company)
             .unwrap()
             .queue
             .is_upstream(&patch.id)
@@ -3657,7 +3657,7 @@ fn internal_only_add_from_explicit_range_does_not_rebuild_main() {
         main_before
     );
     assert!(
-        status_snapshot(company)
+        working_snapshot(company)
             .unwrap()
             .queue
             .is_internal(&patch.id)
@@ -4123,7 +4123,7 @@ fn rebuilds_company_main_with_stacked_patches_including_internal_only() {
     )
     .unwrap();
 
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     let tokens = snapshot.product_files.get("src/tokens.js").unwrap();
     assert!(tokens.contains("sha256"));
     assert!(tokens.contains("console.log(\"hash\")"));
@@ -4214,7 +4214,7 @@ fn drops_a_merged_patch_so_a_later_upstream_fix_is_not_reverted() {
     assert!(inspected.flowed_back.iter().any(|id| id == &hash_patch.id));
     accept_upstream(company).unwrap();
 
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     let merged = snapshot
         .queue
         .all_patches()
@@ -5042,7 +5042,7 @@ fn a_public_pr_is_recorded_only_after_approval() {
 fn status_lists_patches_whose_approval_no_longer_covers_them() {
     let (world, hash_patch) = world_with_hash_patch();
     let company = &world.company;
-    let stale = |repo: &Path| status_snapshot(repo).unwrap().stale_approvals;
+    let stale = |repo: &Path| working_snapshot(repo).unwrap().stale_approvals;
 
     // Not approved yet: nothing to be stale.
     assert!(stale(company).is_empty());
@@ -5051,10 +5051,12 @@ fn status_lists_patches_whose_approval_no_longer_covers_them() {
 
     retitle(company, &hash_patch.id, "Use SHA-256 everywhere");
     assert_eq!(stale(company), std::slice::from_ref(&hash_patch.id));
-    let snapshot = status_snapshot(company).unwrap();
-    let report = serde_json::to_value(git_uplink::status_report(&snapshot)).unwrap();
+    let _origin = publish_origin(company);
+    let status = origin_status(company).unwrap();
+    let report = serde_json::to_value(git_uplink::status_report(&status)).unwrap();
     assert_eq!(report["staleApprovals"][0], hash_patch.id.as_str());
-    let table = git_uplink::format_status_table(&snapshot);
+    assert_eq!(report["stateRef"], "origin/uplink/state");
+    let table = git_uplink::format_status_table(&status);
     assert!(
         table.contains(&format!(
             "needs approval before submit (content changed since the last approval): {}",
@@ -5065,7 +5067,14 @@ fn status_lists_patches_whose_approval_no_longer_covers_them() {
 
     approve_patch(company, &hash_patch.id).unwrap();
     assert!(stale(company).is_empty());
-    let table = git_uplink::format_status_table(&status_snapshot(company).unwrap());
+    push_queue(
+        company,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+    let table = git_uplink::format_status_table(&origin_status(company).unwrap());
     assert!(!table.contains("needs approval before submit"), "{table}");
 }
 
@@ -5427,7 +5436,7 @@ fn sync_mixed_flow_back_and_foreign_waits_for_approval() {
     assert!(result.flowed_back.iter().any(|id| id == &hash_patch.id));
     assert_eq!(result.queue.patch_refs()[0].status, PatchStatus::Queued);
     accept_upstream(company).unwrap();
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     assert_eq!(snapshot.queue.patch_refs()[0].status, PatchStatus::Merged);
     let changelog = snapshot.product_files.get("CHANGELOG.md").unwrap();
     assert!(changelog.contains("release note"));
@@ -5754,7 +5763,7 @@ fn stops_on_a_sync_conflict_and_amends_the_same_patch_when_resolved() {
     git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
     resolve_conflict(company, &ttl_patch.id).unwrap();
 
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     assert_eq!(snapshot.queue.patch_refs()[0].status, PatchStatus::Queued);
     let tokens = snapshot.product_files.get("src/tokens.js").unwrap();
     assert!(tokens.contains("return 7200;"));
@@ -5910,7 +5919,7 @@ fn resolve_refuses_a_resolution_that_fails_the_assessment() {
     assert_eq!(git_ok(company, &["rev-parse", "HEAD"]).unwrap(), before);
     let staged = git_ok(company, &["diff", "--cached", "--name-only"]).unwrap();
     assert_eq!(staged, "src/tokens.js");
-    let queue = status_snapshot(company).unwrap().queue;
+    let queue = working_snapshot(company).unwrap().queue;
     let still = queue.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(still.status, PatchStatus::Conflict);
 
@@ -5921,7 +5930,7 @@ fn resolve_refuses_a_resolution_that_fails_the_assessment() {
     );
     git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
     resolve_conflict(company, &ttl_patch.id).unwrap();
-    let queue = status_snapshot(company).unwrap().queue;
+    let queue = working_snapshot(company).unwrap().queue;
     let resolved = queue.all_patches().find(|p| p.id == ttl_patch.id).unwrap();
     assert_eq!(resolved.status, PatchStatus::Queued);
     assert!(resolved.assess.as_ref().unwrap().ok);
@@ -6014,7 +6023,7 @@ fn submitted_conflict_resolve_that_changes_the_patch_requires_delta_approval_and
     git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
     resolve_conflict(company, &ttl_patch.id).unwrap();
 
-    let after_resolve = status_snapshot(company).unwrap();
+    let after_resolve = working_snapshot(company).unwrap();
     let amended = after_resolve
         .queue
         .all_patches()
@@ -6128,7 +6137,7 @@ fn submitted_conflict_resolve_that_changes_the_patch_requires_delta_approval_and
     );
     git(company, &["add", "src/tokens.js"], GitOpts::default()).unwrap();
     resolve_conflict(company, &ttl_patch.id).unwrap();
-    let third = status_snapshot(company).unwrap();
+    let third = working_snapshot(company).unwrap();
     let amended = third
         .queue
         .all_patches()
@@ -6248,7 +6257,12 @@ fn submitted_conflict_resolve_that_keeps_the_patch_lines_needs_no_new_approval()
     assert_eq!(resolved.approvals.len(), 1);
     assert_ne!(resolved.patch_id_stable, ttl_patch.patch_id_stable);
     assert_eq!(review_token(company, &resolved).unwrap(), approved);
-    assert!(status_snapshot(company).unwrap().stale_approvals.is_empty());
+    assert!(
+        working_snapshot(company)
+            .unwrap()
+            .stale_approvals
+            .is_empty()
+    );
     let event = resolved.events.last().unwrap();
     assert!(
         event.detail.contains("the last approval still covers it"),
@@ -6828,7 +6842,7 @@ fn resolving_asha_records_a_follow_on_conflict_on_ben() {
         "follow-on conflict should name ben, stderr:\n{stderr}"
     );
 
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     let asha_after = snapshot
         .queue
         .all_patches()
@@ -6937,7 +6951,7 @@ fn refuses_to_submit_internal_only_patches_and_exports_approved_ones() {
 
     mark_merged(company, &hash_patch.id, MergeVia::Pr, Some(&submitted.sha)).unwrap();
     rebuild(company).unwrap();
-    let after = status_snapshot(company).unwrap();
+    let after = working_snapshot(company).unwrap();
     assert_eq!(
         after
             .queue
@@ -6983,7 +6997,7 @@ fn can_drop_an_internal_only_patch_from_the_company_build() {
     )
     .unwrap();
     drop_patch(company, &internal.id, "no longer needed").unwrap();
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     assert!(
         !snapshot
             .product_files
@@ -7035,7 +7049,7 @@ fn imports_as_queued_not_contribution_approved() {
     .unwrap();
     assert_eq!(again.id, patch.id);
     assert_eq!(
-        status_snapshot(company)
+        working_snapshot(company)
             .unwrap()
             .queue
             .all_patches()
@@ -7087,7 +7101,7 @@ fn merge_then_import_stays_queued_and_approvable() {
     assert!(!upstream_tokens.contains("return sha256(value);"));
     approve_patch(company, &patch.id).unwrap();
     assert_eq!(
-        status_snapshot(company).unwrap().queue.patch_refs()[0].status,
+        working_snapshot(company).unwrap().queue.patch_refs()[0].status,
         PatchStatus::Approved
     );
 }
@@ -7206,7 +7220,7 @@ fn serializes_two_adds_in_one_checkout_so_both_patches_survive() {
     handle_a.join().unwrap().unwrap();
     handle_b.join().unwrap().unwrap();
 
-    let snapshot = status_snapshot(&company).unwrap();
+    let snapshot = working_snapshot(&company).unwrap();
     assert_eq!(snapshot.queue.all_patches().count(), 2);
     assert!(
         snapshot
@@ -7339,7 +7353,7 @@ fn retries_concurrent_adds_from_two_clones_against_a_shared_origin() {
     h2.join().unwrap().unwrap();
 
     let (_integrated_keep, integrated) = clone_company_from(&origin, &upstream);
-    let snapshot = status_snapshot(&integrated).unwrap();
+    let snapshot = working_snapshot(&integrated).unwrap();
     let mut titles: Vec<_> = snapshot
         .queue
         .all_patches()
@@ -7403,11 +7417,16 @@ fn push_publishes_a_local_add() {
     );
 }
 
+fn add_count(queue: &QueueState) -> usize {
+    queue.all_patches().count()
+}
+
 #[test]
-fn status_reports_ahead_after_local_add() {
+fn status_ignores_unpushed_local_add() {
     let world = setup_world();
     let company = &world.company;
     let _origin = publish_origin(company);
+    let published = git_ok(company, &["rev-parse", STATE_BRANCH]).unwrap();
     git(
         company,
         &["checkout", "-b", "feat/readme"],
@@ -7425,19 +7444,15 @@ fn status_reports_ahead_after_local_add() {
         },
     )
     .unwrap();
-    let snapshot = status_snapshot(company).unwrap();
-    assert_eq!(snapshot.state.ahead, Some(1));
-    assert_eq!(snapshot.state.behind, Some(0));
-    assert!(
-        snapshot.state.uncommitted.is_empty(),
-        "{:?}",
-        snapshot.state.uncommitted
-    );
-    assert!(snapshot.state.remote.is_some());
+    let added = add_count(&working_snapshot(company).unwrap().queue);
+    let status = origin_status(company).unwrap();
+    assert_eq!(status.state_ref, "origin/uplink/state");
+    assert_eq!(status.state_sha, published.trim());
+    assert_eq!(add_count(&status.queue) + 1, added);
 }
 
 #[test]
-fn status_reports_behind_when_origin_moved() {
+fn status_reads_origin_as_last_fetched() {
     let world = setup_world();
     let company = &world.company;
     let upstream = world.upstream.clone();
@@ -7471,40 +7486,45 @@ fn status_reports_behind_when_origin_moved() {
     .unwrap();
 
     let local_before = git_ok(&behind, &["rev-parse", STATE_BRANCH]).unwrap();
-    let snapshot = status_snapshot(&behind).unwrap();
+    let stale = origin_status(&behind).unwrap();
+    assert_eq!(stale.state_sha, local_before.trim());
+
+    refresh_from_origin(&behind).unwrap();
+    let fresh = origin_status(&behind).unwrap();
+    assert_eq!(
+        fresh.state_sha,
+        git_ok(&origin, &["rev-parse", STATE_BRANCH])
+            .unwrap()
+            .trim()
+    );
+    assert_eq!(add_count(&fresh.queue), add_count(&stale.queue) + 1);
     assert_eq!(
         git_ok(&behind, &["rev-parse", STATE_BRANCH]).unwrap(),
         local_before
     );
-    assert_eq!(snapshot.state.ahead, Some(0));
-    assert_eq!(snapshot.state.behind, Some(1));
-    assert!(
-        snapshot.state.uncommitted.is_empty(),
-        "{:?}",
-        snapshot.state.uncommitted
-    );
 }
 
 #[test]
-fn status_reports_uncommitted_queue() {
+fn status_ignores_the_uplink_folder() {
     let world = setup_world();
     let company = &world.company;
     let _origin = publish_origin(company);
     let path = company.join(".uplink/queue.json");
-    let raw = fs::read_to_string(&path).unwrap();
-    fs::write(&path, raw.replace("\"version\": 1", "\"version\": 1 ")).unwrap();
-    let snapshot = status_snapshot(company).unwrap();
-    assert!(
-        snapshot
-            .state
-            .uncommitted
-            .iter()
-            .any(|path| path == ".uplink/queue.json"),
-        "{:?}",
-        snapshot.state.uncommitted
+    fs::write(&path, "not json\n").unwrap();
+    let status = origin_status(company).unwrap();
+    assert_eq!(
+        status.state_sha,
+        git_ok(company, &["rev-parse", "origin/uplink/state"])
+            .unwrap()
+            .trim()
     );
-    assert_eq!(snapshot.state.ahead, Some(0));
-    assert_eq!(snapshot.state.behind, Some(0));
+}
+
+#[test]
+fn status_without_origin_state_fails() {
+    let world = setup_world();
+    let err = origin_status(&world.company).unwrap_err().to_string();
+    assert!(err.contains("git uplink refresh"), "{err}");
 }
 
 #[test]
@@ -7521,8 +7541,8 @@ fn status_cli_table_or_json() {
     assert!(table.status.success(), "{:?}", table);
     let text = String::from_utf8_lossy(&table.stdout);
     assert!(!text.trim_start().starts_with('{'), "{text}");
-    assert!(text.contains("uplink/state"), "{text}");
-    assert!(text.contains("up to date"), "{text}");
+    assert!(text.contains("origin/uplink/state"), "{text}");
+    assert!(text.contains("as last fetched"), "{text}");
     assert!(text.contains("id"), "{text}");
 
     let json = Command::new(bin)
@@ -7533,12 +7553,58 @@ fn status_cli_table_or_json() {
     assert!(json.status.success(), "{:?}", json);
     let text = String::from_utf8_lossy(&json.stdout);
     let value: serde_json::Value = serde_json::from_str(text.trim()).expect(&text);
-    assert!(value.get("state").is_some(), "{text}");
+    assert_eq!(value["stateRef"], "origin/uplink/state");
+    assert!(value.get("stateSha").is_some(), "{text}");
+    assert!(value.get("state").is_none(), "{text}");
     assert!(value.get("upstream").is_some(), "{text}");
     assert!(value.get("internal").is_some(), "{text}");
     assert!(value.get("counts").is_some(), "{text}");
-    assert_eq!(value["state"]["ahead"], 0);
-    assert_eq!(value["state"]["behind"], 0);
+}
+
+#[test]
+fn status_cli_refresh_fetches_first() {
+    let world = setup_world();
+    let company = &world.company;
+    let origin = publish_origin(company);
+    let (_other_keep, other) = clone_company_from(&origin, &world.upstream);
+    git(
+        &other,
+        &["checkout", "-b", "feat/readme"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(&other, "README.md", "from-other\n");
+    commit_all(&other, "readme");
+    add_landed_patch(
+        &other,
+        AddPatchOpts {
+            message: "Readme".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    push_queue(
+        &other,
+        PushOpts {
+            push_remote: Some("origin".into()),
+        },
+    )
+    .unwrap();
+    let pushed = git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap();
+
+    let state_sha = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_git-uplink"))
+            .args(args)
+            .current_dir(company)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        value["stateSha"].as_str().unwrap().to_string()
+    };
+    assert_ne!(state_sha(&["status", "--json"]), pushed.trim());
+    assert_eq!(state_sha(&["status", "--json", "--refresh"]), pushed.trim());
 }
 
 #[test]
@@ -7600,7 +7666,7 @@ fn push_appends_local_only_patches_when_origin_moved() {
     assert_eq!(result.action, "restacked");
 
     let (_integrated_keep, integrated) = clone_company_from(&origin, &upstream);
-    let patch_titles: Vec<_> = status_snapshot(&integrated)
+    let patch_titles: Vec<_> = working_snapshot(&integrated)
         .unwrap()
         .queue
         .all_patches()
@@ -7675,7 +7741,7 @@ fn push_keeps_a_local_drop_of_a_patch_that_is_also_on_origin() {
     assert_eq!(result.action, "restacked");
 
     let (_integrated_keep, integrated) = clone_company_from(&origin, &world.upstream);
-    let queue = status_snapshot(&integrated).unwrap().queue;
+    let queue = working_snapshot(&integrated).unwrap().queue;
     let shared_now = queue.all_patches().find(|p| p.id == shared.id).unwrap();
     assert_eq!(shared_now.status, PatchStatus::Dropped);
     assert!(queue.all_patches().any(|p| p.subject() == "Notes from Ben"));
@@ -7901,7 +7967,7 @@ fn push_skips_a_local_patch_whose_internal_pr_is_already_on_origin() {
         git_ok(&origin, &["rev-parse", STATE_BRANCH]).unwrap(),
         origin_before
     );
-    let titles: Vec<_> = status_snapshot(&ben)
+    let titles: Vec<_> = working_snapshot(&ben)
         .unwrap()
         .queue
         .all_patches()
@@ -7971,7 +8037,7 @@ fn refuses_import_when_a_stacked_change_does_not_declare_depends_on() {
         other => panic!("expected preflight, got {other}"),
     }
     assert_eq!(
-        status_snapshot(company)
+        working_snapshot(company)
             .unwrap()
             .queue
             .all_patches()
@@ -8104,7 +8170,7 @@ fn trim_deps_keeps_direct_dependencies_and_what_applies() {
     let trimmed = trim_deps(company, false).unwrap();
     assert_eq!(trimmed.len(), 1);
     assert_ne!(rev_of(company, STATE_BRANCH), state_before);
-    let queue = status_snapshot(company).unwrap().queue;
+    let queue = working_snapshot(company).unwrap().queue;
     let stored = queue.all_patches().find(|p| p.id == reword.id).unwrap();
     assert_eq!(stored.depends_on, vec![log.id.clone()]);
     let event = stored.events.last().unwrap();
@@ -8366,7 +8432,7 @@ fn does_not_submit_or_push_when_export_tests_fail() {
     let err = submit_patch(company, &hash_patch.id, true);
     assert!(matches!(err, Err(Error::Preflight(_))));
 
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     assert_eq!(snapshot.queue.patch_refs()[0].status, PatchStatus::Approved);
     assert!(
         snapshot.queue.patch_refs()[0]
@@ -9429,7 +9495,7 @@ fn refuses_import_when_the_export_diff_names_the_company() {
     .unwrap_err();
     assert!(matches!(err, Error::Assess(_)));
     assert_eq!(
-        status_snapshot(company)
+        working_snapshot(company)
             .unwrap()
             .queue
             .all_patches()
@@ -9759,7 +9825,7 @@ fn submit_does_not_commit_queue_until_submitted() {
     .unwrap();
     approve_patch(company, &patch.id).unwrap();
     let exported = submit_patch(company, &patch.id, true).unwrap();
-    let after_submit = status_snapshot(company).unwrap();
+    let after_submit = working_snapshot(company).unwrap();
     assert_eq!(
         after_submit.queue.patch_refs()[0].status,
         PatchStatus::Approved
@@ -9861,7 +9927,7 @@ fn submitted_push_replays_pr_fields_when_origin_state_moved() {
     record_pull_request(&asha, &asha_patch.id, 7, url, "uplink/asha", Some("origin")).unwrap();
 
     let (_check_keep, check) = clone_company_from(&origin, &upstream);
-    let queue = status_snapshot(&check).unwrap().queue;
+    let queue = working_snapshot(&check).unwrap().queue;
     let recorded = queue.all_patches().find(|p| p.id == asha_patch.id).unwrap();
     assert_eq!(recorded.status, PatchStatus::Submitted);
     assert_eq!(recorded.upstream.as_ref().unwrap().pr_number, Some(7));
@@ -11158,7 +11224,7 @@ fn add_internal_only_does_not_rebuild_main() {
         main_after_land
     );
     assert!(
-        status_snapshot(company)
+        working_snapshot(company)
             .unwrap()
             .queue
             .is_internal(&patch.id)
@@ -11208,7 +11274,7 @@ fn rebuild_applies_earlier_internal_after_later_upstream() {
         },
     )
     .unwrap();
-    let snapshot = status_snapshot(company).unwrap();
+    let snapshot = working_snapshot(company).unwrap();
     assert_eq!(snapshot.queue.upstream.len(), 1);
     assert_eq!(snapshot.queue.internal.len(), 1);
     assert!(
@@ -11384,7 +11450,7 @@ fn rebuild_empty_apply_merges_upstream_only() {
     .unwrap();
     assert_eq!(internal.status, PatchStatus::Queued);
     rebuild(company).unwrap();
-    let after = status_snapshot(company).unwrap();
+    let after = working_snapshot(company).unwrap();
     assert_eq!(
         after
             .queue

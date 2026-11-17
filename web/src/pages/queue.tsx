@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AppShell } from "../components/app-shell";
 import { FinishedFilter } from "../components/finished-filter";
 import { PatchTable } from "../components/patch-table";
-import { SourceToggle } from "../components/source-toggle";
 import { StatusBadge } from "../components/status-badge";
 import { SubmitStream } from "../components/submit-stream";
 import { Button } from "../components/ui/button";
@@ -17,22 +16,17 @@ import { Tabs } from "../components/ui/tabs";
 import {
   loadStatus,
   type Patch,
-  parseSource,
-  type QueueSource,
   refreshRemote,
-  type StateStatus,
   type StatusCounts,
   type StatusResponse,
 } from "../lib/api";
 import { LABEL_ORDER, STATUS_INFO, STATUS_ORDER } from "../lib/status";
-import { cn } from "../lib/utils";
 import {
   finishedStatuses,
   parseShown,
   parseView,
   type QueueView,
   type ShownFinished,
-  sourceBranch,
   viewSearch,
   visiblePatches,
 } from "../lib/view";
@@ -81,37 +75,6 @@ function StatusLegend() {
       <h3 className="mt-5 font-medium">Labels</h3>
       <LegendList values={LABEL_ORDER} />
     </details>
-  );
-}
-
-/** How the local uplink/state compares with origin. */
-function syncLabel(state: StateStatus): string {
-  if (!state.remote) {
-    return "no origin tracking";
-  }
-  const parts: string[] = [];
-  if (state.ahead) {
-    parts.push(`${state.ahead} ahead of origin`);
-  }
-  if (state.behind) {
-    parts.push(`${state.behind} behind origin`);
-  }
-  return parts.length ? parts.join(", ") : "up to date with origin";
-}
-
-function SyncPill({ state }: { state: StateStatus }) {
-  return (
-    <span
-      className={cn(
-        "rounded-full border px-2.5 py-0.5 align-middle text-xs font-normal tracking-normal",
-        state.behind
-          ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
-          : "border-border text-muted-foreground",
-      )}
-      title={`Local uplink/state against ${state.remoteRef ?? "origin/uplink/state"}`}
-    >
-      {syncLabel(state)}
-    </span>
   );
 }
 
@@ -175,30 +138,26 @@ function LayerCard({
 
 export function QueuePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const source = parseSource(searchParams.get("source"));
   const view = parseView(searchParams.get("view"));
   const shown = parseShown(searchParams.get("show"));
-  const search = viewSearch(source, view, shown);
+  const search = viewSearch(view, shown);
   const [data, setData] = useState<StatusResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
-  const fetchedOnce = useRef(false);
 
   useEffect(() => {
-    const first = !fetchedOnce.current;
-    fetchedOnce.current = true;
-    loadStatus(source, first)
+    loadStatus()
       .then(setData)
       .catch((err: Error) =>
         setData({
           present: false,
           cwd: "",
-          source,
+          stateRef: "origin/uplink/state",
           error: err.message,
         }),
       );
-  }, [source]);
+  }, []);
 
   const empty =
     !data?.tooling && !data?.upstream?.length && !data?.internal?.length;
@@ -206,14 +165,8 @@ export function QueuePage() {
     (data?.upstream ?? []).filter((patch) => patch.id === id),
   );
 
-  function show(
-    nextSource: QueueSource,
-    nextView: QueueView,
-    nextShown: ShownFinished[] = shown,
-  ) {
-    setSearchParams(
-      new URLSearchParams(viewSearch(nextSource, nextView, nextShown)),
-    );
+  function show(nextView: QueueView, nextShown: ShownFinished[] = shown) {
+    setSearchParams(new URLSearchParams(viewSearch(nextView, nextShown)));
   }
 
   async function onRefresh() {
@@ -221,7 +174,7 @@ export function QueuePage() {
     setRefreshError(null);
     try {
       await refreshRemote();
-      setData(await loadStatus(source, false));
+      setData(await loadStatus());
       setReload((n) => n + 1);
     } catch (err) {
       setRefreshError(err instanceof Error ? err.message : String(err));
@@ -235,39 +188,24 @@ export function QueuePage() {
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-2">
           <h1 className="flex flex-wrap items-center gap-3 text-3xl font-semibold tracking-tight">
-            {source === "remote" ? "Remote" : "Local"}{" "}
-            <span className="font-mono text-2xl">uplink/state</span>
-            {source === "local" && data?.state ? (
-              <SyncPill state={data.state} />
-            ) : null}
+            <span className="font-mono text-2xl">origin/uplink/state</span>
           </h1>
           <p className="max-w-3xl text-muted-foreground">
-            {source === "remote" ? (
-              <>
-                Queue at{" "}
-                <code className="rounded bg-muted px-1.5">
-                  origin/uplink/state
-                </code>{" "}
-                as last fetched. Local branches are not moved.
-              </>
-            ) : (
-              <>
-                Queue on the local{" "}
-                <code className="rounded bg-muted px-1.5">uplink/state</code>{" "}
-                branch.
-              </>
-            )}
+            Queue at{" "}
+            <code className="rounded bg-muted px-1.5">origin/uplink/state</code>{" "}
+            as last fetched. Refresh fetches it; no local branch or{" "}
+            <code className="rounded bg-muted px-1.5">.uplink/</code> folder is
+            read or moved.
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
-          <SourceToggle source={source} onChange={(next) => show(next, view)} />
           <Button
             variant="outline"
             size="sm"
             onClick={onRefresh}
             disabled={refreshing}
           >
-            {refreshing ? "Refreshing…" : "Refresh remote"}
+            {refreshing ? "Refreshing…" : "Refresh"}
           </Button>
         </div>
       </div>
@@ -340,7 +278,7 @@ export function QueuePage() {
           <Tabs
             label="Queue views"
             value={view}
-            onChange={(next) => show(source, next)}
+            onChange={(next) => show(next)}
             items={[
               { value: "queue", label: "Queue" },
               {
@@ -363,7 +301,7 @@ export function QueuePage() {
               <CardHeader>
                 <CardTitle className="text-base">Ready to submit</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Queued upstream patches on {sourceBranch(source)} with no
+                  Queued upstream patches on origin/uplink/state with no
                   unmerged upstream dependency and no public pull request yet.
                   Dispatch Uplink submit for any of them.
                 </p>
@@ -379,7 +317,7 @@ export function QueuePage() {
               </CardContent>
             </Card>
           ) : view === "stream" ? (
-            <SubmitStream source={source} search={search} reload={reload} />
+            <SubmitStream search={search} reload={reload} />
           ) : empty ? (
             <Card>
               <CardHeader>
@@ -411,7 +349,7 @@ export function QueuePage() {
                 layer="upstream"
                 patches={data.upstream ?? []}
                 shown={shown}
-                onShownChange={(next) => show(source, view, next)}
+                onShownChange={(next) => show(view, next)}
                 search={search}
                 stale={data.staleApprovals}
                 empty="No upstream-bound patches."
@@ -421,7 +359,7 @@ export function QueuePage() {
                 layer="internal"
                 patches={data.internal ?? []}
                 shown={shown}
-                onShownChange={(next) => show(source, view, next)}
+                onShownChange={(next) => show(view, next)}
                 search={search}
                 empty="No internal patches."
               />

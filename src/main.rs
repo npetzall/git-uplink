@@ -29,16 +29,16 @@ use git_uplink::{
     format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
     format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
     hooks_publish_hint, incoming_change_preflight, init, load_groups_file, mark_merged,
-    mark_rejected, mark_waiting, message_subject, newly_ready_to_submit, parse_depends_on,
-    parse_github_repo, parse_pull_request_url, patch_text, public_subject_and_body,
-    push_imported_main, push_queue, push_rebuilt_main, read_queue, rebase_onto_main, rebase_plan,
-    rebuild_inline, rebuild_preflight, rebuild_with, record_gated_pr, record_on_remote,
-    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
-    reset_from_origin, resolve_conflict_with, resolve_preflight, restack, resume_rebuild,
-    review_token, review_token_path, set_script_echo, split_subject_body, status_report,
-    status_snapshot, store_assess_result, store_patch_extras, strip_html_comments,
-    submit_patch_with, sync_with, transfer_patch_with, transfer_preflight, trim_deps,
-    upstream_pr_body, write_man_pages,
+    mark_rejected, mark_waiting, message_subject, newly_ready_to_submit, origin_status,
+    parse_depends_on, parse_github_repo, parse_pull_request_url, patch_text,
+    public_subject_and_body, push_imported_main, push_queue, push_rebuilt_main, read_queue,
+    rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
+    record_gated_pr, record_on_remote, record_pull_request, refresh_from_origin,
+    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
+    resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
+    split_subject_body, status_report, store_assess_result, store_patch_extras,
+    strip_html_comments, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
+    trim_deps, upstream_pr_body, write_man_pages,
 };
 use git_uplink::{SelfEnv, self_available, self_check, self_list, self_update, self_use};
 
@@ -1775,15 +1775,15 @@ fn cmd_preflight_command(repo: &Path, hooks_ref: Option<&str>, json: bool) -> Re
     }
 }
 
-fn cmd_status(repo: &Path, json: bool) -> Result<(), Error> {
-    let snapshot = status_snapshot(repo)?;
+fn cmd_status(repo: &Path, json: bool, refresh: bool) -> Result<(), Error> {
+    if refresh {
+        refresh_from_origin(repo)?;
+    }
+    let status = origin_status(repo)?;
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&status_report(&snapshot))?
-        );
+        println!("{}", serde_json::to_string_pretty(&status_report(&status))?);
     } else {
-        print!("{}", format_status_table(&snapshot));
+        print!("{}", format_status_table(&status));
     }
     Ok(())
 }
@@ -2670,7 +2670,7 @@ fn run() -> Result<(), Error> {
                 json,
             )
         }
-        Commands::Status { json } => cmd_status(&repo, json),
+        Commands::Status { json, refresh } => cmd_status(&repo, json, refresh),
         Commands::Approve {
             id,
             out,

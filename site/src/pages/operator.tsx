@@ -158,7 +158,9 @@ git uplink doctor
 git uplink web-ui`}</Code>
         <ul>
           <li>
-            <code>status</code> prints the queue. <code>doctor</code> checks the
+            <code>status</code> prints the queue on{" "}
+            <code>origin/uplink/state</code> as last fetched;{" "}
+            <code>--refresh</code> fetches first. <code>doctor</code> checks the
             queue, the remotes, the pack on <code>main</code>,{" "}
             <code>uplink/hooks</code>, the <code>UPLINK_*</code> credentials,
             and a pending adoption.
@@ -166,9 +168,10 @@ git uplink web-ui`}</Code>
           <li>
             <code>web-ui</code> is the operator dashboard, on{" "}
             <code>127.0.0.1</code>. It lists every patch, its status and its
-            dependencies, and what happens next. <strong>Local</strong> is{" "}
-            <code>uplink/state</code> in your clone, <strong>Remote</strong> is{" "}
-            <code>origin/uplink/state</code> as last fetched.{" "}
+            dependencies, and what happens next, from{" "}
+            <code>origin/uplink/state</code> as last fetched;{" "}
+            <strong>Refresh</strong> fetches it. Neither command reads your
+            local branches or <code>.uplink/</code>.{" "}
             <strong>Ready to submit</strong> lists the queued upstream changes
             submit can take now, and <strong>Submit stream</strong> draws the
             order to submit and merge them.

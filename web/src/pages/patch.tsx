@@ -17,7 +17,6 @@ import {
   loadPatchDiff,
   type PatchApproval,
   type PatchResponse,
-  parseSource,
 } from "../lib/api";
 import type { FileDelta } from "../lib/patch";
 import { NEEDS_APPROVAL, shownStatus } from "../lib/status";
@@ -45,9 +44,7 @@ function approvalLabel(approval: PatchApproval): string {
 export function PatchPage() {
   const { id = "" } = useParams();
   const [searchParams] = useSearchParams();
-  const source = parseSource(searchParams.get("source"));
   const home = `/${viewSearch(
-    source,
     parseView(searchParams.get("view")),
     parseShown(searchParams.get("show")),
   )}`;
@@ -68,7 +65,7 @@ export function PatchPage() {
     if (!id) {
       return;
     }
-    loadPatch(id, source)
+    loadPatch(id)
       .then((body) => {
         setData(body);
         const first = body.revisions[0]?.sha ?? "";
@@ -81,12 +78,11 @@ export function PatchPage() {
       .catch((err: Error) =>
         setData({
           present: false,
-          source,
           error: err.message,
           revisions: [],
         }),
       );
-  }, [id, source]);
+  }, [id]);
 
   const approvals = data?.patch?.approvals ?? [];
   const selectedApproval = useMemo(
@@ -104,10 +100,10 @@ export function PatchPage() {
       return;
     }
     const path = `.uplink/patches/${id}.patch`;
-    loadFile(path, source, patchSha)
+    loadFile(path, patchSha)
       .then(setPatchText)
       .catch((err: Error) => setFileError(err.message));
-  }, [id, patchSha, source, data]);
+  }, [id, patchSha, data]);
 
   useEffect(() => {
     if (!id || !selectedApproval) {
@@ -118,9 +114,9 @@ export function PatchPage() {
     }
     const dir = `.uplink/reports/${id}`;
     Promise.allSettled([
-      loadFile(`${dir}/approval.md`, source, selectedApproval.sha),
-      loadFile(`${dir}/assessment.md`, source, selectedApproval.sha),
-      loadFile(`.uplink/patches/${id}.patch`, source, selectedApproval.sha),
+      loadFile(`${dir}/approval.md`, selectedApproval.sha),
+      loadFile(`${dir}/assessment.md`, selectedApproval.sha),
+      loadFile(`.uplink/patches/${id}.patch`, selectedApproval.sha),
     ]).then(([approval, assessment, patch]) => {
       setApprovalText(approval.status === "fulfilled" ? approval.value : "");
       setAssessmentText(
@@ -128,7 +124,7 @@ export function PatchPage() {
       );
       setApprovedPatch(patch.status === "fulfilled" ? patch.value : "");
     });
-  }, [id, source, selectedApproval]);
+  }, [id, selectedApproval]);
 
   const revisions = data?.revisions ?? [];
   // Approvals made at a commit that did not touch the patch file.
@@ -155,7 +151,7 @@ export function PatchPage() {
       return;
     }
     let current = true;
-    loadPatchDiff(id, source, olderSha, newerSha)
+    loadPatchDiff(id, olderSha, newerSha)
       .then((files) => {
         if (current) {
           setDelta(files);
@@ -169,7 +165,7 @@ export function PatchPage() {
     return () => {
       current = false;
     };
-  }, [id, source, comparing, olderSha, newerSha]);
+  }, [id, comparing, olderSha, newerSha]);
 
   const patch = data?.patch;
 
@@ -209,7 +205,7 @@ export function PatchPage() {
             <CardTitle>Patch not found</CardTitle>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            {data.error ?? `No patch ${id} in this ${source} queue.`}
+            {data.error ?? `No patch ${id} on origin/uplink/state.`}
           </CardContent>
         </Card>
       ) : (
