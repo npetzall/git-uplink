@@ -140,8 +140,9 @@ jobs:
             # The PR title and description become the patch message on merge.
             # Assess the whole amended patch (base^ is the commit before it),
             # then run export preflight on it, as amend --complete will after
-            # merge: upstream, its declared dependencies, then the change.
-            # The assessment hook job runs only when both pass.
+            # merge: upstream, its declared dependencies, then the change, and
+            # the queued upstream patches with the change in place of the
+            # patch it amends. The assessment hook job runs only when both pass.
             {
               printf '%s\n\n' "$TITLE"
               printf '%s\n' "${BODY:-}"
@@ -151,6 +152,7 @@ jobs:
               --from "${FROM_SHA}^" \
               --head "$HEAD_SHA"
             run_preflight \
+              --amends "${BASE_REF#uplink/amend/}" \
               --message-file /tmp/uplink-msg.txt \
               --from "${FROM_SHA}^" \
               --head "$HEAD_SHA"

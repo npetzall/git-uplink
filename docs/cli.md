@@ -34,7 +34,7 @@ git uplink reset
 git uplink rebase [--plan] [--head <rev>] [--json] [--no-fetch]
 git uplink preflight [<id>] [--from <ref>] [--head <ref>]
             [--message <text> | --message-file <path>] [--depends-on <id>]...
-            [--internal-only] [--command-only] [--hooks <rev>] [--json]
+            [--internal-only] [--amends <id>] [--command-only] [--hooks <rev>] [--json]
 git uplink assess [--from <ref>] [--head <ref>]
             [--message <text> | --message-file <path>] [--internal-only | --patch <id>]
             [--package <dir>] [--json]
@@ -433,6 +433,9 @@ The output of `preflight.sh` is shown as it runs. The verdict lists what the scr
 - `--message-file <path>`: Read the commit message from a file (- reads stdin).
 - `--depends-on <id>`: Patch the change depends on, on top of the message trailers (repeatable).
 - `--internal-only`: The incoming change is internal-only; export preflight is skipped.
+- `--amends <id>`: The incoming change amends this queued upstream patch.
+
+  It is the whole amended patch, so it takes that patch's place among the queued upstream patches instead of following it, and keeps that patch's dependencies, as `amend --complete` will.
 - `--command-only`: Only run preflight.sh in the current tree.
 - `--hooks <rev>`: Read preflight.sh from this revision instead of uplink/hooks, to try a change to it.
 - `--json`: Print the result as JSON, for `--preflight-result` of the command that records it.

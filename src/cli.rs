@@ -842,8 +842,15 @@ pub enum Commands {
         /// The incoming change is internal-only; export preflight is skipped.
         #[arg(long)]
         internal_only: bool,
+        /// The incoming change amends this queued upstream patch.
+        ///
+        /// It is the whole amended patch, so it takes that patch's place
+        /// among the queued upstream patches instead of following it, and
+        /// keeps that patch's dependencies, as `amend --complete` will.
+        #[arg(long, value_name = "id", conflicts_with_all = ["id", "internal_only"])]
+        amends: Option<String>,
         /// Only run preflight.sh in the current tree.
-        #[arg(long = "command-only", conflicts_with_all = ["id", "from", "head"])]
+        #[arg(long = "command-only", conflicts_with_all = ["id", "from", "head", "amends"])]
         command_only: bool,
         /// Read preflight.sh from this revision instead of uplink/hooks, to try a change to it.
         #[arg(long, value_name = "rev")]
