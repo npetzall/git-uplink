@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::error::{Error, Result};
 use crate::types::{
@@ -9,8 +10,40 @@ use crate::types::{
     PatchStatus, PreviousMain, QUEUE_PATH, QueueState,
 };
 
+/// Now in UTC, as RFC 3339 with milliseconds: `2026-11-17T09:30:00.123Z`.
 pub fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    let since = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format_utc_millis(since)
+}
+
+fn format_utc_millis(since_epoch: Duration) -> String {
+    let secs = since_epoch.as_secs();
+    let (year, month, day) = civil_from_days(secs / 86_400);
+    let time = secs % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+        time / 3600,
+        time / 60 % 60,
+        time % 60,
+        since_epoch.subsec_millis()
+    )
+}
+
+/// The proleptic Gregorian date `days` after 1970-01-01, after Howard
+/// Hinnant's `civil_from_days`.
+fn civil_from_days(days: u64) -> (u64, u64, u64) {
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z % 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + u64::from(month <= 2);
+    (year, month, day)
 }
 
 pub fn require_path_component(name: &str) -> Result<&str> {
@@ -532,6 +565,18 @@ pub fn cannot_depend_on(queue: &QueueState, from_internal: bool, dep_id: &str) -
 mod tests {
     use super::*;
     use crate::types::{Patch, QueueConfig, QueueState};
+
+    #[test]
+    fn format_utc_millis_writes_rfc3339_in_utc() {
+        let at =
+            |secs: u64, millis: u64| format_utc_millis(Duration::from_millis(secs * 1000 + millis));
+        assert_eq!(at(0, 0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(at(951_782_400, 7), "2000-02-29T00:00:00.007Z");
+        assert_eq!(at(1_709_164_800, 0), "2024-02-29T00:00:00.000Z");
+        assert_eq!(at(1_709_251_199, 999), "2024-02-29T23:59:59.999Z");
+        assert_eq!(at(1_798_761_600, 120), "2027-01-01T00:00:00.120Z");
+        assert_eq!(at(4_102_444_799, 0), "2099-12-31T23:59:59.000Z");
+    }
 
     fn patch(id: &str) -> Patch {
         serde_json::from_value(serde_json::json!({
