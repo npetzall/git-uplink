@@ -365,18 +365,20 @@ git commit -am "Resolve <id> onto the new upstream"
 git push`}</Code>
         <p>
           The <strong>Uplink gate</strong> check assesses your resolution with
-          the patch&apos;s message, like the original PR. If it fails (for
-          example the fix mentions the company), change the resolution before
-          merging. A company-only patch is not assessed; the check runs only the
-          preflight script. Get the PR reviewed and merge it. The resolve job
-          updates your patch (same id) and rebuilds <code>main</code>. If a
-          later patch conflicts too, its owner gets the next PR. If your change
-          was already submitted, <strong>Uplink submit</strong> runs again and
-          the same public PR is updated. When your fix changes the lines the
-          patch adds or removes, which includes keeping your line over an
-          upstream change of the same line, the patch is queued again and IP
-          reviews a small delta. A fix that only follows upstream changes next
-          to your lines needs no new approval.
+          the patch&apos;s message, like the original PR, and comments the
+          message the patch has, the diff, and the message merging stores. If it
+          fails (for example the fix mentions the company), change the
+          resolution before merging. A company-only patch is not assessed; the
+          check runs only the preflight script. Get the PR reviewed and merge
+          it. The resolve job updates your patch (same id) and rebuilds{" "}
+          <code>main</code>. If a later patch conflicts too, its owner gets the
+          next PR. If your change was already submitted,{" "}
+          <strong>Uplink submit</strong> runs again and the same public PR is
+          updated. When your fix changes the lines the patch adds or removes,
+          which includes keeping your line over an upstream change of the same
+          line, the patch is queued again and IP reviews a small delta. A fix
+          that only follows upstream changes next to your lines needs no new
+          approval.
         </p>
         <p>
           Fix it in the pull request; don&apos;t ask for a local fix. Only when
@@ -410,14 +412,15 @@ git push`}</Code>
           description lists the patch's <code>Uplink-Depends-On</code> lines; on
           merge they replace its dependencies, so add or remove a line to change
           them. The <strong>Uplink gate</strong> check assesses the whole
-          amended patch with that message. A company-only patch is not assessed
-          and needs no IP approval; the check runs only the preflight script.
-          Mark the PR ready, get it reviewed, and merge it. The patch keeps its
-          id and <code>main</code> is rebuilt. If it was already submitted and
-          the change touches the lines the patch adds or removes, or the public
-          message, the patch is queued again and goes to IP as a small delta.
-          After approval, the same public PR is updated. Close the PR without
-          merging to cancel.
+          amended patch with that message, and comments the message the patch
+          has, the diff, and the message merging stores, updated on every edit.
+          A company-only patch is not assessed and needs no IP approval; the
+          check runs only the preflight script. Mark the PR ready, get it
+          reviewed, and merge it. The patch keeps its id and <code>main</code>{" "}
+          is rebuilt. If it was already submitted and the change touches the
+          lines the patch adds or removes, or the public message, the patch is
+          queued again and goes to IP as a small delta. After approval, the same
+          public PR is updated. Close the PR without merging to cancel.
         </p>
       </Section>
 
@@ -442,15 +445,16 @@ git push --force-with-lease`}</Code>
         <p>
           Each commit's message becomes that part's message, its first line the
           subject. The <strong>Uplink gate</strong> check assesses every part
-          with its own message. Merge the PR with any merge method. The first
-          part keeps the patch id, and its public PR if it has one; the others
-          are new patches right after it. Each part depends on the one before
-          it, so upstream parts go out one at a time; amend a part to drop a
-          dependency it does not need. A patch that depended on the whole patch
-          depends on the last part. To move a part to company-only, transfer it
-          afterwards. Keep the <code>Uplink-Gate-Base</code> comment in the
-          description: the merge is refused when the patch changed since the PR
-          was opened. Close the PR without merging to cancel.
+          with its own message, and comments each part&apos;s message beside the
+          patch&apos;s. Merge the PR with any merge method. The first part keeps
+          the patch id, and its public PR if it has one; the others are new
+          patches right after it. Each part depends on the one before it, so
+          upstream parts go out one at a time; amend a part to drop a dependency
+          it does not need. A patch that depended on the whole patch depends on
+          the last part. To move a part to company-only, transfer it afterwards.
+          Keep the <code>Uplink-Gate-Base</code> comment in the description: the
+          merge is refused when the patch changed since the PR was opened. Close
+          the PR without merging to cancel.
         </p>
       </Section>
 
@@ -470,10 +474,11 @@ git push --force-with-lease`}</Code>
           one commit and their messages joined in the title and description.
           When a patch needs another patch that it now comes before, the work
           branch has conflict markers: resolve them on the work branch. Edit the
-          title and description into one message, then merge. The other patches
-          are dropped, and whatever depended on them depends on the merged
-          patch. Keep the <code>Uplink-Gate-Base</code> comments in the
-          description. Close the PR without merging to cancel.
+          title and description into one message; a comment shows it beside the
+          joined messages, with the diff. Then merge. The other patches are
+          dropped, and whatever depended on them depends on the merged patch.
+          Keep the <code>Uplink-Gate-Base</code> comments in the description.
+          Close the PR without merging to cancel.
         </p>
       </Section>
 
@@ -492,8 +497,9 @@ git push --force-with-lease`}</Code>
           </li>
           <li>
             If it needs changes, you get a transfer PR with a <code>-work</code>{" "}
-            branch, like a conflict. Merge the PR to finish the move. Close it
-            without merging to cancel.
+            branch, like a conflict. A comment shows the patch message merging
+            stores beside the one it has. Merge the PR to finish the move. Close
+            it without merging to cancel.
           </li>
           <li>
             Moving to internal is refused while an upstream change still depends

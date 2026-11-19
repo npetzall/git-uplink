@@ -1,0 +1,112 @@
+name: Uplink message comment
+description: >-
+  Write the patch message a gated pull request stores on merge to the pull
+  request: the internal message as it is, the diff, and the message merging
+  stores, one set per part for a split. One comment per PR, created on the
+  first run and updated in place on every run after, also when the message
+  does not change. Runs in a job that never runs preflight.sh.
+inputs:
+  report:
+    description: Output of git uplink message. Empty when the job printed none.
+    required: true
+  pr-number:
+    description: Number of the pull request to comment on.
+    required: true
+  token:
+    description: Token with pull-requests write on this repository. Workflows pass secrets.GITHUB_TOKEN.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Comment the patch message
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        REPORT: ${{ inputs.report }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+          echo "::warning title=Uplink message::not a pull request number, skipped"
+          exit 0
+        fi
+        marker='<!-- uplink:message -->'
+        body="$RUNNER_TEMP/uplink-message-comment.md"
+        original="$RUNNER_TEMP/uplink-message-original.txt"
+        result="$RUNNER_TEMP/uplink-message-result.txt"
+        # The messages come from the pull request: each block's fence is
+        # longer than any run of backticks in it.
+        fenced() {
+          local lang=$1 file=$2 longest fence
+          longest=$({ grep -o '`\+' "$file" || true; } | awk '{ if (length > m) m = length } END { print m + 0 }')
+          fence=$(printf '%*s' $(( longest < 3 ? 3 : longest + 1 )) '' | tr ' ' '`')
+          echo "${fence}${lang}"
+          cat "$file"
+          echo "$fence"
+        }
+        # The whole message as one hunk, without the file and hunk headers.
+        diff_and_result() {
+          local diffed="$RUNNER_TEMP/uplink-message-diff.txt"
+          { diff -U1000000 "$original" "$result" || true; } | tail -n +4 > "$diffed"
+          echo '**Diff**'
+          echo
+          if [ -s "$diffed" ]; then
+            fenced diff "$diffed"
+          else
+            echo 'No change to the message.'
+          fi
+          echo
+          echo '**Result**'
+          echo
+          fenced text "$result"
+        }
+
+        {
+          echo "$marker"
+          if jq -e 'type == "object" and (.original | type == "string") and (.results | type == "array")' \
+            >/dev/null 2>&1 <<<"$REPORT"; then
+            gate=$(jq -r '.gate' <<<"$REPORT")
+            jq -r '.original' <<<"$REPORT" > "$original"
+            echo '**Patch message.** The internal message the patch has now, and the one merging this pull request stores. The public message is cut from it.'
+            echo
+            echo '**Original**'
+            echo
+            fenced text "$original"
+            echo
+            count=$(jq '.results | length' <<<"$REPORT")
+            if [ "$gate" = "split" ]; then
+              for ((i = 0; i < count; i++)); do
+                jq -r --argjson i "$i" '.results[$i].message' <<<"$REPORT" > "$result"
+                if [ "$i" = 0 ]; then
+                  echo "### Part 1 (keeps the id)"
+                else
+                  echo "### Part $((i + 1)) (new patch)"
+                fi
+                echo
+                diff_and_result
+                echo
+              done
+            elif [ "$count" -gt 0 ]; then
+              jq -r '.results[0].message' <<<"$REPORT" > "$result"
+              diff_and_result
+              echo
+            fi
+          else
+            echo 'Uplink could not read the patch message; see the job log.'
+            echo
+          fi
+          echo "[Run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+        } > "$body"
+
+        # One comment per PR: the oldest is updated, any other is deleted.
+        mapfile -t ids < <(gh api --paginate "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+          --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"${marker}\"))) | .id")
+        for extra in "${ids[@]:1}"; do
+          gh api --method DELETE "repos/${GH_REPO}/issues/comments/${extra}" > /dev/null 2>&1 || true
+        done
+        if [ "${#ids[@]}" -gt 0 ] \
+          && gh api --method PATCH "repos/${GH_REPO}/issues/comments/${ids[0]}" -F "body=@${body}" > /dev/null 2>&1; then
+          exit 0
+        fi
+        gh api --method POST "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" -F "body=@${body}" > /dev/null

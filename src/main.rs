@@ -31,8 +31,8 @@ use git_uplink::{
     hooks_publish_hint, incoming_change_preflight, incoming_depends_on, init, load_groups_file,
     mark_merged, mark_rejected, mark_waiting, message_subject, newly_ready_to_submit,
     origin_status, parse_depends_on, parse_github_repo, parse_pull_request_url, patch_text,
-    public_subject_and_body, push_imported_main, push_queue, push_rebuilt_main, read_queue,
-    rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
+    preview_message, public_subject_and_body, push_imported_main, push_queue, push_rebuilt_main,
+    read_queue, rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
     record_gated_pr, record_on_remote, record_pull_request, refresh_from_origin,
     refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
     resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
@@ -3254,6 +3254,35 @@ fn run() -> Result<(), Error> {
                 &script_verdict(preflight_result)?,
                 push,
             )
+        }
+        Commands::Message {
+            id,
+            gate,
+            message,
+            message_file,
+            expect,
+            from,
+            head,
+        } => {
+            let change = patch_message(message, message_file)?;
+            let split = from.as_deref().zip(head.as_deref());
+            let preview =
+                preview_message(&repo, &id, gate.into(), change.as_ref(), &expect, split)?;
+            let results: Vec<serde_json::Value> = preview
+                .results
+                .iter()
+                .map(|r| serde_json::json!({ "id": r.id, "message": r.message }))
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "id": preview.id,
+                    "gate": preview.gate.as_str(),
+                    "original": preview.original,
+                    "results": results,
+                }))?
+            );
+            Ok(())
         }
         Commands::WebUi { port, no_open } => cmd_web_ui(repo, port, no_open),
         Commands::Man { dir } => {

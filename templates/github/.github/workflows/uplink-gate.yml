@@ -10,6 +10,9 @@
 # runs the company assessment hook on the assessment package (kind `pr`)
 # and writes both to the assessment comment, as Uplink PR checks do. That
 # job holds actions and pull-requests write and never runs preflight.sh.
+# On every run, whatever the gate's verdict, a job writes the patch message
+# merging stores (the original, the diff and the result) to one PR comment,
+# updated in place. It reads the PR's commits as data and never runs them.
 name: Uplink gate
 
 on: # zizmor: ignore[dangerous-triggers] YAML from default branch; gated tree is data; contents: read; persist-credentials: false
@@ -243,6 +246,79 @@ jobs:
       - uses: $/.github/actions/uplink-preflight-comment
         with:
           report: ${{ needs.validate.outputs.report }}
+          pr-number: ${{ github.event.pull_request.number }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # The PR shows the change to the files, not to the patch message: this
+  # comment shows that, also when it does not change. Never runs
+  # preflight.sh and never checks out the gated tree; a split's commits are
+  # fetched for their messages only.
+  message-comment:
+    name: Uplink gate message comment
+    if: ${{ !endsWith(github.event.pull_request.base.ref, '-work') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: $/.github/actions/install-git-uplink
+        with:
+          repo: ${{ vars.UPLINK_SRC }}
+          version: ${{ vars.UPLINK_VERSION }}
+          signer: ${{ vars.UPLINK_SIGNER }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read the patch message
+        id: message
+        env:
+          UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          FROM_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          git uplink init
+          gate="${BASE_REF#uplink/}"
+          gate="${gate%%/*}"
+          id="${BASE_REF#uplink/"${gate}"/}"
+          args=(message "$id" --gate "$gate")
+          if [ "$gate" = "split" ]; then
+            auth=$(printf 'x-access-token:%s' "$UPLINK_INTERNAL_TOKEN" | base64 -w0)
+            git \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=" \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=Authorization: Basic ${auth}" \
+              fetch --quiet origin "$BASE_REF" "$HEAD_SHA"
+            args+=(--from "$FROM_SHA" --head "$HEAD_SHA")
+          else
+            {
+              printf '%s\n\n' "$TITLE"
+              printf '%s\n' "${BODY:-}"
+            } > "$RUNNER_TEMP/uplink-msg.txt"
+            args+=(--message-file "$RUNNER_TEMP/uplink-msg.txt")
+          fi
+          if [ "$gate" = "merge" ]; then
+            while read -r line; do
+              args+=(--expect "$line")
+            done < <(printf '%s\n' "${BODY:-}" | sed -nE 's/.*Uplink-Gate-Base: ([A-Za-z0-9_-]+=[^ ]+).*/\1/p')
+          fi
+          # A message git uplink refuses (an empty subject) still gets a
+          # comment: the action says it could not be read.
+          report=$(git uplink "${args[@]}") || true
+          if jq -e . >/dev/null 2>&1 <<<"$report"; then
+            echo "report=$(jq -c . <<<"$report")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: $/.github/actions/uplink-message-comment
+        with:
+          report: ${{ steps.message.outputs.report }}
           pr-number: ${{ github.event.pull_request.number }}
           token: ${{ secrets.GITHUB_TOKEN }}
 

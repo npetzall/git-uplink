@@ -90,7 +90,7 @@ pub use expect::{GATE_BASE_KEY, gate_base_comments};
 pub use init::*;
 pub use lifecycle::*;
 pub use merge::*;
-pub use message::PatchMessage;
+pub use message::{MessagePreview, MessageResult, PatchMessage, preview_message};
 pub use push::*;
 pub use rebase::*;
 pub use rebuild::*;

@@ -81,3 +81,95 @@ pub(super) fn commit_message_change(
     )?;
     Ok(())
 }
+
+/// The message a gated PR stores on merge, beside the one it replaces.
+#[derive(Debug, Clone)]
+pub struct MessagePreview {
+    pub id: String,
+    pub gate: GateKind,
+    /// The stored message, or for a merge the one its PR opened with.
+    pub original: String,
+    /// One per patch the merge leaves; a split has one per part.
+    pub results: Vec<MessageResult>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MessageResult {
+    /// None for a split part that gets a new id.
+    pub id: Option<String>,
+    pub message: String,
+}
+
+/// What `--complete` of the gated PR for `id` would store as the message:
+/// `change` (the PR title and body) for every kind but a split, and for a
+/// split the message of each commit of `from..head`. Changes nothing.
+pub fn preview_message(
+    repo: &Path,
+    id: &str,
+    gate: GateKind,
+    change: Option<&PatchMessage>,
+    expect: &[String],
+    split: Option<(&str, &str)>,
+) -> Result<MessagePreview> {
+    let queue = read_queue_file(repo)?;
+    let patch = get_patch(&queue, id)?;
+    let (original, results) = match gate {
+        GateKind::Split => {
+            let Some((from, head)) = split else {
+                return Err(Error::msg("A split needs --from and --head"));
+            };
+            let listed = git_ok(
+                repo,
+                &[
+                    "rev-list",
+                    "--reverse",
+                    "--no-merges",
+                    &format!("{from}..{head}"),
+                ],
+            )?;
+            let mut results = Vec::new();
+            for (index, sha) in listed.lines().filter(|l| !l.is_empty()).enumerate() {
+                let raw = super::split::part_message(repo, sha)?;
+                results.push(MessageResult {
+                    id: (index == 0).then(|| id.to_string()),
+                    message: strip_html_comments(&raw),
+                });
+            }
+            (patch.commit_message.clone(), results)
+        }
+        _ => {
+            let Some(change) = change else {
+                return Err(Error::msg(
+                    "The PR title and body are needed: pass --message-file",
+                ));
+            };
+            let original = if gate == GateKind::Merge {
+                let ids: Vec<String> = super::expect::parse_expect(expect)?
+                    .into_iter()
+                    .map(|(member, _)| member)
+                    .collect();
+                if !ids.iter().any(|member| member == id) {
+                    return Err(Error::msg(format!(
+                        "The merge into {id} needs --expect <id>=<stable patch id> for every patch of it, from the PR"
+                    )));
+                }
+                let members = super::merge::ordered_members(&queue, &ids)?;
+                strip_html_comments(&super::merge::proposed_message(patch, &members))
+            } else {
+                patch.commit_message.clone()
+            };
+            let (updated, _) = with_message(patch, Some(change))?;
+            let results = vec![MessageResult {
+                id: Some(id.to_string()),
+                message: updated.commit_message,
+            }];
+            (original, results)
+        }
+    };
+    Ok(MessagePreview {
+        id: id.to_string(),
+        gate,
+        original,
+        results,
+    })
+}

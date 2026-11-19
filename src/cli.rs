@@ -157,6 +157,7 @@ pub const GROUPS: &[(&str, &str, &[&str])] = &[
             "amend",
             "split",
             "merge",
+            "message",
             "rebase",
         ],
     ),
@@ -241,6 +242,23 @@ pub enum MergeViaArg {
     EmptyRebase,
     /// Recorded by an operator.
     Manual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum GateArg {
+    /// A conflict PR into uplink/conflict/<id>.
+    Conflict,
+    /// A transfer PR into uplink/transfer-to-upstream/<id>.
+    TransferToUpstream,
+    /// A transfer PR into uplink/transfer-to-internal/<id>.
+    TransferToInternal,
+    /// An amend PR into uplink/amend/<id>.
+    Amend,
+    /// A split PR into uplink/split/<id>: one message per commit.
+    Split,
+    /// A merge PR into uplink/merge/<id>.
+    Merge,
 }
 
 #[derive(Parser)]
@@ -1855,6 +1873,44 @@ pub enum Commands {
         /// has `push.state` and `push.main`.
         #[arg(long)]
         push: bool,
+    },
+    /// Print the patch message a gated PR stores on merge, beside the one it replaces.
+    ///
+    /// Uplink gate runs it to write the message comment on a gated PR: the
+    /// internal message as it is, the diff, and the message `--complete`
+    /// would store. The public message is cut from the internal one, so it
+    /// is not printed. Nothing is changed.
+    ///
+    /// For conflict, transfer, amend and merge `--message[-file]` is the PR
+    /// title and body. The original is the stored message of the patch; for
+    /// merge it is the message the merge PR opened with, the members'
+    /// messages joined, with the members from `--expect`. For split each
+    /// commit of `--from..--head` is a part and its message the part's
+    /// message, compared with the stored message of the patch. The JSON has
+    /// `id`, `gate`, `original` and `results` (`id`, null for a part that
+    /// gets a new id, and `message`).
+    Message {
+        /// The patch of the gated PR (the id in its base branch).
+        #[arg(value_name = "id")]
+        id: String,
+        /// The kind of gated PR.
+        #[arg(long, value_enum, value_name = "kind")]
+        gate: GateArg,
+        /// New commit message, as the PR title and body.
+        #[arg(long, value_name = "text", conflicts_with = "message_file")]
+        message: Option<String>,
+        /// New commit message, as the PR title and body (- reads stdin).
+        #[arg(long = "message-file", value_name = "path", conflicts_with = "message")]
+        message_file: Option<PathBuf>,
+        /// `<id>=<stable patch id>` of a merged patch, from the PR's `Uplink-Gate-Base` comments.
+        #[arg(long, value_name = "id=stable")]
+        expect: Vec<String>,
+        /// Split: the base of the split PR.
+        #[arg(long, value_name = "sha", requires = "head")]
+        from: Option<String>,
+        /// Split: the split PR's head commit, the last part.
+        #[arg(long, value_name = "sha", requires = "from")]
+        head: Option<String>,
     },
     /// Start the embedded operator dashboard on 127.0.0.1 and open a browser.
     ///
