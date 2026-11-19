@@ -18,6 +18,7 @@ mod inspect;
 mod lock;
 mod man;
 mod ops;
+mod pattern;
 mod preflight;
 mod progress;
 mod prompt;

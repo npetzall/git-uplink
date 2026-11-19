@@ -572,21 +572,6 @@ fn tree_diff_patches_compares_applied_trees_and_cleans_up() {
 }
 
 #[test]
-fn static_patterns_compile() {
-    for re in [
-        &HTML_COMMENT,
-        &BLANK_LINES,
-        &DEPENDS_ON_HEADER,
-        &PATCH_ID,
-        &PERSON,
-        &EXPORT_AUTHOR_HEADER,
-        &TICKET,
-    ] {
-        std::sync::LazyLock::force(re);
-    }
-}
-
-#[test]
 fn ip_review_shows_what_leaves_and_hides_how_the_message_was_written() {
     let passed = report(
         true,

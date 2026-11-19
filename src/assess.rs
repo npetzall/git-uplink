@@ -1,14 +1,16 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AssessError, Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::ops::IncomingClaim;
+use crate::pattern::{
+    collapse_blank_lines, find_tickets, header_lines, is_patch_id, remove_header_lines,
+    remove_html_comments, split_person,
+};
 use crate::queue::now_iso;
 use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
 use crate::types::{
@@ -16,25 +18,10 @@ use crate::types::{
     PatchApproval, PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
 };
 
-static HTML_COMMENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").expect("html comment regex"));
-static BLANK_LINES: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\n[ \t]*\n(?:[ \t]*\n)+").expect("blank-line regex"));
-static DEPENDS_ON_HEADER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?im)^Uplink-Depends-On:\s*(.+)$").expect("depends-on header regex")
-});
-static PATCH_ID: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^upl_[0-9a-f]{10}$").expect("patch id regex"));
-static PERSON: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(.*)\s+<([^>]+)>$").expect("person regex"));
-static EXPORT_AUTHOR_HEADER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?im)^Uplink-Export-Author:\s*(.+)$").expect("export-author header regex")
-});
-static CO_AUTHOR_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?im)^Co-Authored-By:\s*(.+)$").expect("co-author trailer regex")
-});
-static TICKET: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b[A-Z]{2,10}-\d+\b").expect("ticket regex"));
+/// Message headers, matched without regard to case at the start of a line.
+const DEPENDS_ON: &str = "Uplink-Depends-On";
+const EXPORT_AUTHOR: &str = "Uplink-Export-Author";
+const CO_AUTHORED_BY: &str = "Co-Authored-By";
 
 pub const TO_UPSTREAM_ENVIRONMENT: &str = "to-upstream";
 pub const FROM_UPSTREAM_ENVIRONMENT: &str = "from-upstream";
@@ -51,9 +38,7 @@ pub fn cutoff_marker(queue: &QueueState) -> String {
 }
 
 pub fn strip_html_comments(raw: &str) -> String {
-    let stripped = HTML_COMMENT.replace_all(raw, "");
-    BLANK_LINES
-        .replace_all(&stripped, "\n\n")
+    collapse_blank_lines(&remove_html_comments(raw))
         .trim()
         .to_string()
 }
@@ -75,10 +60,10 @@ pub fn split_internal_message(raw: &str, marker: &str) -> (String, String) {
 pub fn parse_depends_on(message: &str) -> Vec<String> {
     let stripped = strip_html_comments(message);
     let mut ids = Vec::new();
-    for caps in DEPENDS_ON_HEADER.captures_iter(&stripped) {
-        for token in caps[1].split(|c: char| c.is_whitespace() || c == ',') {
+    for header in header_lines(&stripped, DEPENDS_ON) {
+        for token in header.value.split(|c: char| c.is_whitespace() || c == ',') {
             let token = token.trim();
-            if token.is_empty() || !PATCH_ID.is_match(token) {
+            if token.is_empty() || !is_patch_id(token) {
                 continue;
             }
             let token = token.to_ascii_lowercase();
@@ -93,9 +78,7 @@ pub fn parse_depends_on(message: &str) -> Vec<String> {
 /// `public_text` without its `Uplink-Depends-On:` lines. They name internal
 /// patch ids, so they stay on company `main` and are never exported.
 fn strip_depends_on(public_text: &str) -> String {
-    let stripped = DEPENDS_ON_HEADER.replace_all(public_text, "");
-    BLANK_LINES
-        .replace_all(&stripped, "\n\n")
+    collapse_blank_lines(&remove_header_lines(public_text, DEPENDS_ON))
         .trim()
         .to_string()
 }
@@ -119,8 +102,8 @@ pub fn parse_person(value: Option<&str>) -> Option<(String, String)> {
     if value.is_empty() {
         return None;
     }
-    if let Some(caps) = PERSON.captures(value) {
-        return Some((caps[1].trim().to_string(), caps[2].trim().to_string()));
+    if let Some((name, email)) = split_person(value) {
+        return Some((name.trim().to_string(), email.trim().to_string()));
     }
     if value.contains('@') && !value.contains(' ') {
         let name = value.split('@').next().unwrap_or(value);
@@ -131,8 +114,10 @@ pub fn parse_person(value: Option<&str>) -> Option<(String, String)> {
 
 /// The `Uplink-Export-Author` header below the cutoff, if any.
 fn resolve_co_author(internal_text: &str) -> Option<(String, String)> {
-    let caps = EXPORT_AUTHOR_HEADER.captures(internal_text)?;
-    parse_person(Some(&caps[1]))
+    let header = header_lines(internal_text, EXPORT_AUTHOR)
+        .into_iter()
+        .next()?;
+    parse_person(Some(header.value))
 }
 
 /// The first line of `message` and the rest, both trimmed: the subject and
@@ -240,9 +225,9 @@ fn names_co_author(message: &str, author: &str) -> bool {
     let Some(email) = person_email(author) else {
         return false;
     };
-    CO_AUTHOR_LINE
-        .captures_iter(message)
-        .filter_map(|caps| person_email(caps[1].trim()))
+    header_lines(message, CO_AUTHORED_BY)
+        .into_iter()
+        .filter_map(|header| person_email(header.value.trim()))
         .any(|found| found == email)
 }
 
@@ -2277,7 +2262,7 @@ fn message_checks(
     co_author: Option<&(String, String)>,
     original: (Option<&str>, Option<&str>),
 ) -> Vec<AssessCheck> {
-    let tickets: Vec<&str> = TICKET.find_iter(public_text).map(|m| m.as_str()).collect();
+    let tickets: Vec<&str> = find_tickets(public_text);
     vec![
         AssessCheck {
             id: "message-scrubbed".into(),

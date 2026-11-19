@@ -1,13 +1,6 @@
 use super::*;
 
 #[test]
-fn static_patterns_compile() {
-    for re in [&GITHUB_REPO, &PULL_REQUEST, &ISSUE] {
-        LazyLock::force(re);
-    }
-}
-
-#[test]
 fn parses_https_and_ssh_github_remotes() {
     assert_eq!(
         parse_github_repo("https://github.com/upstream/tokenkit.git"),
