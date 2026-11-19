@@ -1924,10 +1924,26 @@ with the internal App, not GITHUB_TOKEN:\n{job}"
             // rebuild (no pr-number) writes an unchanged one again.
             assert!(
                 comment.contains("done < <(tail -n +2 <<<\"$found\")")
+                    && comment
+                        .contains("if [ \"$changed\" = \"false\" ] && [ -n \"$PR_NUMBER\" ]; then"),
+                "{comment}"
+            );
+
+            // A rebase that stopped on a conflict tells the developer to
+            // rebase by hand, and a push that is not rebased keeps it.
+            assert!(
+                comment.contains("<!-- uplink:rebase stopped ${fork} -->")
+                    && comment.contains("Rebase it yourself.")
+                    && comment.contains("git rebase --continue")
                     && comment.contains(
-                        "if [ \"$changed\" = \"false\" ] && [ -z \"$NOTE\" ] && [ -n \"$PR_NUMBER\" ]; then"
+                        "if { [ \"$kind\" = \"needs\" ] || [ \"$kind\" = \"stopped\" ]; } && [ \"$old_fork\" = \"$fork\" ]; then"
                     ),
                 "{comment}"
+            );
+            assert!(
+                text(".github/workflows/uplink-rebase.yml")
+                    .contains("stopped: ${{ steps.rebase.outputs.outcome }}"),
+                "uplink-rebase.yml"
             );
 
             // The hint runs where a conflicting pull request still runs a

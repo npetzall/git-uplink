@@ -43,8 +43,8 @@
 # Actions token, so that Uplink PR checks runs on the new head.
 #
 # What it does to the branch: the authors stay, the committer becomes the
-# bot, and commit signatures are lost. A conflict pushes nothing and is
-# noted on the pull request. Branches named uplink/* and pull requests from
+# bot, and commit signatures are lost. A conflict pushes nothing, and the
+# comment tells the developer to rebase by hand. Branches named uplink/* and pull requests from
 # forks are left alone.
 #
 # This workflow does not write uplink/state (not uplink-mutate).
@@ -256,7 +256,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           pr-number: ${{ inputs.pr_number || github.event.pull_request.number }}
-          note: Uplink rebase could not rebase this branch for you (conflicts, or no commit to rebase from). Rebase it by hand.
+          stopped: ${{ steps.rebase.outputs.outcome }}
 
       # Last, whatever happened: while the label is on, the rebase is in
       # progress, and once it is off, adding it again asks again.

@@ -49,7 +49,7 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
   - Left alone: closed pull requests, pull requests from forks or into another branch, and branches named `main` or `uplink/*`.
   - The branch is rebased in a worktree of its own with hooks off, so its files never replace the checkout the job's actions run from.
   - The push is `--force-with-lease` on the head the job read: a push the developer made meanwhile wins and the job fails.
-  - Afterwards the comment says how to bring a local copy of the branch up to date. On a conflict nothing is pushed, the comment says so, and the job fails.
+  - Afterwards the comment says how to bring a local copy of the branch up to date. On a conflict nothing is pushed and the job fails. The comment says the developer has to rebase by hand, since the label would stop at the same conflict, and gives the command; a push that is not rebased leaves it as it is.
   - A branch that is only behind `main` is rebased too when asked by hand or by label; it is never dispatched automatically.
 - **Requires:**
   - the internal App or PAT (contents and workflows write) for the push, so that **Uplink PR checks** runs on the new head, which a push with the Actions token would not start;
