@@ -14,3 +14,12 @@ fn format_step_line_plain_tags() {
     let line = format_step_line(false, "Fetch upstream", &pass);
     assert!(line.starts_with("[ok  ]"));
 }
+
+#[test]
+fn spinner_stops_promptly() {
+    let spinner = Spinner::start("Working".into());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let started = std::time::Instant::now();
+    spinner.finish_and_clear();
+    assert!(started.elapsed() < std::time::Duration::from_millis(60));
+}

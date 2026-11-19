@@ -1,6 +1,8 @@
 use std::io::{IsTerminal, Write};
-
-use indicatif::{ProgressBar, ProgressStyle};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::types::{AssessCheck, CheckStatus};
 
@@ -58,7 +60,7 @@ pub struct StepProgress {
     mode: ProgressMode,
     tty: bool,
     checks: Vec<AssessCheck>,
-    spinner: Option<ProgressBar>,
+    spinner: Option<Spinner>,
 }
 
 impl StepProgress {
@@ -153,23 +155,54 @@ impl StepProgress {
 
     fn start_spinner(&mut self, label: &str) {
         if self.tty {
-            let pb = ProgressBar::new_spinner();
-            pb.set_style(
-                ProgressStyle::default_spinner()
-                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-            );
-            pb.enable_steady_tick(std::time::Duration::from_millis(80));
-            pb.set_message(label.to_string());
-            self.spinner = Some(pb);
+            self.spinner = Some(Spinner::start(label.to_string()));
         }
     }
 
     fn finish_line(&mut self, label: &str, outcome: &StepOutcome) {
-        if let Some(pb) = self.spinner.take() {
-            pb.finish_and_clear();
+        if let Some(spinner) = self.spinner.take() {
+            spinner.finish_and_clear();
         }
         let line = format_step_line(self.tty, label, outcome);
         let _ = writeln!(std::io::stderr(), "{line}");
+    }
+}
+
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// A spinner and `label` redrawn on one stderr line until
+/// [`Self::finish_and_clear`] stops it and blanks the line.
+struct Spinner {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
+}
+
+impl Spinner {
+    fn start(label: String) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            for frame in SPINNER_FRAMES.iter().cycle() {
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                let mut err = std::io::stderr().lock();
+                let _ = write!(err, "\r{frame} {label}");
+                let _ = err.flush();
+                drop(err);
+                std::thread::park_timeout(Duration::from_millis(80));
+            }
+        });
+        Self { stop, handle }
+    }
+
+    fn finish_and_clear(self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.handle.thread().unpark();
+        let _ = self.handle.join();
+        let mut err = std::io::stderr().lock();
+        let _ = write!(err, "\r\x1b[2K");
+        let _ = err.flush();
     }
 }
 
