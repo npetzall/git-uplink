@@ -105,12 +105,5 @@ pub use types::{
 };
 
 #[cfg(test)]
-mod embed_tests {
-    #[test]
-    fn web_ui_index_is_embedded() {
-        assert!(
-            crate::webui::has_embedded_index(),
-            "web/dist/index.html must be produced by build.rs and embedded"
-        );
-    }
-}
+#[path = "lib_test.rs"]
+mod tests;

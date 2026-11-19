@@ -870,28 +870,6 @@ pub fn store_assess_result(repo: &Path, id: &str, package: &AssessPackage) -> Re
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn event(at: &str, kind: &str, detail: &str) -> PatchEvent {
-        PatchEvent {
-            at: at.into(),
-            kind: kind.into(),
-            detail: detail.into(),
-        }
-    }
-
-    #[test]
-    fn merge_events_keeps_repeated_approvals() {
-        let first = event("2026-01-01T00:00:00Z", "approved", "delta approval");
-        let second = event("2026-01-02T00:00:00Z", "approved", "delta approval");
-        let mut dest = vec![first.clone()];
-        merge_events(&mut dest, vec![first.clone(), second.clone()]);
-        assert_eq!(dest, vec![first, second]);
-    }
-}
-
 /// The `waiting` event detail for the submit run `run_url`.
 fn waiting_detail(run_url: Option<&str>) -> String {
     match run_url {
@@ -1042,3 +1020,7 @@ pub fn mark_rejected(repo: &Path, id: &str, rejection: &Rejection) -> Result<Opt
         Ok(Some(get_patch(&queue, id)?.clone()))
     })
 }
+
+#[cfg(test)]
+#[path = "lifecycle_test.rs"]
+mod tests;

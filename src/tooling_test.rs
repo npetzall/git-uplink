@@ -1,0 +1,1743 @@
+use super::*;
+use crate::types::SYNC_SCHEDULES;
+
+fn patch(id: &str, title: &str) -> Patch {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "commitMessage": title,
+        "status": "queued",
+        "dependsOn": [],
+        "createdAt": "",
+        "updatedAt": "",
+        "source": {},
+        "events": [],
+    }))
+    .unwrap()
+}
+
+#[test]
+fn only_the_legacy_tooling_patch_is_found_by_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    fs::create_dir_all(repo.join(".uplink/patches")).unwrap();
+    for id in ["upl_aaaaaaaaaa", "upl_bbbbbbbbbb", "upl_cccccccccc"] {
+        fs::write(
+            repo.join(format!(".uplink/patches/{id}.patch")),
+            "diff --git a/.github/workflows/uplink-pr.yml b/.github/workflows/uplink-pr.yml\n",
+        )
+        .unwrap();
+    }
+    let mut queue = QueueState::empty(Default::default());
+    queue
+        .internal
+        .push(patch("upl_aaaaaaaaaa", "Tune PR workflow"));
+    queue
+        .upstream
+        .push(patch("upl_bbbbbbbbbb", TOOLING_PATCH_TITLE));
+    assert_eq!(find_tooling_patch(&queue, repo).unwrap(), None);
+
+    queue
+        .internal
+        .push(patch("upl_cccccccccc", TOOLING_PATCH_TITLE));
+    assert_eq!(
+        find_tooling_patch(&queue, repo).unwrap().as_deref(),
+        Some("upl_cccccccccc")
+    );
+}
+
+#[test]
+fn github_pack_embeds_workflows_and_shared_pr_template() {
+    let files = composed_files(Forge::Github).unwrap();
+    let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+    assert!(
+        paths.contains(&".github/workflows/uplink-pr.yml"),
+        "{paths:?}"
+    );
+    assert!(
+        !paths.contains(&".github/workflows/uplink-assess.yml"),
+        "{paths:?}"
+    );
+    assert!(
+        !paths.contains(&".github/workflows/uplink-preflight.yml"),
+        "{paths:?}"
+    );
+    let pr = files
+        .iter()
+        .find(|(p, _)| p == ".github/workflows/uplink-pr.yml")
+        .unwrap();
+    let text = String::from_utf8_lossy(&pr.1);
+    assert!(text.contains("name: Uplink upstream assess"), "{text}");
+    assert!(text.contains("name: Uplink upstream preflight"), "{text}");
+    assert!(text.contains("git uplink assess"), "{text}");
+    assert!(text.contains("git uplink preflight"), "{text}");
+    // Removing uplink:internal-only must run the checks it skipped, and
+    // no job may be skipped for an unrelated label: skipped is a pass.
+    assert!(
+        text.contains("types: [opened, synchronize, reopened, edited, labeled, unlabeled]"),
+        "{text}"
+    );
+    // The one job that looks at the label is the one that cancels the
+    // run for uplink:rebase, which is not a check. The others wait for
+    // it and are cancelled with the run, never skipped by it.
+    for (key, job) in jobs_of(&text) {
+        if key == "rebase-requested" {
+            continue;
+        }
+        assert!(
+            !job.contains("github.event.action") && !job.contains("github.event.label"),
+            "{key} must run for every label\n{job}"
+        );
+        if key != "preflight-comment" {
+            assert!(
+                job.contains("\n    needs: rebase-requested\n")
+                    && job.contains("\n    if: ${{ !cancelled()"),
+                "{key} must wait for rebase-requested\n{job}"
+            );
+        }
+    }
+    assert!(
+        paths.contains(&".github/pull_request_template.md"),
+        "{paths:?}"
+    );
+    assert!(
+        paths.contains(&".github/actions/install-git-uplink/action.yml"),
+        "{paths:?}"
+    );
+}
+
+#[test]
+fn install_action_defaults_to_the_version_of_this_binary() {
+    let default = format!("VERSION=\"${{VERSION:-{}}}\"", env!("CARGO_PKG_VERSION"));
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        for (path, data) in &files {
+            let text = String::from_utf8_lossy(data);
+            assert!(!text.contains(VERSION_PLACEHOLDER), "{forge:?}: {path}");
+            if path == INSTALL_ACTION {
+                assert!(text.contains(&default), "{forge:?}: {text}");
+                assert!(
+                    text.contains("REPO=\"${REPO:-npetzall/git-uplink}\""),
+                    "{forge:?}: {text}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn github_packs_install_the_contrib_commit_script_their_submit_runs() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(
+            paths.contains(&".github/uplink/contrib_commit.py"),
+            "{forge:?}: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|p| !p.contains("__pycache__") && !p.ends_with(".pyc")),
+            "{forge:?}: {paths:?}"
+        );
+        let submit = files
+            .iter()
+            .find(|(p, _)| p == ".github/workflows/uplink-submit.yml")
+            .unwrap();
+        let text = String::from_utf8_lossy(&submit.1);
+        assert!(
+            text.contains("python3 .github/uplink/contrib_commit.py"),
+            "{forge:?}"
+        );
+        assert!(!text.contains("submit \"$PATCH_ID\" --push"), "{forge:?}");
+    }
+}
+
+#[test]
+fn pack_readme_is_not_installed_into_the_product_repo() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        assert!(
+            files
+                .iter()
+                .all(|(p, _)| p != PACK_README && p != ".github/README.md"),
+            "{forge:?} pack would overwrite the product README"
+        );
+    }
+}
+
+#[test]
+fn try_it_on_github_is_the_github_pack_without_the_sync_schedules() {
+    let mut base = composed_files(Forge::Github).unwrap();
+    let text = |path: &str| {
+        base.iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("github pack is missing {path}"))
+    };
+    for schedule in SYNC_SCHEDULES {
+        let scheduled = text(schedule);
+        assert!(scheduled.contains("schedule:"), "{schedule}\n{scheduled}");
+        assert!(
+            scheduled.contains("gh workflow run uplink-sync.yml"),
+            "{schedule}\n{scheduled}"
+        );
+    }
+    let sync = text(".github/workflows/uplink-sync.yml");
+    assert!(sync.contains("workflow_dispatch:"), "{sync}");
+    assert!(
+        !sync.contains("schedule:"),
+        "the schedule lives in its own file so an overlay can drop it\n{sync}"
+    );
+
+    // Anything else that differs must be a deliberate overlay file.
+    base.retain(|(path, _)| !SYNC_SCHEDULES.contains(&path.as_str()));
+    assert_eq!(composed_files(Forge::TryItOnGithub).unwrap(), base);
+}
+
+#[test]
+fn submit_workflows_run_optional_hooks_before_to_upstream() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(
+            !paths.contains(&".github/uplink-assessment-hook.md"),
+            "{forge:?} the guide lives on uplink/hooks now {paths:?}"
+        );
+        assert!(
+            paths.contains(&".github/uplink-hooks-ruleset.json"),
+            "{forge:?} {paths:?}"
+        );
+        let placeholder = files
+            .iter()
+            .find(|(p, _)| p == ".github/workflows/uplink-assessment-hook.yml")
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing assessment hook placeholder"));
+        // GitHub checks dispatch inputs against the file on the default
+        // branch, so the placeholder declares the real hook's inputs.
+        let trigger = |workflow: &str| {
+            let start = workflow.find("\non:\n").expect("on: block");
+            let end = workflow.find("\npermissions:").expect("permissions: block");
+            workflow[start..end].to_string()
+        };
+        let example = hooks_files(forge)
+            .into_iter()
+            .find(|(p, _)| p == ".github/workflows/uplink-assessment-hook-example.yml")
+            .map(|(_, b)| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing assessment hook example"));
+        assert_eq!(
+            trigger(&placeholder),
+            trigger(&example),
+            "{forge:?} placeholder and hook example must take the same inputs"
+        );
+        assert!(
+            placeholder.contains("if: github.ref == 'refs/heads/main'"),
+            "{forge:?} placeholder must not run as the hook\n{placeholder}"
+        );
+        assert!(
+            placeholder.contains("refs/heads/uplink/hooks"),
+            "{forge:?}\n{placeholder}"
+        );
+        let submit = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-submit.yml"))
+            .unwrap();
+        let text = String::from_utf8_lossy(&submit.1);
+        assert!(
+            text.contains("uses: $/.github/actions/uplink-assessment-hook"),
+            "{forge:?}\n{text}"
+        );
+        assert!(text.contains("--store-extras"), "{forge:?}\n{text}");
+        // Assess is its own step, and the packet stores its result:
+        // the one the hook read too.
+        assert!(
+            text.contains("git uplink assess --patch \"$PATCH_ID\" --package \"$out\""),
+            "{forge:?}\n{text}"
+        );
+        assert_eq!(
+            text.matches("--assess-result \"$ASSESSMENT\"").count(),
+            3,
+            "{forge:?} every report takes the assessment of this run\n{text}"
+        );
+        // The binary decides whether dependencies are merged and whether
+        // a stored hook result is current; the workflow only reads that.
+        assert!(
+            !text.contains("dependsOn") && !text.contains("patchIdStable"),
+            "{forge:?}\n{text}"
+        );
+        assert!(
+            text.contains("jq -r '.storedExtras.fresh == true'")
+                && text.contains("jq -r '.ok == true'"),
+            "{forge:?}\n{text}"
+        );
+        assert!(
+                text.contains(
+                    "if: steps.assess.outputs.ok == 'true' && steps.assess.outputs.fresh != 'true' && steps.assess.outputs.covered != 'true'\n        uses: $/.github/actions/uplink-assessment-hook"
+                ),
+                "{forge:?} no hook run for findings, a current stored result or covered content\n{text}"
+            );
+        assert!(
+            text.contains("jq -r '.coveredBy != null'"),
+            "{forge:?}\n{text}"
+        );
+        // approve pushes the approval to origin before anything can fail
+        // after it.
+        let approve = text
+            .find("git uplink approve \"$PATCH_ID\" --reviewed \"$REVIEW_TOKEN\" --push)")
+            .unwrap();
+        let submit = text.find("git uplink submit \"$PATCH_ID\"").unwrap();
+        assert!(approve < submit, "{forge:?}\n{text}");
+        let action = files
+            .iter()
+            .find(|(p, _)| p == ".github/actions/uplink-assessment-hook/action.yml")
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing assessment hook action"));
+        assert!(
+            action.contains("gh workflow run uplink-assessment-hook.yml --ref uplink/hooks"),
+            "{action}"
+        );
+        // The hook is told only which run holds its assessment package.
+        assert_eq!(action.matches(" -f \"").count(), 1, "{action}");
+        assert!(
+            action.contains("-f \"caller_run_id=${caller}\""),
+            "{action}"
+        );
+        assert!(
+            example.contains("-n uplink-assessment") && example.contains("actions: read"),
+            "{example}"
+        );
+        assert!(
+            action.contains("::warning title=Uplink assessment hook failed::"),
+            "{action}"
+        );
+        assert!(action.contains("00-uplink-hook-failed.md"), "{action}");
+        assert!(
+            !action.contains("gh run watch \"$run_id\" --exit-status\n"),
+            "a failed hook must not fail the caller\n{action}"
+        );
+        let pr = files
+            .iter()
+            .find(|(p, _)| p == ".github/workflows/uplink-pr.yml")
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap();
+        assert!(
+            pr.contains("uses: $/.github/actions/uplink-assessment-hook"),
+            "{forge:?}\n{pr}"
+        );
+        let comment = files
+            .iter()
+            .find(|(p, _)| p == ".github/actions/uplink-assessment-comment/action.yml")
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing assessment comment action"));
+        assert!(comment.contains("<!-- uplink:assessment -->"), "{comment}");
+        assert!(
+            comment.contains("--method PATCH") && comment.contains("--method POST"),
+            "{comment}"
+        );
+        assert!(!comment.contains("gh pr comment"), "{comment}");
+        assert!(
+            pr.contains("uses: $/.github/actions/uplink-assessment-comment"),
+            "{forge:?}\n{pr}"
+        );
+        assert!(!pr.contains("fingerprint"), "{forge:?}\n{pr}");
+        // The gate runs the same hook on the same package, in a job of
+        // its own after validate, for upstream amends and transfers.
+        let gate = files
+            .iter()
+            .find(|(p, _)| p == ".github/workflows/uplink-gate.yml")
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap();
+        let gate_hook = jobs_of(&gate)
+            .into_iter()
+            .find(|(key, _)| key == "assessment-hook")
+            .map(|(_, job)| job)
+            .unwrap_or_else(|| panic!("{forge:?} gate has no assessment-hook job"));
+        assert!(
+            gate_hook.contains("needs: validate")
+                    && gate_hook.contains("needs.validate.result == 'success'")
+                    // A fork's PR would get the job's write token.
+                    && gate_hook
+                        .contains("github.event.pull_request.head.repo.full_name == github.repository")
+                    && gate_hook.contains("'uplink/amend/'")
+                    && gate_hook.contains("'uplink/transfer-to-upstream/'"),
+            "{forge:?}\n{gate_hook}"
+        );
+        assert!(
+            gate_hook.contains("--package \"$out\"")
+                    // An amend's package is the patch as merge squashes it.
+                    && gate_hook.contains("from=\"${FROM_SHA}^\"")
+                    && gate_hook.contains("uses: $/.github/actions/uplink-assessment-comment")
+                    && gate_hook.contains("if: steps.assess.outputs.ok == 'true'"),
+            "{forge:?}\n{gate_hook}"
+        );
+        // Write tokens: never preflight.sh, never the gated tree checked
+        // out, nothing read from validate.
+        assert!(
+            !gate_hook.contains("git uplink preflight")
+                && !gate_hook.contains("uplink-toolchain-hook")
+                && !gate_hook.contains("ref: ${{ github.event.pull_request.head")
+                && !gate_hook.contains("needs.validate.outputs")
+                && gate_hook.contains("ref: ${{ github.event.repository.default_branch }}")
+                && gate_hook.contains("persist-credentials: false"),
+            "{forge:?}\n{gate_hook}"
+        );
+        // All callers upload the package before they run the hook.
+        for (name, workflow) in [
+            ("pr", pr.as_str()),
+            ("submit", text.as_ref()),
+            ("gate", gate_hook.as_str()),
+        ] {
+            let assess = workflow
+                .find("git uplink assess")
+                .unwrap_or_else(|| panic!("{forge:?} {name} runs no assess"));
+            let upload = workflow
+                .find("name: uplink-assessment\n")
+                .unwrap_or_else(|| panic!("{forge:?} {name} uploads no package"));
+            let hook = workflow
+                .find("uses: $/.github/actions/uplink-assessment-hook")
+                .unwrap();
+            assert!(assess < upload && upload < hook, "{forge:?} {name}");
+        }
+        assert!(
+            !pr.contains("gh pr comment"),
+            "{forge:?} PR comments must be updated in place\n{pr}"
+        );
+        let import = files
+            .iter()
+            .find(|(p, _)| p == ".github/workflows/uplink-import.yml")
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap();
+        assert!(
+            !import.contains("--extra-dir") && !import.contains("gh run download"),
+            "{forge:?} import must not store a result of the PR checks\n{import}"
+        );
+        assert!(action.contains("uplink-packet-extra"), "{action}");
+        assert!(action.contains("run-id:"), "{action}");
+        assert!(action.contains("continue-on-error: true"), "{action}");
+        assert!(text.contains("needs: [assess, preflight]"), "{forge:?}");
+        assert!(text.contains("needs: [packet, submit]"), "{forge:?}");
+        assert!(text.contains("needs: [packet, preflight]"), "{forge:?}");
+        assert!(!text.contains("finalize:"), "{forge:?}\n{text}");
+        // The hook runs in `assess`, which must not hold the queue lock;
+        // only `packet` writes uplink/state.
+        let assess_job = text.find("\n  assess:").expect("assess job");
+        let packet_job = text.find("\n  packet:").expect("packet job");
+        let submit_job = text.find("\n  submit:").expect("submit job");
+        let lock = text.find("group: uplink-mutate").expect("uplink-mutate");
+        // `packet` and `rejected` hold it; never `assess` or `submit`.
+        assert_eq!(
+            text.matches("group: uplink-mutate").count(),
+            2,
+            "{forge:?}\n{text}"
+        );
+        assert!(packet_job < lock && lock < submit_job, "{forge:?}\n{text}");
+        let rejected_job = text.find("\n  rejected:").expect("rejected job");
+        let last_lock = text.rfind("group: uplink-mutate").unwrap();
+        assert!(
+            submit_job < rejected_job && rejected_job < last_lock,
+            "{forge:?}\n{text}"
+        );
+        assert!(text.contains("git uplink waiting"), "{forge:?}");
+        assert!(text.contains("git uplink rejected"), "{forge:?}");
+        let hook = text
+            .find("uses: $/.github/actions/uplink-assessment-hook")
+            .unwrap();
+        assert!(assess_job < hook && hook < packet_job, "{forge:?}\n{text}");
+        assert_eq!(
+            text.matches("printf '%s\\n' \"$packet\" >> \"$GITHUB_STEP_SUMMARY\"")
+                .count(),
+            1,
+            "{forge:?} the packet is written to the summary once\n{text}"
+        );
+        assert!(text.contains("assessment.md"), "{forge:?}");
+        assert!(
+            paths.contains(&".github/workflows/uplink-pr.yml"),
+            "{forge:?} {paths:?}"
+        );
+        assert!(
+            !paths.contains(&".github/workflows/uplink-assess.yml"),
+            "{forge:?} {paths:?}"
+        );
+        assert!(
+            !paths.contains(&".github/workflows/uplink-preflight.yml"),
+            "{forge:?} {paths:?}"
+        );
+    }
+}
+
+#[test]
+fn hooks_pack_holds_guides_stub_and_example() {
+    let files = hooks_files(Forge::Github);
+    let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            ".github/actions/uplink-toolchain-hook/action.yml",
+            ".github/workflows/uplink-assessment-hook-example.yml",
+            "assessment-hook.md",
+            "preflight.sh",
+            "toolchain-hook.md",
+        ]
+    );
+    let text = |path: &str| {
+        files
+            .iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap()
+    };
+    let script = text("preflight.sh");
+    assert!(script.starts_with("#!/bin/sh\n"), "{script}");
+    // `init` appends the seed command, so the stub must end on a new line
+    // and run nothing by itself.
+    assert!(script.ends_with("\nset -eu\n"), "{script}");
+    let stub = text(".github/actions/uplink-toolchain-hook/action.yml");
+    assert!(stub.contains("using: composite"), "{stub}");
+    assert!(stub.contains("toolchain-hook.md"), "{stub}");
+    let example = text(".github/workflows/uplink-assessment-hook-example.yml");
+    assert!(example.contains("caller_run_id"), "{example}");
+    assert!(example.contains("uplink-packet-extra"), "{example}");
+    // The starter checks out the ref it runs on and may run from any branch.
+    assert!(
+        !example.contains("ref:") && !example.contains("github.ref"),
+        "{example}"
+    );
+    assert!(
+        !example.contains("\n  push:") && !example.contains("pull_request"),
+        "the example must only run when dispatched\n{example}"
+    );
+    assert_eq!(hooks_files(Forge::TryItOnGithub), files);
+}
+
+/// The jobs of a workflow as (key, text).
+fn jobs_of(text: &str) -> Vec<(String, String)> {
+    let body = text.split_once("\njobs:\n").expect("jobs:").1;
+    let mut jobs: Vec<(String, String)> = Vec::new();
+    for line in body.lines() {
+        let key = line
+            .strip_prefix("  ")
+            .filter(|rest| !rest.starts_with([' ', '#']))
+            .and_then(|rest| rest.strip_suffix(':'));
+        match (key, jobs.last_mut()) {
+            (Some(key), _) => jobs.push((key.to_string(), String::new())),
+            (None, Some((_, job))) => {
+                job.push_str(line);
+                job.push('\n');
+            }
+            (None, None) => {}
+        }
+    }
+    jobs
+}
+
+/// The steps of a job as text, each starting at its `name:` or `uses:`.
+fn steps_of(job: &str) -> Vec<&str> {
+    job.split("\n      - ").skip(1).collect()
+}
+
+#[test]
+fn preflight_sh_runs_only_in_jobs_without_credentials() {
+    let hook = "uses: $/.github/actions/uplink-toolchain-hook";
+    // (workflow, job that runs preflight.sh, job that records, its command)
+    let split = [
+        (
+            "uplink-import.yml",
+            "preflight",
+            "import",
+            "git uplink add ",
+        ),
+        (
+            "uplink-submit.yml",
+            "preflight",
+            "submit",
+            "git uplink submit ",
+        ),
+        (
+            "uplink-amend.yml",
+            "complete-preflight",
+            "complete",
+            "git uplink amend ",
+        ),
+        (
+            "uplink-split.yml",
+            "complete-preflight",
+            "complete",
+            "git uplink split ",
+        ),
+        (
+            "uplink-merge.yml",
+            "complete-preflight",
+            "complete",
+            "git uplink merge ",
+        ),
+        (
+            "uplink-transfer.yml",
+            "start-preflight",
+            "start",
+            "git uplink transfer ",
+        ),
+        (
+            "uplink-transfer.yml",
+            "complete-preflight",
+            "complete",
+            "git uplink transfer ",
+        ),
+        (
+            "uplink-resolve.yml",
+            "preflight",
+            "resolve",
+            "git uplink resolve ",
+        ),
+        (
+            "uplink-verify.yml",
+            "preflight",
+            "verify",
+            "git uplink rebuild ",
+        ),
+        (
+            "uplink-sync.yml",
+            "accept-preflight",
+            "apply",
+            "git uplink accept-upstream ",
+        ),
+    ];
+    // Jobs that only check: (workflow, job, step that runs preflight.sh).
+    let checks = [
+        ("uplink-pr.yml", "preflight", "name: Export preflight"),
+        ("uplink-gate.yml", "validate", "name: Validate gated work"),
+    ];
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let jobs = |workflow: &str| {
+            let text = files
+                .iter()
+                .find(|(p, _)| p.ends_with(workflow))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing {workflow}"));
+            jobs_of(&text)
+        };
+        let job = |workflow: &str, key: &str| {
+            jobs(workflow)
+                .into_iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, text)| text)
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} has no job {key}"))
+        };
+        // The step that runs the script: no secret, the hook right before it.
+        let script_step_is_clean = |workflow: &str, key: &str, name: &str| {
+            let text = job(workflow, key);
+            let steps = steps_of(&text);
+            let i = steps
+                .iter()
+                .position(|step| step.contains(name))
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} {key} has no step {name:?}"));
+            assert!(
+                steps[i - 1].contains(hook),
+                "{forge:?} {workflow} {key}: the toolchain hook must run right before {name:?}"
+            );
+            assert!(
+                !steps[i].contains("secrets.") && !steps[i].contains("_TOKEN"),
+                "{forge:?} {workflow} {key}: {name:?} runs preflight.sh and must hold no token\n{}",
+                steps[i]
+            );
+            assert!(
+                text.contains("persist-credentials: false")
+                    && !text.contains("persist-credentials: true"),
+                "{forge:?} {workflow} {key} must not keep credentials in its checkout"
+            );
+            // The probe of an approved upstream has to fetch it: it may
+            // mint the upstream token, read-only, and nothing else.
+            let mints = text.matches("create-github-app-token").count();
+            let upstream_only = key == "accept-preflight"
+                && mints == 1
+                && text.contains("id: upstream-app")
+                && text.contains("permission-contents: read")
+                && !text.contains("UPLINK_INTERNAL_APP");
+            assert!(
+                (mints == 0 || upstream_only) && !text.contains("environment:"),
+                "{forge:?} {workflow} {key} must not mint a token or use an Environment"
+            );
+        };
+        for (workflow, probe, record, command) in split {
+            script_step_is_clean(workflow, probe, "name: Run preflight.sh");
+            let probing = job(workflow, probe);
+            assert!(
+                probing.contains("    permissions:\n      contents: read\n    outputs:")
+                    && !probing.contains(": write"),
+                "{forge:?} {workflow} {probe} must be read-only\n{probing}"
+            );
+            // Most of these hold uplink-mutate while the script runs: a
+            // stuck build must not hold it for GitHub's six hours.
+            assert!(
+                    probing.contains(
+                        "    timeout-minutes: ${{ fromJSON(vars.UPLINK_PREFLIGHT_TIMEOUT_MINUTES || '60') }}\n"
+                    ),
+                    "{forge:?} {workflow} {probe} must time out after UPLINK_PREFLIGHT_TIMEOUT_MINUTES"
+                );
+            let recording = job(workflow, record);
+            assert!(
+                recording.contains(&format!("needs: {probe}"))
+                    || recording.contains(&format!(", {probe}]")),
+                "{forge:?} {workflow} {record} must wait for {probe}"
+            );
+            assert!(
+                !recording.contains(hook),
+                "{forge:?} {workflow} {record} holds write tokens and must not run the toolchain hook"
+            );
+            assert!(
+                recording.contains(&format!(
+                    "PREFLIGHT_REPORT: ${{{{ needs.{probe}.outputs.report }}}}"
+                )),
+                "{forge:?} {workflow} {record} must take the result of {probe}"
+            );
+            // Every call of the recording command takes the result.
+            let calls: Vec<&str> = recording
+                .split(command)
+                .skip(1)
+                .map(|rest| rest.split(")\n").next().unwrap_or(rest))
+                .collect();
+            assert!(
+                !calls.is_empty(),
+                "{forge:?} {workflow} {record}: no {command}"
+            );
+            for call in calls {
+                let call = call.split(" > ").next().unwrap_or(call);
+                assert!(
+                    call.contains("--preflight-result \"$RUNNER_TEMP/uplink-preflight.json\""),
+                    "{forge:?} {workflow} {record}: `{command}` would run preflight.sh itself\n{call}"
+                );
+            }
+        }
+        for (workflow, key, name) in checks {
+            script_step_is_clean(workflow, key, name);
+        }
+        // No other job runs a command that would run the script.
+        for (path, bytes) in &files {
+            if !path.starts_with(".github/workflows/") {
+                continue;
+            }
+            let text = String::from_utf8_lossy(bytes);
+            for (key, body) in jobs_of(&text) {
+                let runs_script =
+                    body.contains("git uplink preflight") || body.contains("--preflight-only");
+                let known = split
+                    .iter()
+                    .any(|(w, probe, ..)| path.ends_with(w) && *probe == key)
+                    || checks
+                        .iter()
+                        .any(|(w, job, _)| path.ends_with(w) && *job == key);
+                assert_eq!(
+                    runs_script, known,
+                    "{forge:?} {path} job {key}: jobs that run preflight.sh are listed in this test"
+                );
+            }
+        }
+        for (path, bytes) in &files {
+            let text = String::from_utf8_lossy(bytes);
+            for variable in [
+                "UPLINK_PREFLIGHT",
+                "UPLINK_REDACT_KEYWORDS",
+                "UPLINK_INTERNAL_DOMAINS",
+            ] {
+                // The whole name: UPLINK_PREFLIGHT_TIMEOUT_MINUTES is another.
+                let used = text.match_indices(variable).any(|(i, _)| {
+                    !text[i + variable.len()..]
+                        .starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric())
+                });
+                assert!(
+                    !used,
+                    "{forge:?} {path} still uses {variable}; it lives on uplink/hooks now"
+                );
+            }
+        }
+        let wrapper = files
+            .iter()
+            .find(|(p, _)| p == ".github/actions/uplink-toolchain-hook/action.yml")
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing toolchain hook wrapper"));
+        assert!(wrapper.contains("ref: uplink/hooks"), "{wrapper}");
+        assert!(
+            wrapper.contains("uses: ./.uplink-hooks/.github/actions/uplink-toolchain-hook"),
+            "{wrapper}"
+        );
+        assert!(
+            !wrapper.contains("continue-on-error"),
+            "a failed toolchain hook must fail the job\n{wrapper}"
+        );
+        assert!(wrapper.contains("persist-credentials: false"), "{wrapper}");
+    }
+}
+
+#[test]
+fn sync_passes_merged_prs_and_accepts_only_the_reviewed_upstream() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-sync.yml"))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing uplink-sync.yml"));
+        let lookup = text
+            .find("name: Find merged public pull requests")
+            .unwrap_or_else(|| panic!("{forge:?} sync must look up merged PRs\n{text}"));
+        let sync = text.find("git uplink sync \"${merged[@]}\"").unwrap();
+        assert!(lookup < sync, "{forge:?}\n{text}");
+        assert!(
+            text.contains("merged+=(--merged-pr \"$item\")"),
+            "{forge:?}"
+        );
+        assert!(
+            text.contains("pulls/${number}") && !text.contains(".upstream.prUrl"),
+            "{forge:?} the PR is looked up by number on the configured upstream\n{text}"
+        );
+        assert!(
+            text.contains("git uplink accept-upstream --sha \"$PENDING_SHA\""),
+            "{forge:?} apply must name the reviewed upstream\n{text}"
+        );
+        assert!(
+            text.contains("PENDING_SHA: ${{ needs.inspect.outputs.pending_sha }}"),
+            "{forge:?}\n{text}"
+        );
+    }
+}
+
+#[test]
+fn auto_submit_dispatches_what_the_binary_says_is_ready_only_when_the_variable_is_set() {
+    let action = "uses: $/.github/actions/uplink-dispatch-submit";
+    // (workflow, job, the step that writes the queue)
+    let sites = [
+        ("uplink-import.yml", "import", "add"),
+        ("uplink-sync.yml", "inspect", "sync"),
+        ("uplink-sync.yml", "apply", "accept"),
+        ("uplink-transfer.yml", "start", "transfer"),
+        ("uplink-transfer.yml", "complete", "transfer"),
+        ("uplink-resolve.yml", "resolve", "resolve"),
+    ];
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = |path: &str| {
+            files
+                .iter()
+                .find(|(p, _)| p.ends_with(path))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing {path}"))
+        };
+        for (workflow, job_key, step_id) in sites {
+            let workflow_text = text(workflow);
+            let jobs = jobs_of(&workflow_text);
+            let (_, job) = jobs
+                .iter()
+                .find(|(key, _)| key == job_key)
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} has no job {job_key}"));
+            assert!(
+                job.contains("      actions: write\n"),
+                "{forge:?} {workflow} {job_key} dispatches with the Actions token\n{job}"
+            );
+            let steps = steps_of(job);
+            let dispatch = steps
+                .iter()
+                .position(|step| step.contains(action))
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} {job_key} does not dispatch"));
+            let written = steps
+                .iter()
+                .position(|step| step.contains(&format!("id: {step_id}\n")))
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} {job_key} has no step {step_id}"));
+            assert!(
+                written < dispatch,
+                "{forge:?} {workflow} {job_key} dispatches after the queue is pushed\n{job}"
+            );
+            let last = steps[dispatch];
+            assert!(
+                    last.contains(&format!(
+                        "if: ${{{{ vars.UPLINK_AUTO_SUBMIT == 'true' && steps.{step_id}.outputs.ready_to_submit != '' && steps.{step_id}.outputs.ready_to_submit != '[]' }}}}"
+                    )),
+                    "{forge:?} {workflow} {job_key} is off unless the variable is true\n{last}"
+                );
+            assert!(
+                last.contains(&format!(
+                    "patch-ids: ${{{{ steps.{step_id}.outputs.ready_to_submit }}}}"
+                )),
+                "{forge:?} {workflow} {job_key}\n{last}"
+            );
+            let writer = steps
+                .iter()
+                .find(|step| step.contains(&format!("id: {step_id}\n")))
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} {job_key} has no step {step_id}"));
+            let pushed = writer
+                .find("git push origin uplink/state")
+                .or_else(|| writer.find("git uplink add "))
+                .or_else(|| writer.find(" --push)"))
+                .unwrap();
+            let read = writer.find(".readyToSubmit // []").unwrap_or_else(|| {
+                panic!("{forge:?} {workflow} {job_key} reads readyToSubmit\n{writer}")
+            });
+            assert!(pushed < read, "{forge:?} {workflow} {job_key}\n{writer}");
+            // The binary decides what is ready; the workflow only reads that.
+            assert!(
+                !workflow_text.contains("dependsOn"),
+                "{forge:?} {workflow}\n{workflow_text}"
+            );
+        }
+        let dispatch = text(".github/actions/uplink-dispatch-submit/action.yml");
+        assert!(
+            dispatch.contains("gh workflow run \"Uplink submit\" --ref main -f \"patch_id=$id\""),
+            "{dispatch}"
+        );
+        assert!(dispatch.contains("gh run cancel \"$run_id\""), "{dispatch}");
+        assert!(
+            dispatch.contains("PATCH_IDS: ${{ inputs.patch-ids }}")
+                && !dispatch.split("run: |").nth(1).unwrap().contains("${{"),
+            "ids reach the script through the environment\n{dispatch}"
+        );
+    }
+}
+
+#[test]
+fn import_runs_only_for_pull_requests_merged_into_main() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-import.yml"))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing uplink-import.yml"));
+        assert!(
+            text.contains("  pull_request:\n    types: [closed]\n    branches:\n      - main\n"),
+            "{forge:?} import must be limited to main\n{text}"
+        );
+        assert!(
+            text.contains("BASE_REF: ${{ github.event.pull_request.base.ref }}")
+                && text.contains("--base-branch \"$BASE_REF\""),
+            "{forge:?} import must tell add where the PR merged\n{text}"
+        );
+    }
+}
+
+#[test]
+fn import_keeps_a_failed_import_and_never_overwrites_a_later_merge() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-import.yml"))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing uplink-import.yml"));
+        // add pushes uplink/state and main itself, main only with a
+        // lease on the merge.
+        assert!(
+            text.contains("MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}")
+                && text.contains("--push --merged-as \"$MERGE_SHA\"")
+                && !text.contains("git push origin main --force")
+                && !text.contains("git uplink push"),
+            "{forge:?}\n{text}"
+        );
+        // Whatever failed before the change was recorded, it goes to a
+        // rescue branch: from the import job, or from a job of its own
+        // when import did not run (a failed preflight job).
+        let import = jobs_of(&text)
+            .into_iter()
+            .find(|(k, _)| k == "import")
+            .map(|(_, job)| job)
+            .unwrap();
+        assert!(
+            import.contains("recorded: ${{ steps.add.outputs.recorded }}")
+                && import.contains("rescued: ${{ steps.rescue.outputs.branch }}")
+                && import.contains("echo \"recorded=true\" >> \"$GITHUB_OUTPUT\""),
+            "{forge:?}\n{import}"
+        );
+        let step = steps_of(&import)
+            .into_iter()
+            .find(|step| step.contains("name: Rescue a failed import"))
+            .unwrap_or_else(|| panic!("{forge:?} has no rescue step\n{import}"));
+        assert!(
+            step.contains("if: failure() && steps.add.outputs.recorded != 'true'")
+                && step.contains("uses: $/.github/actions/uplink-rescue-import"),
+            "{forge:?}\n{step}"
+        );
+        let rescue = jobs_of(&text)
+            .into_iter()
+            .find(|(k, _)| k == "rescue")
+            .map(|(_, job)| job)
+            .unwrap_or_else(|| panic!("{forge:?} has no rescue job\n{text}"));
+        assert!(
+                rescue.contains("needs: [preflight, import]")
+                    && rescue.contains("if: always() && github.event.pull_request.merged && needs.import.outputs.recorded != 'true' && needs.import.outputs.rescued == ''")
+                    && rescue.contains("uses: $/.github/actions/uplink-rescue-import"),
+                "{forge:?}\n{rescue}"
+            );
+        // git uplink first, plain git when that fails; both need a token.
+        let action = files
+            .iter()
+            .find(|(p, _)| p == ".github/actions/uplink-rescue-import/action.yml")
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} has no rescue action"));
+        assert!(
+            action.contains("git uplink rescue --from \"$FROM_SHA\"")
+                && action.contains("git commit-tree")
+                && action.contains("refs/heads/${branch}")
+                && action.contains("UPLINK_INTERNAL_TOKEN: ${{ inputs.token }}"),
+            "{forge:?}\n{action}"
+        );
+    }
+}
+
+#[test]
+fn no_workflow_pushes_main_or_state_itself() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        for (path, body) in &files {
+            if !path.ends_with(".yml") {
+                continue;
+            }
+            let text = String::from_utf8_lossy(body);
+            for line in text.lines() {
+                let line = line.trim();
+                assert!(
+                    !(line.starts_with("git push") && line.contains("main")),
+                    "{forge:?} {path} pushes main itself; the command pushes it with a lease: {line}"
+                );
+                assert!(
+                    !(line.starts_with("git push") && line.contains("uplink/state"))
+                        && !line.starts_with("git uplink push"),
+                    "{forge:?} {path} pushes uplink/state itself; the command that wrote it pushes it: {line}"
+                );
+            }
+        }
+        let text = |name: &str| {
+            files
+                .iter()
+                .find(|(p, _)| p.ends_with(name))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing {name}"))
+        };
+        for (workflow, command) in [
+            ("uplink-resolve.yml", "git uplink resolve \"$id\""),
+            ("uplink-amend.yml", "git uplink amend \"$id\" --complete"),
+            ("uplink-split.yml", "git uplink split \"$id\" --complete"),
+            ("uplink-merge.yml", "git uplink merge \"$id\" --complete"),
+            ("uplink-transfer.yml", "git uplink transfer \"$PATCH_ID\""),
+            ("uplink-transfer.yml", "git uplink transfer \"$id\""),
+            ("uplink-sync.yml", "git uplink sync "),
+            ("uplink-sync.yml", "git uplink accept-upstream --sha"),
+        ] {
+            let text = text(workflow);
+            // The last call is the one that writes; earlier ones preflight.
+            let at = text
+                .rfind(command)
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} runs no {command}"));
+            let end = text[at..].find(')').unwrap() + at;
+            assert!(
+                text[at..end].contains("--push"),
+                "{forge:?} {workflow}: {command} must push itself\n{}",
+                &text[at..end]
+            );
+        }
+    }
+}
+
+#[test]
+fn submit_approves_only_the_packet_of_its_own_run() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-submit.yml"))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing uplink-submit.yml"));
+        for needle in [
+            "review_token: ${{ steps.packet.outputs.review_token }}",
+            "REVIEW_TOKEN: ${{ needs.packet.outputs.review_token }}",
+            "git uplink approve \"$PATCH_ID\" --reviewed \"$REVIEW_TOKEN\"",
+            "/blob/${{ needs.packet.outputs.state_sha }}/.uplink/reports/",
+        ] {
+            assert!(text.contains(needle), "{forge:?} missing {needle}\n{text}");
+        }
+        assert!(
+            !text.contains("git uplink approve \"$PATCH_ID\")")
+                && !text.contains("/blob/uplink/state/"),
+            "{forge:?} approval must not follow the moving branch\n{text}"
+        );
+    }
+}
+
+#[test]
+fn abandon_contrib_is_detached_from_uplink_mutate() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-abandon.yml"))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing uplink-abandon.yml"));
+        assert!(
+            text.contains("environment:\n      name: abandon-contrib"),
+            "{forge:?} must wait on abandon-contrib\n{text}"
+        );
+        assert!(
+            !text.contains("group: uplink-mutate"),
+            "{forge:?} abandon must not take uplink-mutate\n{text}"
+        );
+        assert!(
+            text.contains("workflow_dispatch:"),
+            "{forge:?} abandon must be workflow_dispatch\n{text}"
+        );
+    }
+}
+
+#[test]
+fn gated_branch_sidecars_load_from_default_branch() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let paths: Vec<_> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(
+            paths.contains(&".github/uplink-pack-files-ruleset.json"),
+            "{forge:?} {paths:?}"
+        );
+        for name in [
+            "uplink-gate.yml",
+            "uplink-resolve.yml",
+            "uplink-transfer.yml",
+            "uplink-amend.yml",
+            "uplink-split.yml",
+            "uplink-merge.yml",
+        ] {
+            let text = files
+                .iter()
+                .find(|(p, _)| p.ends_with(name))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing {name}"));
+            assert!(
+                text.contains("pull_request_target:"),
+                "{forge:?} {name} must use pull_request_target\n{text}"
+            );
+            assert!(
+                text.contains("zizmor: ignore[dangerous-triggers]"),
+                "{forge:?} {name} must ignore dangerous-triggers\n{text}"
+            );
+            assert!(
+                !text.contains("\n  pull_request:\n"),
+                "{forge:?} {name} must not use pull_request\n{text}"
+            );
+        }
+        let gate = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-gate.yml"))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap();
+        assert!(
+            gate.contains("uplink-.*\\.yml"),
+            "{forge:?} gate must refuse pack-file diffs\n{gate}"
+        );
+        // The gate and the ruleset refuse the same paths.
+        for path in ["\\.github/uplink/", "'^\\.uplink/'"] {
+            assert!(
+                gate.contains(path),
+                "{forge:?} gate must refuse {path}\n{gate}"
+            );
+        }
+        // GitHub enforces path rules only in push rulesets, which take no
+        // ref conditions. `.uplink/` is written on uplink/state, so only
+        // the gate refuses it.
+        let ruleset: serde_json::Value = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-pack-files-ruleset.json"))
+            .map(|(_, b)| serde_json::from_slice(b).unwrap())
+            .unwrap();
+        assert_eq!(ruleset["target"], "push", "{forge:?}\n{ruleset}");
+        assert!(ruleset.get("conditions").is_none(), "{forge:?}\n{ruleset}");
+        let restricted: Vec<&str> = ruleset["rules"][0]["parameters"]["restricted_file_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        let covered = |path: &str| {
+            restricted.iter().any(|r| match r.strip_suffix("**") {
+                Some(dir) => path.starts_with(dir),
+                None => path == *r,
+            })
+        };
+        // A push rule covers every branch, so it must leave alone what the
+        // company owns on uplink/hooks.
+        let mut company: Vec<String> = hooks_files(forge).into_iter().map(|(p, _)| p).collect();
+        company.push(".github/workflows/uplink-assessment-hook.yml".into());
+        for path in &company {
+            assert!(!covered(path), "{forge:?} ruleset must not restrict {path}");
+        }
+        for (path, _) in &files {
+            let pack = path.starts_with(".github/workflows/")
+                || path.starts_with(".github/actions/")
+                || path.starts_with(".github/uplink/");
+            let hook = path.starts_with(".github/actions/uplink-toolchain-hook/")
+                || company.contains(path);
+            assert!(
+                !pack || hook || covered(path),
+                "{forge:?} ruleset must restrict {path}"
+            );
+        }
+        assert!(
+            gate.contains("contents: read"),
+            "{forge:?} gate must be contents: read\n{gate}"
+        );
+        assert!(
+            gate.contains("git uplink assess --patch \"${BASE_REF#uplink/conflict/}\""),
+            "{forge:?} gate must assess conflict resolutions\n{gate}"
+        );
+        assert!(
+            gate.contains("\"uplink/amend/**\"")
+                && gate.contains("git uplink assess --patch \"${BASE_REF#uplink/amend/}\""),
+            "{forge:?} gate must assess amends\n{gate}"
+        );
+        // An upstream amend is assessed, then gets export preflight of
+        // the whole amended patch, as amend --complete runs after merge.
+        // Not --command-only: the PR head has every earlier queued patch,
+        // so a dependency missing from Uplink-Depends-On would pass.
+        let amend = gate
+            .find("git uplink assess --patch \"${BASE_REF#uplink/amend/}\"")
+            .unwrap();
+        let amend_body = &gate[amend..];
+        let amend_body = &amend_body[..amend_body.find("elif").unwrap_or(amend_body.len())];
+        let preflight = amend_body
+            .find("run_preflight")
+            .unwrap_or_else(|| panic!("{forge:?} gate must preflight upstream amends"));
+        assert!(
+            amend_body[preflight..].contains("--message-file /tmp/uplink-msg.txt")
+                && amend_body[preflight..].contains("--from \"${FROM_SHA}^\"")
+                && !amend_body.contains("--command-only"),
+            "{forge:?} gate must run export preflight on upstream amends\n{amend_body}"
+        );
+        // The hook job routes as validate does. If the copies drift, the
+        // hook runs on an internal-only amend or skips an upstream one.
+        let is_internal = |job: &str| {
+            let start = job
+                .find("is_internal() {")
+                .unwrap_or_else(|| panic!("{forge:?} no is_internal in\n{job}"));
+            let body = &job[start..];
+            let end = body.find("\n          }\n").map_or(body.len(), |i| i + 12);
+            body[..end]
+                .lines()
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let jobs = jobs_of(&gate);
+        let job = |name: &str| {
+            jobs.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, job)| job.as_str())
+                .unwrap_or_else(|| panic!("{forge:?} gate has no {name} job"))
+        };
+        assert_eq!(
+            is_internal(job("validate")),
+            is_internal(job("assessment-hook")),
+            "{forge:?} gate is_internal copies differ"
+        );
+        // A transfer to upstream runs preflight.sh, then is assessed as
+        // upstream-bound, so a failing assessment still updates the
+        // preflight comment. Not with --patch: that would take the
+        // patch's current queue, internal.
+        let branch = gate
+            .find("elif [[ \"$BASE_REF\" == uplink/transfer-to-upstream/* ]]")
+            .unwrap_or_else(|| panic!("{forge:?} gate has no transfer-to-upstream branch"));
+        let body = &gate[branch..];
+        let body = &body[..body[1..].find("elif").map_or(body.len(), |i| i + 1)];
+        let assess = body
+            .find("git uplink assess \\")
+            .unwrap_or_else(|| panic!("{forge:?} gate must assess transfers to upstream\n{body}"));
+        let preflight = body
+            .find("run_preflight")
+            .unwrap_or_else(|| panic!("{forge:?} gate must preflight transfers to upstream"));
+        assert!(preflight < assess, "{forge:?}\n{body}");
+        assert!(!body.contains("--patch \""), "{forge:?}\n{body}");
+        assert!(
+            gate.contains("is_internal \"${BASE_REF#uplink/conflict/}\"")
+                && gate.contains("is_internal \"${BASE_REF#uplink/amend/}\""),
+            "{forge:?} gate must skip assess for internal-only patches\n{gate}"
+        );
+        // Only the jobs that comment may write. The preflight comment
+        // never sees the gated tree. The assessment hook and the message
+        // comment read it as data only: their checkout is the default
+        // branch, and they never run preflight.sh or the toolchain hook.
+        for (key, job) in jobs_of(&gate) {
+            if key == "assessment-hook" || key == "message-comment" {
+                assert!(
+                    job.contains("ref: ${{ github.event.repository.default_branch }}")
+                        && !job.contains("ref: ${{ github.event.pull_request.head")
+                        && !job.contains("git uplink preflight")
+                        && !job.contains("uplink-toolchain-hook"),
+                    "{forge:?} gate {key} must not check out or run the gated tree\n{job}"
+                );
+            } else if key == "preflight-comment" {
+                assert!(
+                    !job.contains("pull_request.head") && !job.contains("git uplink"),
+                    "{forge:?} gate {key} must not check out or run the gated tree\n{job}"
+                );
+                assert!(
+                    job.contains("ref: ${{ github.event.repository.default_branch }}"),
+                    "{forge:?} gate {key} must take its action from the default branch\n{job}"
+                );
+            } else {
+                assert!(
+                    !job.contains(": write"),
+                    "{forge:?} gate {key} must not hold a write permission\n{job}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn state_and_upstream_rulesets_match_who_pushes_them() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let ruleset = |name: &str| -> serde_json::Value {
+            let (_, body) = files
+                .iter()
+                .find(|(p, _)| p == &format!(".github/{name}"))
+                .unwrap_or_else(|| panic!("{forge:?} missing {name}"));
+            serde_json::from_slice(body).unwrap()
+        };
+        let rules = |set: &serde_json::Value| -> Vec<String> {
+            set["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["type"].as_str().unwrap().to_string())
+                .collect()
+        };
+        // Every ruleset ships active, so a missing bypass fails a push
+        // instead of leaving the ruleset off. The setup guide finds them
+        // by the `Uplink: ` prefix.
+        for (path, body) in &files {
+            if path.starts_with(".github/uplink-") && path.ends_with("-ruleset.json") {
+                let set: serde_json::Value = serde_json::from_slice(body).unwrap();
+                assert_eq!(set["enforcement"], "active", "{forge:?} {path}");
+                assert!(
+                    set["name"].as_str().unwrap().starts_with("Uplink: "),
+                    "{forge:?} {path}"
+                );
+            }
+        }
+        // `git uplink push` only fast-forwards uplink/state, so nothing
+        // needs to bypass a ban on force-push and deletion.
+        let state = ruleset("uplink-state-ruleset.json");
+        assert_eq!(
+            state["conditions"]["ref_name"]["include"],
+            serde_json::json!(["refs/heads/uplink/state"])
+        );
+        assert_eq!(rules(&state), ["deletion", "non_fast_forward"]);
+        assert_eq!(state["bypass_actors"], serde_json::json!([]));
+        // Only the internal App and admins write it; any job that pushes
+        // it uses that App, never its own GITHUB_TOKEN.
+        let writers = ruleset("uplink-state-writers-ruleset.json");
+        assert_eq!(
+            writers["conditions"]["ref_name"]["include"],
+            serde_json::json!(["refs/heads/uplink/state"])
+        );
+        assert_eq!(rules(&writers), ["creation", "update"]);
+        assert_eq!(
+            writers["bypass_actors"][0]["actor_type"], "RepositoryRole",
+            "{forge:?} keep the admin role for operators"
+        );
+        for (path, body) in &files {
+            if !path.starts_with(".github/workflows/") {
+                continue;
+            }
+            let text = String::from_utf8_lossy(body);
+            let jobs = text.split_once("\njobs:\n").map_or("", |(_, jobs)| jobs);
+            let mut job = String::new();
+            for line in jobs.lines().chain(["  end:"]) {
+                let is_job = line.starts_with("  ")
+                    && !line.starts_with("   ")
+                    && line.trim_end().ends_with(':');
+                if is_job && !job.is_empty() {
+                    assert!(
+                        !(job.contains("      contents: write")
+                            && job.contains("UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}")),
+                        "{forge:?} {path}: a job with contents write must push uplink/state \
+with the internal App, not GITHUB_TOKEN:\n{job}"
+                    );
+                    job.clear();
+                }
+                job.push_str(line);
+                job.push('\n');
+            }
+        }
+        // Only sync writes uplink/upstream, with the internal App.
+        let upstream = ruleset("uplink-upstream-ruleset.json");
+        assert_eq!(
+            upstream["conditions"]["ref_name"]["include"],
+            serde_json::json!(["refs/heads/uplink/upstream"])
+        );
+        for rule in ["creation", "update", "deletion", "non_fast_forward"] {
+            assert!(
+                rules(&upstream).iter().any(|r| r == rule),
+                "{forge:?} upstream ruleset must have {rule}"
+            );
+        }
+        for (path, body) in &files {
+            let text = String::from_utf8_lossy(body);
+            let pushes = text
+                .lines()
+                .any(|l| l.contains("git push") && l.contains("uplink/upstream"));
+            assert!(
+                !pushes || path == ".github/workflows/uplink-sync.yml",
+                "{forge:?} {path} pushes uplink/upstream; only sync may, see uplink-upstream-ruleset.json"
+            );
+        }
+    }
+}
+
+#[test]
+fn preflight_verdict_is_commented_on_every_run() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = |path: &str| {
+            files
+                .iter()
+                .find(|(p, _)| p.ends_with(path))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing {path}"))
+        };
+        let action = text(".github/actions/uplink-preflight-comment/action.yml");
+        assert!(action.contains("<!-- uplink:preflight -->"), "{action}");
+        // One comment: update it, else create it. No outcome decides.
+        assert!(
+            action.contains("--method PATCH") && action.contains("--method POST"),
+            "{action}"
+        );
+        assert!(!action.contains("elif"), "{action}");
+        // The action words the comment; the report has no comment.
+        assert!(!action.contains(".comment"), "{action}");
+        assert!(action.contains("Uplink-Depends-On:"), "{action}");
+        assert!(action.contains(".runId"), "{action}");
+        for (workflow, needs) in [
+            ("uplink-pr.yml", "needs: preflight"),
+            ("uplink-gate.yml", "needs: validate"),
+        ] {
+            let job = jobs_of(&text(workflow))
+                .into_iter()
+                .find(|(key, _)| key == "preflight-comment")
+                .map(|(_, job)| job)
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} has no preflight-comment"));
+            assert!(job.contains(needs), "{forge:?} {workflow}\n{job}");
+            assert!(
+                job.contains("uses: $/.github/actions/uplink-preflight-comment")
+                    && job.contains("pull-requests: write")
+                    && job.contains("always()")
+                    && job.contains("persist-credentials: false"),
+                "{forge:?} {workflow}\n{job}"
+            );
+            assert!(
+                !job.contains("uplink-toolchain-hook") && !job.contains("git uplink"),
+                "{forge:?} {workflow}: the job that comments must not run preflight.sh\n{job}"
+            );
+        }
+        // The gate hands over every preflight it runs.
+        let gate = text("uplink-gate.yml");
+        assert_eq!(
+            gate.matches("git uplink preflight").count(),
+            1,
+            "{forge:?} gate runs preflight in one place, with --json\n{gate}"
+        );
+        assert!(
+            gate.contains("report=$(git uplink preflight --json \"$@\") || true"),
+            "{gate}"
+        );
+    }
+}
+
+#[test]
+fn patch_message_is_commented_on_every_gate_run() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = |path: &str| {
+            files
+                .iter()
+                .find(|(p, _)| p.ends_with(path))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing {path}"))
+        };
+        let action = text(".github/actions/uplink-message-comment/action.yml");
+        assert!(action.contains("<!-- uplink:message -->"), "{action}");
+        assert!(
+            action.contains("--method PATCH") && action.contains("--method POST"),
+            "{action}"
+        );
+        // An unchanged message is commented too.
+        assert!(action.contains("No change to the message."), "{action}");
+        let job = jobs_of(&text("uplink-gate.yml"))
+            .into_iter()
+            .find(|(key, _)| key == "message-comment")
+            .map(|(_, job)| job)
+            .unwrap_or_else(|| panic!("{forge:?} gate has no message-comment"));
+        // Whatever the gate's verdict: it waits for nothing.
+        assert!(!job.contains("needs:"), "{forge:?}\n{job}");
+        assert!(
+            job.contains("uses: $/.github/actions/uplink-message-comment")
+                && job.contains("pull-requests: write")
+                && job.contains("persist-credentials: false")
+                && job.contains("git uplink \"${args[@]}\""),
+            "{forge:?}\n{job}"
+        );
+        assert!(
+            !job.contains("uplink-toolchain-hook")
+                && !job.contains("git uplink preflight")
+                && !job.contains("ref: ${{ github.event.pull_request.head"),
+            "{forge:?}: the job that comments must not run the gated tree\n{job}"
+        );
+    }
+}
+
+#[test]
+fn a_rebuilt_main_is_told_to_open_pull_requests_and_rebased_on_request() {
+    let action = "uses: $/.github/actions/uplink-rebase-comment";
+    // Every job that pushes a rebuilt main.
+    let sites = [
+        ("uplink-import.yml", "import"),
+        ("uplink-sync.yml", "inspect"),
+        ("uplink-sync.yml", "apply"),
+        ("uplink-transfer.yml", "start"),
+        ("uplink-transfer.yml", "complete"),
+        ("uplink-resolve.yml", "resolve"),
+        ("uplink-amend.yml", "complete"),
+        ("uplink-split.yml", "complete"),
+        ("uplink-merge.yml", "complete"),
+    ];
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = |path: &str| {
+            files
+                .iter()
+                .find(|(p, _)| p.ends_with(path))
+                .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| panic!("{forge:?} missing {path}"))
+        };
+        let job = |workflow: &str, key: &str| {
+            jobs_of(&text(workflow))
+                .into_iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, job)| job)
+                .unwrap_or_else(|| panic!("{forge:?} {workflow} has no job {key}"))
+        };
+        for (workflow, key) in sites {
+            let job = job(workflow, key);
+            assert!(
+                job.contains("git push origin main --force")
+                    || job.contains("git push origin HEAD:main --force")
+                    || job.contains("git uplink rebuild --push")
+                    || job.contains(" --push)")
+                    || job.contains("--push --merged-as \"$MERGE_SHA\""),
+                "{forge:?} {workflow} {key} pushes main\n{job}"
+            );
+            let last = *steps_of(&job).last().unwrap();
+            // Last, and never the reason the job fails: main is pushed.
+            assert!(
+                last.contains(action)
+                    && last.contains("continue-on-error: true")
+                    && last.contains("token: ${{ secrets.GITHUB_TOKEN }}")
+                    && last.contains("auto-rebase: ${{ vars.UPLINK_AUTO_REBASE }}"),
+                "{forge:?} {workflow} {key}\n{last}"
+            );
+            assert!(
+                job.contains("      pull-requests: write\n")
+                    && job.contains("      actions: write\n"),
+                "{forge:?} {workflow} {key}\n{job}"
+            );
+        }
+
+        let comment = text(".github/actions/uplink-rebase-comment/action.yml");
+        assert!(
+            comment.contains("<!-- uplink:rebase needs ${fork} -->"),
+            "{comment}"
+        );
+        assert!(comment.contains("<!-- uplink:rebase done -->"), "{comment}");
+        // The plan comes from the binary, for a head that is only fetched.
+        assert!(
+            comment.contains("git uplink rebase --plan --head \"$oid\" --json"),
+            "{comment}"
+        );
+        assert!(
+            !comment.contains("git checkout") && !comment.contains("git switch"),
+            "{comment}"
+        );
+        // Dispatch only with the variable, and only for a comment this
+        // run wrote: a rebase that stopped is not asked for again.
+        assert!(
+            comment.contains(
+                "if [ \"$changed\" = \"true\" ] && [ \"$AUTO_REBASE\" = \"true\" ]; then"
+            ),
+            "{comment}"
+        );
+        assert_eq!(comment.matches("gh workflow run").count(), 1, "{comment}");
+
+        // One comment per pull request: duplicates are deleted, and a
+        // rebuild (no pr-number) writes an unchanged one again.
+        assert!(
+            comment.contains("done < <(tail -n +2 <<<\"$found\")")
+                && comment
+                    .contains("if [ \"$changed\" = \"false\" ] && [ -n \"$PR_NUMBER\" ]; then"),
+            "{comment}"
+        );
+
+        // A rebase that stopped on a conflict tells the developer to
+        // rebase by hand, and a push that is not rebased keeps it.
+        assert!(
+                comment.contains("<!-- uplink:rebase stopped ${fork} -->")
+                    && comment.contains("Rebase it yourself.")
+                    && comment.contains("git rebase --continue")
+                    && comment.contains(
+                        "if { [ \"$kind\" = \"needs\" ] || [ \"$kind\" = \"stopped\" ]; } && [ \"$old_fork\" = \"$fork\" ]; then"
+                    ),
+                "{comment}"
+            );
+        assert!(
+            text(".github/workflows/uplink-rebase.yml")
+                .contains("stopped: ${{ steps.rebase.outputs.outcome }}"),
+            "uplink-rebase.yml"
+        );
+
+        // The hint runs where a conflicting pull request still runs a
+        // workflow: pull_request_target in Uplink rebase, not PR checks.
+        let hint = job("uplink-rebase.yml", "hint");
+        assert!(
+                hint.contains(action)
+                    && hint.contains("pr-number: ${{ github.event.pull_request.number }}")
+                    && hint.contains("persist-credentials: false")
+                    && hint.contains(
+                        "\n    if: ${{ github.event_name == 'pull_request_target' && github.event.action != 'labeled' }}\n"
+                    )
+                    && hint.contains("\n      cancel-in-progress: true\n"),
+                "{forge:?}\n{hint}"
+            );
+        assert!(
+            job("uplink-rebase.yml", "rebase").contains("\n      cancel-in-progress: false\n"),
+            "{forge:?}"
+        );
+        assert!(
+            !text("uplink-pr.yml").contains("uplink-rebase-comment"),
+            "{forge:?}"
+        );
+        // The label goes to Uplink rebase itself; PR checks only cancel
+        // their own first attempt for it.
+        let pr = text("uplink-pr.yml");
+        assert!(!pr.contains("gh workflow run"), "{forge:?}\n{pr}");
+        let requested = job("uplink-pr.yml", "rebase-requested");
+        assert!(
+                requested.contains(
+                    "if: ${{ github.run_attempt == 1 && github.event.action == 'labeled' && github.event.label.name == 'uplink:rebase' }}"
+                ) && requested.contains("gh run cancel \"$GITHUB_RUN_ID\"")
+                    && !requested.contains("secrets.UPLINK"),
+                "{forge:?}\n{requested}"
+            );
+
+        let rebase = text("uplink-rebase.yml");
+        assert!(rebase.contains("name: Uplink rebase\n"), "{rebase}");
+        // Runs on the label even when the pull request conflicts, which
+        // a pull_request workflow never does.
+        assert!(
+                rebase.contains(
+                    "  pull_request_target:\n    types: [opened, reopened, synchronize, labeled]\n"
+                ) && rebase.contains("zizmor: ignore[dangerous-triggers]")
+                    // Per job: a hint event must not replace a pending rebase.
+                    && !rebase.contains("\nconcurrency:")
+                    && !rebase.contains("\n  pull_request:\n")
+                    && rebase.contains(
+                        "(github.event_name == 'pull_request_target' && github.event.label.name == 'uplink:rebase')"
+                    ),
+                "{forge:?}\n{rebase}"
+            );
+        // The label stays on while the rebase runs and comes off after
+        // the push, whatever the outcome. The cancelled checks are
+        // re-run only when nothing was pushed.
+        let push = rebase.find("origin push --quiet origin").unwrap();
+        let unlabel = rebase.find("labels/uplink%3Arebase").unwrap();
+        let fail = rebase
+            .find("- name: Fail when the branch was not rebased")
+            .unwrap();
+        assert!(push < unlabel && unlabel < fail, "{forge:?}\n{rebase}");
+        let unlabel_step = steps_of(&job("uplink-rebase.yml", "rebase"))
+            .into_iter()
+            .find(|step| step.contains("labels/uplink%3Arebase"))
+            .unwrap()
+            .to_string();
+        assert!(
+            unlabel_step
+                .contains("if: ${{ always() && github.event_name == 'pull_request_target' }}"),
+            "{forge:?}\n{unlabel_step}"
+        );
+        assert!(
+                rebase.contains(
+                    "if: ${{ always() && github.event_name == 'pull_request_target' && steps.rebase.outputs.outcome != 'rebased' }}"
+                ) && rebase.contains("gh run rerun \"$id\""),
+                "{forge:?}\n{rebase}"
+            );
+        assert!(!rebase.contains("group: uplink-mutate"), "{rebase}");
+        // The pull request number is the only input: the commit to
+        // rebase from is worked out in the job.
+        assert_eq!(
+            rebase.matches("inputs.").count(),
+            rebase.matches("inputs.pr_number").count(),
+            "{rebase}"
+        );
+        assert!(
+            rebase.contains("git uplink rebase --plan --head \"$old\" --json"),
+            "{rebase}"
+        );
+        // The branch's files stay out of the checkout, and a push made
+        // since the head was read wins.
+        assert!(
+            rebase.contains("git worktree add --quiet --detach \"$tree\" \"$old\"")
+                && rebase.contains("-c core.hooksPath=/dev/null"),
+            "{rebase}"
+        );
+        assert!(
+            rebase.contains("\"--force-with-lease=refs/heads/${HEAD_REF}:${old}\""),
+            "{rebase}"
+        );
+        assert!(
+            !rebase.contains(" --force\n") && !rebase.contains(" --force "),
+            "{rebase}"
+        );
+        assert!(
+            rebase.contains("git check-ref-format --branch \"$HEAD_REF\""),
+            "{rebase}"
+        );
+    }
+}
+
+#[test]
+fn a_verify_that_passes_pushes_nothing() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        let files = composed_files(forge).unwrap();
+        let text = files
+            .iter()
+            .find(|(p, _)| p.ends_with("uplink-verify.yml"))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| panic!("{forge:?} missing uplink-verify.yml"));
+        let job = jobs_of(&text)
+            .into_iter()
+            .find(|(key, _)| key == "verify")
+            .map(|(_, job)| job)
+            .unwrap_or_else(|| panic!("{forge:?} uplink-verify.yml has no job verify"));
+        // It rebuilds main to the tree main has, so main is never pushed,
+        // and no open pull request is told that main was rebuilt.
+        assert!(
+            !job.contains("main --force")
+                && !job.contains("rebuild --push")
+                && !text.contains("uplink-rebase-comment"),
+            "{forge:?}\n{job}"
+        );
+        // The rebuild records origin's main as replaced on uplink/state,
+        // which Uplink rebase reads. A pass leaves before any push; only
+        // a conflict, which records no rebuild, is pushed.
+        let passed = job
+            .find("if ! jq -e '.conflict != null' <<<\"$rebuild_json\"")
+            .unwrap_or_else(|| panic!("{forge:?} verify does not branch on the conflict"));
+        let left = passed + job[passed..].find("exit 0").expect("a pass exits");
+        let pushes: Vec<usize> = job.match_indices("git push").map(|(at, _)| at).collect();
+        assert!(
+            !pushes.is_empty() && pushes.iter().all(|at| *at > left),
+            "{forge:?} verify pushes before it knows the rebuild stopped\n{job}"
+        );
+    }
+}
