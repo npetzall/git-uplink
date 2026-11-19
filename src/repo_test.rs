@@ -1,4 +1,7 @@
-use super::{UPSTREAM_REF, ensure_upstream_ref, file_history, has_ref, patch_substance, show_at};
+use super::{
+    UPSTREAM_REF, ensure_upstream_ref, file_history, has_ref, new_patch_id, patch_substance,
+    random_hex, show_at,
+};
 use crate::git::git_ok;
 
 #[test]
@@ -126,4 +129,26 @@ fn date_line_in_the_message_body_is_a_change() {
         "one",
     );
     assert_ne!(patch_substance(&stored), patch_substance(&updated));
+}
+
+#[test]
+fn random_hex_has_the_requested_length_and_alphabet() {
+    for len in [1, 8, 10, 32] {
+        let hex = random_hex(len);
+        assert_eq!(hex.len(), len);
+        assert!(
+            hex.bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+    }
+    assert_ne!(random_hex(32), random_hex(32));
+}
+
+#[test]
+fn new_patch_id_is_upl_and_ten_hex_digits() {
+    let id = new_patch_id();
+    assert!(id.starts_with("upl_"), "{id}");
+    assert_eq!(id.len(), 14, "{id}");
+    let header = format!("Uplink-Depends-On: {id}");
+    assert_eq!(crate::assess::parse_depends_on(&header), vec![id]);
 }

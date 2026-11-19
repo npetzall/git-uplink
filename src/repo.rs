@@ -1,8 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use uuid::Uuid;
-
 use crate::assess::{company_commit_message, export_commit_message};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
@@ -141,7 +139,7 @@ pub(crate) struct TempWorktree<'a> {
 
 impl<'a> TempWorktree<'a> {
     pub(crate) fn add(repo: &'a Path, prefix: &str, at: &str) -> Result<Self> {
-        let dir = std::env::temp_dir().join(format!("{prefix}-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}", random_hex(32)));
         git(
             repo,
             &[
@@ -333,7 +331,7 @@ fn is_mbox_from_line(line: &str) -> bool {
 /// True when `git apply --reverse --check` succeeds against `git_ref`'s tree.
 /// Uses a throwaway index so HEAD and the worktree stay put.
 pub fn patch_already_applied_on(repo: &Path, git_ref: &str, patch_file_abs: &Path) -> Result<bool> {
-    let index = repo.join(format!(".git/uplink-apply-check-{}", Uuid::new_v4()));
+    let index = repo.join(format!(".git/uplink-apply-check-{}", random_hex(32)));
     let index_s = index.to_string_lossy().into_owned();
     let index_opts = GitOpts {
         extra_env: vec![("GIT_INDEX_FILE".into(), index_s)],
@@ -608,7 +606,7 @@ pub fn ensure_state_worktree(repo: &Path) -> Result<()> {
 fn uplink_worktree_tree(repo: &Path, branch: &str) -> Result<String> {
     ensure_uplink_excluded(repo)?;
     ensure_uplink_dirs(repo)?;
-    let index = repo.join(format!(".git/uplink-index-{}", Uuid::new_v4()));
+    let index = repo.join(format!(".git/uplink-index-{}", random_hex(32)));
     let index_s = index.to_string_lossy().into_owned();
     let index_opts = GitOpts {
         extra_env: vec![("GIT_INDEX_FILE".into(), index_s)],
@@ -671,7 +669,7 @@ pub fn commit_files_on(
     files: &[(&str, &str)],
     message: &str,
 ) -> Result<String> {
-    let index = repo.join(format!(".git/uplink-index-{}", Uuid::new_v4()));
+    let index = repo.join(format!(".git/uplink-index-{}", random_hex(32)));
     let index_opts = GitOpts {
         extra_env: vec![(
             "GIT_INDEX_FILE".into(),
@@ -1040,8 +1038,17 @@ pub fn ensure_company_branch_ref(repo: &Path, remote: &str, branch: &str) -> Res
 }
 
 pub fn new_patch_id() -> String {
-    let raw = Uuid::new_v4().simple().to_string();
-    format!("upl_{}", &raw[..10])
+    format!("upl_{}", random_hex(10))
+}
+
+/// `len` random lowercase hex digits from the OS generator, for ids and
+/// scratch file names that must not collide.
+pub fn random_hex(len: usize) -> String {
+    let mut bytes = vec![0u8; len.div_ceil(2)];
+    getrandom::fill(&mut bytes).expect("OS random number generator failed");
+    let mut hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    hex.truncate(len);
+    hex
 }
 
 pub fn stamp() -> String {

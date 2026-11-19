@@ -546,7 +546,10 @@ pub(super) fn probe_report(
 /// in conflict or does not apply there.
 pub fn rebuilt_tree_at(repo: &Path, state: &str, upstream: &str) -> Result<Option<String>> {
     let queue = queue_at(repo, state)?;
-    let scratch = repo.join(format!(".git/uplink-replay-{}", uuid::Uuid::new_v4()));
+    let scratch = repo.join(format!(
+        ".git/uplink-replay-{}",
+        crate::repo::random_hex(32)
+    ));
     fs::create_dir_all(&scratch)?;
     let index = scratch.join("index");
     let opts = GitOpts {

@@ -953,7 +953,7 @@ fn diff_on_upstream(repo: &Path, patch_text: &str) -> Option<String> {
     if !has_ref(repo, "uplink/upstream").unwrap_or(false) {
         return None;
     }
-    let id = uuid::Uuid::new_v4();
+    let id = crate::repo::random_hex(32);
     let git_dir = git_ok(repo, &["rev-parse", "--absolute-git-dir"]).ok()?;
     let index = PathBuf::from(&git_dir).join(format!("uplink-packet-index-{id}"));
     let file = PathBuf::from(&git_dir).join(format!("uplink-packet-{id}.patch"));
@@ -1377,7 +1377,8 @@ fn text_diff(
     new: (&str, &str),
     context: Option<usize>,
 ) -> Option<String> {
-    let dir = RemoveOnDrop(env::temp_dir().join(format!("uplink-delta-{}", uuid::Uuid::new_v4())));
+    let dir =
+        RemoveOnDrop(env::temp_dir().join(format!("uplink-delta-{}", crate::repo::random_hex(32))));
     fs::create_dir_all(&dir.0).ok()?;
     let old_file = dir.0.join(old.0);
     let new_file = dir.0.join(new.0);
@@ -1515,8 +1516,9 @@ fn tree_diff_patches(repo: &Path, old_patch: &str, new_patch: &str) -> Option<St
     } else {
         "HEAD"
     };
-    let root =
-        RemoveOnDrop(env::temp_dir().join(format!("uplink-delta-tree-{}", uuid::Uuid::new_v4())));
+    let root = RemoveOnDrop(
+        env::temp_dir().join(format!("uplink-delta-tree-{}", crate::repo::random_hex(32))),
+    );
     fs::create_dir_all(&root.0).ok()?;
     let old_tree = patched_tree(repo, &root.0, "approved", base, old_patch)?;
     let new_tree = patched_tree(repo, &root.0, "current", base, new_patch)?;

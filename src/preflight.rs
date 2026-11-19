@@ -7,7 +7,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::assess::{depends_on_from_message, export_commit_message, strip_html_comments};
 use crate::error::{Error, PreflightError, Result};
@@ -1546,10 +1545,7 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
         return Ok(None);
     }
     let queue = read_queue(repo)?;
-    let id = format!(
-        "upl_preflight_{}",
-        &Uuid::new_v4().simple().to_string()[..8]
-    );
+    let id = format!("upl_preflight_{}", crate::repo::random_hex(8));
     let depends_on = incoming_depends_on(&queue, &opts)?;
     let patch = Patch {
         id: id.clone(),

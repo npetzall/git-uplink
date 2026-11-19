@@ -149,7 +149,7 @@ pub fn write_atomic(path: &Path, body: impl AsRef<[u8]>) -> Result<()> {
     let tmp = path.with_file_name(format!(
         "{}.{}.tmp",
         name.to_string_lossy(),
-        uuid::Uuid::new_v4()
+        crate::repo::random_hex(32)
     ));
     let written = (|| -> std::io::Result<()> {
         // create_new fails on anything already there, a symlink included.

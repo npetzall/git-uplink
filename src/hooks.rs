@@ -6,8 +6,6 @@
 
 use std::path::Path;
 
-use uuid::Uuid;
-
 use crate::error::Result;
 use crate::git::{GitOpts, git, git_ok};
 use crate::progress::StepOutcome;
@@ -263,7 +261,10 @@ pub(crate) fn hooks_checked_out(repo: &Path) -> bool {
 
 /// Write `files` into the tree of `base` (or an empty tree) and return the new tree.
 fn build_tree(repo: &Path, base: Option<&str>, files: &[(String, Vec<u8>)]) -> Result<String> {
-    let index = repo.join(format!(".git/uplink-hooks-index-{}", Uuid::new_v4()));
+    let index = repo.join(format!(
+        ".git/uplink-hooks-index-{}",
+        crate::repo::random_hex(32)
+    ));
     let index_opts = GitOpts {
         extra_env: vec![(
             "GIT_INDEX_FILE".into(),

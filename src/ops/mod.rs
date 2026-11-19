@@ -160,7 +160,7 @@ pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
 }
 
 pub(super) fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
-    let dir = std::env::temp_dir().join(format!("uplink-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("uplink-{}", crate::repo::random_hex(32)));
     copy_dir(&repo.join(".uplink"), &dir.join(".uplink"))?;
     Ok(dir)
 }
