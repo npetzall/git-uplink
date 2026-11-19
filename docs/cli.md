@@ -72,6 +72,8 @@ git uplink split <id> [--complete] [--head <sha>] [--expect <id=stable>]...
 git uplink merge <id>... [--pr-closed <id>]... [--complete] [--expect <id=stable>]...
             [--message <text> | --message-file <path>] [--preflight-result <path>]
             [--preflight-only] [--push]
+git uplink message <id> --gate <kind> [--message <text> | --message-file <path>]
+            [--expect <id=stable>]... [--from <sha>] [--head <sha>]
 git uplink web-ui [--port <port>] [--no-open]
 git uplink self-update [<version>] [--no-switch]
 git uplink self-use <version>
@@ -742,6 +744,28 @@ Without `--complete` it takes the patch ids, replays the queue on `uplink/upstre
 - `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
 
   As `amend --push`: uplink/state is pushed as a fast-forward and recorded again on a lost race, then main with a lease. The JSON has `push.state` and `push.main`.
+
+### `message`
+
+Print the patch message a gated PR stores on merge, beside the one it replaces.
+
+Uplink gate runs it to write the message comment on a gated PR: the internal message as it is, the diff, and the message `--complete` would store. The public message is cut from the internal one, so it is not printed. Nothing is changed.
+
+For conflict, transfer, amend and merge `--message[-file]` is the PR title and body. The original is the stored message of the patch; for merge it is the message the merge PR opened with, the members' messages joined, with the members from `--expect`. For split each commit of `--from..--head` is a part and its message the part's message, compared with the stored message of the patch. The JSON has `id`, `gate`, `original` and `results` (`id`, null for a part that gets a new id, and `message`).
+
+- `<id>`: The patch of the gated PR (the id in its base branch).
+- `--gate <kind>`: The kind of gated PR.
+  - `conflict`: A conflict PR into uplink/conflict/\<id>.
+  - `transfer-to-upstream`: A transfer PR into uplink/transfer-to-upstream/\<id>.
+  - `transfer-to-internal`: A transfer PR into uplink/transfer-to-internal/\<id>.
+  - `amend`: An amend PR into uplink/amend/\<id>.
+  - `split`: A split PR into uplink/split/\<id>: one message per commit.
+  - `merge`: A merge PR into uplink/merge/\<id>.
+- `--message <text>`: New commit message, as the PR title and body.
+- `--message-file <path>`: New commit message, as the PR title and body (- reads stdin).
+- `--expect <id=stable>`: `<id>=<stable patch id>` of a merged patch, from the PR's `Uplink-Gate-Base` comments.
+- `--from <sha>`: Split: the base of the split PR.
+- `--head <sha>`: Split: the split PR's head commit, the last part.
 
 ### `rebase`
 

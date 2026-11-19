@@ -5,24 +5,25 @@ use std::thread;
 
 use git_uplink::{
     AddPatchOpts, AdoptGroup, ApprovalReceipt, CheckStatus, ConflictError, DEFAULT_CUTOFF, Error,
-    Forge, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia, PREVIOUS_MAIN_PATH,
-    Patch, PatchIntent, PatchMessage, PatchStatus, PendingMerge, PreflightReport, PreviousMain,
-    ProgressMode, PushOpts, QueueConfig, QueueState, RebaseState, RebuildOpts, Rejection, Result,
-    STATE_BRANCH, ScriptVerdict, Settings, SettingsFlags, StepOutcome, SubmitResult, SyncOpts,
-    TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE, TransferDirection, UPGRADE_PREVIEW, UpgradeAnswer,
-    UpgradePublish, UpgradeQuestion, WaitingOutcome, accept_upstream, accept_upstream_at,
-    add_patch, amend_patch, amend_patch_with, amend_preflight, approve_patch,
-    approve_patch_reviewed, assess_patch_for_packet, complete_merge_with, doctor, drop_patch,
-    extras_dir, format_approval_receipt, format_approver_packet, format_contribution_packet,
-    format_contribution_packet_with_extras, format_step_line, from_upstream_report_paths, git,
-    git_ok, init, init_repo, load_extra_markdown, load_groups_file, mark_merged, mark_rejected,
-    mark_waiting, merge_patches, newly_ready_to_submit, origin_status, parse_depends_on,
-    preflight_existing_patch, preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan,
-    rebuild, rebuild_with, record_gated_pr, record_pull_request, refresh_from_origin, report_paths,
-    reset_from_origin, resolve_conflict, review_token, split_patch_with, split_preflight,
-    store_patch_extras, stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with,
-    summarize_queue, sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight,
-    trim_deps, working_snapshot, write_queue,
+    Forge, GateKind, GitOpts, HooksPushAction, IncomingPreflight, InitOpts, MergeVia,
+    PREVIOUS_MAIN_PATH, Patch, PatchIntent, PatchMessage, PatchStatus, PendingMerge,
+    PreflightReport, PreviousMain, ProgressMode, PushOpts, QueueConfig, QueueState, RebaseState,
+    RebuildOpts, Rejection, Result, STATE_BRANCH, ScriptVerdict, Settings, SettingsFlags,
+    StepOutcome, SubmitResult, SyncOpts, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
+    TransferDirection, UPGRADE_PREVIEW, UpgradeAnswer, UpgradePublish, UpgradeQuestion,
+    WaitingOutcome, accept_upstream, accept_upstream_at, add_patch, amend_patch, amend_patch_with,
+    amend_preflight, approve_patch, approve_patch_reviewed, assess_patch_for_packet,
+    complete_merge_with, doctor, drop_patch, extras_dir, format_approval_receipt,
+    format_approver_packet, format_contribution_packet, format_contribution_packet_with_extras,
+    format_step_line, from_upstream_report_paths, git, git_ok, init, init_repo,
+    load_extra_markdown, load_groups_file, mark_merged, mark_rejected, mark_waiting, merge_patches,
+    newly_ready_to_submit, origin_status, parse_depends_on, preflight_existing_patch,
+    preflight_incoming_change, push_queue, rebase_onto_main, rebase_plan, rebuild, rebuild_with,
+    record_gated_pr, record_pull_request, refresh_from_origin, report_paths, reset_from_origin,
+    resolve_conflict, review_token, split_patch_with, split_preflight, store_patch_extras,
+    stored_extras_fresh, strip_html_comments, submit_patch, submit_patch_with, summarize_queue,
+    sync, sync_with, transfer_patch, transfer_patch_with, transfer_preflight, trim_deps,
+    working_snapshot, write_queue,
 };
 use tempfile::TempDir;
 
@@ -19052,4 +19053,109 @@ fn transfer_complete_push_records_again_on_a_moved_state_from_the_merged_base() 
     ));
     let queue = git_uplink::queue_at(&race.origin, &state).unwrap();
     assert!(queue.is_upstream(&notes), "the transfer is on origin");
+}
+
+#[test]
+fn message_preview_shows_the_stored_message_and_the_one_the_pr_stores() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_files(company, "feat/a", "Note A\n\nWhy.", &[("A.md", "a\n")]);
+    let state_before = rev_of(company, STATE_BRANCH);
+    let change = PatchMessage {
+        message: "Note A, revised\n\n<!-- template hint -->\nWhy, again.\n".into(),
+    };
+    let preview = git_uplink::preview_message(
+        company,
+        &patch.id,
+        GateKind::Amend,
+        Some(&change),
+        &[],
+        None,
+    )
+    .unwrap();
+    assert_eq!(preview.original, "Note A\n\nWhy.");
+    assert_eq!(preview.results.len(), 1);
+    assert_eq!(preview.results[0].id.as_deref(), Some(patch.id.as_str()));
+    assert_eq!(preview.results[0].message, "Note A, revised\n\nWhy, again.");
+
+    let same = PatchMessage {
+        message: "Note A\n\nWhy.".into(),
+    };
+    let preview =
+        git_uplink::preview_message(company, &patch.id, GateKind::Amend, Some(&same), &[], None)
+            .unwrap();
+    assert_eq!(preview.original, preview.results[0].message);
+    assert_eq!(rev_of(company, STATE_BRANCH), state_before);
+}
+
+#[test]
+fn message_preview_of_a_merge_compares_with_the_joined_messages() {
+    let world = setup_world();
+    let company = &world.company;
+    let a = add_internal_files(company, "feat/a", "Note A", &[("A.md", "a\n")]);
+    let b = add_internal_files(company, "feat/b", "Note B", &[("B.md", "b\n")]);
+    let started = merge_patches(company, &[a.id.clone(), b.id.clone()], &[]).unwrap();
+    let change = PatchMessage {
+        message: "Notes A and B".into(),
+    };
+    let preview = git_uplink::preview_message(
+        company,
+        &a.id,
+        GateKind::Merge,
+        Some(&change),
+        &started.expect,
+        None,
+    )
+    .unwrap();
+    assert_eq!(preview.original, "Note A\n\nNote B");
+    assert_eq!(preview.results[0].message, "Notes A and B");
+    let err =
+        git_uplink::preview_message(company, &a.id, GateKind::Merge, Some(&change), &[], None)
+            .unwrap_err();
+    assert!(err.to_string().contains("--expect"), "{err}");
+}
+
+#[test]
+fn message_preview_of_a_split_has_one_message_per_commit() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_files(
+        company,
+        "feat/two",
+        "Two notes",
+        &[("A.md", "a\n"), ("B.md", "b\n")],
+    );
+    let started = split_patch_with(company, &patch.id, None, &[], &ScriptVerdict::Run).unwrap();
+    let base = started.base_branch.unwrap();
+    let from = rev_of(company, &base);
+    let head = split_on_work_and_squash(
+        company,
+        &patch.id,
+        &[
+            ("Note A", "A.md", "a\n"),
+            ("Note B\n\nThe second part.", "B.md", "b\n"),
+        ],
+    );
+    let preview = git_uplink::preview_message(
+        company,
+        &patch.id,
+        GateKind::Split,
+        None,
+        &[],
+        Some((&from, &head)),
+    )
+    .unwrap();
+    assert_eq!(preview.original, "Two notes");
+    let parts: Vec<(Option<&str>, &str)> = preview
+        .results
+        .iter()
+        .map(|r| (r.id.as_deref(), r.message.as_str()))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            (Some(patch.id.as_str()), "Note A"),
+            (None, "Note B\n\nThe second part."),
+        ]
+    );
 }

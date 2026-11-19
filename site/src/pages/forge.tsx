@@ -119,8 +119,9 @@ export function ForgePage() {
             <strong>Gates</strong> every change to a patch through a pull
             request: conflicts, amends, splits, merges and transfers each get a
             draft PR from a <code>-work</code> branch, checked by{" "}
-            <strong>Uplink gate</strong>. Merging it finishes the change;
-            closing it cancels.
+            <strong>Uplink gate</strong>, which also comments the patch message
+            merging stores: the original, the diff and the result. Merging it
+            finishes the change; closing it cancels.
           </li>
         </ul>
         <p>

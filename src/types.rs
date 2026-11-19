@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::cli::{ForgeArg, MergeViaArg};
+use crate::cli::{ForgeArg, GateArg, MergeViaArg};
 use crate::settings::Settings;
 
 pub const QUEUE_PATH: &str = ".uplink/queue.json";
@@ -363,6 +363,19 @@ pub enum GateKind {
     Amend,
     Split,
     Merge,
+}
+
+impl From<GateArg> for GateKind {
+    fn from(arg: GateArg) -> Self {
+        match arg {
+            GateArg::Conflict => Self::Conflict,
+            GateArg::TransferToUpstream => Self::TransferToUpstream,
+            GateArg::TransferToInternal => Self::TransferToInternal,
+            GateArg::Amend => Self::Amend,
+            GateArg::Split => Self::Split,
+            GateArg::Merge => Self::Merge,
+        }
+    }
 }
 
 impl GateKind {

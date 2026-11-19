@@ -1645,11 +1645,11 @@ mod embed_tests {
                 "{forge:?} gate must skip assess for internal-only patches\n{gate}"
             );
             // Only the jobs that comment may write. The preflight comment
-            // never sees the gated tree. The assessment hook reads it as
-            // data only: its checkout is the default branch, and it never
-            // runs preflight.sh or the toolchain hook.
+            // never sees the gated tree. The assessment hook and the message
+            // comment read it as data only: their checkout is the default
+            // branch, and they never run preflight.sh or the toolchain hook.
             for (key, job) in jobs_of(&gate) {
-                if key == "assessment-hook" {
+                if key == "assessment-hook" || key == "message-comment" {
                     assert!(
                         job.contains("ref: ${{ github.event.repository.default_branch }}")
                             && !job.contains("ref: ${{ github.event.pull_request.head")
@@ -1838,6 +1838,49 @@ with the internal App, not GITHUB_TOKEN:\n{job}"
             );
         }
     }
+
+    #[test]
+    fn patch_message_is_commented_on_every_gate_run() {
+        for forge in [Forge::Github, Forge::TryItOnGithub] {
+            let files = composed_files(forge).unwrap();
+            let text = |path: &str| {
+                files
+                    .iter()
+                    .find(|(p, _)| p.ends_with(path))
+                    .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+                    .unwrap_or_else(|| panic!("{forge:?} missing {path}"))
+            };
+            let action = text(".github/actions/uplink-message-comment/action.yml");
+            assert!(action.contains("<!-- uplink:message -->"), "{action}");
+            assert!(
+                action.contains("--method PATCH") && action.contains("--method POST"),
+                "{action}"
+            );
+            // An unchanged message is commented too.
+            assert!(action.contains("No change to the message."), "{action}");
+            let job = jobs_of(&text("uplink-gate.yml"))
+                .into_iter()
+                .find(|(key, _)| key == "message-comment")
+                .map(|(_, job)| job)
+                .unwrap_or_else(|| panic!("{forge:?} gate has no message-comment"));
+            // Whatever the gate's verdict: it waits for nothing.
+            assert!(!job.contains("needs:"), "{forge:?}\n{job}");
+            assert!(
+                job.contains("uses: $/.github/actions/uplink-message-comment")
+                    && job.contains("pull-requests: write")
+                    && job.contains("persist-credentials: false")
+                    && job.contains("git uplink \"${args[@]}\""),
+                "{forge:?}\n{job}"
+            );
+            assert!(
+                !job.contains("uplink-toolchain-hook")
+                    && !job.contains("git uplink preflight")
+                    && !job.contains("ref: ${{ github.event.pull_request.head"),
+                "{forge:?}: the job that comments must not run the gated tree\n{job}"
+            );
+        }
+    }
+
     #[test]
     fn a_rebuilt_main_is_told_to_open_pull_requests_and_rebased_on_request() {
         let action = "uses: $/.github/actions/uplink-rebase-comment";

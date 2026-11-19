@@ -153,7 +153,7 @@ fn split_commits(repo: &Path, id: &str, onto: &str, head: &str) -> Result<Vec<St
 
 /// A part's message from its commit: the commit message without the
 /// `Uplink-Patch-Id` trailer the company commit had.
-fn part_message(repo: &Path, sha: &str) -> Result<String> {
+pub(super) fn part_message(repo: &Path, sha: &str) -> Result<String> {
     let raw = git_ok(repo, &["log", "-1", "--format=%B", sha])?;
     let kept: Vec<&str> = raw
         .lines()

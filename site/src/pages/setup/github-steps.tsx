@@ -290,6 +290,7 @@ const PACK_RULESET = `{
           ".github/actions/uplink-assessment-comment/**",
           ".github/actions/uplink-assessment-hook/**",
           ".github/actions/uplink-dispatch-submit/**",
+          ".github/actions/uplink-message-comment/**",
           ".github/actions/uplink-preflight-comment/**",
           ".github/actions/uplink-rebase-comment/**",
           ".github/actions/uplink-rescue-import/**",

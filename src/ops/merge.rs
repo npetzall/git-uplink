@@ -80,7 +80,7 @@ pub fn merge_preflight(
 /// merged: at least two, each active and rewritable, all in one lane, and
 /// none depending on a patch between the first and the last of them (the
 /// merged patch takes the first one's place, before that patch).
-fn ordered_members(queue: &QueueState, ids: &[String]) -> Result<Vec<Patch>> {
+pub(super) fn ordered_members(queue: &QueueState, ids: &[String]) -> Result<Vec<Patch>> {
     let mut unique: Vec<&String> = Vec::new();
     for id in ids {
         if !unique.contains(&id) {
@@ -167,7 +167,7 @@ fn outside(deps: impl IntoIterator<Item = String>, members: &[String]) -> Vec<St
 /// The message the merge PR opens with: the target's message, then each
 /// other member's, without the `Uplink-Depends-On` lines, which follow once
 /// for what the merged patch depends on.
-fn proposed_message(target: &Patch, members: &[Patch]) -> String {
+pub(super) fn proposed_message(target: &Patch, members: &[Patch]) -> String {
     let ids: Vec<String> = members.iter().map(|p| p.id.clone()).collect();
     let strip = |message: &str| -> String {
         message
