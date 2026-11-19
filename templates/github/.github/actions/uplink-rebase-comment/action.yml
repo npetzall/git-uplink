@@ -2,8 +2,9 @@ name: Uplink rebase comment
 description: >-
   Tell a pull request that the main it was cut from has been replaced by a
   rebuild, and how to rebase it: one comment per PR, edited in place, written
-  when the branch needs a rebase and again after every rebuild, removed once
-  the developer has rebased and pushed. Without pr-number it looks at every open pull request into
+  when the branch needs a rebase and again after every rebuild, replaced by
+  how to rebase by hand when Uplink rebase stopped, removed once the
+  developer has rebased and pushed. Without pr-number it looks at every open pull request into
   main. With auto-rebase it also dispatches Uplink rebase for a pull request
   it writes the comment on. The pull request's branch is fetched, never
   checked out, and nothing the pull request controls is put into the comment.
@@ -21,8 +22,10 @@ inputs:
     description: "'true' dispatches Uplink rebase for a pull request this run writes the comment on. Workflows pass vars.UPLINK_AUTO_REBASE."
     required: false
     default: ""
-  note:
-    description: A line added to the comment, and a reason to write it again. Uplink rebase passes why it stopped.
+  stopped:
+    description: >-
+      Why Uplink rebase stopped: 'conflict' or 'unknown' (no commit to rebase
+      from). The comment then says the developer has to rebase by hand.
     required: false
     default: ""
   rebased-from:
@@ -43,7 +46,7 @@ runs:
         UPLINK_INTERNAL_TOKEN: ${{ inputs.token }}
         PR_NUMBER: ${{ inputs.pr-number }}
         AUTO_REBASE: ${{ inputs.auto-rebase }}
-        NOTE: ${{ inputs.note }}
+        STOPPED: ${{ inputs.stopped }}
         REBASED_FROM: ${{ inputs.rebased-from }}
       run: |
         # The backticks in the comments echoed below are Markdown, not
@@ -95,6 +98,13 @@ runs:
           echo "::warning title=Uplink rebase::not a pull request number, skipped"
           exit 0
         fi
+        case "$STOPPED" in
+          "" | conflict | unknown) ;;
+          *)
+            echo "::warning title=Uplink rebase::stopped is not conflict or unknown, ignored"
+            STOPPED=""
+            ;;
+        esac
 
         if [ -n "$REBASED_FROM" ]; then
           if [ -z "$PR_NUMBER" ] || [[ ! "$REBASED_FROM" =~ ^[0-9a-f]{40,64}$ ]]; then
@@ -160,19 +170,46 @@ runs:
           id="" kind="" old_fork=""
           read -r id kind old_fork <<<"$(find_comment "$number")" || true
 
+          # The rebase stopped on a conflict: the label would stop at the
+          # same one, so the developer rebases by hand.
+          if [ "$STOPPED" = "conflict" ] && { [ "$state" = "replaced" ] || [ "$state" = "behind" ]; }; then
+            if [[ ! "$fork" =~ ^[0-9a-f]{40,64}$ ]] || [ -z "$command" ]; then
+              continue
+            fi
+            {
+              echo "<!-- uplink:rebase stopped ${fork} -->"
+              echo '**Uplink rebase could not rebase this branch: it conflicts with `main`. Rebase it yourself.** Adding the label `uplink:rebase` again stops at the same conflict.'
+              echo
+              echo '```bash'
+              echo 'git fetch origin'
+              echo "$command"
+              echo '```'
+              echo
+              echo '`git rebase` stops at each commit that conflicts. Resolve the files it names, `git add` them and run `git rebase --continue`; `git rebase --abort` gives up. When it is done:'
+              echo
+              echo '```bash'
+              echo 'git push --force-with-lease'
+              echo '```'
+              run_link
+            } > "$body"
+            write_comment "$number" "$id"
+            echo "Pull request #${number}: rebase stopped on a conflict"
+            continue
+          fi
+
           case "$state" in
             replaced)
               if [[ ! "$fork" =~ ^[0-9a-f]{40,64}$ ]]; then
                 continue
               fi
               changed=true
-              if [ "$kind" = "needs" ] && [ "$old_fork" = "$fork" ]; then
+              if { [ "$kind" = "needs" ] || [ "$kind" = "stopped" ]; } && [ "$old_fork" = "$fork" ]; then
                 changed=false
               fi
               # A run for one PR (every push, reopen) leaves an unchanged
-              # comment alone. A rebuild writes it again, so its run link
-              # names the latest rebuild.
-              if [ "$changed" = "false" ] && [ -z "$NOTE" ] && [ -n "$PR_NUMBER" ]; then
+              # comment alone, a conflict included. A rebuild writes it
+              # again, so its run link names the latest rebuild.
+              if [ "$changed" = "false" ] && [ -n "$PR_NUMBER" ]; then
                 continue
               fi
               {
@@ -186,10 +223,6 @@ runs:
                 echo "$command"
                 echo 'git push --force-with-lease'
                 echo '```'
-                if [ -n "$NOTE" ]; then
-                  echo
-                  echo "$NOTE"
-                fi
                 run_link
               } > "$body"
               write_comment "$number" "$id"
@@ -203,21 +236,22 @@ runs:
               fi
               ;;
             current | behind | unknown)
-              if [ -n "$NOTE" ] && [ "$state" != "current" ]; then
+              if [ -n "$STOPPED" ] && [ "$state" = "unknown" ]; then
                 {
                   echo '<!-- uplink:rebase stopped -->'
-                  echo "$NOTE"
+                  echo '**Uplink rebase could not rebase this branch: it cannot tell which commit of `main` the branch started from. Rebase it yourself.**'
                   if [ -n "$reason" ]; then
                     echo
                     echo "git-uplink cannot tell where this branch left \`main\`: ${reason}."
                   fi
-                  if [ -n "$command" ]; then
-                    echo
-                    echo '```bash'
-                    echo 'git fetch origin'
-                    echo "$command"
-                    echo '```'
-                  fi
+                  echo
+                  echo 'Name the commit of the old `main` the branch started from:'
+                  echo
+                  echo '```bash'
+                  echo 'git fetch origin'
+                  echo 'git rebase --onto origin/main <that commit>'
+                  echo 'git push --force-with-lease'
+                  echo '```'
                   run_link
                 } > "$body"
                 write_comment "$number" "$id"

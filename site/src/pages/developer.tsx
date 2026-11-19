@@ -323,6 +323,14 @@ git switch -c fix/token-hash origin/main`}</Code>
 git rebase --onto origin/main <commit from the comment>
 git push --force-with-lease`}</Code>
         <p>
+          When your branch conflicts with the new <code>main</code>, the
+          forge&apos;s rebase stops, pushes nothing, and the comment says so.
+          Adding the label again stops at the same conflict: run the command
+          yourself, resolve the files <code>git rebase</code> names,{" "}
+          <code>git add</code> them, <code>git rebase --continue</code>, and
+          push with <code>--force-with-lease</code>.
+        </p>
+        <p>
           After the forge rebased it, the comment says how to update your local
           copy:
         </p>
