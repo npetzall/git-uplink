@@ -43,6 +43,7 @@ fn main() {
                 dist.join("index.html").display()
             );
         }
+        write_embedded(&manifest);
         return;
     }
 
@@ -66,6 +67,52 @@ fn main() {
     );
     if !dist.join("index.html").is_file() {
         panic!("vite did not write web/dist/index.html");
+    }
+    write_embedded(&manifest);
+}
+
+/// The folders embedded in the binary, as the name of their table in
+/// `embedded.rs` and their path under the manifest directory.
+const EMBEDDED: &[(&str, &str)] = &[
+    ("WEB", "web/dist"),
+    ("PACK_GITHUB", "templates/github"),
+    ("PACK_GITHUB_HOOKS", "templates/github-hooks"),
+    ("PACK_TRY_IT_ON_GITHUB", "templates/try-it-on-github"),
+];
+
+/// Writes `$OUT_DIR/embedded.rs`, the tables `src/embedded.rs` includes: one
+/// per `EMBEDDED` folder, every file in it (dotfiles too) as its `/`-separated
+/// relative path and its bytes, sorted by path.
+fn write_embedded(manifest: &Path) {
+    let mut out = String::new();
+    for (name, folder) in EMBEDDED {
+        let root = manifest.join(folder);
+        let mut files = Vec::new();
+        walk(&root, &root, &mut files);
+        files.sort();
+        out.push_str(&format!("pub static {name}: &[(&str, &[u8])] = &[\n"));
+        for (rel, path) in files {
+            out.push_str(&format!("    ({rel:?}, include_bytes!({path:?})),\n"));
+        }
+        out.push_str("];\n");
+    }
+    let dest = PathBuf::from(env::var("OUT_DIR").unwrap()).join("embedded.rs");
+    std::fs::write(dest, out).unwrap();
+}
+
+fn walk(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            walk(root, &path, files);
+        } else {
+            let rel = path.strip_prefix(root).unwrap();
+            let rel: Vec<_> = rel
+                .components()
+                .map(|c| c.as_os_str().to_str().unwrap())
+                .collect();
+            files.push((rel.join("/"), path.to_str().unwrap().to_string()));
+        }
     }
 }
 

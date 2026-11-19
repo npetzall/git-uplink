@@ -9,11 +9,11 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 use crate::assess::{FileDelta, revision_delta};
+use crate::embedded::{self, WEB};
 use crate::ops::{
     QueueCounts, approval_stale_at, origin_status, ready_to_submit_ids, refresh_from_origin,
     summarize_queue,
@@ -21,10 +21,6 @@ use crate::ops::{
 use crate::queue::{get_patch, patch_path, require_path_component, submit_layers};
 use crate::repo::{COMPANY_REMOTE, FileRevision, file_history, has_ref, queue_at, show_at};
 use crate::types::{LastSync, Patch, QueueState, STATE_BRANCH};
-
-#[derive(RustEmbed)]
-#[folder = "web/dist"]
-struct Assets;
 
 #[derive(Clone)]
 struct AppState {
@@ -173,7 +169,7 @@ impl IntoResponse for ApiError {
 }
 
 pub fn has_embedded_index() -> bool {
-    Assets::get("index.html").is_some()
+    embedded::get(WEB, "index.html").is_some()
 }
 
 fn router(state: Arc<AppState>) -> Router {
@@ -566,22 +562,42 @@ async fn file_at(
 async fn static_file(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
-    if let Some(file) = Assets::get(path) {
-        return file_response(path, file.data.as_ref());
+    if let Some(bytes) = embedded::get(WEB, path) {
+        return file_response(path, bytes);
     }
-    if let Some(file) = Assets::get("index.html") {
-        return file_response("index.html", file.data.as_ref());
+    if let Some(bytes) = embedded::get(WEB, "index.html") {
+        return file_response("index.html", bytes);
     }
     (StatusCode::INTERNAL_SERVER_ERROR, "embedded UI is missing").into_response()
 }
 
 fn file_response(path: &str, bytes: &[u8]) -> Response {
-    let mime = mime_guess::from_path(path).first_or_octet_stream();
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, mime.as_ref())
+        .header(header::CONTENT_TYPE, content_type(path))
         .body(Body::from(bytes.to_vec()))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// The media type of an embedded web UI file, by extension.
+fn content_type(path: &str) -> &'static str {
+    let ext = path
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json" | "map") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
+        Some("webp") => "image/webp",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 #[cfg(test)]

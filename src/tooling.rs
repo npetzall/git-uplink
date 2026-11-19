@@ -1,9 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use rust_embed::RustEmbed;
-
 use crate::assess::{append_patch_id_trailer, assess_from_message, strip_html_comments};
+use crate::embedded::{PACK_GITHUB, PACK_GITHUB_HOOKS, PACK_TRY_IT_ON_GITHUB};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{
@@ -17,18 +16,6 @@ use crate::types::{
     AssessReport, DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchIntent, PatchSource, PatchStatus,
     QueueState, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
 };
-
-#[derive(RustEmbed)]
-#[folder = "templates/try-it-on-github"]
-struct TryItOnGithubPack;
-
-#[derive(RustEmbed)]
-#[folder = "templates/github"]
-struct GithubFamilyPack;
-
-#[derive(RustEmbed)]
-#[folder = "templates/github-hooks"]
-struct GithubHooksPack;
 
 /// The action every job installs the binary with, and the placeholder in it
 /// that `composed_files` replaces with this binary's version: pack and binary
@@ -235,10 +222,10 @@ pub fn composed_files(forge: Forge) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = Vec::new();
     match forge {
         Forge::Github => {}
-        Forge::TryItOnGithub => collect_pack::<TryItOnGithubPack>(&mut files),
+        Forge::TryItOnGithub => collect_pack(PACK_TRY_IT_ON_GITHUB, &mut files),
     }
     match forge.family() {
-        ForgeFamily::Github => collect_pack::<GithubFamilyPack>(&mut files),
+        ForgeFamily::Github => collect_pack(PACK_GITHUB, &mut files),
     }
     // The sort is stable, so the overlay's copy of a path stays first.
     files.sort_by(|a, b| a.0.cmp(&b.0));
@@ -268,7 +255,7 @@ fn stamp_version(files: &mut [(String, Vec<u8>)]) -> Result<()> {
 pub fn hooks_files(forge: Forge) -> Vec<(String, Vec<u8>)> {
     let mut files = Vec::new();
     match forge.family() {
-        ForgeFamily::Github => collect_pack::<GithubHooksPack>(&mut files),
+        ForgeFamily::Github => collect_pack(PACK_GITHUB_HOOKS, &mut files),
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files
@@ -278,16 +265,11 @@ pub fn hooks_files(forge: Forge) -> Vec<(String, Vec<u8>)> {
 /// land in the product repository, where it would replace the product README.
 const PACK_README: &str = "README.md";
 
-fn collect_pack<E: RustEmbed>(files: &mut Vec<(String, Vec<u8>)>) {
-    for name in E::iter() {
-        let rel = name.as_ref().replace('\\', "/");
-        if rel == PACK_README {
-            continue;
+fn collect_pack(pack: &[(&str, &[u8])], files: &mut Vec<(String, Vec<u8>)>) {
+    for (path, data) in pack {
+        if *path != PACK_README {
+            files.push((path.to_string(), data.to_vec()));
         }
-        let Some(file) = E::get(name.as_ref()) else {
-            continue;
-        };
-        files.push((rel, file.data.into_owned()));
     }
 }
 

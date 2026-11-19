@@ -7,6 +7,7 @@ mod assess;
 pub mod cli;
 mod doctor;
 mod edit;
+mod embedded;
 mod error;
 mod gate;
 mod git;

@@ -519,3 +519,43 @@ async fn local_state_commits_are_not_shown() {
     );
     assert_eq!(get("/api/patches/upl_a").await["patch"]["status"], "queued");
 }
+
+#[test]
+fn content_type_follows_the_extension() {
+    assert_eq!(content_type("index.html"), "text/html; charset=utf-8");
+    assert_eq!(
+        content_type("assets/index-abc.js"),
+        "text/javascript; charset=utf-8"
+    );
+    assert_eq!(content_type("assets/INDEX.CSS"), "text/css; charset=utf-8");
+    assert_eq!(content_type("favicon.svg"), "image/svg+xml");
+    assert_eq!(content_type("no-extension"), "application/octet-stream");
+}
+
+#[tokio::test]
+async fn static_files_are_served_with_their_type_and_unknown_paths_get_index() {
+    let app = test_app(PathBuf::from("/tmp"));
+    let header_of = |response: &Response| {
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string()
+    };
+    for (path, _) in crate::embedded::WEB {
+        let response = app
+            .clone()
+            .oneshot(local_request(&format!("/{path}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(header_of(&response), content_type(path), "{path}");
+    }
+    let response = app
+        .oneshot(local_request("/some/client/route"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(header_of(&response), "text/html; charset=utf-8");
+}
