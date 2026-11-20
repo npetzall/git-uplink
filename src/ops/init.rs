@@ -473,8 +473,7 @@ pub(super) fn append_init_health_checks(
 /// sync. Without it, seeding from public upstream would put work on a base
 /// nobody accepted, so init stops instead.
 fn require_origin_upstream(repo: &Path) -> Result<()> {
-    if has_ref(repo, UPSTREAM_REF)? || !has_ref(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?
-    {
+    if has_ref(repo, UPSTREAM_REF)? || !has_ref(repo, ORIGIN_STATE_REF)? {
         return Ok(());
     }
     Err(Error::msg(format!(
@@ -1225,7 +1224,7 @@ pub fn init_repo_with_progress(
         let queue = QueueState::empty(config);
         commit_queue(repo, &queue, "uplink: initialize patch queue")?;
         ensure_state_branch(repo)?;
-        let sha = git_ok(repo, &["rev-parse", "--short", STATE_BRANCH])?;
+        let sha = git_ok(repo, &["rev-parse", "--short", STATE_REF])?;
         Ok((queue, StepOutcome::pass(format!("uplink/state at {sha}"))))
     })?;
     progress.run_step("remotes-configured", "Configure remotes", || {

@@ -72,19 +72,19 @@ pub use ops::{
     accept_upstream_preflight, accept_upstream_with, add_patch, add_patch_or_gate, adopt_branch,
     adopted_next_steps, amend_patch, amend_patch_with, amend_preflight, approval_stale,
     approval_stale_at, approve_on_remote, approve_patch, approve_patch_at, approve_patch_reviewed,
-    assess_patch_for_packet, complete_merge_with, count_files, drop_patch, fetch_pending_upstream,
-    format_product_changes, format_status_table, format_unrecorded, format_upgrade_changes,
-    gate_base_comments, init, init_repo, init_repo_with_progress, mark_merged, mark_rejected,
-    mark_waiting, merge_patches, merge_preflight, newly_ready_to_submit, origin_status,
-    preview_message, push_imported_main, push_queue, push_rebuilt_main, read_queue,
-    ready_to_submit_ids, rebase_onto_main, rebase_plan, rebuild, rebuild_inline, rebuild_preflight,
-    rebuild_with, rebuilt_tree_at, record_gated_pr, record_on_remote, record_on_remote_if,
-    record_pull_request, refresh_from_origin, rescue_import, reset_from_origin, resolve_conflict,
-    resolve_conflict_with, resolve_preflight, restack, resume_rebuild, split_patch_with,
-    split_preflight, stale_approvals, stale_approvals_at, status_report, store_assess_result,
-    store_patch_extras, submit_patch, submit_patch_with, summarize_queue, sync, sync_with,
-    terminal_upgrade_asker, transfer_patch, transfer_patch_with, transfer_preflight, trim_deps,
-    working_snapshot,
+    approve_patch_with_receipt, assess_patch_for_packet, complete_merge_with, count_files,
+    drop_patch, fetch_pending_upstream, format_product_changes, format_status_table,
+    format_unrecorded, format_upgrade_changes, gate_base_comments, init, init_repo,
+    init_repo_with_progress, mark_merged, mark_rejected, mark_waiting, merge_patches,
+    merge_preflight, newly_ready_to_submit, origin_status, preview_message, push_imported_main,
+    push_queue, push_rebuilt_main, read_queue, ready_to_submit_ids, rebase_onto_main, rebase_plan,
+    rebuild, rebuild_inline, rebuild_preflight, rebuild_with, rebuilt_tree_at, record_gated_pr,
+    record_on_remote, record_on_remote_if, record_pull_request, refresh_from_origin, rescue_import,
+    reset_from_origin, resolve_conflict, resolve_conflict_with, resolve_preflight, restack,
+    resume_rebuild, split_patch_with, split_preflight, stale_approvals, stale_approvals_at,
+    status_report, store_assess_result, store_patch_extras, submit_patch, submit_patch_with,
+    summarize_queue, sync, sync_with, terminal_upgrade_asker, transfer_patch, transfer_patch_with,
+    transfer_preflight, trim_deps, working_snapshot,
 };
 pub use preflight::{
     FirstBad, IncomingPreflight, PreflightReport, RebuildReport, ScriptEcho, ScriptVerdict,
@@ -95,7 +95,8 @@ pub use preflight::{
 };
 pub use progress::{ProgressMode, StepOutcome, StepProgress, format_step_line};
 pub use repo::{
-    FileRevision, file_history, patch_state_commit, queue_at, retire_legacy_folder, show_at,
+    FileRevision, file_history, forge_out_dir, patch_state_commit, queue_at, retire_legacy_folder,
+    show_at,
 };
 pub use selfinstall::{
     DEFAULT_REPO, SelfConfig, SelfEnv, self_available, self_check, self_list, self_update, self_use,
@@ -106,8 +107,8 @@ pub use types::{
     AssessReport, CheckStatus, ConflictCause, DEFAULT_CUTOFF, Forge, GateKind, MergeVia,
     PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchExtras, PatchIntent, PatchLayer,
     PatchStatus, PatchUpstream, PendingMerge, PendingUpstream, PreviousMain, QUEUE_PATH,
-    QUEUE_VERSION, QueueConfig, QueueState, STATE_BRANCH, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
-    TransferDirection, VerifiedUpstream, first_line,
+    QUEUE_VERSION, QueueConfig, QueueState, STATE_BRANCH, STATE_REF, TOOLING_PATCH_KIND,
+    TOOLING_PATCH_TITLE, TransferDirection, VerifiedUpstream, first_line,
 };
 
 #[cfg(test)]

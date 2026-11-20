@@ -175,3 +175,22 @@ fn queue_round_trips_and_a_missing_queue_says_how_to_initialize() {
     assert!(state.has_queue().unwrap());
     assert!(state.queue().unwrap().upstream.is_empty());
 }
+
+#[test]
+fn a_tag_named_like_the_branch_is_never_read() {
+    let dir = repo();
+    let repo = dir.path();
+    let mut state = StateTree::head(repo).unwrap();
+    state.write(".uplink/a.txt", "branch\n");
+    state.commit_to_branch("branch").unwrap();
+    let mut other = StateTree::at(repo, None).unwrap();
+    other.write(".uplink/a.txt", "tag\n");
+    let decoy = other.commit("decoy").unwrap().unwrap();
+    git_ok(repo, &["tag", STATE_BRANCH, &decoy]).unwrap();
+
+    let state = StateTree::head(repo).unwrap();
+    assert_eq!(
+        state.read(".uplink/a.txt").unwrap().as_deref(),
+        Some("branch\n")
+    );
+}

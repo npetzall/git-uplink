@@ -96,7 +96,7 @@ fn restack_offline(repo: &Path, opts: RestackOpts) -> Result<RestackResult> {
 fetch it first: git uplink refresh"
         )));
     }
-    let local = rev_parse(repo, STATE_BRANCH)?;
+    let local = rev_parse(repo, STATE_REF)?;
     let remote = rev_parse(repo, &tracking)?;
     let settled = |action| {
         Ok(RestackResult {

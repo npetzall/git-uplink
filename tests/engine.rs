@@ -4979,8 +4979,31 @@ fn report_writes_the_token_that_approve_takes_back() {
         Some(token.as_str())
     );
 
-    // A re-run for the same content records nothing and keeps the receipt.
+    // The receipt is in the approval's own commit.
     let receipt_path = format!(".uplink/reports/{id}/approval.md");
+    assert_eq!(
+        git_ok(
+            company,
+            &[
+                "log",
+                "-1",
+                "--format=%s",
+                STATE_BRANCH,
+                "--",
+                &receipt_path
+            ]
+        )
+        .unwrap(),
+        format!("uplink: approve {id}")
+    );
+    let approval = git_uplink::queue_at(company, git_uplink::STATE_REF).unwrap();
+    assert!(
+        approval
+            .all_patches()
+            .any(|p| p.id == id && p.status == PatchStatus::Approved)
+    );
+
+    // A re-run for the same content records nothing and keeps the receipt.
     let first_receipt = state_file(company, &receipt_path);
     let state = rev_of(company, STATE_BRANCH);
     let again = cli(&["approve", id, "--reviewed", &token]);
@@ -19377,4 +19400,89 @@ fn a_legacy_folder_with_edits_is_refused_and_kept() {
     assert!(err.contains("rm -rf .uplink"), "{err}");
     assert!(company.join(".uplink/notes.md").is_file());
     assert_eq!(rev_of(company, STATE_BRANCH), state);
+}
+
+#[test]
+fn a_tracked_uplink_folder_is_product_content_and_left_alone() {
+    let world = setup_world();
+    let company = &world.company;
+    write(company, ".uplink/product.txt", "the product's own\n");
+    git(
+        company,
+        &["add", "-f", ".uplink/product.txt"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    git(
+        company,
+        &["commit", "-q", "-m", "product .uplink"],
+        GitOpts::default(),
+    )
+    .unwrap();
+
+    let output = uplink_in(company, &["doctor", "--json"]);
+
+    assert!(company.join(".uplink/product.txt").is_file(), "{output:?}");
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("differs from"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn an_unrelated_uplink_folder_without_uplink_is_left_alone() {
+    let world = setup_uninitialized();
+    let company = &world.company;
+    write(company, ".uplink/other-tool.json", "{}\n");
+
+    let output = uplink_in(company, &["doctor", "--json"]);
+
+    assert!(
+        company.join(".uplink/other-tool.json").is_file(),
+        "{output:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("differs from"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn submitted_refuses_an_export_file_that_is_not_the_patch() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_ttl_patch(company);
+    approve_patch(company, &patch.id).unwrap();
+    let exported = submit_patch(company, &patch.id, false).unwrap();
+    let out = git_uplink::forge_out_dir(company, &patch.id).unwrap();
+    fs::create_dir_all(&out).unwrap();
+    fs::write(out.join("pr.md"), "something else left\n").unwrap();
+
+    let err = record_pull_request(
+        company,
+        &patch.id,
+        7,
+        "https://github.com/upstream/tokenkit/pull/7",
+        &exported.branch,
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("is not what"), "{err}");
+
+    fs::write(out.join("pr.md"), git_uplink::upstream_pr_body(&patch)).unwrap();
+    record_pull_request(
+        company,
+        &patch.id,
+        7,
+        "https://github.com/upstream/tokenkit/pull/7",
+        &exported.branch,
+        None,
+    )
+    .unwrap();
+    let (pr_path, _) = git_uplink::export_paths(&patch.id).unwrap();
+    assert_eq!(
+        state_file(company, &pr_path).trim_end(),
+        git_uplink::upstream_pr_body(&patch).trim_end()
+    );
 }

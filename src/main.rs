@@ -18,10 +18,10 @@ use git_uplink::{
     Error, FROM_UPSTREAM_ENVIRONMENT, Forge, IncomingPreflight, InitOpts, InlineRebuild,
     InlineRebuildOpts, MergeVia, PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN, PatchMessage,
     PreflightError, PreflightReport, ProgressMode, PushOpts, RebuildOpts, RebuildResume, Rejection,
-    RestackAction, RestackOpts, RunKind, STATE_BRANCH, ScriptEcho, ScriptVerdict,
+    RestackAction, RestackOpts, RunKind, STATE_BRANCH, STATE_REF, ScriptEcho, ScriptVerdict,
     TO_UPSTREAM_ENVIRONMENT, WaitingOutcome, accept_upstream_preflight, accept_upstream_with,
     add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps, already_approved,
-    amend_patch_with, amend_preflight, approve_on_remote, approve_patch_reviewed,
+    amend_patch_with, amend_preflight, approve_on_remote, approve_patch_with_receipt,
     assess_from_message, assess_patch_file, assess_patch_for_packet, assess_rewrite,
     change_between, command_preflight, command_tested, count_files, cutoff_marker, doctor,
     drop_patch, existing_patch_preflight, export_tested, fetch_pending_upstream, first_line,
@@ -79,10 +79,38 @@ fn read_commit_message(
     Ok(message.unwrap_or_else(|| fallback.to_string()))
 }
 
+/// Whether `file`, relative to the checkout `repo` or absolute, names
+/// something under its `.uplink/` folder. `.` and `..` are resolved by
+/// name, so `./.uplink/x` and `sub/../.uplink/x` count.
+fn under_legacy_folder(repo: &Path, file: &Path) -> bool {
+    use std::path::Component;
+    let abs = if file.is_absolute() {
+        file.to_path_buf()
+    } else {
+        repo.join(file)
+    };
+    let mut normal = PathBuf::new();
+    for part in abs.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normal.pop();
+            }
+            other => normal.push(other),
+        }
+    }
+    let root = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+    [repo, root.as_path()].iter().any(|root| {
+        normal.strip_prefix(root).is_ok_and(|rest| {
+            rest.components().next() == Some(Component::Normal(".uplink".as_ref()))
+        })
+    })
+}
+
 /// Writes `markdown` to `file`, relative to the checkout. A path under
 /// `.uplink/` is refused: state lives only on uplink/state.
 fn write_markdown_file(repo: &Path, file: &Path, markdown: &str) -> Result<(), Error> {
-    if !file.is_absolute() && file.starts_with(".uplink") {
+    if under_legacy_folder(repo, file) {
         return Err(Error::msg(format!(
             "{} is under .uplink/; git uplink keeps its state on {STATE_BRANCH} only. \
 Leave the option out to store it there.",
@@ -113,21 +141,6 @@ fn stage_markdown(state: &mut StateTree, path: &str, markdown: &str) {
     state.write(path, body);
 }
 
-/// Where files for the forge to read go (PR descriptions and comments, a
-/// commit message): `<git-common-dir>/uplink/out/<id>/`, outside the work
-/// tree and never on uplink/state.
-fn forge_out_dir(repo: &Path, id: &str) -> Result<PathBuf, Error> {
-    let common = PathBuf::from(git_ok(repo, &["rev-parse", "--git-common-dir"])?);
-    let common = if common.is_absolute() {
-        common
-    } else {
-        repo.join(common)
-    };
-    let id = report_paths(id)?.0;
-    let id = id.rsplit('/').next().unwrap_or_default();
-    Ok(common.join("uplink/out").join(id))
-}
-
 fn github_run_url() -> String {
     match (
         env::var("GITHUB_SERVER_URL"),
@@ -143,7 +156,7 @@ fn github_run_url() -> String {
 
 /// Commit the approval is recorded against: uplink/state, else `GITHUB_SHA`, else HEAD.
 fn state_sha(repo: &Path) -> String {
-    git_ok(repo, &["rev-parse", STATE_BRANCH]).unwrap_or_else(|_| {
+    git_ok(repo, &["rev-parse", STATE_REF]).unwrap_or_else(|_| {
         env::var("GITHUB_SHA")
             .unwrap_or_else(|_| git_ok(repo, &["rev-parse", "HEAD"]).unwrap_or_default())
     })
@@ -608,7 +621,7 @@ fn write_gated_pr_files(
     body: &str,
     comment: &str,
 ) -> Result<Option<(String, String)>, Error> {
-    let Ok(dir) = forge_out_dir(repo, id) else {
+    let Ok(dir) = git_uplink::forge_out_dir(repo, id) else {
         return Ok(None);
     };
     let dir = dir.display();
@@ -839,7 +852,7 @@ fn submit_artifact(
     let branch = exported.branch.as_str();
     let body = upstream_pr_body(patch);
     let (title, _) = public_subject_and_body(patch);
-    let Ok(report_dir) = forge_out_dir(repo, &patch.id) else {
+    let Ok(report_dir) = git_uplink::forge_out_dir(repo, &patch.id) else {
         return Ok(());
     };
     let report_dir = report_dir.display();
@@ -888,8 +901,12 @@ fn submit_artifact(
         "pushed": exported.pushed,
         "existingPr": existing,
     });
-    if !exported.pushed {
-        let message_file = format!("{report_dir}/commit-message.txt");
+    let message_file = format!("{report_dir}/commit-message.txt");
+    if exported.pushed {
+        // Not handed to the forge this time: an older one must not be
+        // recorded as this export.
+        let _ = fs::remove_file(&message_file);
+    } else {
         write_markdown_file(repo, Path::new(&message_file), &exported.message)?;
         value["contribCommit"] = serde_json::json!({
             "branch": branch,
@@ -1389,7 +1406,7 @@ fn record_maybe_push<T>(
     )?;
     eprint_main_push(main, &branch, &lease);
     let report = serde_json::json!({
-        "state": git_ok(repo, &["rev-parse", STATE_BRANCH])?,
+        "state": git_ok(repo, &["rev-parse", STATE_REF])?,
         "main": main,
     });
     Ok((value, Some(report)))
@@ -1512,7 +1529,7 @@ fn cmd_add(
             recorded.extra.insert(
                 "push".into(),
                 serde_json::json!({
-                    "state": git_ok(repo, &["rev-parse", STATE_BRANCH])?,
+                    "state": git_ok(repo, &["rev-parse", STATE_REF])?,
                     "main": main,
                 }),
             );
@@ -2031,18 +2048,18 @@ fn cmd_approve(
     if let Some(out) = &out {
         write_markdown_file(repo, out, &receipt.text)?;
     }
-    let patch = approve_patch_reviewed(
+    // Without --out the receipt is committed with the approval.
+    let in_state = out
+        .is_none()
+        .then_some((default_out.as_str(), receipt.text.as_str()));
+    let patch = approve_patch_with_receipt(
         repo,
         id,
         Some(&receipt.sha),
         Some(&receipt.run_url),
         Some(&token),
+        in_state,
     )?;
-    if out.is_none() {
-        let mut state = StateTree::head(repo)?;
-        stage_markdown(&mut state, &default_out, &receipt.text);
-        state.commit_to_branch(&format!("uplink: to-upstream approval receipt {id}"))?;
-    }
     let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
     println!("{}", receipt.text);
     eprintln!("{} approved", patch.id);

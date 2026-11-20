@@ -5,7 +5,10 @@ use crate::assess::{company_commit_message, export_commit_message};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{now_iso, patch_path};
-use crate::types::{ApplyOutcome, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH};
+use crate::types::{
+    ApplyOutcome, ORIGIN_STATE_REF, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
+    STATE_REF,
+};
 
 pub(crate) const UPSTREAM_REF: &str = "uplink/upstream";
 pub(crate) const COMPANY_REMOTE: &str = "origin";
@@ -416,20 +419,19 @@ pub fn try_replace_state_from_origin(repo: &Path) -> Result<()> {
 }
 
 pub fn state_exists(repo: &Path) -> Result<bool> {
-    Ok(has_ref(repo, STATE_BRANCH)? || has_ref(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?)
+    Ok(has_ref(repo, STATE_REF)? || has_ref(repo, ORIGIN_STATE_REF)?)
 }
 
 /// Creates local `uplink/state` from origin's when it is missing. Nothing
 /// happens when neither exists.
 pub fn ensure_state_branch(repo: &Path) -> Result<()> {
-    if has_ref(repo, STATE_BRANCH)? {
+    if has_ref(repo, STATE_REF)? {
         return Ok(());
     }
-    let origin = format!("{COMPANY_REMOTE}/{STATE_BRANCH}");
-    if has_ref(repo, &origin)? {
+    if has_ref(repo, ORIGIN_STATE_REF)? {
         git(
             repo,
-            &["branch", "-f", STATE_BRANCH, &origin],
+            &["branch", "-f", STATE_BRANCH, ORIGIN_STATE_REF],
             GitOpts::default(),
         )?;
     }
@@ -754,7 +756,7 @@ pub fn file_history(repo: &Path, git_ref: &str, path: &str) -> Result<Vec<FileRe
 }
 
 pub fn patch_state_commit(repo: &Path, id: &str) -> Result<String> {
-    let branch = STATE_BRANCH;
+    let branch = STATE_REF;
     let path = patch_path(id)?.to_string_lossy().into_owned();
     let result = git(
         repo,
@@ -812,6 +814,20 @@ pub fn stamp() -> String {
     now_iso()
 }
 
+/// Where files for the forge to read go (PR descriptions and comments, a
+/// commit message): `<git-common-dir>/uplink/out/<id>/`, outside the work
+/// tree.
+pub fn forge_out_dir(repo: &Path, id: &str) -> Result<PathBuf> {
+    let id = crate::queue::require_path_component(id)?;
+    let common = PathBuf::from(git_ok(repo, &["rev-parse", "--git-common-dir"])?);
+    let common = if common.is_absolute() {
+        common
+    } else {
+        repo.join(common)
+    };
+    Ok(common.join("uplink/out").join(id))
+}
+
 /// The `.uplink/` folder earlier binaries kept in the checkout. State now
 /// lives only in `uplink/state` objects.
 const LEGACY_DIR: &str = ".uplink";
@@ -819,7 +835,11 @@ const LEGACY_DIR: &str = ".uplink";
 /// Removes the `.uplink/` folder an earlier binary left in the checkout, and
 /// its line in `.git/info/exclude`, when everything in it is on
 /// `uplink/state`. Refuses when it holds anything else, so no edit is lost.
-/// Does nothing outside a checkout or without the folder.
+///
+/// Does nothing outside a checkout, without the folder, when the product
+/// tracks files under it, or when no earlier binary was here: neither the
+/// exclude line it wrote nor an `uplink/state` exists. Such a folder is not
+/// uplink's to remove.
 pub fn retire_legacy_folder(repo: &Path) -> Result<()> {
     let dir = repo.join(LEGACY_DIR);
     let Ok(meta) = fs::symlink_metadata(&dir) else {
@@ -832,6 +852,12 @@ pub fn retire_legacy_folder(repo: &Path) -> Result<()> {
     )?;
     if toplevel.code != 0 || fs::canonicalize(&toplevel.stdout).ok() != fs::canonicalize(repo).ok()
     {
+        return Ok(());
+    }
+    if !git_ok(repo, &["ls-files", "-z", "--", LEGACY_DIR])?.is_empty() {
+        return Ok(());
+    }
+    if !has_legacy_exclude(repo)? && !state_exists(repo)? {
         return Ok(());
     }
     if meta.file_type().is_symlink() || !meta.is_dir() {
@@ -858,11 +884,10 @@ To discard them: rm -rf {LEGACY_DIR}",
 /// Paths under `.uplink/` in the checkout that differ from `uplink/state`
 /// (local, else origin's), temporary files left out.
 fn legacy_uncommitted_paths(repo: &Path) -> Result<Vec<String>> {
-    let origin = format!("{COMPANY_REMOTE}/{STATE_BRANCH}");
-    let base = if has_ref(repo, STATE_BRANCH)? {
-        Some(STATE_BRANCH)
-    } else if has_ref(repo, &origin)? {
-        Some(origin.as_str())
+    let base = if has_ref(repo, STATE_REF)? {
+        Some(STATE_REF)
+    } else if has_ref(repo, ORIGIN_STATE_REF)? {
+        Some(ORIGIN_STATE_REF)
     } else {
         None
     };
@@ -908,15 +933,29 @@ fn legacy_uncommitted_paths(repo: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-fn drop_legacy_exclude(repo: &Path) -> Result<()> {
+fn legacy_exclude_path(repo: &Path) -> Result<PathBuf> {
     let common = git_ok(repo, &["rev-parse", "--git-common-dir"])?;
-    let path = repo.join(common).join("info/exclude");
+    Ok(repo.join(common).join("info/exclude"))
+}
+
+fn is_legacy_exclude_line(line: &str) -> bool {
+    matches!(line.trim(), ".uplink/" | ".uplink")
+}
+
+/// Whether `.git/info/exclude` has the line an earlier binary wrote.
+fn has_legacy_exclude(repo: &Path) -> Result<bool> {
+    Ok(fs::read_to_string(legacy_exclude_path(repo)?)
+        .is_ok_and(|current| current.lines().any(is_legacy_exclude_line)))
+}
+
+fn drop_legacy_exclude(repo: &Path) -> Result<()> {
+    let path = legacy_exclude_path(repo)?;
     let Ok(current) = fs::read_to_string(&path) else {
         return Ok(());
     };
     let kept: Vec<&str> = current
         .lines()
-        .filter(|line| !matches!(line.trim(), ".uplink/" | ".uplink"))
+        .filter(|line| !is_legacy_exclude_line(line))
         .collect();
     if kept.len() == current.lines().count() {
         return Ok(());

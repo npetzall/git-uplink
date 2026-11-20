@@ -6,6 +6,11 @@ use crate::settings::Settings;
 pub const QUEUE_PATH: &str = ".uplink/queue.json";
 pub const PATCH_DIR: &str = ".uplink/patches";
 pub const STATE_BRANCH: &str = "uplink/state";
+/// [`STATE_BRANCH`] as a full ref. Resolve it by this name: a tag named
+/// `uplink/state` would win over the branch for the short name.
+pub const STATE_REF: &str = "refs/heads/uplink/state";
+/// Origin's [`STATE_BRANCH`] as last fetched, as a full ref.
+pub const ORIGIN_STATE_REF: &str = "refs/remotes/origin/uplink/state";
 pub const PREVIOUS_MAIN_PATH: &str = ".uplink/previous-main.json";
 pub const DEFAULT_CUTOFF: &str = "----- Uplink: internal below this line -----";
 pub const TOOLING_PATCH_KIND: &str = "uplink-tooling";

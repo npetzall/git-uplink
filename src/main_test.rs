@@ -243,3 +243,22 @@ fn merged_via_is_parsed_by_clap() {
     assert_eq!(merged_via(&[]), Some(MergeVia::Manual));
     assert_eq!(merged_via(&["--via", "bogus"]), None);
 }
+
+#[test]
+fn paths_under_the_legacy_folder_are_found_however_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    for path in [
+        ".uplink/x.md",
+        "./.uplink/x.md",
+        "docs/../.uplink/x.md",
+        ".uplink",
+    ] {
+        assert!(under_legacy_folder(repo, Path::new(path)), "{path}");
+    }
+    assert!(under_legacy_folder(repo, &repo.join(".uplink/x.md")));
+    for path in ["out/x.md", ".uplinks/x.md", "docs/.uplink/x.md"] {
+        assert!(!under_legacy_folder(repo, Path::new(path)), "{path}");
+    }
+    assert!(!under_legacy_folder(repo, Path::new("/tmp/.uplink/x.md")));
+}

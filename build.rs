@@ -82,13 +82,26 @@ const EMBEDDED: &[(&str, &str)] = &[
 
 /// Writes `$OUT_DIR/embedded.rs`, the tables `src/embedded.rs` includes: one
 /// per `EMBEDDED` folder, every file in it (dotfiles too) as its `/`-separated
-/// relative path and its bytes, sorted by path.
+/// relative path and its bytes, sorted by path. Symlinks are skipped.
+///
+/// The packs are installed on the operator's `main`, so in a git work tree
+/// only their tracked files are embedded, never untracked or ignored junk.
+/// Without git or a work tree (a source tarball) every file is embedded.
+/// `web/dist` is generated and always walked.
 fn write_embedded(manifest: &Path) {
     let mut out = String::new();
     for (name, folder) in EMBEDDED {
         let root = manifest.join(folder);
-        let mut files = Vec::new();
-        walk(&root, &root, &mut files);
+        let mut files = if folder.starts_with("templates/") {
+            tracked(manifest, folder)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            let mut files = Vec::new();
+            walk(&root, &root, &mut files);
+            files
+        });
         files.sort();
         out.push_str(&format!("pub static {name}: &[(&str, &[u8])] = &[\n"));
         for (rel, path) in files {
@@ -100,10 +113,40 @@ fn write_embedded(manifest: &Path) {
     std::fs::write(dest, out).unwrap();
 }
 
+/// The files of `folder` git tracks, as `walk` lists them, or `None` when git
+/// or the work tree is unavailable, or the work tree does not track `folder`
+/// (a tarball unpacked inside another repository). A tracked file that is
+/// missing or not a regular file in the work tree is left out.
+fn tracked(manifest: &Path, folder: &str) -> Option<Vec<(String, String)>> {
+    let output = Command::new("git")
+        .args(["ls-files", "-z", "--", folder])
+        .current_dir(manifest)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let listing = String::from_utf8(output.stdout).ok()?;
+    let prefix = format!("{folder}/");
+    let mut files = Vec::new();
+    for name in listing.split('\0').filter(|name| !name.is_empty()) {
+        let rel = name.strip_prefix(&prefix)?;
+        let path = manifest.join(name);
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+            files.push((rel.to_string(), path.to_str().unwrap().to_string()));
+        }
+    }
+    (!files.is_empty()).then_some(files)
+}
+
 fn walk(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) {
     for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
+        let entry = entry.unwrap();
+        let file_type = entry.file_type().unwrap();
+        let path = entry.path();
+        if file_type.is_symlink() {
+            continue;
+        } else if file_type.is_dir() {
             walk(root, &path, files);
         } else {
             let rel = path.strip_prefix(root).unwrap();

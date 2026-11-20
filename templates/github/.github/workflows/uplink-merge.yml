@@ -144,7 +144,7 @@ jobs:
             exit 1
           fi
           git uplink init
-          queue=$(git show uplink/state:.uplink/queue.json)
+          queue=$(git show refs/heads/uplink/state:.uplink/queue.json)
           closed=()
           for id in "${ids[@]}"; do
             if [[ ! "$id" =~ ^[A-Za-z0-9_-]+$ ]]; then

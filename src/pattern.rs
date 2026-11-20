@@ -146,28 +146,30 @@ pub fn is_patch_id(token: &str) -> bool {
 /// `Name <address>`, untrimmed.
 pub fn split_person(value: &str) -> Option<(&str, &str)> {
     let inner = value.strip_suffix('>')?;
-    // `(.*)` is greedy, so the latest split that works wins.
-    let mut splits: Vec<usize> = value.char_indices().map(|(i, _)| i).collect();
-    splits.reverse();
-    for name_end in splits {
-        let name = &value[..name_end];
-        if name.contains('\n') {
-            continue;
-        }
-        let rest = &value[name_end..];
-        if !rest.starts_with(char::is_whitespace) {
-            continue;
-        }
-        let Some(open) = rest.find(|c: char| !c.is_whitespace()) else {
-            continue;
-        };
-        let open = name_end + open;
-        if !value[open..].starts_with('<') || open + 1 > inner.len() {
-            continue;
-        }
+    // `[^>]+` keeps the `<` after the last `>` of `inner`.
+    let floor = inner.rfind('>').map_or(0, |i| i + 1);
+    // `.` stops at a line break, so the name ends at the first one at the latest.
+    let newline = value.find('\n').unwrap_or(value.len());
+    // `(.*)` is greedy, so the latest `<` with a split that works wins. Each
+    // `<` looks back only over its own run of whitespace, which keeps this
+    // linear.
+    let mut end = inner.len();
+    while let Some(offset) = inner[floor..end].rfind('<') {
+        let open = floor + offset;
+        end = open;
         let address = &inner[open + 1..];
-        if !address.is_empty() && !address.contains('>') {
-            return Some((name, address));
+        let gap_start = inner[..open].trim_end_matches(char::is_whitespace).len();
+        if address.is_empty() || gap_start == open {
+            continue;
+        }
+        // `\s+` keeps at least the last whitespace character.
+        let last_space = inner[..open]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(i, _)| i);
+        let name_end = last_space.min(newline);
+        if name_end >= gap_start {
+            return Some((&value[..name_end], address));
         }
     }
     None
@@ -220,7 +222,9 @@ fn ticket_end(text: &str, start: usize) -> Option<usize> {
 /// The two groups of `github\.com[:/](.+?)/(.+?)(?:\.git)?/?$`: owner and
 /// repository name.
 pub fn github_owner_repo(url: &str) -> Option<(&str, &str)> {
-    let mut from = 0;
+    // `.` stops at a line break and `$` is the end of the text, so a match
+    // starts after the last line break.
+    let mut from = url.rfind('\n').map_or(0, |i| i + 1);
     while let Some(offset) = url[from..].find("github.com") {
         let host = from + offset;
         from = host + 1;
@@ -229,21 +233,18 @@ pub fn github_owner_repo(url: &str) -> Option<(&str, &str)> {
             continue;
         }
         let tail = &url[sep + 1..];
-        if tail.contains('\n') {
-            continue;
-        }
-        for (slash, _) in tail.match_indices('/').filter(|(i, _)| *i > 0) {
-            let rest = &tail[slash + 1..];
-            if rest.is_empty() {
-                continue;
-            }
-            // `(.+?)` is lazy, so the name drops the longest optional suffix.
-            let name = [".git/", ".git", "/"]
-                .iter()
-                .find_map(|suffix| rest.strip_suffix(suffix).filter(|name| !name.is_empty()))
-                .unwrap_or(rest);
-            return Some((&tail[..slash], name));
-        }
+        // A later `github.com` offers only a suffix of this tail, which has
+        // no owner and name split that this one lacks, so the first decides.
+        let (slash, _) = tail
+            .match_indices('/')
+            .find(|&(i, _)| i > 0 && i + 1 < tail.len())?;
+        let rest = &tail[slash + 1..];
+        // `(.+?)` is lazy, so the name drops the longest optional suffix.
+        let name = [".git/", ".git", "/"]
+            .iter()
+            .find_map(|suffix| rest.strip_suffix(suffix).filter(|name| !name.is_empty()))
+            .unwrap_or(rest);
+        return Some((&tail[..slash], name));
     }
     None
 }

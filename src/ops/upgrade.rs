@@ -198,7 +198,7 @@ pub(super) fn publish(
         return Ok(Published::Done(Box::new(kept)));
     }
     let origin_state = fetch_state_tracking(repo, remote, STATE_BRANCH)?;
-    let local_state = rev_parse(repo, STATE_BRANCH)?;
+    let local_state = rev_parse(repo, STATE_REF)?;
     if let Some(origin) = &origin_state
         && !is_ancestor(repo, origin, &local_state)?
     {
@@ -440,7 +440,7 @@ nothing was pushed. Run git uplink init --upgrade again."
             }
         }
         // What uplink/state holds when main is pushed: state goes first.
-        let recorded_on = rev_parse(repo, STATE_BRANCH)?;
+        let recorded_on = rev_parse(repo, STATE_REF)?;
         match push_branch_leased(repo, remote, STATE_BRANCH, origin_state) {
             Ok(()) => {}
             Err(err) if is_push_lease_rejected(&err) => {

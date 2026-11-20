@@ -113,8 +113,23 @@ pub fn approve_patch_reviewed(
     run_url: Option<&str>,
     reviewed: Option<&str>,
 ) -> Result<Patch> {
+    approve_patch_with_receipt(repo, id, sha, run_url, reviewed, None)
+}
+
+/// [`approve_patch_reviewed`], committing `receipt` (path, text) with the
+/// approval: the approval and its receipt are never apart. Nothing is
+/// written when an approval already covers the patch.
+pub fn approve_patch_with_receipt(
+    repo: &Path,
+    id: &str,
+    sha: Option<&str>,
+    run_url: Option<&str>,
+    reviewed: Option<&str>,
+    receipt: Option<(&str, &str)>,
+) -> Result<Patch> {
     with_queue_lock(repo, || {
-        let mut queue = read_queue_file(repo)?;
+        let mut state = StateTree::head(repo)?;
+        let mut queue = state.queue()?;
         check_approvable(&queue, id)?;
         let token = review_token(repo, get_patch(&queue, id)?)?;
         if reviewed.is_some_and(|reviewed| reviewed != token) {
@@ -122,10 +137,18 @@ pub fn approve_patch_reviewed(
         }
         let sha = match sha {
             Some(value) if !value.is_empty() => value.to_string(),
-            _ => rev_parse(repo, STATE_BRANCH)?,
+            _ => rev_parse(repo, STATE_REF)?,
         };
         if record_approval(repo, &mut queue, id, sha, run_url, token)? {
-            commit_queue(repo, &queue, &format!("uplink: approve {id}"))?;
+            if let Some((path, text)) = receipt {
+                let mut body = text.to_string();
+                if !body.ends_with('\n') {
+                    body.push('\n');
+                }
+                state.write(path, body);
+            }
+            state.write_queue(&queue)?;
+            state.commit_to_branch(&format!("uplink: approve {id}"))?;
         }
         Ok(get_patch(&queue, id)?.clone())
     })
@@ -259,8 +282,7 @@ pub fn approve_on_remote(
                     "Could not fetch {STATE_BRANCH} from {remote}."
                 )));
             };
-            if has_ref(repo, STATE_BRANCH)?
-                && !is_ancestor(repo, &rev_parse(repo, STATE_BRANCH)?, &base)?
+            if has_ref(repo, STATE_REF)? && !is_ancestor(repo, &rev_parse(repo, STATE_REF)?, &base)?
             {
                 return Err(Error::msg(format!(
                     "{STATE_BRANCH} has commits {remote} lacks; run `git uplink push`, then run this again"
@@ -652,15 +674,44 @@ pub(super) fn push_recorded_patch(
 }
 
 /// Stages what `submit` exported for `patch`: the public PR description and
-/// the contrib commit message, so `uplink/state` shows what left.
+/// the contrib commit message, so `uplink/state` shows what left. The files
+/// `submit` handed the forge are kept as they are; without them (an operator
+/// recording a PR by hand) they are made again. Refused when they are not
+/// what the patch exports now.
 fn stage_export(state: &mut StateTree, patch: &Patch) -> Result<()> {
     let (pr, message) = crate::assess::export_paths(&patch.id)?;
-    let mut body = crate::assess::upstream_pr_body(patch);
-    if !body.ends_with('\n') {
-        body.push('\n');
+    let out = crate::repo::forge_out_dir(state.repo(), &patch.id)?;
+    let made = [
+        (
+            pr,
+            out.join("pr.md"),
+            crate::assess::upstream_pr_body(patch),
+        ),
+        (
+            message,
+            out.join("commit-message.txt"),
+            crate::assess::export_commit_message(patch),
+        ),
+    ];
+    for (path, handed, expected) in made {
+        let text = match fs::read_to_string(&handed) {
+            Ok(text) if text.trim_end() == expected.trim_end() => text,
+            Ok(_) => {
+                return Err(Error::msg(format!(
+                    "{} is not what {} exports now; run git uplink submit {} again",
+                    handed.display(),
+                    patch.id,
+                    patch.id
+                )));
+            }
+            Err(_) => expected,
+        };
+        let mut body = text;
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        state.write(&path, body);
     }
-    state.write(&pr, body);
-    state.write(&message, crate::assess::export_commit_message(patch));
     Ok(())
 }
 

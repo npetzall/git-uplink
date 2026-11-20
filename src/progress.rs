@@ -171,14 +171,15 @@ impl StepProgress {
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// A spinner and `label` redrawn on one stderr line until
-/// [`Self::finish_and_clear`] stops it and blanks the line.
+/// [`Self::finish_and_clear`] or a drop stops it and blanks the line.
 struct Spinner {
     stop: Arc<AtomicBool>,
-    handle: JoinHandle<()>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl Spinner {
     fn start(label: String) -> Self {
+        let label = printable(&label);
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let handle = std::thread::spawn(move || {
@@ -193,20 +194,42 @@ impl Spinner {
                 std::thread::park_timeout(Duration::from_millis(80));
             }
         });
-        Self { stop, handle }
+        Self {
+            stop,
+            handle: Some(handle),
+        }
     }
 
     fn finish_and_clear(self) {
+        drop(self);
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
         self.stop.store(true, Ordering::Relaxed);
-        self.handle.thread().unpark();
-        let _ = self.handle.join();
+        handle.thread().unpark();
+        let _ = handle.join();
         let mut err = std::io::stderr().lock();
         let _ = write!(err, "\r\x1b[2K");
         let _ = err.flush();
     }
 }
 
+/// `text` with every control character but `\t` replaced by `?`, so a label
+/// or detail cannot carry escape sequences to the terminal.
+pub fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() && c != '\t' { '?' } else { c })
+        .collect()
+}
+
 pub fn format_step_line(tty: bool, label: &str, outcome: &StepOutcome) -> String {
+    let label = printable(label);
+    let detail = printable(&outcome.detail);
     if tty {
         let (icon, color) = match outcome.status {
             CheckStatus::Pass => ("✓", GREEN),
@@ -214,10 +237,10 @@ pub fn format_step_line(tty: bool, label: &str, outcome: &StepOutcome) -> String
             CheckStatus::Warn => ("!", YELLOW),
             CheckStatus::Skip => ("−", DIM),
         };
-        let detail = if outcome.detail.is_empty() {
+        let detail = if detail.is_empty() {
             String::new()
         } else {
-            format!("  {}{}", DIM, outcome.detail)
+            format!("  {DIM}{detail}")
         };
         format!("{color}{icon}{RESET} {label}{detail}{RESET}")
     } else {
@@ -227,10 +250,10 @@ pub fn format_step_line(tty: bool, label: &str, outcome: &StepOutcome) -> String
             CheckStatus::Warn => "warn",
             CheckStatus::Skip => "skip",
         };
-        if outcome.detail.is_empty() {
+        if detail.is_empty() {
             format!("[{tag}] {label}")
         } else {
-            format!("[{tag}] {label} — {detail}", detail = outcome.detail)
+            format!("[{tag}] {label} — {detail}")
         }
     }
 }

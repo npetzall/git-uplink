@@ -16,7 +16,7 @@ use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
 use crate::state::StateTree;
 use crate::types::{
     AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, MergeVia, PATCH_DIR, Patch,
-    PatchApproval, PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
+    PatchApproval, PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_REF,
 };
 
 /// Message headers, matched without regard to case at the start of a line.
@@ -714,11 +714,8 @@ fn patch_link_with(
         return plain;
     };
     let path = format!("{PATCH_DIR}/{id}.patch");
-    let sha = git_ok(
-        repo,
-        &["log", "-1", "--format=%H", STATE_BRANCH, "--", &path],
-    )
-    .unwrap_or_default();
+    let sha =
+        git_ok(repo, &["log", "-1", "--format=%H", STATE_REF, "--", &path]).unwrap_or_default();
     if sha.is_empty() {
         return plain;
     }
@@ -1305,7 +1302,7 @@ fn format_delta_since(repo: &Path, patch: &Patch, sha: &str) -> Result<String> {
             ));
         }
     };
-    let new_patch = show_at(repo, STATE_BRANCH, &new_path).unwrap_or_default();
+    let new_patch = show_at(repo, STATE_REF, &new_path).unwrap_or_default();
     let added = delta_added_section(repo, &old_patch, &new_patch);
     if let Some(tree) = tree_diff_patches(repo, &old_patch, &new_patch) {
         return Ok(format!("{added}\n{}", delta_tree_section(&tree)));
@@ -2052,7 +2049,7 @@ impl AssessPackage {
         patch: Option<&Patch>,
     ) -> Result<Self> {
         let state = match patch {
-            Some(_) => git_ok(repo, &["rev-parse", "--verify", "--quiet", STATE_BRANCH]).ok(),
+            Some(_) => git_ok(repo, &["rev-parse", "--verify", "--quiet", STATE_REF]).ok(),
             None => None,
         };
         Ok(Self {

@@ -35,8 +35,8 @@ pub struct Rescued {
 /// branch: never to `uplink/state`, and never forced.
 pub fn rescue_import(repo: &Path, opts: &RescueOpts) -> Result<Rescued> {
     let name = rescue_name(opts.pr);
-    let base = if has_ref(repo, STATE_BRANCH)? {
-        Some(rev_parse(repo, STATE_BRANCH)?)
+    let base = if has_ref(repo, STATE_REF)? {
+        Some(rev_parse(repo, STATE_REF)?)
     } else {
         fetch_state_tracking(repo, &opts.remote, STATE_BRANCH)?
     };

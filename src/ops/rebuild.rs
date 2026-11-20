@@ -70,7 +70,7 @@ pub fn rebuild_with(repo: &Path, opts: RebuildOpts) -> Result<RebuildResult> {
             None
         };
         // What uplink/state covered before this rebuild, for the push.
-        let recorded_on = rev_parse(repo, STATE_BRANCH)?;
+        let recorded_on = rev_parse(repo, STATE_REF)?;
         let upstream_start = rev_parse(repo, UPSTREAM_REF).ok();
         let queue = if preview {
             rebuild_preview(repo, &target)?

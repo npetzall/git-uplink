@@ -40,7 +40,7 @@ use crate::repo::{
     stable_patch_id_from_contents,
 };
 use crate::state::StateTree;
-use crate::types::{ApplyOutcome, Patch, PatchIntent, QueueState, STATE_BRANCH};
+use crate::types::{ApplyOutcome, Patch, PatchIntent, QueueState, STATE_BRANCH, STATE_REF};
 
 pub use pause::AdoptResume;
 use pause::{PauseAt, Paused};
@@ -340,7 +340,7 @@ impl BranchRun {
             preflight: true,
             stack: None,
             keep_stack: false,
-            start_state: rev_parse(repo, STATE_BRANCH)?,
+            start_state: rev_parse(repo, STATE_REF)?,
             next: 0,
             adopted: Vec::new(),
             already_queued: Vec::new(),

@@ -54,10 +54,10 @@ use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings, c
 use crate::state::{StateTree, commit_queue};
 use crate::types::{
     ApplyOutcome, AssessReport, ConflictCause, Forge, GateKind, LastSync, MergeVia,
-    PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchEvent, PatchIntent, PatchLayer,
-    PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingMerge, PendingUpstream,
-    PreviousMain, QueueConfig, QueueState, STATE_BRANCH, TransferDirection, VerifiedUpstream,
-    first_line,
+    ORIGIN_STATE_REF, PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchEvent,
+    PatchIntent, PatchLayer, PatchMerged, PatchSource, PatchStatus, PatchUpstream, PendingMerge,
+    PendingUpstream, PreviousMain, QueueConfig, QueueState, STATE_BRANCH, STATE_REF,
+    TransferDirection, VerifiedUpstream, first_line,
 };
 
 mod add;

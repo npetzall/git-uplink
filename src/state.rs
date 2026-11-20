@@ -10,7 +10,9 @@ use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_bytes, git_ok};
 use crate::queue::{parse_queue, patch_path};
 use crate::repo::{has_ref, random_hex, rev_parse};
-use crate::types::{PREVIOUS_MAIN_PATH, PreviousMain, QUEUE_PATH, QueueState, STATE_BRANCH};
+use crate::types::{
+    PREVIOUS_MAIN_PATH, PreviousMain, QUEUE_PATH, QueueState, STATE_BRANCH, STATE_REF,
+};
 
 /// A commit of `uplink/state` (or none yet) with changes staged on top.
 #[derive(Debug, Clone)]
@@ -39,8 +41,8 @@ impl StateTree {
     /// when neither exists.
     pub fn head(repo: &Path) -> Result<Self> {
         crate::repo::ensure_state_branch(repo)?;
-        if has_ref(repo, STATE_BRANCH)? {
-            Self::at(repo, Some(STATE_BRANCH))
+        if has_ref(repo, STATE_REF)? {
+            Self::at(repo, Some(STATE_REF))
         } else {
             Self::at(repo, None)
         }
@@ -291,12 +293,7 @@ Run `git uplink init --upstream <url> --contrib <url>` to create a queue."
         let old = self.base.clone().unwrap_or_default();
         git(
             &self.repo,
-            &[
-                "update-ref",
-                &format!("refs/heads/{STATE_BRANCH}"),
-                &commit,
-                &old,
-            ],
+            &["update-ref", STATE_REF, &commit, &old],
             GitOpts::default(),
         )?;
         self.base = Some(commit);

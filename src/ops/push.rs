@@ -19,7 +19,7 @@ pub type RefreshResult = ResetResult;
 pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
     let state_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
     let upstream_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, UPSTREAM_REF)?;
-    let queue = queue_at(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?;
+    let queue = queue_at(repo, ORIGIN_STATE_REF)?;
     let internal_branch = queue.config.internal_branch.clone();
     let internal_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, &internal_branch)?;
     let hooks_sha = fetch_state_tracking(repo, COMPANY_REMOTE, HOOKS_BRANCH)?;
@@ -116,7 +116,7 @@ pub fn record_on_remote_if<T>(
                     "Could not fetch {STATE_BRANCH} from {remote}."
                 )));
             };
-            let local = rev_parse(repo, STATE_BRANCH)?;
+            let local = rev_parse(repo, STATE_REF)?;
             if attempt == 0 && !is_ancestor(repo, &local, &base)? {
                 return Err(Error::msg(format!(
                     "{STATE_BRANCH} has commits {remote} lacks; run `git uplink push`, then run this again"
@@ -140,7 +140,7 @@ pub fn record_on_remote_if<T>(
                 point_branch_at(repo, UPSTREAM_REF, start)?;
             }
             let value = record()?;
-            if rev_parse(repo, STATE_BRANCH)? == base {
+            if rev_parse(repo, STATE_REF)? == base {
                 return Ok((value, base));
             }
             if !keep(&value) {
@@ -443,7 +443,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
             action: "pushed".into(),
             remote: remote.into(),
             branch,
-            sha: rev_parse(repo, STATE_BRANCH)?,
+            sha: rev_parse(repo, STATE_REF)?,
             hooks: HooksPushAction::Absent,
         });
     };
@@ -492,7 +492,7 @@ pub(super) fn push_queue_once(repo: &Path, remote: &str) -> Result<PushResult> {
         action,
         remote: remote.into(),
         branch,
-        sha: rev_parse(repo, STATE_BRANCH)?,
+        sha: rev_parse(repo, STATE_REF)?,
         hooks: HooksPushAction::Absent,
     })
 }

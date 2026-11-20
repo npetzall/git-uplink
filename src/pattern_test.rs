@@ -171,3 +171,149 @@ fn number_after_needs_digits_ended_by_slash_query_or_end() {
     }
     assert_eq!(number_after("/a/issues/3/", &["/issues/"]), Some("3"));
 }
+
+/// The `split_person` that this file replaced: quadratic, kept to check that
+/// the linear one returns the same results.
+fn quadratic_split_person(value: &str) -> Option<(&str, &str)> {
+    let inner = value.strip_suffix('>')?;
+    let mut splits: Vec<usize> = value.char_indices().map(|(i, _)| i).collect();
+    splits.reverse();
+    for name_end in splits {
+        let name = &value[..name_end];
+        if name.contains('\n') {
+            continue;
+        }
+        let rest = &value[name_end..];
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let Some(open) = rest.find(|c: char| !c.is_whitespace()) else {
+            continue;
+        };
+        let open = name_end + open;
+        if !value[open..].starts_with('<') || open + 1 > inner.len() {
+            continue;
+        }
+        let address = &inner[open + 1..];
+        if !address.is_empty() && !address.contains('>') {
+            return Some((name, address));
+        }
+    }
+    None
+}
+
+/// The `github_owner_repo` that this file replaced, kept for the same reason.
+fn quadratic_github_owner_repo(url: &str) -> Option<(&str, &str)> {
+    let mut from = 0;
+    while let Some(offset) = url[from..].find("github.com") {
+        let host = from + offset;
+        from = host + 1;
+        let sep = host + "github.com".len();
+        if !(url[sep..].starts_with(':') || url[sep..].starts_with('/')) {
+            continue;
+        }
+        let tail = &url[sep + 1..];
+        if tail.contains('\n') {
+            continue;
+        }
+        for (slash, _) in tail.match_indices('/').filter(|(i, _)| *i > 0) {
+            let rest = &tail[slash + 1..];
+            if rest.is_empty() {
+                continue;
+            }
+            let name = [".git/", ".git", "/"]
+                .iter()
+                .find_map(|suffix| rest.strip_suffix(suffix).filter(|name| !name.is_empty()))
+                .unwrap_or(rest);
+            return Some((&tail[..slash], name));
+        }
+    }
+    None
+}
+
+/// Strings of up to `max_len` pieces drawn from `pieces` by a fixed-seed
+/// xorshift, so a failure reproduces.
+fn generated(pieces: &[&str], max_len: u64, count: usize) -> Vec<String> {
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    (0..count)
+        .map(|_| {
+            let len = next() % (max_len + 1);
+            (0..len)
+                .map(|_| pieces[(next() % pieces.len() as u64) as usize])
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn split_person_matches_the_quadratic_version() {
+    let pieces = [" ", " ", "\t", "\n", "\u{a0}", "<", "<", ">", "a", "é"];
+    for mut value in generated(&pieces, 14, 200_000) {
+        if !value.ends_with('>') && value.len() % 3 != 0 {
+            value.push('>');
+        }
+        assert_eq!(
+            split_person(&value),
+            quadratic_split_person(&value),
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
+fn github_owner_repo_matches_the_quadratic_version() {
+    let pieces = ["github.com", ":", "/", "/", "\n", "a", ".git", "x"];
+    for url in generated(&pieces, 10, 200_000) {
+        assert_eq!(
+            github_owner_repo(&url),
+            quadratic_github_owner_repo(&url),
+            "{url:?}"
+        );
+    }
+}
+
+/// Runs `check` on a 1 MB input and fails if it takes long enough to suggest
+/// quadratic time, which would take minutes on this size.
+fn assert_fast(check: impl FnOnce()) {
+    let started = std::time::Instant::now();
+    check();
+    let took = started.elapsed();
+    assert!(took.as_secs() < 2, "took {took:?}");
+}
+
+#[test]
+fn split_person_is_linear_on_long_lines() {
+    let pairs = "a ".repeat(500_000);
+    let brackets = " <".repeat(500_000);
+    let angles = "<".repeat(1_000_000);
+    assert_fast(|| assert_eq!(split_person(&format!("{pairs}>")), None));
+    assert_fast(|| assert_eq!(split_person(&format!("{pairs}\n <>")), None));
+    assert_fast(|| assert_eq!(split_person(&format!("\nx{angles}a>")), None));
+    assert_fast(|| {
+        let value = format!("{brackets}>");
+        let want = Some((&brackets[..brackets.len() - 4], " <"));
+        assert_eq!(split_person(&value), want);
+    });
+    assert_fast(|| {
+        let value = format!("{pairs}<a>");
+        assert_eq!(split_person(&value), Some((&pairs[..pairs.len() - 1], "a")));
+    });
+}
+
+#[test]
+fn github_owner_repo_is_linear_on_long_lines() {
+    let hosts = "github.com:".repeat(100_000);
+    assert_fast(|| assert_eq!(github_owner_repo(&hosts), None));
+    assert_fast(|| assert_eq!(github_owner_repo(&format!("{hosts}\n")), None));
+    assert_fast(|| assert_eq!(github_owner_repo(&format!("{hosts}\nx")), None));
+    assert_fast(|| {
+        let url = format!("{}github.com/acme/tool", "github.comx".repeat(100_000));
+        assert_eq!(github_owner_repo(&url), Some(("acme", "tool")));
+    });
+}
