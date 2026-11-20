@@ -102,7 +102,8 @@ pub struct MessageResult {
 
 /// What `--complete` of the gated PR for `id` would store as the message:
 /// `change` (the PR title and body) for every kind but a split, and for a
-/// split the message of each commit of `from..head`. Changes nothing.
+/// split the message of each commit of `from..head`, which must be a range
+/// `--complete` takes: no merge commit, at least two. Changes nothing.
 pub fn preview_message(
     repo: &Path,
     id: &str,
@@ -118,17 +119,11 @@ pub fn preview_message(
             let Some((from, head)) = split else {
                 return Err(Error::msg("A split needs --from and --head"));
             };
-            let listed = git_ok(
-                repo,
-                &[
-                    "rev-list",
-                    "--reverse",
-                    "--no-merges",
-                    &format!("{from}..{head}"),
-                ],
-            )?;
+            // The commits `--complete` turns into parts, refused as it
+            // refuses them.
+            let commits = super::split::split_commits(repo, id, from, head)?;
             let mut results = Vec::new();
-            for (index, sha) in listed.lines().filter(|l| !l.is_empty()).enumerate() {
+            for (index, sha) in commits.iter().enumerate() {
                 let raw = super::split::part_message(repo, sha)?;
                 results.push(MessageResult {
                     id: (index == 0).then(|| id.to_string()),
