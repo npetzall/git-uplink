@@ -19200,3 +19200,63 @@ fn message_preview_of_a_split_has_one_message_per_commit() {
         ]
     );
 }
+
+#[test]
+fn message_preview_of_a_split_refuses_what_complete_refuses() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_files(
+        company,
+        "feat/two",
+        "Two notes",
+        &[("A.md", "a\n"), ("B.md", "b\n")],
+    );
+    let started = split_patch_with(company, &patch.id, None, &[], &ScriptVerdict::Run).unwrap();
+    let base = started.base_branch.unwrap();
+    let from = rev_of(company, &base);
+    let preview = |head: &str| {
+        git_uplink::preview_message(
+            company,
+            &patch.id,
+            GateKind::Split,
+            None,
+            &[],
+            Some((&from, head)),
+        )
+    };
+
+    let one = split_on_work_and_squash(company, &patch.id, &[("Both", "A.md", "a\n")]);
+    let err = preview(&one).unwrap_err();
+    assert!(err.to_string().contains("at least two commits"), "{err}");
+
+    // Two parts with a merge commit between them, on the base the PR
+    // opened with: the preview used to skip the merge and show two parts
+    // that --complete refuses.
+    let work = format!("{base}-work");
+    git(
+        company,
+        &["checkout", "--quiet", "-B", &work, &from],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "A.md", "a\n");
+    commit_all(company, "Note A");
+    git(
+        company,
+        &["checkout", "--quiet", "-b", "side", &from],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "B.md", "b\n");
+    commit_all(company, "Note B");
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["merge", "--quiet", "--no-ff", "-m", "Merge side", "side"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let merged = rev_of(company, "HEAD");
+    let err = preview(&merged).unwrap_err();
+    assert!(err.to_string().contains("merge commit"), "{err}");
+}

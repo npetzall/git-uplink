@@ -117,7 +117,7 @@ fn start_split(repo: &Path, id: &str) -> Result<SplitResult> {
 
 /// The commits of `onto..head`, oldest first. Refuses a merge commit and a
 /// range of fewer than two: one commit is an amend.
-fn split_commits(repo: &Path, id: &str, onto: &str, head: &str) -> Result<Vec<String>> {
+pub(super) fn split_commits(repo: &Path, id: &str, onto: &str, head: &str) -> Result<Vec<String>> {
     if !is_ancestor(repo, onto, head)? {
         return Err(Error::msg(format!(
             "{head} does not build on the split base of {id}; was the work branch cut by git uplink split?"
