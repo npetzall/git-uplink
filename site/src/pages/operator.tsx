@@ -37,16 +37,17 @@ export function OperatorPage() {
           <li>
             <strong>The forge&apos;s:</strong> importing merged pull requests,
             syncing upstream, submitting, rebasing pull requests, and finishing
-            conflicts, amends and transfers. Do not run those commands to speed
-            things up; dispatch the workflow instead, so every change goes
-            through its gate.
+            conflicts, amends, splits, merges and transfers. Do not run those
+            commands to speed things up; dispatch the workflow instead, so every
+            change goes through its gate.
           </li>
           <li>
             <strong>The developer&apos;s:</strong> the change itself. A
-            developer who wants a patch amended or moved dispatches{" "}
-            <strong>Uplink amend</strong> or <strong>Uplink transfer</strong>{" "}
-            and works in the pull request the forge opens. Don&apos;t rewrite a
-            patch for them.
+            developer who wants a patch amended, split, merged with others or
+            moved dispatches <strong>Uplink amend</strong>,{" "}
+            <strong>Uplink split</strong>, <strong>Uplink merge</strong> or{" "}
+            <strong>Uplink transfer</strong> and works in the pull request the
+            forge opens. Don&apos;t rewrite a patch for them.
           </li>
           <li id="forge-failed" className="scroll-mt-20">
             <strong>When a forge workflow fails,</strong> developers come to you
@@ -213,9 +214,9 @@ git uplink web-ui`}</Code>
           </li>
         </ul>
         <p>
-          Amend, transfer and submit for a developer&apos;s own change are the
-          developer&apos;s to dispatch. Each workflow is described on the{" "}
-          <Link to="/forge">Forge</Link> page.
+          Amend, split, merge, transfer and submit for a developer&apos;s own
+          change are the developer&apos;s to dispatch. Each workflow is
+          described on the <Link to="/forge">Forge</Link> page.
         </p>
       </Section>
 

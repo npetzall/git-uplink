@@ -10765,11 +10765,52 @@ fn accept_upstream_push_records_again_on_a_moved_state() {
         "the accepted upstream is recorded on origin"
     );
     assert!(queue.pending_upstream.is_none());
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", "refs/heads/uplink/upstream"]).unwrap(),
+        upstream_sha,
+        "the promoted uplink/upstream is pushed with the state"
+    );
     let main = race.origin_main();
     assert!(git_succeeds_in(
         &race.origin,
         &["merge-base", "--is-ancestor", &upstream_sha, &main]
     ));
+}
+
+#[test]
+fn accept_upstream_push_pushes_nothing_when_upstream_moved_on_origin() {
+    let race = rebuild_race(false);
+    write(&race.upstream, "UPSTREAM.md", "from upstream\n");
+    commit_all(&race.upstream, "upstream change");
+    let upstream_sha = rev_of(&race.upstream, "HEAD");
+    let synced = race.cli_json(&["sync", "--push"]);
+    assert_eq!(synced["needsApproval"], true, "{synced}");
+    let state_before = origin_state(&race.origin);
+    let main_before = race.origin_main();
+    let moved = main_before.clone();
+    let marker = move_ref_on_first_push(&race.origin, "refs/heads/uplink/upstream", &moved);
+
+    let out = uplink_cli(
+        &race.runner,
+        &["accept-upstream", "--sha", &upstream_sha, "--push"],
+    );
+
+    assert!(!out.status.success(), "{out:?}");
+    assert!(marker.exists(), "the push reached origin");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("moved while this ran"),
+        "{out:?}"
+    );
+    assert_eq!(
+        origin_state(&race.origin),
+        state_before,
+        "the state is not pushed without its upstream"
+    );
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", "refs/heads/uplink/upstream"]).unwrap(),
+        moved
+    );
+    assert_eq!(race.origin_main(), main_before, "main is not pushed");
 }
 
 #[test]
@@ -19158,4 +19199,64 @@ fn message_preview_of_a_split_has_one_message_per_commit() {
             (None, "Note B\n\nThe second part."),
         ]
     );
+}
+
+#[test]
+fn message_preview_of_a_split_refuses_what_complete_refuses() {
+    let world = setup_world();
+    let company = &world.company;
+    let patch = add_internal_files(
+        company,
+        "feat/two",
+        "Two notes",
+        &[("A.md", "a\n"), ("B.md", "b\n")],
+    );
+    let started = split_patch_with(company, &patch.id, None, &[], &ScriptVerdict::Run).unwrap();
+    let base = started.base_branch.unwrap();
+    let from = rev_of(company, &base);
+    let preview = |head: &str| {
+        git_uplink::preview_message(
+            company,
+            &patch.id,
+            GateKind::Split,
+            None,
+            &[],
+            Some((&from, head)),
+        )
+    };
+
+    let one = split_on_work_and_squash(company, &patch.id, &[("Both", "A.md", "a\n")]);
+    let err = preview(&one).unwrap_err();
+    assert!(err.to_string().contains("at least two commits"), "{err}");
+
+    // Two parts with a merge commit between them, on the base the PR
+    // opened with: the preview used to skip the merge and show two parts
+    // that --complete refuses.
+    let work = format!("{base}-work");
+    git(
+        company,
+        &["checkout", "--quiet", "-B", &work, &from],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "A.md", "a\n");
+    commit_all(company, "Note A");
+    git(
+        company,
+        &["checkout", "--quiet", "-b", "side", &from],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, "B.md", "b\n");
+    commit_all(company, "Note B");
+    git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
+    git(
+        company,
+        &["merge", "--quiet", "--no-ff", "-m", "Merge side", "side"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    let merged = rev_of(company, "HEAD");
+    let err = preview(&merged).unwrap_err();
+    assert!(err.to_string().contains("merge commit"), "{err}");
 }

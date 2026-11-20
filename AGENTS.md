@@ -13,7 +13,7 @@ Rust Git subcommand. The binary is `git-uplink`, so Git treats it as `git uplink
 
 ## Roles
 
-Docs, CLI help, and PR comments address three roles: the **operator** (setup, `init --upgrade`, adopt, troubleshooting, repairs by hand), the **forge** (the workflows in `templates/`), and the **developer** (PRs, labels, the PR body, gated PRs, and dispatching amend, transfer and submit). Developers never run `git uplink`; do not tell them to. Put a new command in the Operator or Forge group of `GROUPS`, and its page on the site (`site/src/pages/operator.tsx`, `forge.tsx`, `developer.tsx`).
+Docs, CLI help, and PR comments address three roles: the **operator** (setup, `init --upgrade`, adopt, troubleshooting, repairs by hand), the **forge** (the workflows in `templates/`), and the **developer** (PRs, labels, the PR body, gated PRs, and dispatching amend, split, merge, transfer and submit). Developers never run `git uplink`; do not tell them to. Put a new command in the Operator or Forge group of `GROUPS`, and its page on the site (`site/src/pages/operator.tsx`, `forge.tsx`, `developer.tsx`).
 
 ## Pack and binary versions
 
@@ -23,7 +23,7 @@ The forge pack (`templates/`) and the binary are released and upgraded together.
 
 Read the rule that applies before you change that area:
 
-- [`docs/rules/state-and-main.md`](docs/rules/state-and-main.md): pushing `uplink/state` and `main` from commands and workflows (no force on `uplink/state`, lease on `main`, record again on a lost race, rescue a failed import, and how to test races).
+- [`docs/rules/state-and-main.md`](docs/rules/state-and-main.md): pushing `uplink/state`, `uplink/upstream` and `main` from commands and workflows (no force on `uplink/state`, `uplink/upstream` atomically with it, lease on `main`, record again on a lost race, rescue a failed import, and how to test races).
 
 ## CI
 

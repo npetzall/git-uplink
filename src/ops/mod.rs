@@ -46,10 +46,11 @@ use crate::repo::{
     ensure_configured_remotes, ensure_revs, ensure_state_worktree, ensure_upstream_ref,
     fetch_state_tracking, fetch_tracking_sha, fetch_upstream, fetch_upstream_remote, has_ref,
     is_ancestor, merge_base, new_patch_id, patch_already_applied_on, path_exists_at,
-    point_branch_at, promote_upstream, push_branch_leased, push_state_branch, queue_at,
-    refresh_company_branch, refresh_upstream_ref, replace_state_from_origin, restore_paths_from,
-    rev_parse, set_state_branch, show_at, stable_patch_id, stable_patch_id_from_contents, stamp,
-    state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
+    point_branch_at, promote_upstream, push_branch_leased, push_state_and_upstream,
+    push_state_branch, queue_at, refresh_company_branch, refresh_upstream_ref,
+    replace_state_from_origin, restore_paths_from, rev_parse, set_state_branch, show_at,
+    stable_patch_id, stable_patch_id_from_contents, stamp, state_exists,
+    try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
 };
 use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings, clean_list};
 use crate::types::{
@@ -165,6 +166,18 @@ pub(super) fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+/// `step`, after `put_back` when it failed: the checkout goes back to how a
+/// gated `--complete` found it, and the error is still the one `step` failed
+/// with. When putting back fails as well, the error names both.
+pub(super) fn or_put_back<T>(step: Result<T>, put_back: impl FnOnce() -> Result<()>) -> Result<T> {
+    step.map_err(|err| match put_back() {
+        Ok(()) => err,
+        Err(cleanup) => Error::msg(format!(
+            "{err}\nPutting the checkout back failed as well: {cleanup}"
+        )),
+    })
+}
+
 /// Resets the `.uplink` worktree to the committed uplink/state, when it exists.
 pub(super) fn restore_uplink_from_state(repo: &Path) -> Result<()> {
     let queue_ref = STATE_BRANCH;
@@ -173,3 +186,7 @@ pub(super) fn restore_uplink_from_state(repo: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

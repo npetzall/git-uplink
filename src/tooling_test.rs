@@ -1000,6 +1000,10 @@ fn no_workflow_pushes_main_or_state_itself() {
                         && !line.starts_with("git uplink push"),
                     "{forge:?} {path} pushes uplink/state itself; the command that wrote it pushes it: {line}"
                 );
+                assert!(
+                    !(line.starts_with("git push") && line.contains("uplink/upstream")),
+                    "{forge:?} {path} pushes uplink/upstream itself; the sync that promoted it pushes it with uplink/state: {line}"
+                );
             }
         }
         let text = |name: &str| {
@@ -1351,10 +1355,9 @@ fn state_and_upstream_rulesets_match_who_pushes_them() {
                     && line.trim_end().ends_with(':');
                 if is_job && !job.is_empty() {
                     assert!(
-                        !(job.contains("      contents: write")
-                            && job.contains("UPLINK_INTERNAL_TOKEN: ${{ secrets.GITHUB_TOKEN }}")),
-                        "{forge:?} {path}: a job with contents write must push uplink/state \
-with the internal App, not GITHUB_TOKEN:\n{job}"
+                        !job.contains("      contents: write"),
+                        "{forge:?} {path}: GITHUB_TOKEN stays contents: read; a job pushes \
+with the internal App or PAT:\n{job}"
                     );
                     job.clear();
                 }
@@ -1362,7 +1365,8 @@ with the internal App, not GITHUB_TOKEN:\n{job}"
                 job.push('\n');
             }
         }
-        // Only sync writes uplink/upstream, with the internal App.
+        // Only sync writes uplink/upstream, through the command, with the
+        // internal App.
         let upstream = ruleset("uplink-upstream-ruleset.json");
         assert_eq!(
             upstream["conditions"]["ref_name"]["include"],
@@ -1380,8 +1384,8 @@ with the internal App, not GITHUB_TOKEN:\n{job}"
                 .lines()
                 .any(|l| l.contains("git push") && l.contains("uplink/upstream"));
             assert!(
-                !pushes || path == ".github/workflows/uplink-sync.yml",
-                "{forge:?} {path} pushes uplink/upstream; only sync may, see uplink-upstream-ruleset.json"
+                !pushes,
+                "{forge:?} {path} pushes uplink/upstream; only sync --push may, see uplink-upstream-ruleset.json"
             );
         }
     }
