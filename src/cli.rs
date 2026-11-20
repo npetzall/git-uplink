@@ -696,8 +696,8 @@ pub enum Commands {
     /// (for example by the hooks ruleset, or a token without workflows scope)
     /// is a warning; open a pull request against `uplink/hooks` instead.
     ///
-    /// The forge runs it after import and submit; the operator after `init`,
-    /// `adopt`, `restack` or a repair.
+    /// The operator runs it after `init`, `adopt`, `restack` or a repair.
+    /// Forge commands push what they record themselves (`--push`).
     Push {
         /// Remote to push to, origin by default.
         #[arg(long = "push-remote", value_name = "remote")]
