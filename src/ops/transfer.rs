@@ -203,7 +203,8 @@ pub(super) fn start_transfer(
     direction: TransferDirection,
     checks: Checks<'_>,
 ) -> Result<Checked<TransferResult>> {
-    let queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let queue = state.queue()?;
     let patch = validate_transfer(&queue, id, direction)?;
     let company_branch = queue.config.internal_branch.clone();
     let mut preview = queue.clone();
@@ -217,14 +218,13 @@ pub(super) fn start_transfer(
     };
     ensure_clean_worktree(repo, "a transfer")?;
     let (original, original_sha) = checkout_identity(repo)?;
-    let snapshot = snapshot_uplink(repo)?;
     let outcome = (|| -> Result<Checked<TransferResult>> {
         git(
             repo,
             &["checkout", "-f", "--quiet", "--detach", upstream_ref],
             GitOpts::default(),
         )?;
-        let target = match apply_queue_preview(repo, &preview, &snapshot, id, false)? {
+        let target = match apply_queue_preview(repo, &preview, &mut state, id, false)? {
             // Gated without asking the script.
             PreviewOutcome::Conflict { .. } if checks.is_probe() => {
                 return Ok(Checked::Probed(PreflightReport::of(Ok(None))));
@@ -244,21 +244,19 @@ pub(super) fn start_transfer(
             PreviewOutcome::Applied(target) => target,
         };
 
-        copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
         let checked = transfer_checks(
-            repo,
+            &state,
             &preview,
             &patch,
-            &snapshot.join(patch_path(id)?),
+            &state.require_patch(id)?,
             direction,
             target.onto.as_deref(),
             target.after.as_deref(),
             checks.verdict(),
         );
-        let _ = fs::remove_dir_all(repo.join(".uplink"));
         if checks.is_probe() {
             return probe_report(checked.map(|(_, token)| token), || {
-                probe_rebuild_from(repo, &preview, &snapshot, upstream_ref, false)
+                probe_rebuild_from(repo, &preview, &state, upstream_ref, false)
             })
             .map(Checked::Probed);
         }
@@ -292,22 +290,21 @@ pub(super) fn start_transfer(
         };
 
         restore_checkout(repo, &original, &original_sha)?;
-        crate::repo::ensure_state_worktree(repo)?;
+        crate::repo::ensure_state_branch(repo)?;
         finish_successful_transfer(repo, id, direction, assess_report, checks.verdict())
             .map(Checked::Recorded)
     })();
-    let _ = fs::remove_dir_all(&snapshot);
     match outcome {
         // A finished transfer has already returned to the company branch.
         Ok(Checked::Recorded(result)) if !result.gated => Ok(Checked::Recorded(result)),
         Ok(other) => {
             restore_checkout(repo, &original, &original_sha)?;
-            crate::repo::ensure_state_worktree(repo)?;
+            crate::repo::ensure_state_branch(repo)?;
             Ok(other)
         }
         Err(err) => {
             let _ = restore_checkout(repo, &original, &original_sha);
-            let _ = crate::repo::ensure_state_worktree(repo);
+            let _ = crate::repo::ensure_state_branch(repo);
             Err(err)
         }
     }
@@ -341,7 +338,7 @@ pub(super) fn not_previewed(id: &str) -> Error {
 pub(super) fn apply_queue_preview(
     repo: &Path,
     preview: &QueueState,
-    snapshot: &Path,
+    state: &mut StateTree,
     id: &str,
     stop_after_target: bool,
 ) -> Result<PreviewOutcome> {
@@ -354,8 +351,7 @@ pub(super) fn apply_queue_preview(
             )));
         }
         let onto_here = rev_parse(repo, "HEAD")?;
-        let patch_file = snapshot.join(patch_path(&item.id)?);
-        let result = apply_patch_file(repo, preview, &item, &patch_file, false)?;
+        let result = apply_stored(repo, preview, state, &item)?;
         if result == ApplyOutcome::Conflict {
             if item.id != id {
                 let why = if stop_after_target {
@@ -390,28 +386,29 @@ pub(super) fn apply_queue_preview(
     Ok(PreviewOutcome::Applied(target))
 }
 
-/// To upstream: assess the change `onto..after`, export preflight of `patch_abs`,
-/// and upstream-layer apply. To internal: `preflight.sh`.
+/// To upstream: assess the change `onto..after`, export preflight of
+/// `patch_text`, and upstream-layer apply, with the queued patches on `state`. To internal: `preflight.sh`.
 /// Returns the new assess report for an upstream move, and the token of the
 /// tree `preflight.sh` was asked about.
 #[allow(clippy::too_many_arguments)]
 fn transfer_checks(
-    repo: &Path,
+    state: &StateTree,
     preview: &QueueState,
     patch: &Patch,
-    patch_abs: &Path,
+    patch_text: &str,
     direction: TransferDirection,
     onto: Option<&str>,
     after: Option<&str>,
     verdict: &ScriptVerdict,
 ) -> Result<(Option<AssessReport>, Option<String>)> {
+    let repo = state.repo();
     match direction {
         TransferDirection::ToUpstream => {
             let onto = onto.ok_or_else(|| not_previewed(&patch.id))?;
             let after = after.ok_or_else(|| not_previewed(&patch.id))?;
             let report = assess_transfer_to_upstream(repo, preview, patch, onto, after)?;
-            let token = export_preflight(repo, preview, patch, patch_abs, None, verdict)?;
-            assert_upstream_layer_applies(repo, preview)?;
+            let token = export_preflight(state, preview, patch, patch_text, None, verdict)?;
+            assert_upstream_layer_applies(state, preview)?;
             Ok((Some(report), token))
         }
         TransferDirection::ToInternal => {
@@ -512,9 +509,9 @@ pub(super) fn finish_successful_transfer(
             format!("Moved {}", direction.as_str()),
         );
     }
-    write_queue_file(repo, &queue)?;
     commit_queue(
         repo,
+        &queue,
         &format!("uplink: transfer {id} {}", direction.as_str()),
     )?;
     let queue = rebuilt_or_stopped(repo, rebuild_checked(repo, preflight))?;
@@ -552,8 +549,8 @@ pub(super) fn complete_transfer(
             "Check out {base} or {work} before completing transfer of {id} (currently on {head})."
         )));
     }
-    restore_uplink_from_state(repo)?;
-    let queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let queue = state.queue()?;
     let mut patch = validate_transfer(&queue, id, direction)?;
     assert_resolution_clean(repo)?;
     let onto = recover_onto(repo, kind, id, &head)?;
@@ -572,8 +569,8 @@ pub(super) fn complete_transfer(
                 return Err(err);
             }
         };
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    crate::queue::write_atomic(&repo.join(patch_path(id)?), format_patch_at_head(repo)?)?;
+    let rewritten = format_patch_at_head(repo)?;
+    state.write_patch(id, rewritten.as_str())?;
 
     let mut preview = queue.clone();
     move_patch(&mut preview, id, direction.to_internal())?;
@@ -584,10 +581,10 @@ pub(super) fn complete_transfer(
         current.depends_on = updated.depends_on.clone();
     }
     let checked = transfer_checks(
-        repo,
+        &state,
         &preview,
         get_patch(&preview, id)?,
-        &repo.join(patch_path(id)?),
+        &rewritten,
         direction,
         Some(&onto),
         Some("HEAD"),
@@ -596,9 +593,8 @@ pub(super) fn complete_transfer(
     if checks.is_probe() {
         let report = probe_report(checked.map(|(_, token)| token), || {
             let upstream_ref = super::amend::upstream_ref_or_company(repo, &preview)?;
-            probe_rebuild(repo, &preview, &upstream_ref, false)
+            probe_rebuild(repo, &preview, &state, &upstream_ref, false)
         });
-        restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
         return Ok(Checked::Probed(report?));
     }
@@ -607,9 +603,8 @@ pub(super) fn complete_transfer(
     // still needs its own assessment.
     let assess_report = assess_report.or(message_report);
 
-    let rel = patch_path(id)?.to_string_lossy().into_owned();
-    let stable = stable_patch_id(repo, &rel)?;
-    let mut queue = read_queue_file(repo)?;
+    let stable = stable_patch_id_from_contents(repo, &rewritten)?;
+    let mut queue = state.queue()?;
     let (pr_close_url, pr_close_number, pr_close_branch) =
         pr_close_from_patch(get_patch(&queue, id)?, direction);
     record_transfer(&mut queue, id, direction, stable, assess_report, &movers)?;
@@ -619,11 +614,8 @@ pub(super) fn complete_transfer(
         current.source.authors = updated.source.authors;
         current.depends_on = updated.depends_on;
     }
-    write_queue_file(repo, &queue)?;
-    commit_queue(
-        repo,
-        &format!("uplink: transfer {id} {}", direction.as_str()),
-    )?;
+    state.write_queue(&queue)?;
+    state.commit_to_branch(&format!("uplink: transfer {id} {}", direction.as_str()))?;
     let queue = rebuilt_or_stopped(repo, rebuild_checked(repo, checks.verdict()))?;
     Ok(Checked::Recorded(TransferResult {
         queue,

@@ -87,11 +87,12 @@ fn check_ready_to_submit(
             "{id} changed since it was approved; approve the current content before submit (dispatch Uplink submit again)."
         )));
     }
+    let state = StateTree::head(repo)?;
     match export_preflight(
-        repo,
+        &state,
         queue,
         patch,
-        &repo.join(patch_path(id)?),
+        &state.require_patch(id)?,
         None,
         preflight,
     ) {
@@ -133,26 +134,16 @@ fn export_onto(
     let id = &patch.id;
     let company_branch = &queue.config.internal_branch;
     ensure_clean_worktree(repo, "submit")?;
-    let snapshot = snapshot_uplink(repo)?;
-    let applied = (|| -> Result<ApplyOutcome> {
-        git(
-            repo,
-            &["checkout", "-f", "--quiet", "--detach", start],
-            GitOpts::default(),
-        )?;
-        apply_patch_file(repo, queue, patch, &snapshot.join(patch_path(id)?), true)
-    })();
-    let applied = match applied {
-        Ok(v) => v,
-        Err(err) => {
-            let _ = fs::remove_dir_all(&snapshot);
-            return Err(err);
-        }
-    };
+    let stored = StateTree::head(repo)?.require_patch(id)?;
+    git(
+        repo,
+        &["checkout", "-f", "--quiet", "--detach", start],
+        GitOpts::default(),
+    )?;
+    let (applied, _) = apply_patch_file(repo, queue, patch, &stored, true)?;
     if applied == ApplyOutcome::Conflict {
         let files = conflicted_files(repo).unwrap_or_default();
         checkout_company(repo, company_branch)?;
-        let _ = fs::remove_dir_all(&snapshot);
         return Err(Error::Conflict(ConflictError::new(
             format!("Cannot export {id} onto upstream"),
             id,
@@ -161,13 +152,11 @@ fn export_onto(
     }
     if applied == ApplyOutcome::Empty {
         checkout_company(repo, company_branch)?;
-        let _ = fs::remove_dir_all(&snapshot);
         return Err(Error::msg(format!(
             "{id} applies empty onto upstream; mark it merged instead."
         )));
     }
     git(repo, &["branch", "-f", branch, "HEAD"], GitOpts::default())?;
-    let _ = fs::remove_dir_all(&snapshot);
 
     let sha = rev_parse(repo, branch)?;
     checkout_company(repo, company_branch)?;

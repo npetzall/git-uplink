@@ -105,9 +105,7 @@ fn blamed_depends_on_names_the_patches_whose_lines_a_hunk_touches() {
     git_ok(repo, &["commit", "-q", "-m", "init"]).unwrap();
     git_ok(repo, &["branch", "uplink/upstream"]).unwrap();
 
-    let patches = repo.join(crate::types::PATCH_DIR);
-    fs::create_dir_all(&patches).unwrap();
-    let patch = |name: &str| patches.join(format!("{name}.patch"));
+    let patch = |name: &str| out.path().join(format!("queued-{name}.patch"));
     let cand = |name: &str| out.path().join(format!("{name}.patch"));
     commit_patch(repo, "main", "upl_a", ("l2\n", "a2\n"), &patch("upl_a"));
     commit_patch(repo, "upl_a", "upl_b", ("l18\n", "b18\n"), &patch("upl_b"));
@@ -125,10 +123,17 @@ fn blamed_depends_on_names_the_patches_whose_lines_a_hunk_touches() {
         &cand("on_upstream"),
     );
 
+    let mut state = StateTree::at(repo, None).unwrap();
+    for id in ["upl_a", "upl_b"] {
+        state
+            .write_patch(id, fs::read_to_string(patch(id)).unwrap())
+            .unwrap();
+    }
     let blamed = |queue: &QueueState, name: &str| {
         let candidates = vec!["upl_a".to_string(), "upl_b".to_string()];
+        let candidate = fs::read_to_string(cand(name)).unwrap();
         with_upstream_worktree(repo, |dir| {
-            blamed_depends_on(dir, repo, queue, &[], &candidates, &cand(name), name)
+            blamed_depends_on(dir, &state, queue, &[], &candidates, &candidate, name)
         })
         .unwrap()
     };

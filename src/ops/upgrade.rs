@@ -529,7 +529,7 @@ pub fn format_upgrade_changes(result: &InitResult) -> String {
     for (id, title) in &result.dropped {
         let _ = write!(
             out,
-            "\nDropped: {id} \"{title}\" (still in .uplink/patches/{id}.patch)"
+            "\nDropped: {id} \"{title}\" (its patch file stays on uplink/state)"
         );
     }
     for (id, title) in &result.amended {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::assess::{assert_assess_ok, assess_from_message, patch_authors, strip_html_comments};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
-use crate::queue::{add_event, cannot_depend_on, get_patch, patch_path};
+use crate::queue::{add_event, cannot_depend_on, get_patch};
 use crate::repo::{has_ref, new_patch_id, rev_parse, stamp};
 use crate::types::{Patch, PatchIntent, PatchSource, PatchStatus, QueueState, first_line};
 
@@ -457,14 +457,6 @@ fn check_group_order(analysis: &AheadAnalysis, assigned: &[Option<usize>]) -> Re
         seen.push(group_idx);
     }
     Ok(())
-}
-
-pub(crate) fn remove_patch_files(repo: &Path, ids: &[String]) {
-    for id in ids {
-        if let Ok(rel) = patch_path(id) {
-            let _ = fs::remove_file(repo.join(rel));
-        }
-    }
 }
 
 /// Builds and assesses the queued patch for one adopt group, depending on

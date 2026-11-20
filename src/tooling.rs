@@ -5,13 +5,12 @@ use crate::assess::{append_patch_id_trailer, assess_from_message, strip_html_com
 use crate::embedded::{PACK_GITHUB, PACK_GITHUB_HOOKS, PACK_TRY_IT_ON_GITHUB};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
-use crate::queue::{
-    add_event, patch_path, read_queue as read_queue_file, write_queue as write_queue_file,
-};
+use crate::queue::add_event;
 use crate::repo::{
-    TempWorktree, commit_queue, ensure_uplink_dirs, ensure_upstream_ref, has_ref, new_patch_id,
-    patch_substance, stable_patch_id_from_contents, stamp,
+    TempWorktree, ensure_upstream_ref, has_ref, new_patch_id, patch_substance,
+    stable_patch_id_from_contents, stamp,
 };
+use crate::state::StateTree;
 use crate::types::{
     AssessReport, DEFAULT_CUTOFF, Forge, ForgeFamily, Patch, PatchIntent, PatchSource, PatchStatus,
     QueueState, TOOLING_PATCH_KIND, TOOLING_PATCH_TITLE,
@@ -42,7 +41,7 @@ pub struct ToolingPlan {
 }
 
 /// Synthesizes the tooling patch from the embedded pack. `None` when the
-/// stored patch already holds it. Writes nothing to `.uplink`.
+/// stored patch already holds it. Writes nothing.
 pub fn plan_tooling_refresh(repo: &Path) -> Result<Option<ToolingPlan>> {
     ensure_upstream_ref(repo)?;
     if !has_ref(repo, "uplink/upstream")? {
@@ -50,7 +49,8 @@ pub fn plan_tooling_refresh(repo: &Path) -> Result<Option<ToolingPlan>> {
             "uplink/upstream is missing; cannot install forge tooling until upstream is seeded.",
         ));
     }
-    let queue = read_queue_file(repo)?;
+    let state = StateTree::head(repo)?;
+    let queue = state.queue()?;
     let forge = queue.config.forge.ok_or_else(|| {
         Error::msg(
             "queue.json has no forge. Re-run `git uplink init --upgrade --forge github` \
@@ -64,7 +64,7 @@ pub fn plan_tooling_refresh(repo: &Path) -> Result<Option<ToolingPlan>> {
         )));
     }
 
-    let existing_id = find_tooling_patch(&queue, repo)?;
+    let existing_id = find_tooling_patch(&queue, &state)?;
     let (id, created) = if let Some(id) = existing_id {
         (id, false)
     } else {
@@ -79,8 +79,7 @@ pub fn plan_tooling_refresh(repo: &Path) -> Result<Option<ToolingPlan>> {
     } = synthesize_pack_patch(repo, &files, &file_message)?;
 
     if !created {
-        let patch_rel = patch_path(&id)?;
-        let stored = fs::read_to_string(repo.join(&patch_rel)).unwrap_or_default();
+        let stored = state.patch(&id)?.unwrap_or_default();
         if patch_substance(&stored) == patch_substance(&formatted) {
             return Ok(None);
         }
@@ -96,12 +95,12 @@ pub fn plan_tooling_refresh(repo: &Path) -> Result<Option<ToolingPlan>> {
     }))
 }
 
-/// Writes `plan` to `.uplink` and commits it on uplink/state, together with
-/// what `also` changes in the queue.
+/// Commits `plan` on uplink/state, together with what `also` changes in the
+/// queue and the state.
 pub fn commit_tooling_refresh(
     repo: &Path,
     plan: ToolingPlan,
-    also: impl FnOnce(&mut QueueState) -> Result<()>,
+    also: impl FnOnce(&mut StateTree, &mut QueueState) -> Result<()>,
 ) -> Result<()> {
     let ToolingPlan {
         id,
@@ -113,10 +112,9 @@ pub fn commit_tooling_refresh(
         head_sha,
     } = plan;
     let new_stable = stable_patch_id_from_contents(repo, &formatted)?;
-    ensure_uplink_dirs(repo)?;
-    let mut queue = read_queue_file(repo)?;
-    let patch_rel = patch_path(&id)?;
-    crate::queue::write_atomic(&repo.join(&patch_rel), &formatted)?;
+    let mut state = StateTree::head(repo)?;
+    let mut queue = state.queue()?;
+    state.write_patch(&id, formatted)?;
 
     let assess = assess_from_message(
         repo,
@@ -133,17 +131,18 @@ pub fn commit_tooling_refresh(
     } else {
         upgrade_tooling_patch(&mut queue, &id, forge, new_stable, message, assess);
     }
-    also(&mut queue)?;
-    write_queue_file(repo, &queue)?;
+    also(&mut state, &mut queue)?;
+    state.write_queue(&queue)?;
     let verb = if created { "add" } else { "upgrade" };
-    commit_queue(repo, &format!("uplink: {verb} {id} {TOOLING_PATCH_TITLE}"))
+    state.commit_to_branch(&format!("uplink: {verb} {id} {TOOLING_PATCH_TITLE}"))?;
+    Ok(())
 }
 
 pub fn refresh_tooling_patch(repo: &Path) -> Result<ToolingRefresh> {
     let Some(plan) = plan_tooling_refresh(repo)? else {
         return Ok(ToolingRefresh { changed: false });
     };
-    commit_tooling_refresh(repo, plan, |_| Ok(()))?;
+    commit_tooling_refresh(repo, plan, |_, _| Ok(()))?;
     Ok(ToolingRefresh { changed: true })
 }
 
@@ -282,7 +281,7 @@ internal-only; not submitted upstream.\n"
     )
 }
 
-fn find_tooling_patch(queue: &QueueState, repo: &Path) -> Result<Option<String>> {
+fn find_tooling_patch(queue: &QueueState, state: &StateTree) -> Result<Option<String>> {
     if let Some(patch) = &queue.tooling {
         return Ok(Some(patch.id.clone()));
     }
@@ -300,14 +299,9 @@ fn find_tooling_patch(queue: &QueueState, repo: &Path) -> Result<Option<String>>
         .iter()
         .filter(|p| p.subject() == TOOLING_PATCH_TITLE)
     {
-        let Ok(rel) = patch_path(&patch.id) else {
+        let Some(contents) = state.patch(&patch.id)? else {
             continue;
         };
-        let path = repo.join(rel);
-        if !path.is_file() {
-            continue;
-        }
-        let contents = fs::read_to_string(&path)?;
         if contents.contains(".github/workflows/uplink-") {
             return Ok(Some(patch.id.clone()));
         }

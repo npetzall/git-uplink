@@ -5,44 +5,10 @@ use crate::assess::{company_commit_message, export_commit_message};
 use crate::error::{Error, Result};
 use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::queue::{now_iso, patch_path};
-use crate::types::{
-    ApplyOutcome, PATCH_DIR, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH,
-};
+use crate::types::{ApplyOutcome, Patch, QUEUE_PATH, QueueConfig, QueueState, STATE_BRANCH};
 
 pub(crate) const UPSTREAM_REF: &str = "uplink/upstream";
 pub(crate) const COMPANY_REMOTE: &str = "origin";
-
-pub fn ensure_uplink_dirs(repo: &Path) -> Result<()> {
-    for dir in [".uplink", PATCH_DIR] {
-        if fs::symlink_metadata(repo.join(dir)).is_ok_and(|meta| meta.file_type().is_symlink()) {
-            return Err(Error::msg(format!(
-                "{dir} is a symlink; git uplink does not write through symlinks. Remove it."
-            )));
-        }
-    }
-    fs::create_dir_all(repo.join(PATCH_DIR))?;
-    Ok(())
-}
-
-/// Refuses a symlink among `paths` at `source`. Anyone who can push may
-/// have written `uplink/state`, and a restored symlink would turn a later
-/// write or read of `.uplink/` into one of any file.
-fn refuse_state_symlinks(repo: &Path, source: &str, paths: &[&str]) -> Result<()> {
-    let mut args = vec!["ls-tree", "-r", "-z", "--full-tree", source, "--"];
-    args.extend_from_slice(paths);
-    let listing = git_ok(repo, &args)?;
-    for entry in listing.split('\0') {
-        if let Some((meta, path)) = entry.split_once('\t')
-            && meta.starts_with("120000 ")
-        {
-            return Err(Error::msg(format!(
-                "{source} has a symlink at {path}. git uplink does not restore \
-symlinks under .uplink/; remove it from {source} with a new commit."
-            )));
-        }
-    }
-    Ok(())
-}
 
 pub fn rev_parse(repo: &Path, git_ref: &str) -> Result<String> {
     git_ok(repo, &["rev-parse", git_ref])
@@ -125,11 +91,6 @@ pub fn stable_patch_id_from_contents(repo: &Path, contents: &str) -> Result<Stri
         .to_string())
 }
 
-pub fn stable_patch_id(repo: &Path, patch_file: &str) -> Result<String> {
-    let contents = fs::read_to_string(repo.join(patch_file))?;
-    stable_patch_id_from_contents(repo, &contents)
-}
-
 /// A detached `git worktree add` checkout, removed when dropped. Work done in
 /// it never touches the operator's own checkout.
 pub(crate) struct TempWorktree<'a> {
@@ -169,15 +130,14 @@ impl Drop for TempWorktree<'_> {
     }
 }
 
-pub fn write_product_patch(
+/// The product change `from_ref..head_ref` as a patch file with `message`.
+pub fn product_patch(
     repo: &Path,
     id: &str,
     from_ref: &str,
     message: &str,
     head_ref: &str,
-) -> Result<PathBuf> {
-    ensure_uplink_dirs(repo)?;
-    let file = patch_path(id)?;
+) -> Result<String> {
     let diff = git_ok(
         repo,
         &[
@@ -225,49 +185,50 @@ pub fn write_product_patch(
         &["format-patch", "--full-index", "-1", "--stdout"],
     )?;
     drop(worktree);
-    fs::create_dir_all(repo.join(PATCH_DIR))?;
-    let body = if formatted.ends_with('\n') {
+    Ok(if formatted.ends_with('\n') {
         formatted
     } else {
         format!("{formatted}\n")
-    };
-    crate::queue::write_atomic(&repo.join(&file), body)?;
-    Ok(file)
+    })
 }
 
+/// Whether `git apply <args>` with the patch text on stdin succeeds.
+fn apply_succeeds(repo: &Path, args: &[&str], patch: &str, opts: GitOpts<'_>) -> Result<bool> {
+    let mut cmd = vec!["apply"];
+    cmd.extend_from_slice(args);
+    let result = git(
+        repo,
+        &cmd,
+        GitOpts {
+            allow_fail: true,
+            input: Some(patch.as_bytes()),
+            ..opts
+        },
+    )?;
+    Ok(result.code == 0)
+}
+
+/// Applies the stored patch file `stored` in `repo` and commits it. On
+/// [`ApplyOutcome::Applied`] it also returns the patch as replayed when that
+/// differs from `stored` in more than its `From` and `Date` lines, for the
+/// caller to store.
 pub fn apply_patch_file(
     repo: &Path,
     queue: &QueueState,
     patch: &Patch,
-    patch_file_abs: &Path,
+    stored: &str,
     export_message: bool,
-) -> Result<ApplyOutcome> {
-    if git_succeeds(
-        repo,
-        &[
-            "apply",
-            "--reverse",
-            "--check",
-            patch_file_abs.to_str().unwrap_or(""),
-        ],
-    )? {
-        return Ok(ApplyOutcome::Empty);
+) -> Result<(ApplyOutcome, Option<String>)> {
+    if apply_succeeds(repo, &["--reverse", "--check"], stored, GitOpts::default())? {
+        return Ok((ApplyOutcome::Empty, None));
     }
 
-    if !git_succeeds(
-        repo,
-        &[
-            "apply",
-            "--3way",
-            "--index",
-            patch_file_abs.to_str().unwrap_or(""),
-        ],
-    )? {
-        return Ok(ApplyOutcome::Conflict);
+    if !apply_succeeds(repo, &["--3way", "--index"], stored, GitOpts::default())? {
+        return Ok((ApplyOutcome::Conflict, None));
     }
 
     if git_succeeds(repo, &["diff", "--cached", "--quiet"])? {
-        return Ok(ApplyOutcome::Empty);
+        return Ok((ApplyOutcome::Empty, None));
     }
 
     let message = if export_message {
@@ -282,14 +243,8 @@ pub fn apply_patch_file(
     } else {
         format!("{formatted}\n")
     };
-    let stored = fs::read_to_string(patch_file_abs).unwrap_or_default();
-    if patch_substance(&stored) != patch_substance(&body) {
-        if let Some(parent) = patch_file_abs.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        crate::queue::write_atomic(patch_file_abs, body)?;
-    }
-    Ok(ApplyOutcome::Applied)
+    let replayed = (patch_substance(stored) != patch_substance(&body)).then_some(body);
+    Ok((ApplyOutcome::Applied, replayed))
 }
 
 /// Patch text with the mbox `From <sha>` line and the `Date:` header removed.
@@ -330,35 +285,23 @@ fn is_mbox_from_line(line: &str) -> bool {
 
 /// True when `git apply --reverse --check` succeeds against `git_ref`'s tree.
 /// Uses a throwaway index so HEAD and the worktree stay put.
-pub fn patch_already_applied_on(repo: &Path, git_ref: &str, patch_file_abs: &Path) -> Result<bool> {
-    let index = repo.join(format!(".git/uplink-apply-check-{}", random_hex(32)));
-    let index_s = index.to_string_lossy().into_owned();
+pub fn patch_already_applied_on(repo: &Path, git_ref: &str, patch: &str) -> Result<bool> {
+    let index = crate::state::temp_index_path(repo)?;
     let index_opts = GitOpts {
-        extra_env: vec![("GIT_INDEX_FILE".into(), index_s)],
-        allow_fail: true,
+        extra_env: vec![(
+            "GIT_INDEX_FILE".into(),
+            index.to_string_lossy().into_owned(),
+        )],
         ..GitOpts::default()
     };
     let outcome = (|| -> Result<bool> {
-        git(
+        git(repo, &["read-tree", git_ref], index_opts.clone())?;
+        apply_succeeds(
             repo,
-            &["read-tree", git_ref],
-            GitOpts {
-                extra_env: index_opts.extra_env.clone(),
-                ..GitOpts::default()
-            },
-        )?;
-        let reverse = git(
-            repo,
-            &[
-                "apply",
-                "--cached",
-                "--reverse",
-                "--check",
-                patch_file_abs.to_str().unwrap_or(""),
-            ],
+            &["--cached", "--reverse", "--check"],
+            patch,
             index_opts,
-        )?;
-        Ok(reverse.code == 0)
+        )
     })();
     let _ = fs::remove_file(&index);
     outcome
@@ -409,18 +352,6 @@ pub fn fetch_upstream(repo: &Path, queue: &QueueState) -> Result<String> {
     Ok(sha)
 }
 
-fn state_ref_source(repo: &Path) -> Result<Option<String>> {
-    let branch = STATE_BRANCH;
-    if has_ref(repo, branch)? {
-        return Ok(Some(branch.to_string()));
-    }
-    let origin = format!("{COMPANY_REMOTE}/{branch}");
-    if has_ref(repo, &origin)? {
-        return Ok(Some(origin));
-    }
-    Ok(None)
-}
-
 fn has_remote(repo: &Path, name: &str) -> bool {
     git_ok(repo, &["remote"])
         .unwrap_or_default()
@@ -462,14 +393,13 @@ Run `git uplink init --upstream <url> --contrib <url>` to create a queue.",
     )
 }
 
-/// Replace local `uplink/state` with origin and restore `.uplink/`.
+/// Replace local `uplink/state` with origin's.
 pub fn replace_state_from_origin(repo: &Path) -> Result<()> {
     let sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
-    apply_state_sha(repo, STATE_BRANCH, &sha)?;
-    if !repo.join(QUEUE_PATH).is_file() {
+    if !path_exists_at(repo, &sha, QUEUE_PATH)? {
         return Err(not_initialized_error());
     }
-    Ok(())
+    set_state_branch(repo, STATE_BRANCH, &sha)
 }
 
 /// Replace local `uplink/state` from origin when that remote exists. Missing
@@ -482,17 +412,28 @@ pub fn try_replace_state_from_origin(repo: &Path) -> Result<()> {
     let Ok(sha) = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH) else {
         return Ok(());
     };
-    apply_state_sha(repo, STATE_BRANCH, &sha)
+    set_state_branch(repo, STATE_BRANCH, &sha)
 }
 
 pub fn state_exists(repo: &Path) -> Result<bool> {
+    Ok(has_ref(repo, STATE_BRANCH)? || has_ref(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))?)
+}
+
+/// Creates local `uplink/state` from origin's when it is missing. Nothing
+/// happens when neither exists.
+pub fn ensure_state_branch(repo: &Path) -> Result<()> {
     if has_ref(repo, STATE_BRANCH)? {
-        return Ok(true);
+        return Ok(());
     }
-    if has_ref(repo, &format!("{COMPANY_REMOTE}/{STATE_BRANCH}"))? {
-        return Ok(true);
+    let origin = format!("{COMPANY_REMOTE}/{STATE_BRANCH}");
+    if has_ref(repo, &origin)? {
+        git(
+            repo,
+            &["branch", "-f", STATE_BRANCH, &origin],
+            GitOpts::default(),
+        )?;
     }
-    Ok(repo.join(QUEUE_PATH).is_file())
+    Ok(())
 }
 
 /// Materialize local `uplink/upstream` from the company repo (`origin`), never from
@@ -558,110 +499,9 @@ pub fn refresh_upstream_ref(repo: &Path, remote: &str) -> Result<()> {
     Ok(())
 }
 
-fn ensure_uplink_excluded(repo: &Path) -> Result<()> {
-    let info = repo.join(".git/info");
-    fs::create_dir_all(&info)?;
-    let path = info.join("exclude");
-    let current = fs::read_to_string(&path).unwrap_or_default();
-    if current
-        .lines()
-        .any(|line| matches!(line.trim(), ".uplink/" | ".uplink"))
-    {
-        return Ok(());
-    }
-    let mut body = current;
-    if !body.is_empty() && !body.ends_with('\n') {
-        body.push('\n');
-    }
-    body.push_str(".uplink/\n");
-    fs::write(path, body)?;
-    Ok(())
-}
-
-pub(crate) fn restore_state_worktree(repo: &Path, source: &str) -> Result<()> {
-    refuse_state_symlinks(repo, source, &[".uplink"])?;
-    git(
-        repo,
-        &["restore", "--source", source, "--worktree", "--", ".uplink"],
-        GitOpts::default(),
-    )?;
-    Ok(())
-}
-
-pub fn ensure_state_worktree(repo: &Path) -> Result<()> {
-    ensure_uplink_excluded(repo)?;
-    if repo.join(QUEUE_PATH).is_file() {
-        return Ok(());
-    }
-    let Some(source) = state_ref_source(repo)? else {
-        return Ok(());
-    };
-    let branch = STATE_BRANCH;
-    if source != branch {
-        git(repo, &["branch", "-f", branch, &source], GitOpts::default())?;
-    }
-    restore_state_worktree(repo, branch)
-}
-
-fn uplink_worktree_tree(repo: &Path, branch: &str) -> Result<String> {
-    ensure_uplink_excluded(repo)?;
-    ensure_uplink_dirs(repo)?;
-    let index = repo.join(format!(".git/uplink-index-{}", random_hex(32)));
-    let index_s = index.to_string_lossy().into_owned();
-    let index_opts = GitOpts {
-        extra_env: vec![("GIT_INDEX_FILE".into(), index_s)],
-        ..GitOpts::default()
-    };
-    let outcome = (|| -> Result<String> {
-        if has_ref(repo, branch)? {
-            git(repo, &["read-tree", branch], index_opts.clone())?;
-        } else {
-            git(repo, &["read-tree", "--empty"], index_opts.clone())?;
-        }
-        git(
-            repo,
-            &["add", "-f", "--", ".uplink", ":(exclude).uplink/*.tmp"],
-            index_opts.clone(),
-        )?;
-        Ok(git(repo, &["write-tree"], index_opts.clone())?.stdout)
-    })();
-    let _ = fs::remove_file(&index);
-    outcome
-}
-
-/// Commits `.uplink/` to uplink/state. Refused while a queue run (adopt,
-/// restack) holds uplink/state, unless this is that run.
-pub fn commit_queue(repo: &Path, message: &str) -> Result<()> {
-    crate::lock::refuse_while_running(repo)?;
-    let branch = STATE_BRANCH;
-    let tree = uplink_worktree_tree(repo, branch)?;
-    if has_ref(repo, branch)? {
-        let old_tree = git_ok(repo, &["rev-parse", &format!("{branch}^{{tree}}")])?;
-        if old_tree == tree {
-            return Ok(());
-        }
-    }
-    let parent = if has_ref(repo, branch)? {
-        Some(rev_parse(repo, branch)?)
-    } else {
-        None
-    };
-    let mut args = vec!["commit-tree", tree.as_str(), "-m", message];
-    if let Some(parent) = parent.as_deref() {
-        args.extend_from_slice(&["-p", parent]);
-    }
-    let commit = git(repo, &args, GitOpts::default())?.stdout;
-    git(
-        repo,
-        &["update-ref", &format!("refs/heads/{branch}"), &commit],
-        GitOpts::default(),
-    )?;
-    Ok(())
-}
-
 /// Commits the tree of `base` with `files` (path, contents) written into it,
 /// on top of `base`; without `base`, a root commit of only `files`. Uses a
-/// temporary index: the working tree, `.uplink/` and every local branch
+/// temporary index: the working tree and every local branch
 /// stay as they are.
 pub fn commit_files_on(
     repo: &Path,
@@ -669,46 +509,13 @@ pub fn commit_files_on(
     files: &[(&str, &str)],
     message: &str,
 ) -> Result<String> {
-    let index = repo.join(format!(".git/uplink-index-{}", random_hex(32)));
-    let index_opts = GitOpts {
-        extra_env: vec![(
-            "GIT_INDEX_FILE".into(),
-            index.to_string_lossy().into_owned(),
-        )],
-        ..GitOpts::default()
-    };
-    let outcome = (|| -> Result<String> {
-        match base {
-            Some(base) => git(repo, &["read-tree", base], index_opts.clone())?,
-            None => git(repo, &["read-tree", "--empty"], index_opts.clone())?,
-        };
-        for (path, contents) in files {
-            let blob = git(
-                repo,
-                &["hash-object", "-w", "--stdin"],
-                GitOpts {
-                    input: Some(contents.as_bytes()),
-                    ..GitOpts::default()
-                },
-            )?
-            .stdout;
-            git(
-                repo,
-                &[
-                    "update-index",
-                    "--add",
-                    "--cacheinfo",
-                    &format!("100644,{blob},{path}"),
-                ],
-                index_opts.clone(),
-            )?;
-        }
-        Ok(git(repo, &["write-tree"], index_opts.clone())?.stdout)
-    })();
-    let _ = fs::remove_file(&index);
-    let tree = outcome?;
+    let mut state = crate::state::StateTree::at(repo, base)?;
+    for (path, contents) in files {
+        state.write(path, *contents);
+    }
+    let tree = state.tree()?;
     let mut args = vec!["commit-tree", tree.as_str(), "-m", message];
-    if let Some(base) = base {
+    if let Some(base) = state.base() {
         args.extend_from_slice(&["-p", base]);
     }
     Ok(git(repo, &args, GitOpts::default())?.stdout)
@@ -723,25 +530,6 @@ pub fn push_commit_to(repo: &Path, remote: &str, commit: &str, branch: &str) -> 
         GitOpts::default(),
     )?;
     Ok(())
-}
-
-/// Paths under `.uplink/` that differ from the committed `{branch}` tree.
-pub fn uplink_uncommitted_paths(repo: &Path, branch: &str) -> Result<Vec<String>> {
-    let worktree = uplink_worktree_tree(repo, branch)?;
-    let listing = if has_ref(repo, branch)? {
-        let committed = git_ok(repo, &["rev-parse", &format!("{branch}^{{tree}}")])?;
-        if committed == worktree {
-            return Ok(Vec::new());
-        }
-        git_ok(repo, &["diff", "--name-only", &committed, &worktree])?
-    } else {
-        git_ok(repo, &["ls-tree", "-r", "--name-only", &worktree])?
-    };
-    Ok(listing
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect())
 }
 
 pub fn ahead_behind(repo: &Path, local: &str, remote: &str) -> Result<(u32, u32)> {
@@ -795,19 +583,6 @@ pub fn point_branch_at(repo: &Path, branch: &str, sha: &str) -> Result<()> {
         GitOpts::default(),
     )?;
     Ok(())
-}
-
-pub fn apply_state_sha(repo: &Path, branch: &str, sha: &str) -> Result<()> {
-    if branch == STATE_BRANCH {
-        crate::lock::refuse_while_running(repo)?;
-    }
-    point_branch_at(repo, branch, sha)?;
-    let dir = repo.join(".uplink");
-    if dir.exists() {
-        fs::remove_dir_all(&dir)?;
-    }
-    ensure_uplink_excluded(repo)?;
-    restore_state_worktree(repo, branch)
 }
 
 /// Fetch `uplink/state` into a remote-tracking ref without moving the local branch.
@@ -893,25 +668,7 @@ pub fn set_state_branch(repo: &Path, branch: &str, sha: &str) -> Result<()> {
     if branch == STATE_BRANCH {
         crate::lock::refuse_while_running(repo)?;
     }
-    git(
-        repo,
-        &["update-ref", &format!("refs/heads/{branch}"), sha],
-        GitOpts::default(),
-    )?;
-    ensure_uplink_excluded(repo)?;
-    restore_state_worktree(repo, branch)
-}
-
-pub fn restore_paths_from(repo: &Path, source: &str, paths: &[String]) -> Result<()> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-    refuse_state_symlinks(repo, source, &paths)?;
-    let mut args = vec!["restore", "--source", source, "--worktree", "--"];
-    args.extend_from_slice(&paths);
-    git(repo, &args, GitOpts::default())?;
-    Ok(())
+    point_branch_at(repo, branch, sha)
 }
 
 pub fn path_exists_at(repo: &Path, sha: &str, path: &str) -> Result<bool> {
@@ -1055,17 +812,120 @@ pub fn stamp() -> String {
     now_iso()
 }
 
-pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &to)?;
-        } else {
-            fs::copy(entry.path(), to)?;
-        }
+/// The `.uplink/` folder earlier binaries kept in the checkout. State now
+/// lives only in `uplink/state` objects.
+const LEGACY_DIR: &str = ".uplink";
+
+/// Removes the `.uplink/` folder an earlier binary left in the checkout, and
+/// its line in `.git/info/exclude`, when everything in it is on
+/// `uplink/state`. Refuses when it holds anything else, so no edit is lost.
+/// Does nothing outside a checkout or without the folder.
+pub fn retire_legacy_folder(repo: &Path) -> Result<()> {
+    let dir = repo.join(LEGACY_DIR);
+    let Ok(meta) = fs::symlink_metadata(&dir) else {
+        return Ok(());
+    };
+    let toplevel = git(
+        repo,
+        &["rev-parse", "--show-toplevel"],
+        GitOpts::allow_fail(),
+    )?;
+    if toplevel.code != 0 || fs::canonicalize(&toplevel.stdout).ok() != fs::canonicalize(repo).ok()
+    {
+        return Ok(());
     }
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(Error::msg(format!(
+            "{LEGACY_DIR} in this checkout is not a folder. git uplink keeps its state only on \
+{STATE_BRANCH} now; remove {LEGACY_DIR} by hand."
+        )));
+    }
+    let uncommitted = legacy_uncommitted_paths(repo)?;
+    if !uncommitted.is_empty() {
+        return Err(Error::msg(format!(
+            "{LEGACY_DIR}/ in this checkout differs from {STATE_BRANCH}:\n  {}\n\
+git uplink keeps its state only on {STATE_BRANCH} now and no longer uses this folder.\n\
+To keep these changes, commit them on {STATE_BRANCH} from a checkout of it \
+(git worktree add <dir> {STATE_BRANCH}) and push it.\n\
+To discard them: rm -rf {LEGACY_DIR}",
+            uncommitted.join("\n  ")
+        )));
+    }
+    fs::remove_dir_all(&dir)?;
+    drop_legacy_exclude(repo)
+}
+
+/// Paths under `.uplink/` in the checkout that differ from `uplink/state`
+/// (local, else origin's), temporary files left out.
+fn legacy_uncommitted_paths(repo: &Path) -> Result<Vec<String>> {
+    let origin = format!("{COMPANY_REMOTE}/{STATE_BRANCH}");
+    let base = if has_ref(repo, STATE_BRANCH)? {
+        Some(STATE_BRANCH)
+    } else if has_ref(repo, &origin)? {
+        Some(origin.as_str())
+    } else {
+        None
+    };
+    let index = crate::state::temp_index_path(repo)?;
+    let index_opts = GitOpts {
+        extra_env: vec![(
+            "GIT_INDEX_FILE".into(),
+            index.to_string_lossy().into_owned(),
+        )],
+        ..GitOpts::default()
+    };
+    let outcome = (|| -> Result<String> {
+        match base {
+            Some(base) => git(repo, &["read-tree", base], index_opts.clone())?,
+            None => git(repo, &["read-tree", "--empty"], index_opts.clone())?,
+        };
+        git(
+            repo,
+            &[
+                "add",
+                "-f",
+                "-A",
+                "--",
+                LEGACY_DIR,
+                ":(exclude).uplink/*.tmp",
+            ],
+            index_opts.clone(),
+        )?;
+        let tree = git(repo, &["write-tree"], index_opts.clone())?.stdout;
+        match base {
+            Some(base) => git_ok(
+                repo,
+                &["diff", "--name-only", &format!("{base}^{{tree}}"), &tree],
+            ),
+            None => git_ok(repo, &["ls-tree", "-r", "--name-only", &tree]),
+        }
+    })();
+    let _ = fs::remove_file(&index);
+    Ok(outcome?
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn drop_legacy_exclude(repo: &Path) -> Result<()> {
+    let common = git_ok(repo, &["rev-parse", "--git-common-dir"])?;
+    let path = repo.join(common).join("info/exclude");
+    let Ok(current) = fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let kept: Vec<&str> = current
+        .lines()
+        .filter(|line| !matches!(line.trim(), ".uplink/" | ".uplink"))
+        .collect();
+    if kept.len() == current.lines().count() {
+        return Ok(());
+    }
+    let mut body = kept.join("\n");
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    fs::write(path, body)?;
     Ok(())
 }
 

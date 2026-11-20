@@ -27,6 +27,7 @@ mod repo;
 mod run;
 mod selfinstall;
 mod settings;
+mod state;
 mod tooling;
 mod tui;
 mod types;
@@ -41,7 +42,7 @@ pub use assess::{
     IncomingPacket, PACKAGE_CHANGE, PACKAGE_JSON, PACKAGE_MARKDOWN, PackageKind,
     TO_UPSTREAM_ENVIRONMENT, already_approved, assert_assess_ok, assess_from_message,
     assess_patch_file, assess_rewrite, change_between, changed_lines, company_commit_message,
-    cutoff_marker, depends_on_from_message, export_commit_message, extras_dir,
+    cutoff_marker, depends_on_from_message, export_commit_message, export_paths, extras_dir,
     format_approval_receipt, format_approver_packet, format_assess_checks_markdown,
     format_assess_markdown, format_contribution_packet, format_contribution_packet_with_extras,
     format_delta_approver_packet, format_incoming_packet, from_upstream_report_paths,
@@ -83,7 +84,7 @@ pub use ops::{
     split_preflight, stale_approvals, stale_approvals_at, status_report, store_assess_result,
     store_patch_extras, submit_patch, submit_patch_with, summarize_queue, sync, sync_with,
     terminal_upgrade_asker, transfer_patch, transfer_patch_with, transfer_preflight, trim_deps,
-    working_snapshot, write_queue,
+    working_snapshot,
 };
 pub use preflight::{
     FirstBad, IncomingPreflight, PreflightReport, RebuildReport, ScriptEcho, ScriptVerdict,
@@ -93,11 +94,14 @@ pub use preflight::{
     run_preflight_command_in, set_script_echo,
 };
 pub use progress::{ProgressMode, StepOutcome, StepProgress, format_step_line};
-pub use repo::{FileRevision, commit_queue, file_history, patch_state_commit, queue_at, show_at};
+pub use repo::{
+    FileRevision, file_history, patch_state_commit, queue_at, retire_legacy_folder, show_at,
+};
 pub use selfinstall::{
     DEFAULT_REPO, SelfConfig, SelfEnv, self_available, self_check, self_list, self_update, self_use,
 };
 pub use settings::{SETTINGS_PATH, Settings, SettingsFlags};
+pub use state::StateTree;
 pub use types::{
     AssessReport, CheckStatus, ConflictCause, DEFAULT_CUTOFF, Forge, GateKind, MergeVia,
     PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchExtras, PatchIntent, PatchLayer,

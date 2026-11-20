@@ -298,7 +298,7 @@ fn add_merged_pr(
         skip("the commit is not in the range being synced");
         return Ok(());
     };
-    let contained = patch_already_applied_on(repo, &commit.sha, &repo.join(patch_path(id)?))?;
+    let contained = patch_already_applied_on(repo, &commit.sha, &patch_text(repo, id)?)?;
     commit.class = CommitClass::Ours(id.to_string());
     reconciliation.merges.push(PendingMerge {
         id: id.to_string(),
@@ -319,14 +319,15 @@ fn residual(
     pending_sha: &str,
     merges: &[PendingMerge],
 ) -> Result<Option<Residual>> {
+    let state = StateTree::head(repo)?;
     let worktree = TempWorktree::add(repo, "uplink-incoming", from)?;
     let dir = worktree.dir.as_path();
     for patch in apply_order_upstream_layer(queue)? {
         if !merges.iter().any(|merge| merge.id == patch.id) {
             continue;
         }
-        let file = repo.join(patch_path(&patch.id)?);
-        if apply_abs(dir, &file, patch.subject())? == ApplyOutcome::Conflict {
+        let text = state.require_patch(&patch.id)?;
+        if apply_text(dir, &text, patch.subject())? == ApplyOutcome::Conflict {
             git(dir, &["reset", "--hard", "--quiet"], GitOpts::default())?;
             git(dir, &["clean", "-fdq"], GitOpts::default())?;
         }
@@ -431,7 +432,7 @@ pub(super) fn output_tail(output: &str) -> String {
 pub(super) fn persist_conflict(
     repo: &Path,
     queue: &mut QueueState,
-    snapshot: &Path,
+    state: &mut StateTree,
     company_branch: &str,
     upstream_ref: &str,
     patch: &Patch,
@@ -516,10 +517,8 @@ pub(super) fn persist_conflict(
     });
 
     restore_company_branch(repo, company_branch)?;
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    copy_dir(&snapshot.join(".uplink"), &repo.join(".uplink"))?;
-    write_queue_file(repo, queue)?;
-    commit_queue(repo, &format!("uplink: conflict on {}", patch.id))?;
+    state.write_queue(queue)?;
+    state.commit_to_branch(&format!("uplink: conflict on {}", patch.id))?;
     Ok(ConflictError::new(message, &patch.id, files))
 }
 
@@ -532,11 +531,15 @@ pub(super) fn persist_conflict(
 /// as verified, and the rebuild, which only moves those patches from the
 /// queue into upstream, is not tested. Company main can differ from that
 /// rebuild by a merge that is not imported yet, so it is no measure here.
+///
+/// `receipt`, the from-upstream approval receipt, goes into the first
+/// commit: the approval and the upstream it accepts are never apart.
 pub(super) fn apply_fetched_upstream(
     repo: &Path,
     sha: &str,
     merges: &[PendingMerge],
     preflight: Option<&ScriptVerdict>,
+    receipt: Option<&str>,
 ) -> Result<QueueState> {
     let queue = read_queue_file(repo)?;
     let token = if let Some(preflight) = preflight {
@@ -557,15 +560,27 @@ pub(super) fn apply_fetched_upstream(
         rev_token(repo, &queue, sha).ok()
     };
     promote_upstream(repo, sha)?;
+    let mut state = StateTree::head(repo)?;
+    if let Some(receipt) = receipt {
+        let mut body = receipt.to_string();
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        state.write(&from_upstream_report_paths().2, body);
+    }
     if let Some(token) = token {
-        let mut queue = read_queue_file(repo)?;
+        let mut queue = state.queue()?;
         queue.verified_upstream = Some(VerifiedUpstream {
             sha: sha.to_string(),
             token,
             at: stamp(),
         });
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, "uplink: record verified upstream")?;
+        state.write_queue(&queue)?;
+    }
+    if receipt.is_some() {
+        state.commit_to_branch(&format!("uplink: accept upstream {sha}"))?;
+    } else {
+        state.commit_to_branch("uplink: record verified upstream")?;
     }
     let mut merged = Vec::new();
     for merge in merges {
@@ -595,16 +610,14 @@ pub(super) fn apply_fetched_upstream(
                     format!("Marked merged: {}", merged.join(", "))
                 }),
             });
-            write_queue_file(repo, &queue)?;
-            commit_queue(repo, "uplink: sync with upstream")?;
+            commit_queue(repo, &queue, "uplink: sync with upstream")?;
             Ok(queue)
         }
         Err(Error::Conflict(_)) => {
             let mut queue = read_queue_file(repo)?;
             if queue.pending_upstream.is_some() {
                 queue.pending_upstream = None;
-                write_queue_file(repo, &queue)?;
-                commit_queue(repo, "uplink: clear pending upstream")?;
+                commit_queue(repo, &queue, "uplink: clear pending upstream")?;
             }
             Ok(queue)
         }
@@ -639,27 +652,23 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
                 result: "ok".into(),
                 message: Some("Synced with upstream".into()),
             });
-            write_queue_file(repo, &queue)?;
-            commit_queue(repo, "uplink: sync with upstream")?;
+            commit_queue(repo, &queue, "uplink: sync with upstream")?;
             return Ok(SyncResult::applied(queue).since(&fetched));
         }
         let reconciliation = reconcile_incoming(repo, &fetched, from_sha.as_deref(), &sha, &opts)?;
         if reconciliation.residual.is_none() {
-            let queue = apply_fetched_upstream(repo, &sha, &reconciliation.merges, None)?;
+            let queue = apply_fetched_upstream(repo, &sha, &reconciliation.merges, None, None)?;
             return Ok(SyncResult::applied_with(queue, reconciliation.merges).since(&fetched));
         }
         let report = write_incoming_packet(repo, &fetched, &reconciliation)?;
         let report_path = from_upstream_report_paths().1;
-        let abs = repo.join(&report_path);
-        if let Some(parent) = abs.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let mut body = report.clone();
         if !body.ends_with('\n') {
             body.push('\n');
         }
-        crate::queue::write_atomic(&abs, body)?;
-        let mut queue = read_queue_file(repo)?;
+        let mut state = StateTree::head(repo)?;
+        state.write(&report_path, body);
+        let mut queue = state.queue()?;
         queue.pending_upstream = Some(PendingUpstream {
             sha: reconciliation.pending_sha.clone(),
             from_sha: reconciliation.from_sha.clone(),
@@ -677,8 +686,8 @@ pub fn sync_with(repo: &Path, opts: SyncOpts) -> Result<SyncResult> {
                 reconciliation.pending_sha
             )),
         });
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, "uplink: from-upstream packet")?;
+        state.write_queue(&queue)?;
+        state.commit_to_branch("uplink: from-upstream packet")?;
         Ok(SyncResult {
             queue,
             needs_approval: true,
@@ -702,7 +711,7 @@ pub fn accept_upstream(repo: &Path) -> Result<SyncResult> {
 /// Promotes the pending upstream. With `expected_sha`, refuses when the
 /// pending upstream is not the one that was reviewed.
 pub fn accept_upstream_at(repo: &Path, expected_sha: Option<&str>) -> Result<SyncResult> {
-    accept_upstream_with(repo, expected_sha, &ScriptVerdict::Run)
+    accept_upstream_with(repo, expected_sha, &ScriptVerdict::Run, None)
 }
 
 /// The pending upstream, checked against the reviewed `expected_sha`.
@@ -814,18 +823,20 @@ pub fn accept_upstream_preflight(
             token,
             at: stamp(),
         });
-        let mut rebuild = probe_rebuild(repo, &queue, &pending.sha, false)?;
+        let mut rebuild =
+            probe_rebuild(repo, &queue, &StateTree::head(repo)?, &pending.sha, false)?;
         rebuild.upstream = Some(verdict);
         Ok(PreflightReport::of_rebuild(rebuild))
     })
 }
 
 /// [`accept_upstream_at`], taking the verdicts of `preflight.sh` from
-/// `preflight`.
+/// `preflight`. `receipt` is committed with the first commit of the accept.
 pub fn accept_upstream_with(
     repo: &Path,
     expected_sha: Option<&str>,
     preflight: &ScriptVerdict,
+    receipt: Option<&str>,
 ) -> Result<SyncResult> {
     with_queue_lock(repo, || {
         let queue = read_queue_file(repo)?;
@@ -835,7 +846,8 @@ pub fn accept_upstream_with(
             return Err(pending_unavailable(&pending.sha));
         }
         let merges = pending_merges(repo, &queue, &pending)?;
-        let applied = apply_fetched_upstream(repo, &pending.sha, &merges, Some(preflight))?;
+        let applied =
+            apply_fetched_upstream(repo, &pending.sha, &merges, Some(preflight), receipt)?;
         Ok(SyncResult::applied_with(applied, merges).since(&queue))
     })
 }

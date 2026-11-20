@@ -15,7 +15,7 @@ pub struct ResetResult {
 pub type RefreshResult = ResetResult;
 
 /// Fetch origin tracking refs for company main, `uplink/state`, `uplink/upstream`,
-/// and `uplink/hooks` when origin has it. Does not move local branches or restore `.uplink/`.
+/// and `uplink/hooks` when origin has it. Does not move local branches.
 pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
     let state_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, STATE_BRANCH)?;
     let upstream_sha = fetch_tracking_sha(repo, COMPANY_REMOTE, UPSTREAM_REF)?;
@@ -34,13 +34,12 @@ pub fn refresh_from_origin(repo: &Path) -> Result<RefreshResult> {
 
 /// Fetch origin and hard-reset company main, `uplink/state`, `uplink/upstream`,
 /// and `uplink/hooks` when origin has it. A local `uplink/hooks` origin lacks
-/// is kept. Leaves HEAD on the configured internal branch with `.uplink/`
-/// restored from origin.
+/// is kept. Leaves HEAD on the configured internal branch.
 pub fn reset_from_origin(repo: &Path) -> Result<ResetResult> {
     crate::lock::refuse_while_running(repo)?;
     let fetched = refresh_from_origin(repo)?;
     refresh_company_branch(repo, COMPANY_REMOTE, &fetched.internal_branch)?;
-    apply_state_sha(repo, STATE_BRANCH, &fetched.state_sha)?;
+    set_state_branch(repo, STATE_BRANCH, &fetched.state_sha)?;
     point_branch_at(repo, UPSTREAM_REF, &fetched.upstream_sha)?;
     if let Some(hooks_sha) = &fetched.hooks_sha {
         point_branch_at(repo, HOOKS_BRANCH, hooks_sha)?;
@@ -69,15 +68,14 @@ const RECORD_PUSH_ATTEMPTS: u32 = 8;
 /// Runs `record` on `uplink/state` as `remote` has it, and pushes what it
 /// recorded there as a fast-forward. Never forced.
 ///
-/// Before each attempt, local `uplink/state` and `.uplink/` are moved to the
-/// remote's `uplink/state`, and the company branch and `uplink/upstream` back
+/// Before each attempt, local `uplink/state` is moved to the remote's, and the company branch and `uplink/upstream` back
 /// to where they were, so `record` (and a rebuild or sync it runs) works on
 /// the newest state from the same start. When the push
 /// loses a race, `record` runs again on the state that won. `record` must
 /// be safe to run again: an import is, since it records a pull request once.
 ///
-/// Refuses when `.uplink/` has uncommitted changes, or local `uplink/state`
-/// has commits the remote lacks: moving it would lose them.
+/// Refuses when local `uplink/state` has commits the remote lacks: moving it
+/// would lose them.
 ///
 /// Returns what `record` returned and the remote's `uplink/state` it was
 /// recorded on.
@@ -90,8 +88,8 @@ pub fn record_on_remote<T>(
 }
 
 /// [`record_on_remote`], pushing only when `keep` says so for what `record`
-/// returned. Otherwise local `uplink/state` and `.uplink/` go back to the
-/// remote's and nothing is pushed.
+/// returned. Otherwise local `uplink/state` goes back to the remote's and
+/// nothing is pushed.
 pub fn record_on_remote_if<T>(
     repo: &Path,
     remote: &str,
@@ -99,14 +97,7 @@ pub fn record_on_remote_if<T>(
     keep: impl Fn(&T) -> bool,
 ) -> Result<(T, String)> {
     with_queue_lock(repo, || {
-        ensure_state_worktree(repo)?;
-        let uncommitted = uplink_uncommitted_paths(repo, STATE_BRANCH)?;
-        if !uncommitted.is_empty() {
-            return Err(Error::msg(format!(
-                ".uplink/ has uncommitted changes ({}); commit or reset them first",
-                uncommitted.join(", ")
-            )));
-        }
+        ensure_state_branch(repo)?;
         let company_branch = read_queue_file(repo)?.config.internal_branch;
         let main_start = if has_ref(repo, &company_branch)? {
             Some(rev_parse(repo, &company_branch)?)
@@ -132,7 +123,7 @@ pub fn record_on_remote_if<T>(
                 )));
             }
             if local != base {
-                apply_state_sha(repo, STATE_BRANCH, &base)?;
+                set_state_branch(repo, STATE_BRANCH, &base)?;
             }
             if let Some(start) = main_start.as_deref()
                 && rev_parse(repo, &company_branch)? != start
@@ -153,7 +144,7 @@ pub fn record_on_remote_if<T>(
                 return Ok((value, base));
             }
             if !keep(&value) {
-                apply_state_sha(repo, STATE_BRANCH, &base)?;
+                set_state_branch(repo, STATE_BRANCH, &base)?;
                 return Ok((value, base));
             }
             match push_state_branch(repo, remote, STATE_BRANCH) {
@@ -598,8 +589,9 @@ pub(super) fn restack_local_patches(
 
     let outcome = (|| -> Result<()> {
         set_state_branch(repo, branch, remote_sha)?;
-        restore_paths_from(repo, local_sha, &paths)?;
-        let mut queue = read_queue_file(repo)?;
+        let mut state = StateTree::head(repo)?;
+        state.copy_from(local_sha, &paths)?;
+        let mut queue = state.queue()?;
         for (patch, layer) in &replay {
             replace_patch(&mut queue, patch.clone(), *layer);
         }
@@ -608,8 +600,8 @@ pub(super) fn restack_local_patches(
         }
         queue.upstream.extend(carry_upstream);
         queue.internal.extend(carry_internal);
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, "uplink: restack onto origin")?;
+        state.write_queue(&queue)?;
+        state.commit_to_branch("uplink: restack onto origin")?;
         Ok(())
     })();
     if let Err(err) = outcome {
@@ -724,7 +716,7 @@ pub(super) fn replace_patch(queue: &mut QueueState, patch: Patch, layer: PatchLa
 pub(super) fn assert_change_already_on_company(
     repo: &Path,
     queue: &QueueState,
-    patch_file: &Path,
+    patch_file: &str,
     title: &str,
     head_sha: &str,
 ) -> Result<()> {
@@ -805,7 +797,7 @@ pub(super) fn mark_empty_if_already_upstream(repo: &Path, id: &str) -> Result<()
     if !queue.is_upstream(id) || !has_ref(repo, "uplink/upstream")? {
         return Ok(());
     }
-    let patch_file = repo.join(patch_path(id)?);
+    let patch_file = StateTree::head(repo)?.require_patch(id)?;
     if !patch_already_applied_on(repo, "uplink/upstream", &patch_file)? {
         return Ok(());
     }
@@ -822,8 +814,7 @@ pub(super) fn mark_empty_if_already_upstream(repo: &Path, id: &str) -> Result<()
         merged,
         merged_detail(MergeVia::EmptyRebase, None),
     )?;
-    write_queue_file(repo, &queue)?;
-    commit_queue(repo, &format!("uplink: empty apply {id}"))?;
+    commit_queue(repo, &queue, &format!("uplink: empty apply {id}"))?;
     git(
         repo,
         &["checkout", "-f", "--quiet", &company_branch],

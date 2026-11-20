@@ -62,19 +62,19 @@ pub fn split_preflight(
 }
 
 fn start_split(repo: &Path, id: &str) -> Result<SplitResult> {
-    let queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let queue = state.queue()?;
     validate_rewrite(&queue, id, "split")?;
     let upstream_ref = upstream_ref_or_company(repo, &queue)?;
     ensure_clean_worktree(repo, "a split")?;
     let (original, original_sha) = checkout_identity(repo)?;
-    let snapshot = snapshot_uplink(repo)?;
     let outcome = (|| -> Result<(String, String, String)> {
         git(
             repo,
             &["checkout", "-f", "--quiet", "--detach", &upstream_ref],
             GitOpts::default(),
         )?;
-        let target = match apply_queue_preview(repo, &queue, &snapshot, id, true)? {
+        let target = match apply_queue_preview(repo, &queue, &mut state, id, true)? {
             PreviewOutcome::Conflict { .. } => {
                 return Err(Error::msg(format!(
                     "{id} does not apply on {upstream_ref}; run sync first"
@@ -95,9 +95,8 @@ fn start_split(repo: &Path, id: &str) -> Result<SplitResult> {
         git(repo, &["branch", "-f", &work, &after], GitOpts::default())?;
         Ok((base, work, onto))
     })();
-    let _ = fs::remove_dir_all(&snapshot);
     let restored = restore_checkout(repo, &original, &original_sha)
-        .and_then(|_| crate::repo::ensure_state_worktree(repo));
+        .and_then(|_| crate::repo::ensure_state_branch(repo));
     let (base, work, onto) = outcome?;
     restored?;
     let expect = expect_lines(&queue, &[id.to_string()])?;
@@ -194,8 +193,8 @@ fn complete_split(
             "Check out {base} or {work} before completing the split of {id} (currently on {branch})."
         )));
     }
-    restore_uplink_from_state(repo)?;
-    let mut queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let mut queue = state.queue()?;
     let before_queue = queue.clone();
     let patch = validate_rewrite(&queue, id, "split")?;
     let pairs = parse_expect(expect)?;
@@ -276,17 +275,15 @@ fn complete_split(
                 ],
                 GitOpts::default(),
             )?;
-            fs::create_dir_all(repo.join(".uplink/patches"))?;
-            let rel = patch_path(&part.id)?;
-            crate::queue::write_atomic(&repo.join(&rel), format_patch_at_head(repo)?)?;
-            part.patch_id_stable = Some(stable_patch_id(repo, &rel.to_string_lossy())?);
+            let text = format_patch_at_head(repo)?;
+            part.patch_id_stable = Some(stable_patch_id_from_contents(repo, &text)?);
+            state.write_patch(&part.id, text)?;
             prev = rev_parse(repo, "HEAD")?;
             parts.push(part);
         }
         Ok(parts)
     })();
     let put_back = |repo: &Path| -> Result<()> {
-        restore_uplink_from_state(repo)?;
         git(
             repo,
             &["checkout", "-f", "--quiet", &branch],
@@ -321,7 +318,7 @@ fn complete_split(
     let how = format!("Split into {}", part_ids.join(", "));
     for part in parts.iter_mut() {
         if part.id == id {
-            part.status = status_after_rewrite(repo, part);
+            part.status = status_after_rewrite(repo, part, &state.require_patch(id)?);
             let detail = rewrite_event_detail(part.status, &how);
             add_event(part, "split", detail);
         } else {
@@ -361,18 +358,18 @@ fn complete_split(
     } else {
         let last = get_patch(&queue, &last_id)?;
         export_preflight(
-            repo,
+            &state,
             &queue,
             last,
-            &repo.join(patch_path(&last_id)?),
+            &state.require_patch(&last_id)?,
             None,
             verdict,
         )
-        .and_then(|token| assert_upstream_layer_applies(repo, &queue).map(|_| token))
+        .and_then(|token| assert_upstream_layer_applies(&state, &queue).map(|_| token))
     };
     if checks.is_probe() {
         let report = probe_report(layer_checks, || {
-            probe_rebuild(repo, &queue, &upstream_ref, false)
+            probe_rebuild(repo, &queue, &state, &upstream_ref, false)
         });
         put_back(repo)?;
         return Ok(Checked::Probed(report?));
@@ -382,11 +379,8 @@ fn complete_split(
     }
     layer_checks?;
 
-    write_queue_file(repo, &queue)?;
-    commit_queue(
-        repo,
-        &format!("uplink: split {id} into {}", part_ids.join(", ")),
-    )?;
+    state.write_queue(&queue)?;
+    state.commit_to_branch(&format!("uplink: split {id} into {}", part_ids.join(", ")))?;
     let queue = rebuild_checked(repo, verdict)?;
     let ready_to_submit = super::submit::newly_ready_to_submit(&before_queue, &queue);
     Ok(Checked::Recorded(SplitResult {

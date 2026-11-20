@@ -1,7 +1,7 @@
 use super::*;
 
 /// The queue as origin has it: `origin/uplink/state` as last fetched. Read
-/// with git; the `.uplink/` folder and local branches are never read.
+/// with git; local branches are never read.
 #[derive(Debug)]
 pub struct OriginStatus {
     /// `origin/uplink/state`.
@@ -16,7 +16,7 @@ pub struct OriginStatus {
     pub stale_approvals: Vec<String>,
 }
 
-/// The working queue in `.uplink/` and the product files at HEAD, for
+/// The queue on local `uplink/state` and the product files at HEAD, for
 /// inspecting what a command did in this clone. Commands show the queue
 /// with [`origin_status`] instead.
 pub struct WorkingSnapshot {

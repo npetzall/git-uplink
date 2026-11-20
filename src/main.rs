@@ -23,28 +23,28 @@ use git_uplink::{
     add_patch, add_patch_or_gate, adopt_branch, adopted_next_steps, already_approved,
     amend_patch_with, amend_preflight, approve_on_remote, approve_patch_reviewed,
     assess_from_message, assess_patch_file, assess_patch_for_packet, assess_rewrite,
-    change_between, command_preflight, command_tested, commit_queue, count_files, cutoff_marker,
-    doctor, drop_patch, existing_patch_preflight, export_tested, fetch_pending_upstream,
-    first_line, format_approval_receipt, format_assess_markdown,
-    format_contribution_packet_with_extras, format_doctor_summary, format_init_summary,
-    format_product_changes, format_status_table, from_upstream_report_paths, git_ok,
-    hooks_publish_hint, incoming_change_preflight, incoming_depends_on, init, load_groups_file,
-    mark_merged, mark_rejected, mark_waiting, message_subject, newly_ready_to_submit,
-    origin_status, parse_depends_on, parse_github_repo, parse_pull_request_url, patch_text,
-    preview_message, public_subject_and_body, push_imported_main, push_queue, push_rebuilt_main,
-    read_queue, rebase_onto_main, rebase_plan, rebuild_inline, rebuild_preflight, rebuild_with,
-    record_gated_pr, record_on_remote, record_pull_request, refresh_from_origin,
-    refuse_script_with_credentials, report_paths, reset_from_origin, resolve_conflict_with,
-    resolve_preflight, restack, resume_rebuild, review_token, review_token_path, set_script_echo,
-    split_subject_body, status_report, store_assess_result, store_patch_extras,
-    strip_html_comments, submit_patch_with, sync_with, transfer_patch_with, transfer_preflight,
-    trim_deps, upstream_pr_body, write_man_pages,
+    change_between, command_preflight, command_tested, count_files, cutoff_marker, doctor,
+    drop_patch, existing_patch_preflight, export_tested, fetch_pending_upstream, first_line,
+    format_approval_receipt, format_assess_markdown, format_contribution_packet_with_extras,
+    format_doctor_summary, format_init_summary, format_product_changes, format_status_table,
+    git_ok, hooks_publish_hint, incoming_change_preflight, incoming_depends_on, init,
+    load_groups_file, mark_merged, mark_rejected, mark_waiting, message_subject,
+    newly_ready_to_submit, origin_status, parse_depends_on, parse_github_repo,
+    parse_pull_request_url, patch_text, preview_message, public_subject_and_body,
+    push_imported_main, push_queue, push_rebuilt_main, read_queue, rebase_onto_main, rebase_plan,
+    rebuild_inline, rebuild_preflight, rebuild_with, record_gated_pr, record_on_remote,
+    record_pull_request, refresh_from_origin, refuse_script_with_credentials, report_paths,
+    reset_from_origin, resolve_conflict_with, resolve_preflight, restack, resume_rebuild,
+    review_token, review_token_path, set_script_echo, split_subject_body, status_report,
+    store_assess_result, store_patch_extras, strip_html_comments, submit_patch_with, sync_with,
+    transfer_patch_with, transfer_preflight, trim_deps, upstream_pr_body, write_man_pages,
 };
 use git_uplink::{
     MergeResult, SplitResult, complete_merge_with, gate_base_comments, merge_patches,
     merge_preflight, split_patch_with, split_preflight,
 };
 use git_uplink::{SelfEnv, self_available, self_check, self_list, self_update, self_use};
+use git_uplink::{StateTree, retire_legacy_folder};
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -79,7 +79,16 @@ fn read_commit_message(
     Ok(message.unwrap_or_else(|| fallback.to_string()))
 }
 
+/// Writes `markdown` to `file`, relative to the checkout. A path under
+/// `.uplink/` is refused: state lives only on uplink/state.
 fn write_markdown_file(repo: &Path, file: &Path, markdown: &str) -> Result<(), Error> {
+    if !file.is_absolute() && file.starts_with(".uplink") {
+        return Err(Error::msg(format!(
+            "{} is under .uplink/; git uplink keeps its state on {STATE_BRANCH} only. \
+Leave the option out to store it there.",
+            file.display()
+        )));
+    }
     let abs = if file.is_absolute() {
         file.to_path_buf()
     } else {
@@ -93,6 +102,30 @@ fn write_markdown_file(repo: &Path, file: &Path, markdown: &str) -> Result<(), E
         .map_or(Ok(()), fs::create_dir_all)
         .and_then(|()| fs::write(&abs, body))
         .map_err(|err| Error::msg(format!("could not write {}: {err}", abs.display())))
+}
+
+/// Stages `markdown` at `path` on `state`, ending in a newline.
+fn stage_markdown(state: &mut StateTree, path: &str, markdown: &str) {
+    let mut body = markdown.to_string();
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    state.write(path, body);
+}
+
+/// Where files for the forge to read go (PR descriptions and comments, a
+/// commit message): `<git-common-dir>/uplink/out/<id>/`, outside the work
+/// tree and never on uplink/state.
+fn forge_out_dir(repo: &Path, id: &str) -> Result<PathBuf, Error> {
+    let common = PathBuf::from(git_ok(repo, &["rev-parse", "--git-common-dir"])?);
+    let common = if common.is_absolute() {
+        common
+    } else {
+        repo.join(common)
+    };
+    let id = report_paths(id)?.0;
+    let id = id.rsplit('/').next().unwrap_or_default();
+    Ok(common.join("uplink/out").join(id))
 }
 
 fn github_run_url() -> String {
@@ -575,9 +608,10 @@ fn write_gated_pr_files(
     body: &str,
     comment: &str,
 ) -> Result<Option<(String, String)>, Error> {
-    let Ok((dir, _, _)) = report_paths(id) else {
+    let Ok(dir) = forge_out_dir(repo, id) else {
         return Ok(None);
     };
+    let dir = dir.display();
     let body_file = format!("{dir}/{name}.md");
     let comment_file = format!("{dir}/{name}-comment.md");
     write_markdown_file(repo, Path::new(&body_file), body)?;
@@ -805,9 +839,10 @@ fn submit_artifact(
     let branch = exported.branch.as_str();
     let body = upstream_pr_body(patch);
     let (title, _) = public_subject_and_body(patch);
-    let Ok((report_dir, _, _)) = report_paths(&patch.id) else {
+    let Ok(report_dir) = forge_out_dir(repo, &patch.id) else {
         return Ok(());
     };
+    let report_dir = report_dir.display();
     let body_file = format!("{report_dir}/pr.md");
     write_markdown_file(repo, Path::new(&body_file), &body)?;
     let existing = patch.upstream.as_ref().and_then(|u| {
@@ -1770,12 +1805,16 @@ fn write_report(
     let packet = format_contribution_packet_with_extras(repo, patch, extra_dir.as_deref())?;
     let default_out = report_paths(id)?.1;
     let dest = out.clone().unwrap_or_else(|| PathBuf::from(&default_out));
-    write_markdown_file(repo, &dest, &packet)?;
+    let mut state = StateTree::head(repo)?;
+    match out {
+        Some(out) => write_markdown_file(repo, out, &packet)?,
+        None => stage_markdown(&mut state, &default_out, &packet),
+    }
     // What the packet is for: `approve --reviewed` takes it back.
     if let Ok(token) = review_token(repo, patch) {
-        write_markdown_file(repo, Path::new(&review_token_path(id)?), &token)?;
+        stage_markdown(&mut state, &review_token_path(id)?, &token);
     }
-    commit_queue(repo, &format!("uplink: contribution packet {id}"))?;
+    state.commit_to_branch(&format!("uplink: contribution packet {id}"))?;
     let not_ready = queue.is_upstream(id) && patch.assess.as_ref().is_some_and(|report| !report.ok);
     Ok((packet, dest, not_ready))
 }
@@ -1863,7 +1902,8 @@ fn cmd_preflight(
     let queue = read_queue(repo)?;
     let mut patch_token = None;
     let (result, depends_on, subject) = if let Some(id) = id {
-        let result = existing_patch_preflight(repo, &queue, &id, incoming.hooks_ref.as_deref());
+        let state = StateTree::head(repo)?;
+        let result = existing_patch_preflight(&state, &queue, &id, incoming.hooks_ref.as_deref());
         // An internal or tooling patch has no export tree.
         match queue.upstream.iter().find(|patch| patch.id == id) {
             Some(patch) => {
@@ -1988,8 +2028,9 @@ fn cmd_approve(
         Some(&token),
     );
     let default_out = report_paths(id)?.2;
-    let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
-    write_markdown_file(repo, &dest, &receipt.text)?;
+    if let Some(out) = &out {
+        write_markdown_file(repo, out, &receipt.text)?;
+    }
     let patch = approve_patch_reviewed(
         repo,
         id,
@@ -1997,7 +2038,12 @@ fn cmd_approve(
         Some(&receipt.run_url),
         Some(&token),
     )?;
-    commit_queue(repo, &format!("uplink: to-upstream approval receipt {id}"))?;
+    if out.is_none() {
+        let mut state = StateTree::head(repo)?;
+        stage_markdown(&mut state, &default_out, &receipt.text);
+        state.commit_to_branch(&format!("uplink: to-upstream approval receipt {id}"))?;
+    }
+    let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
     println!("{}", receipt.text);
     eprintln!("{} approved", patch.id);
     eprintln!("Wrote {}", dest.display());
@@ -2013,12 +2059,10 @@ fn cmd_approve_push(
     reviewed: Option<&str>,
 ) -> Result<(), Error> {
     let default_out = report_paths(id)?.2;
+    // Without --receipt-out the receipt is committed with the approval, as
+    // without --push; with it, it is only written there.
+    let in_state = out.is_none().then_some(default_out.as_str());
     let dest = out.unwrap_or_else(|| PathBuf::from(&default_out));
-    // A receipt under .uplink/ is committed with the approval, as without
-    // --push; one elsewhere is only written here.
-    let in_state = dest
-        .to_str()
-        .filter(|path| !dest.is_absolute() && path.starts_with(".uplink/"));
     let outcome = approve_on_remote(repo, id, "origin", reviewed, in_state, |base, token| {
         let receipt = build_receipt_at(
             id,
@@ -2178,9 +2222,8 @@ fn accept_upstream_once(
         FROM_UPSTREAM_ENVIRONMENT,
         None,
     );
-    let dest = PathBuf::from(from_upstream_report_paths().2);
-    write_markdown_file(repo, &dest, &receipt.text)?;
-    Ok((accept_upstream_with(repo, sha, verdict)?, receipt.text))
+    let result = accept_upstream_with(repo, sha, verdict, Some(&receipt.text))?;
+    Ok((result, receipt.text))
 }
 
 fn cmd_gated(
@@ -2701,6 +2744,19 @@ fn run() -> Result<(), Error> {
     let cli = Cli::from_arg_matches(&cli::command(VERSION).get_matches())
         .unwrap_or_else(|err| err.exit());
     let repo = repo_root(env::current_dir()?);
+    // The folder earlier binaries kept state in goes before anything reads
+    // state. Commands that never touch a queue leave it alone.
+    if !matches!(
+        cli.command,
+        Commands::Man { .. }
+            | Commands::SelfUpdate { .. }
+            | Commands::SelfUse { .. }
+            | Commands::SelfList
+            | Commands::SelfAvailable
+            | Commands::SelfCheck
+    ) {
+        retire_legacy_folder(&repo)?;
+    }
     // Only plain `preflight` has a stdout that is for reading.
     set_script_echo(match &cli.command {
         Commands::Preflight { json: false, .. } => ScriptEcho::Stdout,

@@ -19,13 +19,15 @@ fn patch(id: &str, title: &str) -> Patch {
 fn only_the_legacy_tooling_patch_is_found_by_content() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
-    fs::create_dir_all(repo.join(".uplink/patches")).unwrap();
+    git_ok(repo, &["init", "-q"]).unwrap();
+    let mut state = StateTree::at(repo, None).unwrap();
     for id in ["upl_aaaaaaaaaa", "upl_bbbbbbbbbb", "upl_cccccccccc"] {
-        fs::write(
-            repo.join(format!(".uplink/patches/{id}.patch")),
-            "diff --git a/.github/workflows/uplink-pr.yml b/.github/workflows/uplink-pr.yml\n",
-        )
-        .unwrap();
+        state
+            .write_patch(
+                id,
+                "diff --git a/.github/workflows/uplink-pr.yml b/.github/workflows/uplink-pr.yml\n",
+            )
+            .unwrap();
     }
     let mut queue = QueueState::empty(Default::default());
     queue
@@ -34,13 +36,13 @@ fn only_the_legacy_tooling_patch_is_found_by_content() {
     queue
         .upstream
         .push(patch("upl_bbbbbbbbbb", TOOLING_PATCH_TITLE));
-    assert_eq!(find_tooling_patch(&queue, repo).unwrap(), None);
+    assert_eq!(find_tooling_patch(&queue, &state).unwrap(), None);
 
     queue
         .internal
         .push(patch("upl_cccccccccc", TOOLING_PATCH_TITLE));
     assert_eq!(
-        find_tooling_patch(&queue, repo).unwrap().as_deref(),
+        find_tooling_patch(&queue, &state).unwrap().as_deref(),
         Some("upl_cccccccccc")
     );
 }
@@ -977,6 +979,40 @@ fn import_keeps_a_failed_import_and_never_overwrites_a_later_merge() {
                 && action.contains("UPLINK_INTERNAL_TOKEN: ${{ inputs.token }}"),
             "{forge:?}\n{action}"
         );
+    }
+}
+
+/// State is on `uplink/state` only: no step reads `.uplink/` from the
+/// checkout. A path under it is read with `git show uplink/state:`, the
+/// contents API or a blob URL, and the gate may name it in a pathspec.
+#[test]
+fn no_workflow_reads_uplink_state_from_the_checkout() {
+    for forge in [Forge::Github, Forge::TryItOnGithub] {
+        for (path, body) in composed_files(forge).unwrap() {
+            if !(path.ends_with(".yml") || path.ends_with(".yaml")) {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&body);
+            for line in text.lines() {
+                let line = line.trim();
+                let mut rest = line;
+                while let Some(at) = rest.find(".uplink/") {
+                    let before = &rest[..at];
+                    let read_from_state = before.ends_with("uplink/state:")
+                        || before.ends_with("contents/")
+                        || before.contains("/blob/")
+                        || before.ends_with("dir=\"")
+                        || line.starts_with('#')
+                        || before.ends_with("'^\\")
+                        || line.contains("Gated PRs must not change files under");
+                    assert!(
+                        read_from_state,
+                        "{forge:?} {path} reads .uplink/ from the checkout: {line}"
+                    );
+                    rest = &rest[at + ".uplink/".len()..];
+                }
+            }
+        }
     }
 }
 

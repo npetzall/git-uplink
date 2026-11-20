@@ -199,7 +199,7 @@ export function syncFromUpstream(conflictId?: string): LabOperation[] {
     ciJob(
       "Uplink sync",
       ["git uplink init", "git uplink sync"],
-      "Inspect writes .uplink/reports/from-upstream/incoming.md. Apply job waits on Environment from-upstream.",
+      "Inspect writes .uplink/reports/from-upstream/incoming.md on uplink/state. Apply job waits on Environment from-upstream.",
     ),
     ciJob(
       "Uplink sync",

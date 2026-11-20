@@ -34,7 +34,7 @@ sequenceDiagram
   participant State as uplink_state
   participant Upstream as uplink_upstream
   participant Main as company_main
-  State->>State: snapshot .uplink
+  State->>State: read queue and patches from uplink/state
   Main->>Upstream: detach at uplink/upstream
   loop active patches tooling then upstream then internal
     Upstream->>Upstream: git apply patch
@@ -48,7 +48,7 @@ sequenceDiagram
     end
   end
   Upstream->>Main: force company main to last_good
-  State->>Main: restore .uplink from snapshot
+  Main->>State: commit replayed patches and status
 `;
 
 const RESTACK_CHART = `
@@ -988,7 +988,8 @@ export function InternalsPage() {
         </p>
         <ol>
           <li>
-            Snapshot <code>.uplink/</code> from <code>uplink/state</code>.
+            Read the queue and the patch files from <code>uplink/state</code>,
+            as git objects. Nothing is written to the checkout.
           </li>
           <li>
             Detach at <code>uplink/upstream</code> (or company <code>main</code>{" "}
@@ -1001,8 +1002,8 @@ export function InternalsPage() {
             conflict branches are published.
           </li>
           <li>
-            Force company <code>main</code> to that HEAD, restore{" "}
-            <code>.uplink/</code> from the snapshot, and commit queue status
+            Force company <code>main</code> to that HEAD, and commit the patch
+            files as replayed and the queue status on <code>uplink/state</code>,
             together with <code>.uplink/previous-main.json</code>: the tip of
             the <code>main</code> it replaced and the commits of it that carry
             no <code>Uplink-Patch-Id</code> trailer.

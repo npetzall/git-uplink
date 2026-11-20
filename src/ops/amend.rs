@@ -106,19 +106,19 @@ pub(super) fn upstream_ref_or_company(repo: &Path, queue: &QueueState) -> Result
 }
 
 fn start_amend(repo: &Path, id: &str) -> Result<AmendResult> {
-    let queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let queue = state.queue()?;
     validate_amend(&queue, id)?;
     let upstream_ref = upstream_ref_or_company(repo, &queue)?;
     ensure_clean_worktree(repo, "an amend")?;
     let (original, original_sha) = checkout_identity(repo)?;
-    let snapshot = snapshot_uplink(repo)?;
     let outcome = (|| -> Result<(String, String, String)> {
         git(
             repo,
             &["checkout", "-f", "--quiet", "--detach", &upstream_ref],
             GitOpts::default(),
         )?;
-        let target = match apply_queue_preview(repo, &queue, &snapshot, id, true)? {
+        let target = match apply_queue_preview(repo, &queue, &mut state, id, true)? {
             PreviewOutcome::Conflict { .. } => {
                 return Err(Error::msg(format!(
                     "{id} does not apply on {upstream_ref}; run sync first"
@@ -136,9 +136,8 @@ fn start_amend(repo: &Path, id: &str) -> Result<AmendResult> {
         let (base, work) = cut_amend_work(repo, id, &after)?;
         Ok((base, work, onto))
     })();
-    let _ = fs::remove_dir_all(&snapshot);
     let restored = restore_checkout(repo, &original, &original_sha)
-        .and_then(|_| crate::repo::ensure_state_worktree(repo));
+        .and_then(|_| crate::repo::ensure_state_branch(repo));
     let (base, work, onto) = outcome?;
     restored?;
     Ok(AmendResult {
@@ -201,8 +200,8 @@ fn complete_amend(
             "Check out {base} or {work} before completing the amend of {id} (currently on {head})."
         )));
     }
-    restore_uplink_from_state(repo)?;
-    let mut queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let mut queue = state.queue()?;
     let before_queue = queue.clone();
     let mut patch = validate_amend(&queue, id)?;
     assert_resolution_clean(repo)?;
@@ -259,7 +258,7 @@ fn complete_amend(
             &["checkout", "-f", "--quiet", &queue.config.internal_branch],
             GitOpts::default(),
         )?;
-        crate::repo::ensure_state_worktree(repo)?;
+        crate::repo::ensure_state_branch(repo)?;
         if checks.is_probe() {
             // Nothing changed, so complete has nothing to test.
             return Ok(Checked::Probed(PreflightReport::of(Ok(None))));
@@ -276,9 +275,8 @@ fn complete_amend(
         }));
     }
 
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    let patch_abs = repo.join(patch_path(id)?);
-    crate::queue::write_atomic(&patch_abs, format_patch_at_head(repo)?)?;
+    let rewritten = format_patch_at_head(repo)?;
+    state.write_patch(id, rewritten.as_str())?;
     {
         let current = get_patch_mut(&mut queue, id)?;
         current.commit_message = updated.commit_message.clone();
@@ -290,25 +288,23 @@ fn complete_amend(
         command_preflight(&queue, repo, None, verdict)
     } else {
         export_preflight(
-            repo,
+            &state,
             &queue,
             get_patch(&queue, id)?,
-            &patch_abs,
+            &rewritten,
             None,
             verdict,
         )
-        .and_then(|token| assert_upstream_layer_applies(repo, &queue).map(|_| token))
+        .and_then(|token| assert_upstream_layer_applies(&state, &queue).map(|_| token))
     };
     if checks.is_probe() {
         let report = probe_report(layer_checks, || {
-            probe_rebuild(repo, &queue, &upstream_ref, false)
+            probe_rebuild(repo, &queue, &state, &upstream_ref, false)
         });
-        restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
         return Ok(Checked::Probed(report?));
     }
     if layer_checks.is_err() {
-        restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
     }
     layer_checks?;
@@ -316,17 +312,16 @@ fn complete_amend(
     {
         let current = get_patch_mut(&mut queue, id)?;
         current.assess = Some(report);
-        let rel = patch_path(id)?.to_string_lossy().into_owned();
-        current.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-        current.status = status_after_rewrite(repo, current);
+        current.patch_id_stable = Some(stable_patch_id_from_contents(repo, &rewritten)?);
+        current.status = status_after_rewrite(repo, current, &rewritten);
         let detail = rewrite_event_detail(
             current.status,
             &with_people("Amended through the gated amend PR", &amenders),
         );
         add_event(current, "amended", detail);
     }
-    write_queue_file(repo, &queue)?;
-    commit_queue(repo, &format!("uplink: amend {id}"))?;
+    state.write_queue(&queue)?;
+    state.commit_to_branch(&format!("uplink: amend {id}"))?;
     let queue = rebuild_checked(repo, verdict)?;
     let ready_to_submit = super::submit::newly_ready_to_submit(&before_queue, &queue);
     Ok(Checked::Recorded(AmendResult {

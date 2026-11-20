@@ -61,4 +61,4 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 type(scope): imperative subject
 ```
 
-Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`. Scopes when useful: `cli`, `web`, `site`, `ci`, `forge`. Subject is lowercase imperative, with no trailing period. Breaking changes use `!` or a `BREAKING CHANGE:` footer. Type and Scope `ci` is only for this project. If changes are done in templates it's scope is most likely `forge`.
+Types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`. Scopes when useful: `cli`, `web`, `site`, `ci`, `forge`. Subject is lowercase imperative, with no trailing period. Breaking changes use `!` or a `BREAKING CHANGE:` footer. A change is breaking only when it affects the developer: PRs, labels, the PR body, gated PRs, or dispatching amend, transfer and submit. Changes to operator or forge commands, flags, output or workflows are not breaking, since the pack and the binary are upgraded together. Type and Scope `ci` is only for this project. If changes are done in templates it's scope is most likely `forge`.

@@ -121,7 +121,7 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
 
   A queued patch that changes pack files is replayed on the new pack before anything is written. One the new pack makes empty is dropped. One that no longer applies pauses the upgrade the way `git rebase` stops on a commit: the checkout is left on the new pack with the failed apply, and `--continue`, `--drop` or `--abort` takes it from there.
 
-  Before anything moves, the upgrade checks for work unrelated to it: changes or untracked files in the checkout, `.uplink/` edits not on `uplink/state`, a local `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of origin's, or company main commits origin's main does not have. It asks whether to reset to origin, losing that work, and goes on; No stops it. Without a terminal it refuses unless `--allow-reset` is passed.
+  Before anything moves, the upgrade checks for work unrelated to it: changes or untracked files in the checkout, a local `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of origin's, or company main commits origin's main does not have. It asks whether to reset to origin, losing that work, and goes on; No stops it. Without a terminal it refuses unless `--allow-reset` is passed.
 - `--allow-reset`: With `--upgrade`: when local work is pending, reset to origin without asking, as `git uplink reset` does, and delete untracked files in the checkout (`git clean -fd`). That work is lost.
 - `--push-if-unchanged`: With `--upgrade`: publish without asking when the preview changes tooling only and origin's company main has no commits `uplink/state` lacks. Otherwise nothing is pushed, unless the question is answered Yes in a terminal.
 - `--continue`: Continue a paused upgrade with the conflict resolved.
@@ -129,7 +129,7 @@ A later `git uplink init` with no arguments fetches `origin` `uplink/state`, `up
   Resolve the files, `git add` them, and what they hold becomes the patch. A patch resolved to what the new pack has is dropped.
 - `--drop`: Continue a paused upgrade by dropping the patch it stopped on.
 
-  The patch file stays in `.uplink/patches/`.
+  The patch file stays in `.uplink/patches/` on `uplink/state`.
 - `--abort`: Give up a paused upgrade: the checkout is put back and nothing was written.
 - `--adopt-groups [<path>]`: Open the terminal UI with the groups from this JSON file when internal is ahead of upstream (default: the file `--write-groups` writes).
 
@@ -196,7 +196,7 @@ Adopt runs locally only: it makes no network calls, so `--branch`, `uplink/upstr
 
 Show the queue on origin/uplink/state as last fetched.
 
-Reads `origin/uplink/state` with git. Local branches and the `.uplink/` folder are not read. Nothing is fetched unless `--refresh` is given.
+Reads `origin/uplink/state` with git. Local branches are not read. Nothing is fetched unless `--refresh` is given.
 
 - `--json`: Print the queue status as JSON, for machines.
 - `--refresh`: Fetch origin's tracking refs first, as `git uplink refresh` does. No local branch is moved.
@@ -221,7 +221,7 @@ The refs are `uplink/state`, `uplink/upstream`, company main, and `uplink/hooks`
 
 Fetch origin and hard-reset company main, uplink/state, uplink/upstream, and uplink/hooks.
 
-Afterwards the clone matches origin and `.uplink/` is restored. A local `uplink/hooks` that origin does not have yet is kept. Untracked files in the checkout are left alone.
+Afterwards the clone matches origin. A local `uplink/hooks` that origin does not have yet is kept. Untracked files in the checkout are left alone.
 
 ### `restack`
 
@@ -336,7 +336,7 @@ Commits `uplink/state` when a list changed; `git uplink push` sends it. `Uplink-
 
 Start the embedded operator dashboard on 127.0.0.1 and open a browser.
 
-Serves the local operator UI for this checkout. It reads the queue on `origin/uplink/state` as last fetched, with git; local branches and the `.uplink/` folder are not read. Its Refresh button fetches origin's tracking refs, as `git uplink refresh` does. The UI is embedded in the binary.
+Serves the local operator UI for this checkout. It reads the queue on `origin/uplink/state` as last fetched, with git; local branches are not read. Its Refresh button fetches origin's tracking refs, as `git uplink refresh` does. The UI is embedded in the binary.
 
 - `--port <port>`: Port to listen on. Default: `43721`.
 - `--no-open`: Do not launch a browser.
@@ -479,7 +479,7 @@ The packet of an upstream-bound patch shows an assessment of the patch file as i
 Stored extras lead the packet while the patch content is unchanged (same stable patch id, not a delta review). Submit runs the hook from branch `uplink/hooks` on the assessment package when nothing current is stored (see `assessment-hook.md` on that branch); a failed hook adds a warning note instead of failing submit, and is not stored.
 
 - `<id>`: Patch to report on.
-- `--out <path>`: Write the packet here instead of .uplink/reports/\<id>/assessment.md.
+- `--out <path>`: Write the packet here instead of .uplink/reports/\<id>/assessment.md on uplink/state.
 - `--extra-dir <path>`: Directory of \*.md files prepended to the packet. Without it, extras stored for the same lines and public message are used.
 - `--store-extras`: Also store --extra-dir as the patch's extras for later packets.
 - `--extra-source <url>`: Where the stored extras came from, such as the hook run URL.
@@ -497,13 +497,13 @@ Record the to-upstream approval of a patch and write its receipt.
 `approve` and `submit` are the IP gate. On GitHub Enterprise Cloud, dispatch the to-upstream Environment workflow instead of calling them by hand; see Forge packs at https://npetzall.github.io/git-uplink/setup
 
 - `<id>`: Patch to approve.
-- `--out <path>`: Write the receipt here instead of .uplink/reports/\<id>/approval.md.
+- `--out <path>`: Write the receipt here instead of .uplink/reports/\<id>/approval.md on uplink/state.
 - `--reviewed <token>`: Review token of the packet that was reviewed.
 
-  `report` writes it to `.uplink/reports/<id>/review-token`. It names what the patch changes, the patch subject and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one, and its receipt is left as it is.
+  `report` writes it to `.uplink/reports/<id>/review-token` on `uplink/state`. It names what the patch changes, the patch subject and the public message. What the patch changes is the lines it adds and removes per file, plus the files it creates, deletes, renames or replaces; the unchanged lines around them are not part of it. When the patch no longer has this token, nothing is approved. Without it, the patch is approved as it is now. A patch its last approval already covers gets no second one, and its receipt is left as it is.
 - `--push`: Approve on origin's uplink/state and push the approval there.
 
-  Reads the queue and the patch from origin's uplink/state, not from .uplink/, and pushes the approval as a fast-forward; it never force-pushes. When origin moved, approve fetches it and approves again on top: the patch there must still have the reviewed token, and an approval that already covers it there is kept as it is. Local uplink/state and .uplink/ then match origin. Refused when local uplink/state has commits origin lacks.
+  Reads the queue and the patch from origin's uplink/state, not the local one, and pushes the approval as a fast-forward; it never force-pushes. When origin moved, approve fetches it and approves again on top: the patch there must still have the reviewed token, and an approval that already covers it there is kept as it is. Local uplink/state then matches origin. Refused when local uplink/state has commits origin lacks.
 
 ### `waiting`
 
@@ -804,7 +804,7 @@ Same as `git-uplink --version`, for example `git-uplink 0.1.0 (0c393c4)`. A `-di
 
 ## Where state lives
 
-Queue state lives on the orphan branch `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`.
+Queue state lives on the orphan branch `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Commands read and write it as git objects; no checkout has a copy of it. Repair it by hand from a checkout of `uplink/state`, pushed as a fast-forward.
 
 Company `main` is product-only: public upstream, then the tooling patch, then every active `upstream[]` and `internal[]` patch.
 

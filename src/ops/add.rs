@@ -131,7 +131,8 @@ pub(super) fn add_patch_attempt(
     from_sha: &str,
     head_sha: &str,
 ) -> Result<Patch> {
-    let mut queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let mut queue = state.queue()?;
     if let Some(pr) = opts.internal_pr_number
         && let Some(existing) = queue
             .all_patches()
@@ -139,11 +140,12 @@ pub(super) fn add_patch_attempt(
     {
         return Ok(existing.clone());
     }
-    add_patch_once(repo, &mut queue, opts, from_sha, head_sha)
+    add_patch_once(repo, &mut state, &mut queue, opts, from_sha, head_sha)
 }
 
 pub(super) fn add_patch_once(
     repo: &Path,
+    state: &mut StateTree,
     queue: &mut QueueState,
     opts: &AddPatchOpts,
     from_sha: &str,
@@ -173,25 +175,21 @@ pub(super) fn add_patch_once(
     )?;
 
     let message = company_commit_message(queue, &patch);
-    write_product_patch(repo, &id, from_sha, &message, head_sha)?;
-    let rel = patch_path(&id)?.to_string_lossy().into_owned();
-    patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
+    let candidate = product_patch(repo, &id, from_sha, &message, head_sha)?;
+    patch.patch_id_stable = Some(stable_patch_id_from_contents(repo, &candidate)?);
     if let Some(duplicate) = queue.all_patches().find(|item| {
         item.patch_id_stable.is_some() && item.patch_id_stable == patch.patch_id_stable
     }) {
         return Ok(duplicate.clone());
     }
 
-    let candidate_abs = repo.join(patch_path(&id)?);
-    if let Err(err) = validate_candidate(repo, queue, opts, &patch, &candidate_abs, head_sha) {
-        let _ = fs::remove_file(&candidate_abs);
-        return Err(err);
-    }
+    validate_candidate(state, queue, opts, &patch, &candidate, head_sha)?;
 
     let rebuild = !opts.internal_only && queue.internal.iter().any(is_active);
     queue.push_patch(patch, opts.internal_only);
-    write_queue_file(repo, queue)?;
-    commit_queue(repo, &format!("uplink: add {id} {}", opts.subject()))?;
+    state.write_patch(&id, candidate)?;
+    state.write_queue(queue)?;
+    state.commit_to_branch(&format!("uplink: add {id} {}", opts.subject()))?;
     if rebuild {
         // Not tested: an import only reorders what a reviewed pull request
         // already merged into main. Main can also hold merges that are not
@@ -290,19 +288,20 @@ fn assess_new_patch(
 /// Export preflight for upstream-bound patches, then (unless an explicit
 /// --from/--head range was given) that the change is already on company main.
 fn validate_candidate(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     opts: &AddPatchOpts,
     patch: &Patch,
-    candidate_abs: &Path,
+    candidate: &str,
     head_sha: &str,
 ) -> Result<()> {
     if !opts.internal_only {
-        export_preflight(repo, queue, patch, candidate_abs, None, &opts.preflight)?;
+        export_preflight(state, queue, patch, candidate, None, &opts.preflight)?;
     }
     let explicit_range = opts.from_ref.is_some() && opts.head_ref.is_some();
     if !explicit_range {
-        assert_change_already_on_company(repo, queue, candidate_abs, &opts.subject(), head_sha)?;
+        let repo = state.repo();
+        assert_change_already_on_company(repo, queue, candidate, &opts.subject(), head_sha)?;
     }
     Ok(())
 }

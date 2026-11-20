@@ -390,47 +390,6 @@ fn upstream_cannot_depend_on_internal_or_tooling() {
 }
 
 #[test]
-fn write_queue_replaces_file_without_leaving_temp() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-    let mut queue = QueueState::empty(QueueConfig::default());
-    write_queue(repo, &queue).unwrap();
-    queue.upstream.push(patch("upl_one"));
-    write_queue(repo, &queue).unwrap();
-
-    let raw = fs::read_to_string(repo.join(QUEUE_PATH)).unwrap();
-    let read: QueueState = serde_json::from_str(&raw).unwrap();
-    assert_eq!(read.upstream.len(), 1);
-    let leftover: Vec<_> = fs::read_dir(repo.join(".uplink"))
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
-        .collect();
-    assert!(leftover.is_empty(), "{leftover:?}");
-}
-
-#[cfg(unix)]
-#[test]
-fn write_atomic_replaces_a_symlink_instead_of_writing_through_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("script.sh");
-    fs::write(&target, "echo hi\n").unwrap();
-    let link = dir.path().join("upl_x.patch");
-    std::os::unix::fs::symlink(&target, &link).unwrap();
-
-    write_atomic(&link, "patch text\n").unwrap();
-
-    assert_eq!(fs::read_to_string(&target).unwrap(), "echo hi\n");
-    assert!(
-        !fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert_eq!(fs::read_to_string(&link).unwrap(), "patch text\n");
-}
-
-#[test]
 fn require_path_component_rejects_traversal() {
     assert!(require_path_component("upl_abcdefghij").is_ok());
     assert!(require_path_component("..").is_err());

@@ -14,12 +14,13 @@ use crate::git::{GitOpts, git, git_ok, git_succeeds};
 use crate::hooks::{PREFLIGHT_SCRIPT_PATH, hooks_source};
 use crate::queue::{
     active_upstream, apply_order_active, apply_order_upstream_layer, dependency_closure,
-    direct_dependencies, get_patch, patch_path, read_queue,
+    direct_dependencies, get_patch,
 };
 use crate::repo::{
-    TempWorktree, ensure_revs, ensure_upstream_ref, has_ref, path_exists_at, rev_parse,
-    write_product_patch,
+    TempWorktree, ensure_revs, ensure_upstream_ref, has_ref, path_exists_at, product_patch,
+    rev_parse,
 };
+use crate::state::StateTree;
 use crate::types::{ApplyOutcome, Patch, PatchStatus, QueueState};
 
 /// Stage of a [`PreflightError`]: `preflight.sh` exited non-zero.
@@ -573,16 +574,18 @@ impl<'a> PreflightScript<'a> {
     }
 }
 
-pub(crate) fn apply_abs(dir: &Path, patch_abs: &Path, message: &str) -> Result<ApplyOutcome> {
-    if !git_succeeds(
+/// Applies the patch text `patch` in `dir` and commits it with `message`.
+pub(crate) fn apply_text(dir: &Path, patch: &str, message: &str) -> Result<ApplyOutcome> {
+    let applied = git(
         dir,
-        &[
-            "apply",
-            "--3way",
-            "--index",
-            patch_abs.to_str().unwrap_or(""),
-        ],
-    )? {
+        &["apply", "--3way", "--index"],
+        GitOpts {
+            allow_fail: true,
+            input: Some(patch.as_bytes()),
+            ..GitOpts::default()
+        },
+    )?;
+    if applied.code != 0 {
         return Ok(ApplyOutcome::Conflict);
     }
     if git_succeeds(dir, &["diff", "--cached", "--quiet"])? {
@@ -615,14 +618,14 @@ fn reset_export(dir: &Path, repo: &Path) -> Result<()> {
     Ok(())
 }
 
-fn dep_patch_abs(repo: &Path, id: &str) -> Result<PathBuf> {
-    Ok(repo.join(patch_path(id)?))
+fn dep_patch(state: &StateTree, id: &str) -> Result<String> {
+    state.require_patch(id)
 }
 
 /// Applies `dep_ids` and everything they depend on, dependencies first.
 fn apply_deps(
     dir: &Path,
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     dep_ids: &[String],
 ) -> Result<ApplyOutcome> {
@@ -632,9 +635,9 @@ fn apply_deps(
         if dep.status == PatchStatus::Merged {
             continue;
         }
-        let result = apply_abs(
+        let result = apply_text(
             dir,
-            &dep_patch_abs(repo, id)?,
+            &dep_patch(state, id)?,
             &format!("{} (dep)", dep.subject()),
         )?;
         if result == ApplyOutcome::Conflict {
@@ -659,15 +662,15 @@ fn format_suggestion(ids: &[String]) -> String {
 /// public upstream, as [`detect_depends_on`] finds them; it and the patches
 /// that depend on it are not candidates. Empty when none is found.
 pub fn suggest_depends_on(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     patch_id: &str,
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
 ) -> Result<Vec<String>> {
     let candidates = upstream_candidates(queue, Some(patch_id))?;
     Ok(
-        detect_depends_on_in(repo, queue, &[], &candidates, candidate_abs, title, None)?
+        detect_depends_on_in(state, queue, &[], &candidates, candidate, title, None)?
             .unwrap_or_default(),
     )
 }
@@ -690,7 +693,7 @@ fn upstream_candidates(queue: &QueueState, exclude: Option<&str>) -> Result<Vec<
     Ok(candidates)
 }
 
-/// The active upstream patches `candidate_abs` needs to apply onto public
+/// The active upstream patches `candidate` needs to apply onto public
 /// upstream, direct dependencies only: none when it applies alone, else the
 /// patches whose lines its hunks touch (see [`blamed_depends_on`]), else
 /// the first set found by trying each patch alone, then growing prefixes.
@@ -698,31 +701,31 @@ fn upstream_candidates(queue: &QueueState, exclude: Option<&str>) -> Result<Vec<
 /// makes it apply. With `keep_branch`, that branch is left at upstream +
 /// the set + the candidate for inspection.
 pub(crate) fn detect_depends_on(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
     keep_branch: Option<&str>,
 ) -> Result<Option<Vec<String>>> {
     let candidates = upstream_candidates(queue, None)?;
     detect_depends_on_in(
-        repo,
+        state,
         queue,
         &[],
         &candidates,
-        candidate_abs,
+        candidate,
         title,
         keep_branch,
     )
 }
 
-/// The active patches an internal-only `candidate_abs` needs to apply on
+/// The active patches an internal-only `candidate` needs to apply on
 /// public upstream with the tooling patch: upstream and internal ones, in
 /// the order company main applies them. As [`detect_depends_on`] otherwise.
 pub(crate) fn detect_internal_depends_on(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
 ) -> Result<Option<Vec<String>>> {
     let order = apply_order_active(queue)?;
@@ -731,27 +734,28 @@ pub(crate) fn detect_internal_depends_on(
         .into_iter()
         .map(|p| p.id)
         .partition(|id| Some(id.as_str()) == tooling);
-    detect_depends_on_in(repo, queue, &base, &candidates, candidate_abs, title, None)
+    detect_depends_on_in(state, queue, &base, &candidates, candidate, title, None)
 }
 
 /// The smallest subset of `candidates` (kept in their order) that makes
-/// `candidate_abs` apply on public upstream with `base` applied first.
+/// `candidate` apply on public upstream with `base` applied first.
 fn detect_depends_on_in(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     base: &[String],
     candidates: &[String],
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
     keep_branch: Option<&str>,
 ) -> Result<Option<Vec<String>>> {
+    let repo = state.repo();
     with_upstream_worktree(repo, |dir| {
         let applies_with = |deps: &[String]| -> Result<bool> {
             reset_export(dir, repo)?;
             Ok(
-                apply_deps(dir, repo, queue, base)? != ApplyOutcome::Conflict
-                    && apply_deps(dir, repo, queue, deps)? != ApplyOutcome::Conflict
-                    && apply_abs(dir, candidate_abs, title)? != ApplyOutcome::Conflict,
+                apply_deps(dir, state, queue, base)? != ApplyOutcome::Conflict
+                    && apply_deps(dir, state, queue, deps)? != ApplyOutcome::Conflict
+                    && apply_text(dir, candidate, title)? != ApplyOutcome::Conflict,
             )
         };
         let mut found = None;
@@ -760,7 +764,7 @@ fn detect_depends_on_in(
         }
         if found.is_none()
             && let Some(blamed) =
-                blamed_depends_on(dir, repo, queue, base, candidates, candidate_abs, title)?
+                blamed_depends_on(dir, state, queue, base, candidates, candidate, title)?
             && applies_with(&blamed)?
         {
             found = Some(blamed);
@@ -806,7 +810,7 @@ fn detect_depends_on_in(
     })
 }
 
-/// The patches among `candidates` whose lines `candidate_abs` changes or
+/// The patches among `candidates` whose lines `candidate` changes or
 /// keeps as context, as direct dependencies. Applies `base` and every
 /// candidate, then the candidate on top, and runs `git blame` on the lines
 /// before each hunk of the candidate: a line from a queued patch's commit
@@ -815,15 +819,16 @@ fn detect_depends_on_in(
 /// on top of them all, or its diff cannot be read; the caller then probes.
 fn blamed_depends_on(
     dir: &Path,
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     base: &[String],
     candidates: &[String],
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
 ) -> Result<Option<Vec<String>>> {
+    let repo = state.repo();
     reset_export(dir, repo)?;
-    if apply_deps(dir, repo, queue, base)? == ApplyOutcome::Conflict {
+    if apply_deps(dir, state, queue, base)? == ApplyOutcome::Conflict {
         return Ok(None);
     }
     let stack_base = rev_parse(dir, "HEAD")?;
@@ -833,7 +838,7 @@ fn blamed_depends_on(
         if patch.status == PatchStatus::Merged {
             continue;
         }
-        match apply_abs(dir, &dep_patch_abs(repo, id)?, patch.subject())? {
+        match apply_text(dir, &dep_patch(state, id)?, patch.subject())? {
             ApplyOutcome::Conflict => return Ok(None),
             ApplyOutcome::Empty => {}
             ApplyOutcome::Applied => {
@@ -842,7 +847,7 @@ fn blamed_depends_on(
         }
     }
     let stack_tip = rev_parse(dir, "HEAD")?;
-    if apply_abs(dir, candidate_abs, title)? != ApplyOutcome::Applied {
+    if apply_text(dir, candidate, title)? != ApplyOutcome::Applied {
         return Ok(None);
     }
     let diff = git_ok(
@@ -989,17 +994,17 @@ pub fn command_tested(cwd: &Path) -> Vec<String> {
 }
 
 pub fn assert_export_preflight(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     patch: &Patch,
-    candidate_abs: &Path,
+    candidate: &str,
     hooks_ref: Option<&str>,
 ) -> Result<()> {
     export_preflight(
-        repo,
+        state,
         queue,
         patch,
-        candidate_abs,
+        candidate,
         hooks_ref,
         &ScriptVerdict::Run,
     )
@@ -1011,27 +1016,28 @@ pub fn assert_export_preflight(
 /// tested; `None` for a patch that never goes upstream. When the script
 /// fails, the queued patches it passes with are suggested as dependencies.
 pub fn export_preflight(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     patch: &Patch,
-    candidate_abs: &Path,
+    candidate: &str,
     hooks_ref: Option<&str>,
     verdict: &ScriptVerdict,
 ) -> Result<Option<String>> {
-    export_preflight_with(repo, queue, patch, candidate_abs, hooks_ref, verdict, true)
+    export_preflight_with(state, queue, patch, candidate, hooks_ref, verdict, true)
 }
 
 /// [`export_preflight`]; without `suggest_deps` a failing script is not run
 /// again with queued patches, so nothing is suggested.
 pub(crate) fn export_preflight_with(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     patch: &Patch,
-    candidate_abs: &Path,
+    candidate: &str,
     hooks_ref: Option<&str>,
     verdict: &ScriptVerdict,
     suggest_deps: bool,
 ) -> Result<Option<String>> {
+    let repo = state.repo();
     if queue.is_internal(&patch.id) || queue.is_tooling(&patch.id) {
         return Ok(None);
     }
@@ -1042,10 +1048,10 @@ pub(crate) fn export_preflight_with(
     };
 
     with_upstream_worktree(repo, |dir| {
-        let deps = apply_deps(dir, repo, queue, &patch.depends_on)?;
+        let deps = apply_deps(dir, state, queue, &patch.depends_on)?;
         if deps == ApplyOutcome::Conflict {
             let suggested =
-                suggest_depends_on(repo, queue, &patch.id, candidate_abs, patch.subject())?;
+                suggest_depends_on(state, queue, &patch.id, candidate, patch.subject())?;
             return Err(Error::Preflight(PreflightError::new(
                 format!(
                     "Declared depends-on [{}] do not apply onto public upstream before \"{}\".{}",
@@ -1063,10 +1069,10 @@ pub(crate) fn export_preflight_with(
             )));
         }
 
-        let applied = apply_abs(dir, candidate_abs, patch.subject())?;
+        let applied = apply_text(dir, candidate, patch.subject())?;
         if applied == ApplyOutcome::Conflict {
             let suggested =
-                suggest_depends_on(repo, queue, &patch.id, candidate_abs, patch.subject())?;
+                suggest_depends_on(state, queue, &patch.id, candidate, patch.subject())?;
             let extra = if patch.depends_on.is_empty() {
                 " alone".to_string()
             } else {
@@ -1098,7 +1104,7 @@ pub(crate) fn export_preflight_with(
             return Ok(Some(token));
         }
         let suggested = if suggest_deps {
-            suggest_command_deps(repo, queue, candidate_abs, patch, script, dir)?
+            suggest_command_deps(state, queue, candidate, patch, script, dir)?
         } else {
             Vec::new()
         };
@@ -1127,30 +1133,31 @@ pub(crate) fn export_preflight_with(
 }
 
 fn suggest_command_deps(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
-    candidate_abs: &Path,
+    candidate: &str,
     patch: &Patch,
     script: &PreflightScript,
     dir: &Path,
 ) -> Result<Vec<String>> {
+    let repo = state.repo();
     let declared = dependency_closure(queue, &patch.depends_on)?;
     let mut candidates: Vec<String> = upstream_candidates(queue, Some(&patch.id))?
         .into_iter()
         .filter(|id| !declared.contains(id))
         .collect();
     // Patches that change the same files are the likely ones: try them first.
-    let touched = patch_paths(candidate_abs);
+    let touched = patch_paths(candidate);
     candidates.sort_by_key(|id| {
-        let shares = dep_patch_abs(repo, id)
-            .map(|abs| !patch_paths(&abs).is_disjoint(&touched))
+        let shares = dep_patch(state, id)
+            .map(|text| !patch_paths(&text).is_disjoint(&touched))
             .unwrap_or(false);
         !shares
     });
     let passes_with = |deps: &[String]| -> Result<Option<bool>> {
         reset_export(dir, repo)?;
-        if apply_deps(dir, repo, queue, deps)? == ApplyOutcome::Conflict
-            || apply_abs(dir, candidate_abs, patch.subject())? == ApplyOutcome::Conflict
+        if apply_deps(dir, state, queue, deps)? == ApplyOutcome::Conflict
+            || apply_text(dir, candidate, patch.subject())? == ApplyOutcome::Conflict
         {
             return Ok(None);
         }
@@ -1191,11 +1198,8 @@ fn suggest_command_deps(
     Ok(deps)
 }
 
-/// Paths a patch file changes, before and after. Empty when it cannot be read.
-fn patch_paths(patch_abs: &Path) -> std::collections::HashSet<String> {
-    let Ok(text) = fs::read_to_string(patch_abs) else {
-        return Default::default();
-    };
+/// Paths a patch file changes, before and after.
+fn patch_paths(text: &str) -> std::collections::HashSet<String> {
     text.lines()
         .filter_map(|line| {
             let name = line
@@ -1207,27 +1211,27 @@ fn patch_paths(patch_abs: &Path) -> std::collections::HashSet<String> {
 }
 
 pub fn preflight_existing_patch(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     id: &str,
     hooks_ref: Option<&str>,
 ) -> Result<()> {
-    existing_patch_preflight(repo, queue, id, hooks_ref).map(|_| ())
+    existing_patch_preflight(state, queue, id, hooks_ref).map(|_| ())
 }
 
 /// [`preflight_existing_patch`], returning the token of what was tested.
 pub fn existing_patch_preflight(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     id: &str,
     hooks_ref: Option<&str>,
 ) -> Result<Option<String>> {
     let patch = get_patch(queue, id)?.clone();
     export_preflight(
-        repo,
+        state,
         queue,
         &patch,
-        &repo.join(patch_path(id)?),
+        &state.require_patch(id)?,
         hooks_ref,
         &ScriptVerdict::Run,
     )
@@ -1394,7 +1398,12 @@ pub(crate) fn stale_first_bad(token: &str) -> Error {
 /// Points `branch` at company main as `queue` builds it: public upstream,
 /// then every active patch in apply order. Built in a worktree of its own,
 /// so the checkout is not touched.
-pub(crate) fn build_company_stack(repo: &Path, queue: &QueueState, branch: &str) -> Result<()> {
+pub(crate) fn build_company_stack(
+    state: &StateTree,
+    queue: &QueueState,
+    branch: &str,
+) -> Result<()> {
+    let repo = state.repo();
     with_upstream_worktree(repo, |dir| {
         for patch in apply_order_active(queue)? {
             if patch.status == PatchStatus::Conflict {
@@ -1403,7 +1412,7 @@ pub(crate) fn build_company_stack(repo: &Path, queue: &QueueState, branch: &str)
                     patch.id
                 )));
             }
-            let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, patch.subject())?;
+            let result = apply_text(dir, &dep_patch(state, &patch.id)?, patch.subject())?;
             if result == ApplyOutcome::Conflict {
                 return Err(Error::msg(format!(
                     "Queued patch {} (\"{}\") does not apply on company main; fix the queue (git uplink rebuild -i) first.",
@@ -1417,14 +1426,15 @@ pub(crate) fn build_company_stack(repo: &Path, queue: &QueueState, branch: &str)
     })
 }
 
-pub fn assert_upstream_layer_applies(repo: &Path, queue: &QueueState) -> Result<()> {
-    with_upstream_worktree(repo, |dir| apply_upstream_layer(dir, repo, queue, None))
+pub fn assert_upstream_layer_applies(state: &StateTree, queue: &QueueState) -> Result<()> {
+    let repo = state.repo();
+    with_upstream_worktree(repo, |dir| apply_upstream_layer(dir, state, queue, None))
 }
 
 /// The change preflight tests on the upstream layer, and the queued patch it
 /// amends, which it replaces there.
 struct LayerCandidate<'a> {
-    file: &'a Path,
+    file: &'a str,
     title: &'a str,
     amends: Option<&'a str>,
 }
@@ -1434,7 +1444,7 @@ struct LayerCandidate<'a> {
 /// the old version an amend would apply the same change twice.
 fn apply_upstream_layer(
     dir: &Path,
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     candidate: Option<&LayerCandidate>,
 ) -> Result<()> {
@@ -1452,7 +1462,7 @@ fn apply_upstream_layer(
                 patch.id
             )));
         }
-        let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, patch.subject())?;
+        let result = apply_text(dir, &dep_patch(state, &patch.id)?, patch.subject())?;
         if result == ApplyOutcome::Conflict {
             let before = candidate
                 .filter(|_| !amended)
@@ -1480,7 +1490,7 @@ fn apply_upstream_layer(
 
 fn apply_candidate(dir: &Path, candidate: &LayerCandidate) -> Result<()> {
     let title = candidate.title;
-    if apply_abs(dir, candidate.file, title)? == ApplyOutcome::Conflict {
+    if apply_text(dir, candidate.file, title)? == ApplyOutcome::Conflict {
         return Err(Error::Preflight(PreflightError::new(
             format!(
                 "Patch \"{title}\" does not apply onto tooling + queued upstream (internal omitted). \
@@ -1495,22 +1505,23 @@ or label the PR uplink:internal-only."
     Ok(())
 }
 
-/// Applies the upstream layer with `candidate_abs` on it, in place of the
+/// Applies the upstream layer with `candidate` on it, in place of the
 /// patch `amends` names, if any.
 pub fn assert_upstream_layer_preflight(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
-    candidate_abs: &Path,
+    candidate: &str,
     title: &str,
     amends: Option<&str>,
 ) -> Result<()> {
+    let repo = state.repo();
     let candidate = LayerCandidate {
-        file: candidate_abs,
+        file: candidate,
         title,
         amends,
     };
     with_upstream_worktree(repo, |dir| {
-        apply_upstream_layer(dir, repo, queue, Some(&candidate))
+        apply_upstream_layer(dir, state, queue, Some(&candidate))
     })
 }
 
@@ -1544,7 +1555,8 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
     if opts.internal_only {
         return Ok(None);
     }
-    let queue = read_queue(repo)?;
+    let state = StateTree::head(repo)?;
+    let queue = state.queue()?;
     let id = format!("upl_preflight_{}", crate::repo::random_hex(8));
     let depends_on = incoming_depends_on(&queue, &opts)?;
     let patch = Patch {
@@ -1567,22 +1579,21 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
     };
     let message = export_commit_message(&patch);
     let shas = ensure_revs(repo, &[&opts.from_ref, &opts.head_ref])?;
-    write_product_patch(repo, &id, &shas[0], &message, &shas[1])?;
-    let candidate_abs = repo.join(patch_path(&id)?);
-    let result = (|| {
+    let candidate = product_patch(repo, &id, &shas[0], &message, &shas[1])?;
+    (|| {
         let token = export_preflight(
-            repo,
+            &state,
             &queue,
             &patch,
-            &candidate_abs,
+            &candidate,
             opts.hooks_ref.as_deref(),
             &ScriptVerdict::Run,
         )?;
         // Keep the token: the script passed on that tree, whatever follows.
         match assert_upstream_layer_preflight(
-            repo,
+            &state,
             &queue,
-            &candidate_abs,
+            &candidate,
             patch.subject(),
             opts.amends.as_deref(),
         ) {
@@ -1592,9 +1603,7 @@ pub fn incoming_change_preflight(repo: &Path, opts: IncomingPreflight) -> Result
             })),
             other => other.map(|_| token),
         }
-    })();
-    let _ = fs::remove_file(&candidate_abs);
-    result
+    })()
 }
 
 #[cfg(test)]

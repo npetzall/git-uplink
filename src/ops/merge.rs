@@ -197,7 +197,8 @@ pub(super) fn proposed_message(target: &Patch, members: &[Patch]) -> String {
 }
 
 fn start_merge(repo: &Path, ids: &[String], closed: &[String]) -> Result<MergeResult> {
-    let queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let queue = state.queue()?;
     let members = ordered_members(&queue, ids)?;
     let target_id = pick_target(&members, closed)?;
     let target = get_patch(&queue, &target_id)?.clone();
@@ -205,7 +206,6 @@ fn start_merge(repo: &Path, ids: &[String], closed: &[String]) -> Result<MergeRe
     let upstream_ref = upstream_ref_or_company(repo, &queue)?;
     ensure_clean_worktree(repo, "a merge")?;
     let (original, original_sha) = checkout_identity(repo)?;
-    let snapshot = snapshot_uplink(repo)?;
     let message = proposed_message(&target, &members);
     let outcome = (|| -> Result<(String, String, String, Vec<String>)> {
         git(
@@ -213,7 +213,7 @@ fn start_merge(repo: &Path, ids: &[String], closed: &[String]) -> Result<MergeRe
             &["checkout", "-f", "--quiet", "--detach", &upstream_ref],
             GitOpts::default(),
         )?;
-        let preview = match apply_queue_preview(repo, &queue, &snapshot, &first, true)? {
+        let preview = match apply_queue_preview(repo, &queue, &mut state, &first, true)? {
             PreviewOutcome::Conflict { .. } => {
                 return Err(Error::msg(format!(
                     "{first} does not apply on {upstream_ref}; run sync first"
@@ -231,8 +231,7 @@ fn start_merge(repo: &Path, ids: &[String], closed: &[String]) -> Result<MergeRe
         // markers are committed for the developer to resolve in the PR.
         let mut conflicts: Vec<String> = Vec::new();
         for member in &members {
-            let file = snapshot.join(patch_path(&member.id)?);
-            if apply_patch_file(repo, &queue, member, &file, false)? == ApplyOutcome::Conflict {
+            if apply_stored(repo, &queue, &mut state, member)? == ApplyOutcome::Conflict {
                 let files = conflicted_files(repo)?;
                 if files.is_empty() {
                     return Err(Error::msg(format!(
@@ -260,9 +259,8 @@ fn start_merge(repo: &Path, ids: &[String], closed: &[String]) -> Result<MergeRe
         )?;
         Ok((base, work, onto, conflicts))
     })();
-    let _ = fs::remove_dir_all(&snapshot);
     let restored = restore_checkout(repo, &original, &original_sha)
-        .and_then(|_| crate::repo::ensure_state_worktree(repo));
+        .and_then(|_| crate::repo::ensure_state_branch(repo));
     let (base, work, onto, conflicts) = outcome?;
     restored?;
     let member_ids: Vec<String> = members.iter().map(|p| p.id.clone()).collect();
@@ -297,8 +295,8 @@ fn complete_merge(
             "Check out {base} or {work} before completing the merge into {target} (currently on {head})."
         )));
     }
-    restore_uplink_from_state(repo)?;
-    let mut queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let mut queue = state.queue()?;
     let before_queue = queue.clone();
     let pairs = parse_expect(expect)?;
     if !pairs.iter().any(|(id, _)| id == target) {
@@ -355,9 +353,8 @@ fn complete_merge(
         }
     };
 
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    let patch_abs = repo.join(patch_path(target)?);
-    crate::queue::write_atomic(&patch_abs, format_patch_at_head(repo)?)?;
+    let rewritten = format_patch_at_head(repo)?;
+    state.write_patch(target, rewritten.as_str())?;
     let others: Vec<String> = member_ids
         .iter()
         .filter(|id| *id != target)
@@ -413,25 +410,23 @@ fn complete_merge(
         command_preflight(&queue, repo, None, verdict)
     } else {
         export_preflight(
-            repo,
+            &state,
             &queue,
             get_patch(&queue, target)?,
-            &patch_abs,
+            &rewritten,
             None,
             verdict,
         )
-        .and_then(|token| assert_upstream_layer_applies(repo, &queue).map(|_| token))
+        .and_then(|token| assert_upstream_layer_applies(&state, &queue).map(|_| token))
     };
     if checks.is_probe() {
         let report = probe_report(layer_checks, || {
-            probe_rebuild(repo, &queue, &upstream_ref, false)
+            probe_rebuild(repo, &queue, &state, &upstream_ref, false)
         });
-        restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
         return Ok(Checked::Probed(report?));
     }
     if layer_checks.is_err() {
-        restore_uplink_from_state(repo)?;
         git(repo, &["reset", "--soft", &before], GitOpts::default())?;
     }
     layer_checks?;
@@ -439,9 +434,8 @@ fn complete_merge(
     {
         let current = get_patch_mut(&mut queue, target)?;
         current.assess = Some(report);
-        let rel = patch_path(target)?.to_string_lossy().into_owned();
-        current.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-        current.status = status_after_rewrite(repo, current);
+        current.patch_id_stable = Some(stable_patch_id_from_contents(repo, &rewritten)?);
+        current.status = status_after_rewrite(repo, current, &rewritten);
         let detail = rewrite_event_detail(
             current.status,
             &with_people(
@@ -451,11 +445,11 @@ fn complete_merge(
         );
         add_event(current, "merged-in", detail);
     }
-    write_queue_file(repo, &queue)?;
-    commit_queue(
-        repo,
-        &format!("uplink: merge {} into {target}", others.join(", ")),
-    )?;
+    state.write_queue(&queue)?;
+    state.commit_to_branch(&format!(
+        "uplink: merge {} into {target}",
+        others.join(", ")
+    ))?;
     let queue = rebuild_checked(repo, verdict)?;
     let ready_to_submit = super::submit::newly_ready_to_submit(&before_queue, &queue);
     Ok(Checked::Recorded(MergeResult {

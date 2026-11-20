@@ -13,6 +13,7 @@ use crate::pattern::{
 };
 use crate::queue::now_iso;
 use crate::repo::{TempWorktree, ensure_revs, has_ref, show_at};
+use crate::state::StateTree;
 use crate::types::{
     AssessCheck, AssessReport, CheckStatus, DEFAULT_CUTOFF, MergeVia, PATCH_DIR, Patch,
     PatchApproval, PatchExtras, PatchIntent, PatchStatus, QueueState, STATE_BRANCH,
@@ -406,13 +407,9 @@ fn hunk_counts(line: &str) -> Option<(usize, usize)> {
     Some((old, new))
 }
 
-/// The patch file of `id`: the checked-out copy, or the one on `uplink/state`.
+/// The patch file of `id` on local `uplink/state`.
 pub fn patch_text(repo: &Path, id: &str) -> Result<String> {
-    let path = format!("{PATCH_DIR}/{id}.patch");
-    match fs::read_to_string(repo.join(&path)) {
-        Ok(text) => Ok(text),
-        Err(_) => show_at(repo, STATE_BRANCH, &path),
-    }
+    StateTree::head(repo)?.require_patch(id)
 }
 
 fn hash_text(repo: &Path, content: &str) -> Result<String> {
@@ -1102,10 +1099,8 @@ pub fn format_contribution_packet_with_extras(
         )
     };
     if extra_dir.is_none() && stored_extras_fresh(repo, patch) {
-        let stored = repo.join(extras_dir(&patch.id)?);
-        if stored.is_dir() {
-            return prepend_report_extras(&packet, Some(&stored));
-        }
+        let stored = stored_extras(&StateTree::head(repo)?, &patch.id)?;
+        return Ok(prepend_extras_text(&packet, &stored));
     }
     prepend_report_extras(&packet, extra_dir)
 }
@@ -1138,11 +1133,13 @@ fn stored_extras_fresh_for(patch: &Patch, token: Option<&str>) -> bool {
 /// records them as fresh for the patch's current content. No files is a valid
 /// result: the hook ran and had nothing to add.
 pub fn store_extras(
-    repo: &Path,
+    state: &mut StateTree,
     patch: &mut Patch,
     src: &Path,
     source: Option<String>,
 ) -> Result<()> {
+    let repo = state.repo().to_path_buf();
+    let repo = repo.as_path();
     let Some(stable) = patch.patch_id_stable.clone() else {
         return Err(Error::msg(format!(
             "{} has no stable patch id; cannot store extras",
@@ -1151,13 +1148,10 @@ pub fn store_extras(
     };
     let reviewed = review_token(repo, patch)?;
     let names = extra_markdown_names(src)?;
-    let dest = repo.join(extras_dir(&patch.id)?);
-    if dest.exists() {
-        fs::remove_dir_all(&dest)?;
-    }
-    fs::create_dir_all(&dest)?;
+    let dest = extras_dir(&patch.id)?;
+    state.remove_dir(&dest)?;
     for name in names {
-        fs::copy(src.join(&name), dest.join(&name))?;
+        state.write(&format!("{dest}/{name}"), fs::read(src.join(&name))?);
     }
     patch.extras = Some(PatchExtras {
         at: now_iso(),
@@ -1207,11 +1201,33 @@ pub fn prepend_report_extras(packet: &str, extra_dir: Option<&Path>) -> Result<S
     let Some(dir) = extra_dir else {
         return Ok(packet.to_string());
     };
-    let extras = load_extra_markdown(dir)?;
+    Ok(prepend_extras_text(packet, &load_extra_markdown(dir)?))
+}
+
+fn prepend_extras_text(packet: &str, extras: &str) -> String {
     if extras.is_empty() {
-        return Ok(packet.to_string());
+        packet.to_string()
+    } else {
+        format!("{extras}\n\n{packet}")
     }
-    Ok(format!("{extras}\n\n{packet}"))
+}
+
+/// The stored extras of patch `id` on `state`, as [`load_extra_markdown`]
+/// joins them.
+fn stored_extras(state: &StateTree, id: &str) -> Result<String> {
+    let mut parts = Vec::new();
+    for path in state.list(&extras_dir(id)?)? {
+        let name = path.rsplit('/').next().unwrap_or_default();
+        if name.starts_with('.') || !name.ends_with(".md") {
+            continue;
+        }
+        let body = state.read(&path)?.unwrap_or_default();
+        let body = body.trim();
+        if !body.is_empty() {
+            parts.push(body.to_string());
+        }
+    }
+    Ok(parts.join("\n\n"))
 }
 
 pub fn format_delta_approver_packet(repo: &Path, patch: &Patch) -> Result<String> {
@@ -1289,8 +1305,7 @@ fn format_delta_since(repo: &Path, patch: &Patch, sha: &str) -> Result<String> {
             ));
         }
     };
-    let new_patch = fs::read_to_string(repo.join(&new_path))
-        .unwrap_or_else(|_| show_at(repo, STATE_BRANCH, &new_path).unwrap_or_default());
+    let new_patch = show_at(repo, STATE_BRANCH, &new_path).unwrap_or_default();
     let added = delta_added_section(repo, &old_patch, &new_patch);
     if let Some(tree) = tree_diff_patches(repo, &old_patch, &new_patch) {
         return Ok(format!("{added}\n{}", delta_tree_section(&tree)));
@@ -1628,6 +1643,14 @@ pub fn report_paths(id: &str) -> Result<(String, String, String)> {
         format!("{dir}/assessment.md"),
         format!("{dir}/approval.md"),
     ))
+}
+
+/// Where the export of patch `id` is kept on `uplink/state`: the public PR
+/// description and the contrib commit message, as `submit` hands them to
+/// the forge.
+pub fn export_paths(id: &str) -> Result<(String, String)> {
+    let dir = report_paths(id)?.0;
+    Ok((format!("{dir}/pr.md"), format!("{dir}/commit-message.txt")))
 }
 
 pub fn from_upstream_report_paths() -> (String, String, String) {

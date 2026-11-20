@@ -30,7 +30,7 @@ use crate::inspect::{
 };
 use crate::lock::{is_push_lease_rejected, with_queue_lock};
 use crate::preflight::{
-    FirstBad, PreflightReport, RebuildReport, STAGE_STALE, ScriptVerdict, apply_abs,
+    FirstBad, PreflightReport, RebuildReport, STAGE_STALE, ScriptVerdict, apply_text,
     assert_upstream_layer_applies, bisect_first_bad, command_preflight, export_preflight,
     is_script_failure, rev_preflight, rev_token, stale_first_bad, upstream_failure,
 };
@@ -38,20 +38,20 @@ use crate::progress::{ProgressMode, StepOutcome, StepProgress};
 use crate::queue::{
     add_event, apply_order_active, apply_order_upstream_layer, cannot_depend_on, get_patch,
     get_patch_mut, is_active, merged_detail, move_patch, patch_path, read_queue as read_queue_file,
-    set_merged, transitive_reduction, write_previous_main, write_queue as write_queue_file,
+    set_merged, transitive_reduction,
 };
 use crate::repo::{
-    COMPANY_REMOTE, TempWorktree, UPSTREAM_REF, ahead_behind, apply_patch_file, apply_state_sha,
-    commit_queue, commits_with_patch_id, conflicted_files, copy_dir, ensure_company_branch_ref,
-    ensure_configured_remotes, ensure_revs, ensure_state_worktree, ensure_upstream_ref,
-    fetch_state_tracking, fetch_tracking_sha, fetch_upstream, fetch_upstream_remote, has_ref,
-    is_ancestor, merge_base, new_patch_id, patch_already_applied_on, path_exists_at,
-    point_branch_at, promote_upstream, push_branch_leased, push_state_branch, queue_at,
-    refresh_company_branch, refresh_upstream_ref, replace_state_from_origin, restore_paths_from,
-    rev_parse, set_state_branch, show_at, stable_patch_id, stable_patch_id_from_contents, stamp,
-    state_exists, try_replace_state_from_origin, uplink_uncommitted_paths, write_product_patch,
+    COMPANY_REMOTE, TempWorktree, UPSTREAM_REF, ahead_behind, apply_patch_file,
+    commits_with_patch_id, conflicted_files, ensure_company_branch_ref, ensure_configured_remotes,
+    ensure_revs, ensure_state_branch, ensure_upstream_ref, fetch_state_tracking,
+    fetch_tracking_sha, fetch_upstream, fetch_upstream_remote, has_ref, is_ancestor, merge_base,
+    new_patch_id, patch_already_applied_on, path_exists_at, point_branch_at, product_patch,
+    promote_upstream, push_branch_leased, push_state_branch, queue_at, refresh_company_branch,
+    refresh_upstream_ref, replace_state_from_origin, rev_parse, set_state_branch, show_at,
+    stable_patch_id_from_contents, stamp, state_exists, try_replace_state_from_origin,
 };
 use crate::settings::{SETTINGS_PATH, Settings, SettingsFlags, answer_settings, clean_list};
+use crate::state::{StateTree, commit_queue};
 use crate::types::{
     ApplyOutcome, AssessReport, ConflictCause, Forge, GateKind, LastSync, MergeVia,
     PREVIOUS_MAIN_PATH, Patch, PatchApproval, PatchConflict, PatchEvent, PatchIntent, PatchLayer,
@@ -153,23 +153,4 @@ impl<T> Checked<T> {
             Err(err) => PreflightReport::of(Err(err)),
         }
     }
-}
-
-pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
-    write_queue_file(repo, queue)
-}
-
-pub(super) fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
-    let dir = std::env::temp_dir().join(format!("uplink-{}", crate::repo::random_hex(32)));
-    copy_dir(&repo.join(".uplink"), &dir.join(".uplink"))?;
-    Ok(dir)
-}
-
-/// Resets the `.uplink` worktree to the committed uplink/state, when it exists.
-pub(super) fn restore_uplink_from_state(repo: &Path) -> Result<()> {
-    let queue_ref = STATE_BRANCH;
-    if has_ref(repo, queue_ref)? {
-        crate::repo::restore_state_worktree(repo, queue_ref)?;
-    }
-    Ok(())
 }

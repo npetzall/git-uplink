@@ -8,12 +8,14 @@ A change that reached the company (a merged pull request, an approval, a recorde
 
 ## `uplink/state`
 
+State is read from and written to `uplink/state` objects only: a command stages its changes on a `StateTree` (`src/state.rs`) and commits them with a temporary index. Nothing is written to the work tree, so no checkout holds a copy that can go stale or be committed by mistake. A local commit moves `uplink/state` only while it is still at the commit the change was read from.
+
 1. **Never force-push it.** Push it only as a fast-forward. The ruleset `uplink-state-ruleset.json` refuses anything else.
    - **Push it with the internal App or PAT, never `GITHUB_TOKEN`.** `uplink-state-writers-ruleset.json` lets only the internal App and admins update it. A job that pushes it mints the internal App token and passes `steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN` as `UPLINK_INTERNAL_TOKEN`; its own `GITHUB_TOKEN` stays `contents: read`.
 2. **The command that writes it pushes it.** Use `--push` (or `--push-remote`) on the command, not a separate `git uplink push` or `git push` step afterwards. The command knows what it recorded and can do it again.
-3. **On a lost race, record again on the state that won.** Fetch origin's `uplink/state`, move local `uplink/state` and `.uplink/` to it, and run the whole change again, checks included (for example the review token). Do not restack local commits onto origin when the change also rebuilt `main`: the rebuild has to start from the state that won. The change must be safe to run twice (an import records a pull request once; an approval that already covers the patch is kept).
+3. **On a lost race, record again on the state that won.** Fetch origin's `uplink/state`, move local `uplink/state` to it, and run the whole change again, checks included (for example the review token). Do not restack local commits onto origin when the change also rebuilt `main`: the rebuild has to start from the state that won. The change must be safe to run twice (an import records a pull request once; an approval that already covers the patch is kept).
 4. **Work on origin's state, not the checkout, when the job holds no lock.** `approve --push` reads the queue and the patch from `origin/uplink/state` and builds its commit with a temporary index (`commit_files_on`), so nothing local can be stale.
-5. **Refuse to throw away local work.** Before resetting to origin, refuse when local `uplink/state` has commits origin lacks, or `.uplink/` has uncommitted changes.
+5. **Refuse to throw away local work.** Before resetting to origin, refuse when local `uplink/state` has commits origin lacks.
 6. **Only push races are retried.** `is_push_lease_rejected` in `src/lock.rs` lists what counts as a race (`stale info`, `non-fast-forward`, `fetch first`, `cannot lock ref`, GitHub's `fatal error in commit_refs`). Add a new forge message there, with a unit test, when a forge reports a race another way. Auth and hook refusals are never retried.
 
 ## `main`

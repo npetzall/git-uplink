@@ -193,9 +193,8 @@ export function QueuePage() {
           <p className="max-w-3xl text-muted-foreground">
             Queue at{" "}
             <code className="rounded bg-muted px-1.5">origin/uplink/state</code>{" "}
-            as last fetched. Refresh fetches it; no local branch or{" "}
-            <code className="rounded bg-muted px-1.5">.uplink/</code> folder is
-            read or moved.
+            as last fetched. Refresh fetches it; no local branch is read or
+            moved.
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">

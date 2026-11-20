@@ -1,13 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::error::{Error, Result};
 use crate::types::{
-    MergeVia, PATCH_DIR, PREVIOUS_MAIN_PATH, Patch, PatchEvent, PatchLayer, PatchMerged,
-    PatchStatus, PreviousMain, QUEUE_PATH, QueueState,
+    MergeVia, PATCH_DIR, Patch, PatchEvent, PatchLayer, PatchMerged, PatchStatus, QueueState,
 };
 
 /// Now in UTC, as RFC 3339 with milliseconds: `2026-11-17T09:30:00.123Z`.
@@ -65,14 +62,9 @@ pub fn is_active(patch: &Patch) -> bool {
     patch.status.is_active()
 }
 
+/// The queue on local `uplink/state` (created from origin's when missing).
 pub fn read_queue(repo: &Path) -> Result<QueueState> {
-    if !repo.join(QUEUE_PATH).is_file() {
-        crate::repo::ensure_state_worktree(repo)?;
-    }
-    let raw = fs::read_to_string(repo.join(QUEUE_PATH))?;
-    let mut queue = parse_queue(&raw)?;
-    queue.settings = crate::settings::load_settings(repo, queue.config.forge);
-    Ok(queue)
+    crate::state::StateTree::head(repo)?.queue()
 }
 
 /// `queue.json` as written by this or an earlier binary.
@@ -137,45 +129,6 @@ pub fn migrate_legacy_messages(value: &mut serde_json::Value) {
         }
         _ => {}
     }
-}
-
-/// Writes `path` via a new temp file beside it and a rename, so a crash never
-/// leaves it truncated and a symlink at `path` is replaced, not written
-/// through. `commit_queue` never stages the `*.tmp` file.
-pub fn write_atomic(path: &Path, body: impl AsRef<[u8]>) -> Result<()> {
-    let name = path
-        .file_name()
-        .ok_or_else(|| Error::msg(format!("cannot write {}", path.display())))?;
-    let tmp = path.with_file_name(format!(
-        "{}.{}.tmp",
-        name.to_string_lossy(),
-        crate::repo::random_hex(32)
-    ));
-    let written = (|| -> std::io::Result<()> {
-        // create_new fails on anything already there, a symlink included.
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        file.write_all(body.as_ref())?;
-        file.sync_all()?;
-        fs::rename(&tmp, path)
-    })();
-    if written.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    Ok(written?)
-}
-
-pub fn write_queue(repo: &Path, queue: &QueueState) -> Result<()> {
-    fs::create_dir_all(repo.join(PATCH_DIR))?;
-    let body = format!("{}\n", serde_json::to_string_pretty(queue)?);
-    write_atomic(&repo.join(QUEUE_PATH), body)
-}
-
-pub fn write_previous_main(repo: &Path, previous: &PreviousMain) -> Result<()> {
-    let body = format!("{}\n", serde_json::to_string_pretty(previous)?);
-    write_atomic(&repo.join(PREVIOUS_MAIN_PATH), body)
 }
 
 pub fn active_upstream(queue: &QueueState) -> Vec<&Patch> {

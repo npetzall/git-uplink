@@ -193,16 +193,17 @@ fn start_on_origin(repo: &Path, local: &str, remote: &str) -> Result<Vec<QueuedI
         for (patch, _) in &replay {
             paths.extend(patch_state_paths(repo, local, &patch.id)?);
         }
-        restore_paths_from(repo, local, &paths)?;
-        let mut queue = read_queue_file(repo)?;
+        let mut state = StateTree::head(repo)?;
+        state.copy_from(local, &paths)?;
+        let mut queue = state.queue()?;
         for (patch, layer) in &replay {
             replace_patch(&mut queue, patch.clone(), *layer);
         }
         if queue.tooling.is_none() {
             queue.tooling = carry.tooling.clone();
         }
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, "uplink: restack local changes onto origin")?;
+        state.write_queue(&queue)?;
+        state.commit_to_branch("uplink: restack local changes onto origin")?;
     }
     rebuild_preview(repo, RESTACK_BRANCH)?;
     let item = |patch: &Patch, internal_only| QueuedItem {

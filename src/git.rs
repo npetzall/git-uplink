@@ -668,6 +668,21 @@ fn build_command(cwd: &Path, args: &[&str], opts: &GitOpts<'_>, transport: &Tran
     cmd
 }
 
+/// Stdout of a local git command exactly as written, trailing newline
+/// included. Fails on a non-zero exit.
+pub(crate) fn git_bytes(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let output = build_command(cwd, args, &GitOpts::default(), &Transport::default()).output()?;
+    if !output.status.success() {
+        let result = GitResult {
+            stdout: String::new(),
+            stderr: strip_nl(String::from_utf8_lossy(&output.stderr).into_owned()),
+            code: output.status.code().unwrap_or(1),
+        };
+        return Err(Error::Git(GitError::new(args, result)));
+    }
+    Ok(output.stdout)
+}
+
 pub fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(git(cwd, args, GitOpts::default())?.stdout)
 }

@@ -30,8 +30,8 @@ pub fn approval_stale(repo: &Path, queue: &QueueState, patch: &Patch) -> bool {
     needs_covering_approval(queue, patch) && covering_approval(repo, patch).is_none()
 }
 
-/// [`approval_stale`] with the patch file read from `git_ref` instead of the
-/// `.uplink/` folder.
+/// [`approval_stale`] with the patch file read from `git_ref` instead of
+/// local `uplink/state`.
 pub fn approval_stale_at(repo: &Path, git_ref: &str, queue: &QueueState, patch: &Patch) -> bool {
     if !needs_covering_approval(queue, patch) {
         return false;
@@ -53,9 +53,10 @@ fn needs_covering_approval(queue: &QueueState, patch: &Patch) -> bool {
 /// still covered by the last approval and needs no other one. Any other
 /// rewrite makes the patch `queued` again, whatever review it was in; one
 /// with a public PR then gets a delta review ([`Patch::reviews_delta`]).
-pub(super) fn status_after_rewrite(repo: &Path, patch: &Patch) -> PatchStatus {
+/// `text` is the patch file as rewritten.
+pub(super) fn status_after_rewrite(repo: &Path, patch: &Patch, text: &str) -> PatchStatus {
     match (
-        covering_approval(repo, patch).is_some(),
+        covering_approval_for(repo, patch, text).is_some(),
         patch.upstream.is_some(),
     ) {
         (true, true) => PatchStatus::Submitted,
@@ -124,8 +125,7 @@ pub fn approve_patch_reviewed(
             _ => rev_parse(repo, STATE_BRANCH)?,
         };
         if record_approval(repo, &mut queue, id, sha, run_url, token)? {
-            write_queue_file(repo, &queue)?;
-            commit_queue(repo, &format!("uplink: approve {id}"))?;
+            commit_queue(repo, &queue, &format!("uplink: approve {id}"))?;
         }
         Ok(get_patch(&queue, id)?.clone())
     })
@@ -214,8 +214,8 @@ const APPROVE_PUSH_ATTEMPTS: u32 = 8;
 /// What [`approve_on_remote`] did.
 #[derive(Debug, Clone)]
 pub enum RemoteApproval {
-    /// The approval is on `remote` as `commit`, and local `uplink/state` and
-    /// `.uplink/` are at that commit.
+    /// The approval is on `remote` as `commit`, and local `uplink/state` is
+    /// at that commit.
     Recorded {
         patch: Box<Patch>,
         receipt: String,
@@ -228,8 +228,8 @@ pub enum RemoteApproval {
 
 /// Approves `id` on `uplink/state` of `remote` and pushes it there.
 ///
-/// Works on the remote's `uplink/state` as fetched, not on `.uplink/`: the
-/// queue, the patch file and the review token are read from that commit,
+/// Works on the remote's `uplink/state` as fetched, not on the local one:
+/// the queue, the patch file and the review token are read from that commit,
 /// and the approval commit is built on it with a temporary index. The push
 /// is a fast-forward and never forced. When it loses a race (the remote
 /// moved), it fetches again and approves again on top, so `reviewed` is
@@ -238,10 +238,10 @@ pub enum RemoteApproval {
 /// `receipt` gets the `uplink/state` commit the approval is for and the
 /// review token, and returns the receipt text and the run URL. The receipt
 /// is committed at `receipt_path` when given. Once pushed, local
-/// `uplink/state` and `.uplink/` are moved to the pushed commit.
+/// `uplink/state` is moved to the pushed commit.
 ///
-/// Refuses when `.uplink/` has uncommitted changes, or when local
-/// `uplink/state` has commits the remote lacks: moving it would lose them.
+/// Refuses when local `uplink/state` has commits the remote lacks: moving it
+/// would lose them.
 pub fn approve_on_remote(
     repo: &Path,
     id: &str,
@@ -251,14 +251,7 @@ pub fn approve_on_remote(
     mut receipt: impl FnMut(&str, &str) -> (String, String),
 ) -> Result<RemoteApproval> {
     with_queue_lock(repo, || {
-        ensure_state_worktree(repo)?;
-        let uncommitted = uplink_uncommitted_paths(repo, STATE_BRANCH)?;
-        if !uncommitted.is_empty() {
-            return Err(Error::msg(format!(
-                ".uplink/ has uncommitted changes ({}); commit or reset them first",
-                uncommitted.join(", ")
-            )));
-        }
+        ensure_state_branch(repo)?;
         let mut last_error = None;
         for attempt in 0..APPROVE_PUSH_ATTEMPTS {
             let Some(base) = fetch_state_tracking(repo, remote, STATE_BRANCH)? else {
@@ -312,7 +305,7 @@ pub fn approve_on_remote(
             )?;
             match crate::repo::push_commit_to(repo, remote, &commit, STATE_BRANCH) {
                 Ok(()) => {
-                    apply_state_sha(repo, STATE_BRANCH, &commit)?;
+                    set_state_branch(repo, STATE_BRANCH, &commit)?;
                     return Ok(RemoteApproval::Recorded {
                         patch: Box::new(get_patch(&queue, id)?.clone()),
                         receipt: receipt_text,
@@ -358,8 +351,7 @@ pub fn drop_patch(repo: &Path, id: &str, reason: &str) -> Result<Patch> {
             return Err(Error::msg(format!("{id} is already {status}")));
         }
         mark_dropped(&mut queue, id, reason)?;
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: drop {id}"))?;
+        commit_queue(repo, &queue, &format!("uplink: drop {id}"))?;
         rebuild(repo)?;
         Ok(get_patch(&read_queue_file(repo)?, id)?.clone())
     })
@@ -420,8 +412,7 @@ pub fn trim_deps(repo: &Path, dry_run: bool) -> Result<Vec<TrimmedDeps>> {
             });
         }
         if !dry_run && !trimmed.is_empty() {
-            write_queue_file(repo, &queue)?;
-            commit_queue(repo, "uplink: trim depends-on")?;
+            commit_queue(repo, &queue, "uplink: trim depends-on")?;
         }
         Ok(trimmed)
     })
@@ -500,7 +491,7 @@ fn verify_merge_claim(
                 Some(sha) => resolve(sha)?,
                 None => "uplink/upstream".to_string(),
             };
-            if patch_already_applied_on(repo, &at, &repo.join(patch_path(id)?))? {
+            if patch_already_applied_on(repo, &at, &patch_text(repo, id)?)? {
                 Ok(())
             } else {
                 Err(Error::msg(format!(
@@ -536,8 +527,7 @@ pub(super) fn record_merged(
             upstream_sha: upstream_sha.map(str::to_string),
         };
         set_merged(&mut queue, id, merged, merged_detail(via, upstream_sha))?;
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: merged {id}"))?;
+        commit_queue(repo, &queue, &format!("uplink: merged {id}"))?;
         Ok(get_patch(&queue, id)?.clone())
     })
 }
@@ -560,14 +550,18 @@ fn merge_events(dest: &mut Vec<PatchEvent>, src: Vec<PatchEvent>) {
     }
 }
 
+/// Records on local `uplink/state` what `from_sha` recorded for `id`, as
+/// one commit with `message`.
 pub(super) fn replay_recorded_patch_onto_origin(
     repo: &Path,
     id: &str,
     from_sha: &str,
+    message: &str,
 ) -> Result<()> {
     let source = queue_at(repo, from_sha)?;
     let src = get_patch(&source, id)?.clone();
-    let mut queue = read_queue_file(repo)?;
+    let mut state = StateTree::head(repo)?;
+    let mut queue = state.queue()?;
     {
         let dest = get_patch_mut(&mut queue, id)?;
         if dest.status == PatchStatus::Conflict && src.status != PatchStatus::Conflict {
@@ -600,12 +594,15 @@ pub(super) fn replay_recorded_patch_onto_origin(
         merge_events(&mut dest.events, src.events);
         dest.updated_at = stamp();
     }
-    write_queue_file(repo, &queue)?;
-    if let Ok((_, _, receipt)) = report_paths(id)
-        && path_exists_at(repo, from_sha, &receipt)?
-    {
-        restore_paths_from(repo, from_sha, &[receipt])?;
+    state.write_queue(&queue)?;
+    let (_, _, receipt) = report_paths(id)?;
+    let (pr, commit_message) = crate::assess::export_paths(id)?;
+    for path in [receipt, pr, commit_message] {
+        if path_exists_at(repo, from_sha, &path)? {
+            state.copy_from(from_sha, &[path])?;
+        }
     }
+    state.commit_to_branch(message)?;
     Ok(())
 }
 
@@ -630,8 +627,7 @@ pub(super) fn push_state_replaying_patch(
                     return Ok(());
                 }
                 set_state_branch(repo, branch, &remote_sha)?;
-                replay_recorded_patch_onto_origin(repo, id, local_sha)?;
-                commit_queue(repo, message)?;
+                replay_recorded_patch_onto_origin(repo, id, local_sha, message)?;
                 last_error = Some(err);
                 thread::sleep(Duration::from_millis(40 * 2u64.pow(attempt)));
             }
@@ -655,6 +651,19 @@ pub(super) fn push_recorded_patch(
     push_state_replaying_patch(repo, remote, state_branch, id, &local_sha, message)
 }
 
+/// Stages what `submit` exported for `patch`: the public PR description and
+/// the contrib commit message, so `uplink/state` shows what left.
+fn stage_export(state: &mut StateTree, patch: &Patch) -> Result<()> {
+    let (pr, message) = crate::assess::export_paths(&patch.id)?;
+    let mut body = crate::assess::upstream_pr_body(patch);
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    state.write(&pr, body);
+    state.write(&message, crate::assess::export_commit_message(patch));
+    Ok(())
+}
+
 pub fn record_pull_request(
     repo: &Path,
     id: &str,
@@ -672,7 +681,11 @@ pub fn record_pull_request(
                 && existing.pr_url.as_deref() == Some(url)
                 && patch.status == PatchStatus::Submitted
             {
-                let message = format!("uplink: submit {id} as PR {number}");
+                // A new export of the patch for the same public PR.
+                let message = format!("uplink: export {id} to PR {number}");
+                let mut state = StateTree::head(repo)?;
+                stage_export(&mut state, &patch)?;
+                state.commit_to_branch(&message)?;
                 push_recorded_patch(repo, id, state_branch, &message, push_remote)?;
                 return Ok(patch);
             }
@@ -706,9 +719,11 @@ pub fn record_pull_request(
             });
             add_event(patch, "submitted", format!("Upstream PR {url}"));
         }
-        write_queue_file(repo, &queue)?;
         let message = format!("uplink: submit {id} as PR {number}");
-        commit_queue(repo, &message)?;
+        let mut state = StateTree::head(repo)?;
+        stage_export(&mut state, &patch)?;
+        state.write_queue(&queue)?;
+        state.commit_to_branch(&message)?;
         push_recorded_patch(repo, id, state_branch, &message, push_remote)?;
         Ok(get_patch(&read_queue_file(repo)?, id)?.clone())
     })
@@ -756,9 +771,8 @@ pub fn record_gated_pr(
             conflict.pr_url = Some(url.into());
             add_event(patch, "conflict-pr", format!("Conflict PR {url}"));
         }
-        write_queue_file(repo, &queue)?;
         let message = format!("uplink: conflict PR {id} #{number}");
-        commit_queue(repo, &message)?;
+        commit_queue(repo, &queue, &message)?;
         push_recorded_patch(repo, id, state_branch, &message, push_remote)?;
         Ok(get_patch(&read_queue_file(repo)?, id)?.clone())
     })
@@ -774,13 +788,14 @@ pub fn store_patch_extras(
     source: Option<String>,
 ) -> Result<Patch> {
     with_queue_lock(repo, || {
-        let mut queue = read_queue_file(repo)?;
+        let mut state = StateTree::head(repo)?;
+        let mut queue = state.queue()?;
         let patch = get_patch_mut(&mut queue, id)?;
-        store_extras(repo, patch, dir, source)?;
+        store_extras(&mut state, patch, dir, source)?;
         add_event(patch, "extras", "Stored company assessment-hook extras");
         let patch = patch.clone();
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: store assessment extras {id}"))?;
+        state.write_queue(&queue)?;
+        state.commit_to_branch(&format!("uplink: store assessment extras {id}"))?;
         Ok(patch)
     })
 }
@@ -815,8 +830,7 @@ fn store_packet_assessment(
     current.assess = Some(report);
     add_event(current, "assessed", detail);
     let current = current.clone();
-    write_queue_file(repo, queue)?;
-    commit_queue(repo, &format!("uplink: assess {id} for its packet"))?;
+    commit_queue(repo, queue, &format!("uplink: assess {id} for its packet"))?;
     Ok(current)
 }
 
@@ -942,9 +956,9 @@ pub fn mark_waiting(
             patch.status = PatchStatus::Waiting;
             add_event(patch, "waiting", waiting_detail(run_url.as_deref()));
         }
-        write_queue_file(repo, &queue)?;
         commit_queue(
             repo,
+            &queue,
             &format!("uplink: {id} waiting on {TO_UPSTREAM_ENVIRONMENT}"),
         )?;
         Ok((get_patch(&queue, id)?.clone(), WaitingOutcome::Waiting))
@@ -1015,8 +1029,7 @@ pub fn mark_rejected(repo: &Path, id: &str, rejection: &Rejection) -> Result<Opt
             patch.status = PatchStatus::Rejected;
             add_event(patch, "rejected", detail);
         }
-        write_queue_file(repo, &queue)?;
-        commit_queue(repo, &format!("uplink: {id} rejected"))?;
+        commit_queue(repo, &queue, &format!("uplink: {id} rejected"))?;
         Ok(Some(get_patch(&queue, id)?.clone()))
     })
 }

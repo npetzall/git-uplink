@@ -24,24 +24,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::adopt::{
     ADOPT_TEST_BRANCH_PREFIX, AdoptGroup, AheadAnalysis, adopted_patch, clear_adopt_from,
-    remove_patch_files, resolve_group,
+    resolve_group,
 };
 use crate::assess::{company_commit_message, merge_authors, patch_authors, report_paths};
 use crate::error::{Error, PreflightError, Result};
 use crate::git::{GitOpts, git, git_ok};
 use crate::preflight::{
-    ScriptVerdict, apply_abs, build_company_stack, detect_depends_on, detect_internal_depends_on,
+    ScriptVerdict, apply_text, build_company_stack, detect_depends_on, detect_internal_depends_on,
     export_preflight, export_preflight_with, is_script_failure, rev_preflight,
 };
 use crate::progress::{ProgressMode, StepOutcome, StepProgress};
-use crate::queue::{
-    active_upstream, add_event, patch_path, read_queue as read_queue_file,
-    write_queue as write_queue_file,
-};
+use crate::queue::{active_upstream, add_event, patch_path, read_queue as read_queue_file};
 use crate::repo::{
-    TempWorktree, commit_queue, restore_paths_from, rev_parse, set_state_branch, show_at,
-    stable_patch_id, write_product_patch,
+    TempWorktree, product_patch, rev_parse, set_state_branch, show_at,
+    stable_patch_id_from_contents,
 };
+use crate::state::StateTree;
 use crate::types::{ApplyOutcome, Patch, PatchIntent, QueueState, STATE_BRANCH};
 
 pub use pause::AdoptResume;
@@ -704,14 +702,9 @@ fn remove_stack(repo: &Path, run: &BranchRun) {
     }
 }
 
-/// Puts uplink/state back to where `run` started, removing the patch files
-/// and test branches it added, and ends the run.
+/// Puts uplink/state back to where `run` started, removing the test
+/// branches it added, and ends the run.
 fn reset_state(repo: &Path, run: &BranchRun) -> Result<()> {
-    if run.kind != RunKind::Restack {
-        // A restack re-adds patches the start state has, files and all.
-        let ids: Vec<String> = run.adopted.iter().map(|a| a.id.clone()).collect();
-        remove_patch_files(repo, &ids);
-    }
     for branch in run.adopted.iter().filter_map(|a| a.test_branch.as_deref()) {
         let _ = git(repo, &["branch", "-D", branch], GitOpts::allow_fail());
     }
@@ -732,10 +725,10 @@ enum Step {
     Paused(Box<Paused>),
 }
 
-/// The candidate patch of the next item, written to its patch file.
+/// The candidate patch of the next item, and its patch file.
 struct Candidate {
     patch: Patch,
-    abs: PathBuf,
+    text: String,
     /// Short sha of the commit holding the change; empty for a queued patch.
     sha: String,
 }
@@ -760,7 +753,7 @@ fn candidate(ctx: &Ctx<'_>, run: &BranchRun, queue: &QueueState) -> Result<Candi
             }
             let source = (run.kind == RunKind::Branch).then_some(run.branch.as_str());
             let patch = adopted_patch(repo, queue, &resolved, None, source)?;
-            write_product_patch(
+            let text = product_patch(
                 repo,
                 &patch.id,
                 &resolved.from_sha,
@@ -768,7 +761,7 @@ fn candidate(ctx: &Ctx<'_>, run: &BranchRun, queue: &QueueState) -> Result<Candi
                 &resolved.head_sha,
             )?;
             Ok(Candidate {
-                abs: repo.join(patch_path(&patch.id)?),
+                text,
                 sha: resolved.head_sha.chars().take(7).collect(),
                 patch,
             })
@@ -778,31 +771,24 @@ fn candidate(ctx: &Ctx<'_>, run: &BranchRun, queue: &QueueState) -> Result<Candi
             // Kept only when the queue still has them; the rest are found again.
             patch.depends_on.retain(|id| queue.layer_of(id).is_some());
             let rel = patch_path(&patch.id)?;
-            match &item.amended {
+            let text = match &item.amended {
                 Some(sha) => {
                     merge_authors(
                         &mut patch.source.authors,
                         patch_authors(repo, &format!("{sha}^"), sha)?,
                     );
-                    write_product_patch(
+                    product_patch(
                         repo,
                         &patch.id,
                         &format!("{sha}^"),
                         &company_commit_message(queue, &patch),
                         sha,
-                    )?;
+                    )?
                 }
-                None => {
-                    let text = show_at(repo, &item.source, &rel.to_string_lossy())?;
-                    let abs = repo.join(&rel);
-                    if let Some(parent) = abs.parent() {
-                        fs::create_dir_all(parent)?;
-                    }
-                    crate::queue::write_atomic(&abs, format!("{text}\n"))?;
-                }
-            }
+                None => format!("{}\n", show_at(repo, &item.source, &rel.to_string_lossy())?),
+            };
             Ok(Candidate {
-                abs: repo.join(rel),
+                text,
                 sha: item
                     .amended
                     .as_deref()
@@ -822,7 +808,7 @@ fn adopt_next(ctx: &mut Ctx<'_>, run: &mut BranchRun) -> Result<Step> {
     let internal_only = run.items[index].internal_only();
     let Candidate {
         mut patch,
-        abs,
+        text,
         sha,
     } = candidate(ctx, run, &queue)?;
     let id = patch.id.clone();
@@ -854,43 +840,49 @@ fn adopt_next(ctx: &mut Ctx<'_>, run: &mut BranchRun) -> Result<Step> {
         run,
         &mut patch,
         &mut done,
-        &abs,
+        &text,
         &sha,
         test_branch.as_deref(),
     );
     let step = match checked {
-        Ok(Checked::Add { stack_tip }) => {
-            add(ctx, queue, run, patch, done, internal_only, stack_tip).map(|()| Step::Added)
-        }
+        Ok(Checked::Add { stack_tip }) => add(
+            ctx,
+            queue,
+            run,
+            patch,
+            &text,
+            done,
+            internal_only,
+            stack_tip,
+        )
+        .map(|()| Step::Added),
         Ok(Checked::Instead(step)) => Ok(step),
         Err(err) => Err(err),
     };
-    if !matches!(step, Ok(Step::Added)) {
-        if run.kind == RunKind::Restack {
-            // The start state keeps the file; the queue checked out now has no entry for it.
-            let _ = fs::remove_file(&abs);
-        } else {
-            remove_patch_files(repo, &[id]);
-        }
-        if let Some(branch) = &test_branch {
-            let _ = git(repo, &["branch", "-D", branch], GitOpts::allow_fail());
-        }
+    if !matches!(step, Ok(Step::Added))
+        && let Some(branch) = &test_branch
+    {
+        let _ = git(repo, &["branch", "-D", branch], GitOpts::allow_fail());
     }
     step
 }
 
-/// Adds the checked patch to the queue in its own uplink/state commit.
+/// Adds the checked patch with its patch file `text` to the queue in its
+/// own uplink/state commit.
+#[allow(clippy::too_many_arguments)]
 fn add(
     ctx: &mut Ctx<'_>,
     mut queue: QueueState,
     run: &mut BranchRun,
     mut patch: Patch,
+    text: &str,
     done: BranchAdopted,
     internal_only: bool,
     stack_tip: Option<String>,
 ) -> Result<()> {
     let repo = ctx.repo;
     let id = patch.id.clone();
+    let mut state = StateTree::head(repo)?;
     let message = match &run.items[run.next] {
         RunItem::Group(_) => format!("uplink: adopt {id} from {}", run.branch),
         RunItem::Queued(item) => {
@@ -905,7 +897,7 @@ fn add(
                 .filter(|line| !line.is_empty())
                 .map(str::to_string)
                 .collect();
-            restore_paths_from(repo, &item.source, &paths)?;
+            state.copy_from(&item.source, &paths)?;
             add_event(
                 &mut patch,
                 "restacked",
@@ -915,8 +907,9 @@ fn add(
         }
     };
     queue.push_patch(patch, internal_only);
-    write_queue_file(repo, &queue)?;
-    commit_queue(repo, &message)?;
+    state.write_patch(&id, text)?;
+    state.write_queue(&queue)?;
+    state.commit_to_branch(&message)?;
     if let (Some(stack), Some(tip)) = (&run.stack, &stack_tip) {
         git(
             repo,
@@ -957,9 +950,9 @@ enum OnStack {
     Conflict,
 }
 
-fn apply_on_stack(repo: &Path, stack: &str, candidate_abs: &Path, title: &str) -> Result<OnStack> {
+fn apply_on_stack(repo: &Path, stack: &str, candidate: &str, title: &str) -> Result<OnStack> {
     let worktree = TempWorktree::add(repo, "uplink-restack", stack)?;
-    Ok(match apply_abs(&worktree.dir, candidate_abs, title)? {
+    Ok(match apply_text(&worktree.dir, candidate, title)? {
         ApplyOutcome::Applied => OnStack::Applied(rev_parse(&worktree.dir, "HEAD")?),
         ApplyOutcome::Empty => OnStack::Empty,
         ApplyOutcome::Conflict => OnStack::Conflict,
@@ -974,15 +967,15 @@ fn check_item(
     run: &mut BranchRun,
     patch: &mut Patch,
     done: &mut BranchAdopted,
-    candidate_abs: &Path,
+    candidate: &str,
     sha: &str,
     test_branch: Option<&str>,
 ) -> Result<Checked> {
     let repo = ctx.repo;
+    let state = StateTree::head(repo)?;
     let index = run.next;
     let item = run.items[index].clone();
-    let rel = patch_path(&patch.id)?;
-    patch.patch_id_stable = Some(stable_patch_id(repo, &rel.to_string_lossy())?);
+    patch.patch_id_stable = Some(stable_patch_id_from_contents(repo, candidate)?);
     if let Some(existing) = queue.all_patches().find(|other| {
         other.patch_id_stable.is_some() && other.patch_id_stable == patch.patch_id_stable
     }) {
@@ -1017,7 +1010,7 @@ fn check_item(
     if item.internal_only() && run.stack.is_none() {
         // The first internal-only group: every upstream-bound one is in the
         // queue now, so company main is built once and grows from here.
-        build_company_stack(repo, queue, ADOPT_MAIN_BRANCH)?;
+        build_company_stack(&state, queue, ADOPT_MAIN_BRANCH)?;
         run.stack = Some(ADOPT_MAIN_BRANCH.to_string());
         run.save(repo)?;
     }
@@ -1029,7 +1022,7 @@ fn check_item(
     };
     let mut stack_tip = None;
     if let Some(stack) = run.stack.clone() {
-        match apply_on_stack(repo, &stack, candidate_abs, patch.subject())? {
+        match apply_on_stack(repo, &stack, candidate, patch.subject())? {
             OnStack::Applied(tip) => stack_tip = Some(tip),
             OnStack::Empty => {
                 ctx.lines.line(StepOutcome::skip(already_in));
@@ -1047,7 +1040,7 @@ fn check_item(
                     ),
                 );
                 let at = PauseAt::Stack(stack);
-                return on_failure(ctx, queue, run, info, None, candidate_abs, &at)
+                return on_failure(ctx, queue, run, info, None, candidate, &at)
                     .map(|step| Checked::Instead(step.unwrap_or(Step::Again)));
             }
         }
@@ -1059,11 +1052,11 @@ fn check_item(
         if item.stops_to_amend() {
             let info = failure(AdoptFailureKind::Planned, PLANNED.into(), String::new());
             let at = PauseAt::Stack(stack);
-            return planned_stop(ctx, queue, run, info, candidate_abs, &at).map(Checked::Instead);
+            return planned_stop(ctx, queue, run, info, candidate, &at).map(Checked::Instead);
         }
         if matches!(item, RunItem::Group(_))
             && let Some(found) =
-                detect_internal_depends_on(repo, queue, candidate_abs, patch.subject())?
+                detect_internal_depends_on(&state, queue, candidate, patch.subject())?
             && !found.is_empty()
         {
             add_event(
@@ -1086,7 +1079,7 @@ fn check_item(
                         );
                         let at = PauseAt::Stack(stack);
                         if let Some(step) =
-                            on_failure(ctx, queue, run, info, Some(err), candidate_abs, &at)?
+                            on_failure(ctx, queue, run, info, Some(err), candidate, &at)?
                         {
                             return Ok(Checked::Instead(step));
                         }
@@ -1104,7 +1097,7 @@ fn check_item(
         return Ok(Checked::Add { stack_tip });
     }
 
-    let Some(found) = detect_depends_on(repo, queue, candidate_abs, patch.subject(), test_branch)?
+    let Some(found) = detect_depends_on(&state, queue, candidate, patch.subject(), test_branch)?
     else {
         let info = failure(
             AdoptFailureKind::Apply,
@@ -1119,7 +1112,7 @@ fn check_item(
             .map(|p| p.id.clone())
             .collect();
         let at = PauseAt::Upstream(all);
-        return on_failure(ctx, queue, run, info, None, candidate_abs, &at)
+        return on_failure(ctx, queue, run, info, None, candidate, &at)
             .map(|step| Checked::Instead(step.unwrap_or(Step::Again)));
     };
     done.test_branch = test_branch.map(str::to_string);
@@ -1140,14 +1133,14 @@ fn check_item(
     if item.stops_to_amend() {
         let info = failure(AdoptFailureKind::Planned, PLANNED.into(), String::new());
         let at = PauseAt::Upstream(patch.depends_on.clone());
-        return planned_stop(ctx, queue, run, info, candidate_abs, &at).map(Checked::Instead);
+        return planned_stop(ctx, queue, run, info, candidate, &at).map(Checked::Instead);
     }
     if run.preflight {
         let failed = match export_preflight_with(
-            repo,
+            &state,
             queue,
             patch,
-            candidate_abs,
+            candidate,
             None,
             ctx.verdict,
             run.preflight_deps,
@@ -1157,7 +1150,7 @@ fn check_item(
                 None
             }
             Err(Error::Preflight(err)) if is_script_failure(&err) => {
-                with_preflight_deps(repo, queue, patch, done, candidate_abs, ctx.verdict, err)?
+                with_preflight_deps(&state, queue, patch, done, candidate, ctx.verdict, err)?
             }
             Err(err) => return Err(err),
         };
@@ -1169,9 +1162,7 @@ fn check_item(
                     err.to_string(),
                 );
                 let at = PauseAt::Upstream(patch.depends_on.clone());
-                if let Some(step) =
-                    on_failure(ctx, queue, run, info, Some(err), candidate_abs, &at)?
-                {
+                if let Some(step) = on_failure(ctx, queue, run, info, Some(err), candidate, &at)? {
                     return Ok(Checked::Instead(step));
                 }
             }
@@ -1186,11 +1177,11 @@ fn check_item(
 /// not need to apply, it depends on them too. Returns the failure when no
 /// such set was found.
 fn with_preflight_deps(
-    repo: &Path,
+    state: &StateTree,
     queue: &QueueState,
     patch: &mut Patch,
     done: &mut BranchAdopted,
-    candidate_abs: &Path,
+    candidate: &str,
     verdict: &ScriptVerdict,
     err: PreflightError,
 ) -> Result<Option<PreflightError>> {
@@ -1204,7 +1195,7 @@ fn with_preflight_deps(
         return Ok(Some(err));
     }
     let before = std::mem::replace(&mut patch.depends_on, suggested);
-    match export_preflight(repo, queue, patch, candidate_abs, None, verdict) {
+    match export_preflight(state, queue, patch, candidate, None, verdict) {
         Ok(token) => {
             add_event(
                 patch,
@@ -1264,7 +1255,7 @@ fn planned_stop(
     queue: &QueueState,
     run: &mut BranchRun,
     info: AdoptFailure,
-    candidate_abs: &Path,
+    candidate: &str,
     at: &PauseAt,
 ) -> Result<Step> {
     let repo = ctx.repo;
@@ -1278,12 +1269,7 @@ commit or stash them, then run git uplink {} --continue",
     }
     ctx.lines.line(StepOutcome::warn("paused to amend"));
     Ok(Step::Paused(Box::new(pause::pause(
-        repo,
-        queue,
-        run,
-        &info,
-        candidate_abs,
-        at,
+        repo, queue, run, &info, candidate, at,
     )?)))
 }
 
@@ -1295,7 +1281,7 @@ fn on_failure(
     run: &mut BranchRun,
     mut info: AdoptFailure,
     error: Option<PreflightError>,
-    candidate_abs: &Path,
+    candidate: &str,
     at: &PauseAt,
 ) -> Result<Option<Step>> {
     let repo = ctx.repo;
@@ -1328,12 +1314,7 @@ fn on_failure(
         AdoptDecision::Amend if info.can_amend => {
             ctx.lines.line(StepOutcome::warn("paused to amend"));
             Step::Paused(Box::new(pause::pause(
-                repo,
-                queue,
-                run,
-                &info,
-                candidate_abs,
-                at,
+                repo, queue, run, &info, candidate, at,
             )?))
         }
         AdoptDecision::Skip if leave_out => {

@@ -116,7 +116,7 @@ Stop, changing nothing:    git uplink rebuild --abort",
                 "rebuild paused on {id} (\"{}\"): it does not apply on the patches before it, \
 and git apply --3way could not merge it, so nothing of it is applied.\n\
 The checkout holds the queue before {id}. Make its change by hand, from \
-.uplink/patches/{id}.patch (git apply --reject writes what does not fit to .rej files).\n",
+git show uplink/state:.uplink/patches/{id}.patch | git apply --reject (it writes what does not fit to .rej files).\n",
                 stop.title
             ),
             StopCause::Apply { files } => format!(
@@ -253,8 +253,7 @@ pub fn resume_rebuild(repo: &Path, resume: RebuildResume) -> Result<Option<Inlin
     with_run_lock(repo, || match resume {
         RebuildResume::Abort => {
             restore_checkout(repo, &paused.original, &paused.original_sha)?;
-            restore_uplink_from_state(repo)?;
-            ensure_state_worktree(repo)?;
+            ensure_state_branch(repo)?;
             end_pause(repo)?;
             Ok(None)
         }
@@ -346,7 +345,8 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
         .map(|r| (r.id.clone(), r.authors.clone()))
         .collect();
     let resolved = paused.resolved.clone();
-    let mut record = |queue: &mut QueueState| record_resolved(repo, queue, &resolved);
+    let mut record =
+        |state: &mut StateTree, queue: &mut QueueState| record_resolved(state, queue, &resolved);
     let outcome = rebuild_replay(
         repo,
         Some(&ScriptVerdict::Run),
@@ -417,7 +417,7 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
     };
     if paused.original != company_branch {
         restore_checkout(repo, &paused.original, &paused.original_sha)?;
-        ensure_state_worktree(repo)?;
+        ensure_state_branch(repo)?;
     }
     Ok(InlineRebuild {
         result: RebuildResult {
@@ -435,8 +435,14 @@ fn replay(repo: &Path, mut paused: PausedRebuild) -> Result<InlineRebuild> {
 }
 
 /// Records the resolutions on the queue as amends of their patches, in one
-/// uplink/state commit. `.uplink/patches` holds them as replayed.
-fn record_resolved(repo: &Path, queue: &mut QueueState, resolved: &[ResolvedPatch]) -> Result<()> {
+/// uplink/state commit. `state` holds them as replayed.
+fn record_resolved(
+    state: &mut StateTree,
+    queue: &mut QueueState,
+    resolved: &[ResolvedPatch],
+) -> Result<()> {
+    let repo = state.repo().to_path_buf();
+    let repo = repo.as_path();
     let mut ids = Vec::new();
     for resolution in resolved {
         let patch = get_patch_mut(queue, &resolution.id)?;
@@ -447,9 +453,9 @@ fn record_resolved(repo: &Path, queue: &mut QueueState, resolved: &[ResolvedPatc
         patch.assess = Some(resolution.assess.clone());
         patch.source.authors = resolution.authors.clone();
         patch.conflict = None;
-        let rel = patch_path(&resolution.id)?.to_string_lossy().into_owned();
-        patch.patch_id_stable = Some(stable_patch_id(repo, &rel)?);
-        patch.status = status_after_rewrite(repo, patch);
+        let text = state.require_patch(&resolution.id)?;
+        patch.patch_id_stable = Some(stable_patch_id_from_contents(repo, &text)?);
+        patch.status = status_after_rewrite(repo, patch, &text);
         let detail = rewrite_event_detail(patch.status, "Resolved in an interactive rebuild");
         add_event(patch, "amended", detail);
         ids.push(resolution.id.clone());
@@ -457,9 +463,7 @@ fn record_resolved(repo: &Path, queue: &mut QueueState, resolved: &[ResolvedPatc
     if ids.is_empty() {
         return Ok(());
     }
-    write_queue_file(repo, queue)?;
-    commit_queue(
-        repo,
-        &format!("uplink: amend {} in rebuild", ids.join(", ")),
-    )
+    state.write_queue(queue)?;
+    state.commit_to_branch(&format!("uplink: amend {} in rebuild", ids.join(", ")))?;
+    Ok(())
 }

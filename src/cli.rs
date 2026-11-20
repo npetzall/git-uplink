@@ -20,7 +20,7 @@ pub const TOPICS: &[(&str, &str)] = &[
     (
         "Where state lives",
         "\
-Queue state lives on the orphan branch `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`.
+Queue state lives on the orphan branch `uplink/state` as `.uplink/queue.json` and `.uplink/patches/*.patch`. Commands read and write it as git objects; no checkout has a copy of it. Repair it by hand from a checkout of `uplink/state`, pushed as a fast-forward.
 
 Company `main` is product-only: public upstream, then the tooling patch, then every active `upstream[]` and `internal[]` patch.
 
@@ -351,9 +351,9 @@ pub enum Commands {
         /// `--abort` takes it from there.
         ///
         /// Before anything moves, the upgrade checks for work unrelated to
-        /// it: changes or untracked files in the checkout, `.uplink/` edits
-        /// not on `uplink/state`, a local `uplink/state`, `uplink/upstream`
-        /// or `uplink/hooks` ahead of origin's, or company main commits
+        /// it: changes or untracked files in the checkout, a local
+        /// `uplink/state`, `uplink/upstream` or `uplink/hooks` ahead of
+        /// origin's, or company main commits
         /// origin's main does not have. It asks whether to reset to origin,
         /// losing that work, and goes on; No stops it. Without a terminal it
         /// refuses unless `--allow-reset` is passed.
@@ -378,7 +378,7 @@ pub enum Commands {
         resume: bool,
         /// Continue a paused upgrade by dropping the patch it stopped on.
         ///
-        /// The patch file stays in `.uplink/patches/`.
+        /// The patch file stays in `.uplink/patches/` on `uplink/state`.
         #[arg(long, requires = "upgrade", conflicts_with = "abort")]
         drop: bool,
         /// Give up a paused upgrade: the checkout is put back and nothing was written.
@@ -780,7 +780,7 @@ pub enum Commands {
     Refresh,
     /// Fetch origin and hard-reset company main, uplink/state, uplink/upstream, and uplink/hooks.
     ///
-    /// Afterwards the clone matches origin and `.uplink/` is restored.
+    /// Afterwards the clone matches origin.
     /// A local `uplink/hooks` that origin does not have yet is kept.
     /// Untracked files in the checkout are left alone.
     Reset,
@@ -963,7 +963,8 @@ pub enum Commands {
         /// Patch to report on.
         #[arg(value_name = "id")]
         id: String,
-        /// Write the packet here instead of .uplink/reports/<id>/assessment.md.
+        /// Write the packet here instead of .uplink/reports/<id>/assessment.md
+        /// on uplink/state.
         #[arg(long, value_name = "path")]
         out: Option<PathBuf>,
         /// Directory of *.md files prepended to the packet. Without it, extras stored for the same lines and public message are used.
@@ -994,9 +995,8 @@ pub enum Commands {
     },
     /// Show the queue on origin/uplink/state as last fetched.
     ///
-    /// Reads `origin/uplink/state` with git. Local branches and the
-    /// `.uplink/` folder are not read. Nothing is fetched unless `--refresh`
-    /// is given.
+    /// Reads `origin/uplink/state` with git. Local branches are not read.
+    /// Nothing is fetched unless `--refresh` is given.
     Status {
         /// Print the queue status as JSON, for machines.
         #[arg(long)]
@@ -1031,12 +1031,14 @@ pub enum Commands {
         /// Patch to approve.
         #[arg(value_name = "id")]
         id: String,
-        /// Write the receipt here instead of .uplink/reports/<id>/approval.md.
+        /// Write the receipt here instead of .uplink/reports/<id>/approval.md
+        /// on uplink/state.
         #[arg(long, value_name = "path")]
         out: Option<PathBuf>,
         /// Review token of the packet that was reviewed.
         ///
-        /// `report` writes it to `.uplink/reports/<id>/review-token`. It
+        /// `report` writes it to `.uplink/reports/<id>/review-token` on
+        /// `uplink/state`. It
         /// names what the patch changes, the patch subject and the public
         /// message. What the patch changes is the lines it adds and removes
         /// per file, plus the files it creates, deletes, renames or
@@ -1050,11 +1052,11 @@ pub enum Commands {
         /// Approve on origin's uplink/state and push the approval there.
         ///
         /// Reads the queue and the patch from origin's uplink/state, not
-        /// from .uplink/, and pushes the approval as a fast-forward; it never
+        /// the local one, and pushes the approval as a fast-forward; it never
         /// force-pushes. When origin moved, approve fetches it and approves
         /// again on top: the patch there must still have the reviewed token,
         /// and an approval that already covers it there is kept as it is.
-        /// Local uplink/state and .uplink/ then match origin. Refused when
+        /// Local uplink/state then matches origin. Refused when
         /// local uplink/state has commits origin lacks.
         #[arg(long)]
         push: bool,
@@ -1915,8 +1917,8 @@ pub enum Commands {
     /// Start the embedded operator dashboard on 127.0.0.1 and open a browser.
     ///
     /// Serves the local operator UI for this checkout. It reads the queue on
-    /// `origin/uplink/state` as last fetched, with git; local branches and
-    /// the `.uplink/` folder are not read. Its Refresh button fetches
+    /// `origin/uplink/state` as last fetched, with git; local branches are
+    /// not read. Its Refresh button fetches
     /// origin's tracking refs, as `git uplink refresh` does. The UI is
     /// embedded in the binary.
     #[command(name = "web-ui")]

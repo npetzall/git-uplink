@@ -171,10 +171,10 @@ git uplink web-ui`}</Code>
             dependencies, and what happens next, from{" "}
             <code>origin/uplink/state</code> as last fetched;{" "}
             <strong>Refresh</strong> fetches it. Neither command reads your
-            local branches or <code>.uplink/</code>.{" "}
-            <strong>Ready to submit</strong> lists the queued upstream changes
-            submit can take now, and <strong>Submit stream</strong> draws the
-            order to submit and merge them.
+            local branches. <strong>Ready to submit</strong> lists the queued
+            upstream changes submit can take now, and{" "}
+            <strong>Submit stream</strong> draws the order to submit and merge
+            them.
           </li>
         </ul>
       </Section>
@@ -269,6 +269,22 @@ git uplink rebuild --continue   # --abort changes nothing`}</Code>
           <li>
             <strong>Old depends-on lists that name whole chains:</strong>{" "}
             <code>git uplink trim-deps</code> shortens them once.
+          </li>
+          <li>
+            <strong>The state itself needs an edit no command makes:</strong>{" "}
+            the state lives only in <code>uplink/state</code> commits, and no
+            checkout has a copy of it. Check the branch out on its own (
+            <code>git worktree add ../state uplink/state</code>), commit the
+            change there and push it as a fast-forward.
+          </li>
+          <li>
+            <strong>
+              A <code>.uplink/</code> folder from an older binary:
+            </strong>{" "}
+            the first command removes it when everything in it is on{" "}
+            <code>uplink/state</code>. When it holds anything else, the command
+            refuses and names the files: commit them on{" "}
+            <code>uplink/state</code> as above, or delete the folder.
           </li>
           <li>
             <strong>

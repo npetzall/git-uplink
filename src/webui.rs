@@ -286,7 +286,7 @@ fn missing_status(cwd: String, error: String) -> StatusResponse {
 }
 
 /// The queue on `origin/uplink/state` as last fetched, read with git. The
-/// `.uplink/` folder and local branches are never read, and nothing is fetched.
+/// local branches are never read, and nothing is fetched.
 fn origin_queue(repo: &Path) -> crate::error::Result<QueueState> {
     let git_ref = state_ref();
     if !has_ref(repo, &git_ref)? {
