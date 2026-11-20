@@ -13,7 +13,7 @@ const WORKFLOWS: [string, string, string, string][] = [
     "Uplink import",
     "Pull request merged into main",
     "Records the change as a queued patch, rebuilds main when an internal patch must stay on top, comments the patch id. A failed import keeps the change on a rescue branch.",
-    "preflight, add, rescue",
+    "preflight, add, gated, rescue",
   ],
   [
     "Uplink submit",
@@ -60,8 +60,8 @@ const WORKFLOWS: [string, string, string, string][] = [
   [
     "Uplink gate",
     "Pull request into a conflict, amend, split, merge or transfer base",
-    "Assesses and preflights what the gated PR would make the patch. On an upstream amend or transfer that passes, runs the assessment hook as advice.",
-    "assess, preflight",
+    "Assesses and preflights what the gated PR would make the patch, and comments the patch message merging stores. On an upstream amend or transfer that passes, runs the assessment hook as advice.",
+    "assess, preflight, message",
   ],
   [
     "Uplink rebase",
@@ -74,6 +74,12 @@ const WORKFLOWS: [string, string, string, string][] = [
     "Operator dispatch",
     "Tests main with preflight.sh and gates the patch it fails on.",
     "rebuild --verify, gated",
+  ],
+  [
+    "Uplink assessment hook",
+    "Dispatch on uplink/hooks by PR checks, the gate and submit; by hand on main",
+    "Runs the company assessment hook on an assessment package. On main it is a placeholder that prints the hook guide and writes nothing.",
+    "none (the company hook)",
   ],
   [
     "Uplink abandon contrib",
