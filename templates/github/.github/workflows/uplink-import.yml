@@ -121,7 +121,7 @@ jobs:
     if: github.event.pull_request.merged
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       actions: write
     outputs:
@@ -363,7 +363,7 @@ jobs:
     if: always() && github.event.pull_request.merged && needs.import.outputs.recorded != 'true' && needs.import.outputs.rescued == ''
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       # Plain git rescues the change when git-uplink cannot be installed.
       - uses: $/.github/actions/install-git-uplink
