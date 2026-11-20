@@ -329,12 +329,19 @@ fn complete_merge(
     updated.depends_on = outside(updated.depends_on, &member_ids);
 
     let before = rev_parse(repo, "HEAD")?;
+    let put_back = || -> Result<()> {
+        restore_uplink_from_state(repo)?;
+        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+        Ok(())
+    };
     commit_resolution(repo, &onto, &company_commit_message(&queue, &updated))?;
     if rev_parse(repo, "HEAD")? == onto {
-        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-        return Err(Error::msg(format!(
-            "The merge leaves {target} empty; drop the patches instead"
-        )));
+        return or_put_back(
+            Err(Error::msg(format!(
+                "The merge leaves {target} empty; drop the patches instead"
+            ))),
+            put_back,
+        );
     }
 
     let internal = !queue.is_upstream(target);
@@ -347,66 +354,64 @@ fn complete_merge(
         }
         Ok(report)
     })();
-    let report = match checked {
-        Ok(report) => report,
-        Err(err) => {
-            git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-            return Err(err);
-        }
-    };
+    let report = or_put_back(checked, put_back)?;
 
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    let patch_abs = repo.join(patch_path(target)?);
-    crate::queue::write_atomic(&patch_abs, format_patch_at_head(repo)?)?;
     let others: Vec<String> = member_ids
         .iter()
         .filter(|id| *id != target)
         .cloned()
         .collect();
-    // The target takes the place of the first member in its lane; the
-    // others are dropped, and what depended on any of them depends on it.
-    {
-        let lane = if internal {
-            &mut queue.internal
-        } else {
-            &mut queue.upstream
-        };
-        let from = lane.iter().position(|p| p.id == target);
-        let to = lane.iter().position(|p| member_ids.contains(&p.id));
-        if let (Some(from), Some(to)) = (from, to)
-            && to < from
+    let staged = (|| -> Result<PathBuf> {
+        fs::create_dir_all(repo.join(".uplink/patches"))?;
+        let patch_abs = repo.join(patch_path(target)?);
+        crate::queue::write_atomic(&patch_abs, format_patch_at_head(repo)?)?;
+        // The target takes the place of the first member in its lane; the
+        // others are dropped, and what depended on any of them depends on it.
         {
-            let moved = lane.remove(from);
-            lane.insert(to, moved);
+            let lane = if internal {
+                &mut queue.internal
+            } else {
+                &mut queue.upstream
+            };
+            let from = lane.iter().position(|p| p.id == target);
+            let to = lane.iter().position(|p| member_ids.contains(&p.id));
+            if let (Some(from), Some(to)) = (from, to)
+                && to < from
+            {
+                let moved = lane.remove(from);
+                lane.insert(to, moved);
+            }
         }
-    }
-    {
-        let current = get_patch_mut(&mut queue, target)?;
-        current.commit_message = updated.commit_message.clone();
-        current.source.authors = updated.source.authors.clone();
-        current.depends_on = updated.depends_on.clone();
-    }
-    for id in &others {
-        super::lifecycle::mark_dropped(&mut queue, id, &format!("Merged into {target}"))?;
-    }
-    for other in queue.all_patches_mut() {
-        if member_ids.contains(&other.id) {
-            continue;
+        {
+            let current = get_patch_mut(&mut queue, target)?;
+            current.commit_message = updated.commit_message.clone();
+            current.source.authors = updated.source.authors.clone();
+            current.depends_on = updated.depends_on.clone();
         }
-        if other.depends_on.iter().any(|dep| others.contains(dep)) {
-            let deps = std::mem::take(&mut other.depends_on);
-            other.depends_on = outside(
-                deps.into_iter().map(|dep| {
-                    if others.contains(&dep) {
-                        target.to_string()
-                    } else {
-                        dep
-                    }
-                }),
-                &[],
-            );
+        for id in &others {
+            super::lifecycle::mark_dropped(&mut queue, id, &format!("Merged into {target}"))?;
         }
-    }
+        for other in queue.all_patches_mut() {
+            if member_ids.contains(&other.id) {
+                continue;
+            }
+            if other.depends_on.iter().any(|dep| others.contains(dep)) {
+                let deps = std::mem::take(&mut other.depends_on);
+                other.depends_on = outside(
+                    deps.into_iter().map(|dep| {
+                        if others.contains(&dep) {
+                            target.to_string()
+                        } else {
+                            dep
+                        }
+                    }),
+                    &[],
+                );
+            }
+        }
+        Ok(patch_abs)
+    })();
+    let patch_abs = or_put_back(staged, put_back)?;
 
     let verdict = checks.verdict();
     let layer_checks = if internal {
@@ -426,17 +431,12 @@ fn complete_merge(
         let report = probe_report(layer_checks, || {
             probe_rebuild(repo, &queue, &upstream_ref, false)
         });
-        restore_uplink_from_state(repo)?;
-        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+        put_back()?;
         return Ok(Checked::Probed(report?));
     }
-    if layer_checks.is_err() {
-        restore_uplink_from_state(repo)?;
-        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-    }
-    layer_checks?;
+    or_put_back(layer_checks, put_back)?;
 
-    {
+    let recorded = (|| -> Result<()> {
         let current = get_patch_mut(&mut queue, target)?;
         current.assess = Some(report);
         let rel = patch_path(target)?.to_string_lossy().into_owned();
@@ -450,7 +450,9 @@ fn complete_merge(
             ),
         );
         add_event(current, "merged-in", detail);
-    }
+        Ok(())
+    })();
+    or_put_back(recorded, put_back)?;
     write_queue_file(repo, &queue)?;
     commit_queue(
         repo,

@@ -285,7 +285,7 @@ fn complete_split(
         }
         Ok(parts)
     })();
-    let put_back = |repo: &Path| -> Result<()> {
+    let put_back = || -> Result<()> {
         restore_uplink_from_state(repo)?;
         git(
             repo,
@@ -294,64 +294,61 @@ fn complete_split(
         )?;
         Ok(())
     };
-    let mut parts = match built {
-        Ok(parts) => parts,
-        Err(err) => {
-            put_back(repo)?;
-            return Err(err);
-        }
-    };
+    let mut parts = or_put_back(built, put_back)?;
 
-    let combined = git_ok(
-        repo,
-        &[
-            "diff",
-            "--full-index",
-            &onto,
-            "HEAD",
-            "--",
-            ".",
-            ":!.uplink",
-        ],
-    )?;
-    let content_changed = patch.patch_id_stable.as_deref()
-        != Some(stable_patch_id_from_contents(repo, &combined)?.as_str());
-    let part_ids: Vec<String> = parts.iter().map(|p| p.id.clone()).collect();
-    let last_id = part_ids.last().cloned().unwrap_or_else(|| id.to_string());
-    let how = format!("Split into {}", part_ids.join(", "));
-    for part in parts.iter_mut() {
-        if part.id == id {
-            part.status = status_after_rewrite(repo, part);
-            let detail = rewrite_event_detail(part.status, &how);
-            add_event(part, "split", detail);
-        } else {
-            add_event(part, "split", format!("Split from {id}"));
+    let staged = (|| -> Result<(Vec<String>, String, bool)> {
+        let combined = git_ok(
+            repo,
+            &[
+                "diff",
+                "--full-index",
+                &onto,
+                "HEAD",
+                "--",
+                ".",
+                ":!.uplink",
+            ],
+        )?;
+        let content_changed = patch.patch_id_stable.as_deref()
+            != Some(stable_patch_id_from_contents(repo, &combined)?.as_str());
+        let part_ids: Vec<String> = parts.iter().map(|p| p.id.clone()).collect();
+        let last_id = part_ids.last().cloned().unwrap_or_else(|| id.to_string());
+        let how = format!("Split into {}", part_ids.join(", "));
+        for part in parts.iter_mut() {
+            if part.id == id {
+                part.status = status_after_rewrite(repo, part);
+                let detail = rewrite_event_detail(part.status, &how);
+                add_event(part, "split", detail);
+            } else {
+                add_event(part, "split", format!("Split from {id}"));
+            }
         }
-    }
 
-    // The first part takes the patch's place; the others follow it. A
-    // patch that depended on the whole patch depends on the last part.
-    {
-        let lane = lane_mut(&mut queue, id)?;
-        let at = lane.iter().position(|p| p.id == id).unwrap_or(0);
-        lane.splice(at..=at, parts.iter().cloned());
-    }
-    for other in queue.all_patches_mut() {
-        if part_ids.contains(&other.id) {
-            continue;
+        // The first part takes the patch's place; the others follow it. A
+        // patch that depended on the whole patch depends on the last part.
+        {
+            let lane = lane_mut(&mut queue, id)?;
+            let at = lane
+                .iter()
+                .position(|p| p.id == id)
+                .ok_or_else(|| Error::msg(format!("{id} is not in its lane")))?;
+            lane.splice(at..=at, parts.iter().cloned());
         }
-        if other.depends_on.iter().any(|dep| dep == id) {
-            other.depends_on.retain(|dep| dep != id && *dep != last_id);
-            other.depends_on.push(last_id.clone());
+        for other in queue.all_patches_mut() {
+            if part_ids.contains(&other.id) {
+                continue;
+            }
+            if other.depends_on.iter().any(|dep| dep == id) {
+                other.depends_on.retain(|dep| dep != id && *dep != last_id);
+                other.depends_on.push(last_id.clone());
+            }
         }
-    }
-    let checked = parts.iter().try_for_each(|part| {
-        check_message_dependencies(&queue, &part.id, internal, &part.depends_on)
-    });
-    if let Err(err) = checked {
-        put_back(repo)?;
-        return Err(err);
-    }
+        parts.iter().try_for_each(|part| {
+            check_message_dependencies(&queue, &part.id, internal, &part.depends_on)
+        })?;
+        Ok((part_ids, last_id, content_changed))
+    })();
+    let (part_ids, last_id, content_changed) = or_put_back(staged, put_back)?;
 
     // Each part depends on the one before it, so the last part's export
     // holds them all: one export preflight tests the whole split.
@@ -359,28 +356,21 @@ fn complete_split(
     let layer_checks = if internal {
         command_preflight(&queue, repo, None, verdict)
     } else {
-        let last = get_patch(&queue, &last_id)?;
-        export_preflight(
-            repo,
-            &queue,
-            last,
-            &repo.join(patch_path(&last_id)?),
-            None,
-            verdict,
-        )
-        .and_then(|token| assert_upstream_layer_applies(repo, &queue).map(|_| token))
+        get_patch(&queue, &last_id)
+            .and_then(|last| Ok((last, repo.join(patch_path(&last_id)?))))
+            .and_then(|(last, last_abs)| {
+                export_preflight(repo, &queue, last, &last_abs, None, verdict)
+            })
+            .and_then(|token| assert_upstream_layer_applies(repo, &queue).map(|_| token))
     };
     if checks.is_probe() {
         let report = probe_report(layer_checks, || {
             probe_rebuild(repo, &queue, &upstream_ref, false)
         });
-        put_back(repo)?;
+        put_back()?;
         return Ok(Checked::Probed(report?));
     }
-    if layer_checks.is_err() {
-        put_back(repo)?;
-    }
-    layer_checks?;
+    or_put_back(layer_checks, put_back)?;
 
     write_queue_file(repo, &queue)?;
     commit_queue(

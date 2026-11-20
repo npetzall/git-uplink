@@ -166,6 +166,18 @@ pub(super) fn snapshot_uplink(repo: &Path) -> Result<std::path::PathBuf> {
     Ok(dir)
 }
 
+/// `step`, after `put_back` when it failed: the checkout goes back to how a
+/// gated `--complete` found it, and the error is still the one `step` failed
+/// with. When putting back fails as well, the error names both.
+pub(super) fn or_put_back<T>(step: Result<T>, put_back: impl FnOnce() -> Result<()>) -> Result<T> {
+    step.map_err(|err| match put_back() {
+        Ok(()) => err,
+        Err(cleanup) => Error::msg(format!(
+            "{err}\nPutting the checkout back failed as well: {cleanup}"
+        )),
+    })
+}
+
 /// Resets the `.uplink` worktree to the committed uplink/state, when it exists.
 pub(super) fn restore_uplink_from_state(repo: &Path) -> Result<()> {
     let queue_ref = STATE_BRANCH;
@@ -174,3 +186,7 @@ pub(super) fn restore_uplink_from_state(repo: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;
