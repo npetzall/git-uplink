@@ -13,7 +13,7 @@ Rust Git subcommand. The binary is `git-uplink`, so Git treats it as `git uplink
 
 ## Roles
 
-Docs, CLI help, and PR comments address three roles: the **operator** (setup, `init --upgrade`, adopt, troubleshooting, repairs by hand), the **forge** (the workflows in `templates/`), and the **developer** (PRs, labels, the PR body, gated PRs, and dispatching amend, transfer and submit). Developers never run `git uplink`; do not tell them to. Put a new command in the Operator or Forge group of `GROUPS`, and its page on the site (`site/src/pages/operator.tsx`, `forge.tsx`, `developer.tsx`).
+Docs, CLI help, and PR comments address three roles: the **operator** (setup, `init --upgrade`, adopt, troubleshooting, repairs by hand), the **forge** (the workflows in `templates/`), and the **developer** (PRs, labels, the PR body, gated PRs, and dispatching amend, split, merge, transfer and submit). Developers never run `git uplink`; do not tell them to. Put a new command in the Operator or Forge group of `GROUPS`, and its page on the site (`site/src/pages/operator.tsx`, `forge.tsx`, `developer.tsx`).
 
 ## Pack and binary versions
 
