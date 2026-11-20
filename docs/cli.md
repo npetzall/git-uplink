@@ -255,7 +255,7 @@ Publish local uplink/state, restacking unique patches if origin moved.
 
 If origin moved, it appends local-only patches onto the remote tip and carries those patch files. Then it publishes a local `uplink/hooks` that is new or ahead of origin, never with force. A refused hooks push (for example by the hooks ruleset, or a token without workflows scope) is a warning; open a pull request against `uplink/hooks` instead.
 
-The forge runs it after import and submit; the operator after `init`, `adopt`, `restack` or a repair.
+The operator runs it after `init`, `adopt`, `restack` or a repair. Forge commands push what they record themselves (`--push`).
 
 - `--push-remote <remote>`: Remote to push to, origin by default.
 
