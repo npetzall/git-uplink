@@ -23,7 +23,7 @@ The forge pack (`templates/`) and the binary are released and upgraded together.
 
 Read the rule that applies before you change that area:
 
-- [`docs/rules/state-and-main.md`](docs/rules/state-and-main.md): pushing `uplink/state` and `main` from commands and workflows (no force on `uplink/state`, lease on `main`, record again on a lost race, rescue a failed import, and how to test races).
+- [`docs/rules/state-and-main.md`](docs/rules/state-and-main.md): pushing `uplink/state`, `uplink/upstream` and `main` from commands and workflows (no force on `uplink/state`, `uplink/upstream` atomically with it, lease on `main`, record again on a lost race, rescue a failed import, and how to test races).
 
 ## CI
 

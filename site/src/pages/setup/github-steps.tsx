@@ -1072,8 +1072,8 @@ function RulesetList() {
         <strong>Uplink: upstream branch</strong> (<code>uplink/upstream</code>
         ): nobody may create, update, force-push or delete it. It is the
         accepted public base, and only <strong>Uplink sync</strong> moves it.
-        Bypass: the internal App, which force-pushes it when sync promotes.
-        Sample:{" "}
+        Bypass: the internal App, which pushes it with a lease, together with{" "}
+        <code>uplink/state</code>, when sync promotes. Sample:{" "}
         <a
           href={`${GITHUB_BLOB}/templates/github/.github/uplink-upstream-ruleset.json`}
         >

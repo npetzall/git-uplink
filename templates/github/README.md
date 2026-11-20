@@ -116,7 +116,7 @@ What **Uplink rebase** does to a branch: the authors stay, the committer becomes
   - `preflight.sh` on `uplink/hooks`;
   - label `uplink:conflict`;
   - concurrency group `uplink-sync` for the workflow and `uplink-mutate` for inspect and apply;
-  - recommended: import [`uplink-upstream-ruleset.json`](.github/uplink-upstream-ruleset.json). Inspect and apply are the only jobs that push `uplink/upstream`, with `--force`, so the ruleset lets nobody else create, update, force-push or delete it. It ships active: add the internal App to its bypass list (**Always allow**; with a PAT, a team with only the machine user) when you import it, or sync fails when it promotes.
+  - recommended: import [`uplink-upstream-ruleset.json`](.github/uplink-upstream-ruleset.json). Only a sync or accept-upstream that promotes moves `uplink/upstream`: `--push` pushes it with a lease, in one atomic push with `uplink/state`, before `main`. The ruleset lets nobody else create, update, force-push or delete it. It ships active: add the internal App to its bypass list (**Always allow**; with a PAT, a team with only the machine user) when you import it, or sync fails when it promotes, and nothing is promoted.
 
 ## `uplink-resolve.yml` — Uplink resolve
 

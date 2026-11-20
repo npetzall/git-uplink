@@ -1,4 +1,4 @@
-# Rules: pushing `uplink/state` and `main`
+# Rules: pushing `uplink/state`, `uplink/upstream` and `main`
 
 The forge pack runs jobs at the same time. `uplink-mutate` serializes most of them, but not all: the submit job waits on an Environment and holds no lock, and a pull request can merge into `main` at any moment. These rules keep every change when that happens. Follow them in any command or workflow that writes either branch.
 
@@ -15,6 +15,14 @@ A change that reached the company (a merged pull request, an approval, a recorde
 4. **Work on origin's state, not the checkout, when the job holds no lock.** `approve --push` reads the queue and the patch from `origin/uplink/state` and builds its commit with a temporary index (`commit_files_on`), so nothing local can be stale.
 5. **Refuse to throw away local work.** Before resetting to origin, refuse when local `uplink/state` has commits origin lacks, or `.uplink/` has uncommitted changes.
 6. **Only push races are retried.** `is_push_lease_rejected` in `src/lock.rs` lists what counts as a race (`stale info`, `non-fast-forward`, `fetch first`, `cannot lock ref`, GitHub's `fatal error in commit_refs`). Add a new forge message there, with a unit test, when a forge reports a race another way. Auth and hook refusals are never retried.
+
+## `uplink/upstream`
+
+It is the accepted public base. Only a sync or accept-upstream that promotes moves it.
+
+1. **Push it with the state that records it.** `record_on_remote` pushes `uplink/state` and `uplink/upstream` in one `git push --atomic` (`push_state_and_upstream`) when `record` moved `uplink/upstream`: both land or neither does, and both land before `main`. No workflow pushes it itself.
+2. **Lease it on where it was before.** Promoted history can be rewritten, so it is not a fast-forward: lease on the local `uplink/upstream` the command started from. A lost state race records again. If origin's `uplink/upstream` itself moved, recording again cannot win, so the command fails without pushing anything.
+3. **The ruleset lets only the internal App update it.** `uplink-upstream-ruleset.json` has no bypass by default. Without the App in its bypass list, the atomic push is refused and the job fails: nothing is promoted, and `main` is not pushed.
 
 ## `main`
 

@@ -569,7 +569,7 @@ On a conflict it prints `gh.prCreate` JSON for the gated conflict PR and exits 0
 - `--merged-pr <id=sha>`: A recorded public pull request the forge reports as merged, with its merge commit. Repeat it per patch; the sync workflow passes these. One that names a commit outside the new range is ignored.
 - `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
 
-  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
+  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When it promotes, uplink/upstream goes in the same atomic push, with a lease on where it was. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream; when origin's uplink/upstream moved, it fails and pushes nothing. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
 
 ### `accept-upstream`
 
@@ -591,7 +591,7 @@ The pending upstream brings changes that are not ours, so it is promoted only wh
   For a job without credentials; pass the output to the same command with `--preflight-result`. Exits non-zero when the pending upstream fails.
 - `--push`: Push uplink/state, then a rebuilt main that overwrites nothing.
 
-  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
+  Records on origin's uplink/state and pushes it as a fast-forward; uplink/state is never force-pushed. When it promotes, uplink/upstream goes in the same atomic push, with a lease on where it was. When origin moved before the push, the command runs again on the state that won, from the same main and uplink/upstream; when origin's uplink/upstream moved, it fails and pushes nothing. Main is then force-pushed with a lease on origin's main, fetched right before, and only when every commit on it was written by a rebuild: a merge that is not imported yet is never dropped, and its import pushes main. The JSON has `push.state` and `push.main` (`pushed`, `unchanged`, `moved` or `unrecorded`).
 
 ### `gated`
 
