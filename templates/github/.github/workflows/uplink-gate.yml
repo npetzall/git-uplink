@@ -74,7 +74,7 @@ jobs:
           if git diff --no-renames --name-only -z "$FROM_SHA" "$HEAD_SHA" | grep -zE \
             -q '^(\.github/workflows/uplink-.*\.yml|\.github/actions/(install-git-uplink|uplink-[^/]*)/|\.github/uplink/)'; then
             echo "Gated PRs must not change Uplink pack files (uplink-*.yml, install-git-uplink, uplink-* actions, .github/uplink/)."
-            echo "Edit product workflows as needed. Change sidecars on main via git uplink init --upgrade."
+            echo "Edit product workflows as needed. The operator changes pack files on main with git uplink init --upgrade."
             exit 1
           fi
           # .uplink/ is Uplink's own state. It is not scanned by the

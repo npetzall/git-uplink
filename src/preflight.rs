@@ -382,7 +382,7 @@ fn script_source(
             None if queue.config.forge.is_some() => {
                 return Err(Error::msg(
                     "uplink/hooks is missing, so preflight has no preflight.sh to run; \
-run git uplink init --upgrade to create it and answer Yes to publish it",
+the operator creates and publishes it with git uplink init --upgrade (answer Yes)",
                 ));
             }
             None => return Ok(None),
@@ -1407,7 +1407,7 @@ pub(crate) fn build_company_stack(repo: &Path, queue: &QueueState, branch: &str)
             let result = apply_abs(dir, &dep_patch_abs(repo, &patch.id)?, patch.subject())?;
             if result == ApplyOutcome::Conflict {
                 return Err(Error::msg(format!(
-                    "Queued patch {} (\"{}\") does not apply on company main; fix the queue (git uplink rebuild -i) first.",
+                    "Queued patch {} (\"{}\") does not apply on company main; the operator fixes the queue first (git uplink rebuild -i).",
                     patch.id,
                     patch.subject()
                 )));
