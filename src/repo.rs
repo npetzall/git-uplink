@@ -930,6 +930,38 @@ pub fn push_state_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> 
     Ok(())
 }
 
+/// Pushes local `uplink/state` and `uplink/upstream` in one atomic push:
+/// both land or neither does. State goes as a fast-forward; upstream with a
+/// lease, only while `remote` still has it at `upstream_expected`, or does
+/// not have it when that is `None`, since accepted upstream history can be
+/// rewritten.
+pub fn push_state_and_upstream(
+    repo: &Path,
+    remote: &str,
+    upstream_expected: Option<&str>,
+) -> Result<()> {
+    let lease = format!(
+        "--force-with-lease=refs/heads/{UPSTREAM_REF}:{}",
+        upstream_expected.unwrap_or_default()
+    );
+    let state = format!("refs/heads/{STATE_BRANCH}:refs/heads/{STATE_BRANCH}");
+    let upstream = format!("refs/heads/{UPSTREAM_REF}:refs/heads/{UPSTREAM_REF}");
+    git(
+        repo,
+        &[
+            "push",
+            "--atomic",
+            &lease,
+            "--end-of-options",
+            remote,
+            &state,
+            &upstream,
+        ],
+        GitOpts::default(),
+    )?;
+    Ok(())
+}
+
 /// Pushes local `branch` with a lease: only while `remote` still has it at
 /// `expected`, or does not have it when `expected` is `None`. A caller that
 /// checked local descends from `expected` gets a fast-forward or nothing.

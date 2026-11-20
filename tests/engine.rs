@@ -10765,11 +10765,52 @@ fn accept_upstream_push_records_again_on_a_moved_state() {
         "the accepted upstream is recorded on origin"
     );
     assert!(queue.pending_upstream.is_none());
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", "refs/heads/uplink/upstream"]).unwrap(),
+        upstream_sha,
+        "the promoted uplink/upstream is pushed with the state"
+    );
     let main = race.origin_main();
     assert!(git_succeeds_in(
         &race.origin,
         &["merge-base", "--is-ancestor", &upstream_sha, &main]
     ));
+}
+
+#[test]
+fn accept_upstream_push_pushes_nothing_when_upstream_moved_on_origin() {
+    let race = rebuild_race(false);
+    write(&race.upstream, "UPSTREAM.md", "from upstream\n");
+    commit_all(&race.upstream, "upstream change");
+    let upstream_sha = rev_of(&race.upstream, "HEAD");
+    let synced = race.cli_json(&["sync", "--push"]);
+    assert_eq!(synced["needsApproval"], true, "{synced}");
+    let state_before = origin_state(&race.origin);
+    let main_before = race.origin_main();
+    let moved = main_before.clone();
+    let marker = move_ref_on_first_push(&race.origin, "refs/heads/uplink/upstream", &moved);
+
+    let out = uplink_cli(
+        &race.runner,
+        &["accept-upstream", "--sha", &upstream_sha, "--push"],
+    );
+
+    assert!(!out.status.success(), "{out:?}");
+    assert!(marker.exists(), "the push reached origin");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("moved while this ran"),
+        "{out:?}"
+    );
+    assert_eq!(
+        origin_state(&race.origin),
+        state_before,
+        "the state is not pushed without its upstream"
+    );
+    assert_eq!(
+        git_ok(&race.origin, &["rev-parse", "refs/heads/uplink/upstream"]).unwrap(),
+        moved
+    );
+    assert_eq!(race.origin_main(), main_before, "main is not pushed");
 }
 
 #[test]

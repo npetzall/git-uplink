@@ -67,7 +67,9 @@ pub struct PushResult {
 const RECORD_PUSH_ATTEMPTS: u32 = 8;
 
 /// Runs `record` on `uplink/state` as `remote` has it, and pushes what it
-/// recorded there as a fast-forward. Never forced.
+/// recorded there as a fast-forward. Never forced. When `record` moved
+/// `uplink/upstream` (a sync that promoted), it is pushed in the same atomic
+/// push, with a lease on where it was before.
 ///
 /// Before each attempt, local `uplink/state` and `.uplink/` are moved to the
 /// remote's `uplink/state`, and the company branch and `uplink/upstream` back
@@ -149,16 +151,38 @@ pub fn record_on_remote_if<T>(
                 point_branch_at(repo, UPSTREAM_REF, start)?;
             }
             let value = record()?;
-            if rev_parse(repo, STATE_BRANCH)? == base {
+            let upstream_now = if has_ref(repo, UPSTREAM_REF)? {
+                Some(rev_parse(repo, UPSTREAM_REF)?)
+            } else {
+                None
+            };
+            let upstream_moved = upstream_now != upstream_start;
+            if rev_parse(repo, STATE_BRANCH)? == base && !upstream_moved {
                 return Ok((value, base));
             }
             if !keep(&value) {
                 apply_state_sha(repo, STATE_BRANCH, &base)?;
                 return Ok((value, base));
             }
-            match push_state_branch(repo, remote, STATE_BRANCH) {
+            // A sync that promoted moved uplink/upstream: it lands with the
+            // state that records it, before main is pushed on top of it.
+            let pushed = if upstream_moved {
+                push_state_and_upstream(repo, remote, upstream_start.as_deref())
+            } else {
+                push_state_branch(repo, remote, STATE_BRANCH)
+            };
+            match pushed {
                 Ok(()) => return Ok((value, base)),
                 Err(err) if is_push_lease_rejected(&err) => {
+                    // Recording again starts from the same uplink/upstream,
+                    // so a moved one would lose the race every time.
+                    if upstream_moved
+                        && fetch_state_tracking(repo, remote, UPSTREAM_REF)? != upstream_start
+                    {
+                        return Err(Error::msg(format!(
+                            "{UPSTREAM_REF} on {remote} moved while this ran, so nothing was pushed; run it again"
+                        )));
+                    }
                     last_error = Some(err);
                     thread::sleep(Duration::from_millis(40 * 2u64.pow(attempt)));
                 }

@@ -1000,6 +1000,10 @@ fn no_workflow_pushes_main_or_state_itself() {
                         && !line.starts_with("git uplink push"),
                     "{forge:?} {path} pushes uplink/state itself; the command that wrote it pushes it: {line}"
                 );
+                assert!(
+                    !(line.starts_with("git push") && line.contains("uplink/upstream")),
+                    "{forge:?} {path} pushes uplink/upstream itself; the sync that promoted it pushes it with uplink/state: {line}"
+                );
             }
         }
         let text = |name: &str| {

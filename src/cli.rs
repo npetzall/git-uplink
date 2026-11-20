@@ -1189,9 +1189,12 @@ pub enum Commands {
         /// Push uplink/state, then a rebuilt main that overwrites nothing.
         ///
         /// Records on origin's uplink/state and pushes it as a fast-forward;
-        /// uplink/state is never force-pushed. When origin moved before the
-        /// push, the command runs again on the state that won, from the same
-        /// main and uplink/upstream. Main is then force-pushed with a lease
+        /// uplink/state is never force-pushed. When it promotes, uplink/upstream
+        /// goes in the same atomic push, with a lease on where it was. When
+        /// origin moved before the push, the command runs again on the state
+        /// that won, from the same main and uplink/upstream; when origin's
+        /// uplink/upstream moved, it fails and pushes nothing. Main is then
+        /// force-pushed with a lease
         /// on origin's main, fetched right before, and only when every commit
         /// on it was written by a rebuild: a merge that is not imported yet
         /// is never dropped, and its import pushes main. The JSON has
@@ -1241,9 +1244,12 @@ pub enum Commands {
         /// Push uplink/state, then a rebuilt main that overwrites nothing.
         ///
         /// Records on origin's uplink/state and pushes it as a fast-forward;
-        /// uplink/state is never force-pushed. When origin moved before the
-        /// push, the command runs again on the state that won, from the same
-        /// main and uplink/upstream. Main is then force-pushed with a lease
+        /// uplink/state is never force-pushed. When it promotes, uplink/upstream
+        /// goes in the same atomic push, with a lease on where it was. When
+        /// origin moved before the push, the command runs again on the state
+        /// that won, from the same main and uplink/upstream; when origin's
+        /// uplink/upstream moved, it fails and pushes nothing. Main is then
+        /// force-pushed with a lease
         /// on origin's main, fetched right before, and only when every commit
         /// on it was written by a rebuild: a merge that is not imported yet
         /// is never dropped, and its import pushes main. The JSON has
