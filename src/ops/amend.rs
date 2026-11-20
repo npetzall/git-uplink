@@ -218,12 +218,19 @@ fn complete_amend(
     let (updated, raw_message) = with_message(&patch, new_message)?;
 
     let before = rev_parse(repo, "HEAD")?;
+    let put_back = || -> Result<()> {
+        restore_uplink_from_state(repo)?;
+        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+        Ok(())
+    };
     commit_resolution(repo, &onto, &company_commit_message(&queue, &patch))?;
     if rev_parse(repo, "HEAD")? == onto {
-        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-        return Err(Error::msg(format!(
-            "The amend leaves {id} empty; drop the patch instead"
-        )));
+        return or_put_back(
+            Err(Error::msg(format!(
+                "The amend leaves {id} empty; drop the patch instead"
+            ))),
+            put_back,
+        );
     }
 
     let intent = PatchIntent::from_internal_only(!queue.is_upstream(id));
@@ -236,13 +243,7 @@ fn complete_amend(
         commit_message_change(repo, &queue, &updated, new_message)?;
         Ok(report)
     })();
-    let report = match checked {
-        Ok(report) => report,
-        Err(err) => {
-            git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-            return Err(err);
-        }
-    };
+    let report = or_put_back(checked, put_back)?;
 
     let unchanged = tree_of(repo, "HEAD")? == tree_of(repo, &original)?
         && updated.commit_message.clone() == patch.commit_message.clone()
@@ -276,15 +277,17 @@ fn complete_amend(
         }));
     }
 
-    fs::create_dir_all(repo.join(".uplink/patches"))?;
-    let patch_abs = repo.join(patch_path(id)?);
-    crate::queue::write_atomic(&patch_abs, format_patch_at_head(repo)?)?;
-    {
+    let staged = (|| -> Result<PathBuf> {
+        fs::create_dir_all(repo.join(".uplink/patches"))?;
+        let patch_abs = repo.join(patch_path(id)?);
+        crate::queue::write_atomic(&patch_abs, format_patch_at_head(repo)?)?;
         let current = get_patch_mut(&mut queue, id)?;
         current.commit_message = updated.commit_message.clone();
         current.source.authors = updated.source.authors.clone();
         current.depends_on = updated.depends_on.clone();
-    }
+        Ok(patch_abs)
+    })();
+    let patch_abs = or_put_back(staged, put_back)?;
     let verdict = checks.verdict();
     let layer_checks = if intent.is_internal_only() {
         command_preflight(&queue, repo, None, verdict)
@@ -303,17 +306,12 @@ fn complete_amend(
         let report = probe_report(layer_checks, || {
             probe_rebuild(repo, &queue, &upstream_ref, false)
         });
-        restore_uplink_from_state(repo)?;
-        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
+        put_back()?;
         return Ok(Checked::Probed(report?));
     }
-    if layer_checks.is_err() {
-        restore_uplink_from_state(repo)?;
-        git(repo, &["reset", "--soft", &before], GitOpts::default())?;
-    }
-    layer_checks?;
+    or_put_back(layer_checks, put_back)?;
 
-    {
+    let recorded = (|| -> Result<()> {
         let current = get_patch_mut(&mut queue, id)?;
         current.assess = Some(report);
         let rel = patch_path(id)?.to_string_lossy().into_owned();
@@ -324,7 +322,9 @@ fn complete_amend(
             &with_people("Amended through the gated amend PR", &amenders),
         );
         add_event(current, "amended", detail);
-    }
+        Ok(())
+    })();
+    or_put_back(recorded, put_back)?;
     write_queue_file(repo, &queue)?;
     commit_queue(repo, &format!("uplink: amend {id}"))?;
     let queue = rebuild_checked(repo, verdict)?;
