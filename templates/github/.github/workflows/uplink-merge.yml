@@ -46,7 +46,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
     steps:
       - uses: $/.github/actions/install-git-uplink
@@ -259,7 +259,7 @@ jobs:
     if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       actions: write
     steps:
@@ -454,7 +454,7 @@ jobs:
     if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == false && !endsWith(github.event.pull_request.base.ref, '-work')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Mint internal GitHub App token
         id: internal-app
