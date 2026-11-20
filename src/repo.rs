@@ -141,18 +141,7 @@ pub fn product_patch(
     message: &str,
     head_ref: &str,
 ) -> Result<String> {
-    let diff = git_ok(
-        repo,
-        &[
-            "diff",
-            "--full-index",
-            from_ref,
-            head_ref,
-            "--",
-            ".",
-            ":!.uplink",
-        ],
-    )?;
+    let diff = git_ok(repo, &["diff", "--full-index", from_ref, head_ref])?;
     if diff.trim().is_empty() {
         return Err(Error::msg("No product changes to import as a patch."));
     }

@@ -984,7 +984,7 @@ fn import_keeps_a_failed_import_and_never_overwrites_a_later_merge() {
 
 /// State is on `uplink/state` only: no step reads `.uplink/` from the
 /// checkout. A path under it is read with `git show uplink/state:`, the
-/// contents API or a blob URL, and the gate may name it in a pathspec.
+/// contents API or a blob URL.
 #[test]
 fn no_workflow_reads_uplink_state_from_the_checkout() {
     for forge in [Forge::Github, Forge::TryItOnGithub] {
@@ -1002,9 +1002,7 @@ fn no_workflow_reads_uplink_state_from_the_checkout() {
                         || before.ends_with("contents/")
                         || before.contains("/blob/")
                         || before.ends_with("dir=\"")
-                        || line.starts_with('#')
-                        || before.ends_with("'^\\")
-                        || line.contains("Gated PRs must not change files under");
+                        || line.starts_with('#');
                     assert!(
                         read_from_state,
                         "{forge:?} {path} reads .uplink/ from the checkout: {line}"
@@ -1164,15 +1162,17 @@ fn gated_branch_sidecars_load_from_default_branch() {
             "{forge:?} gate must refuse pack-file diffs\n{gate}"
         );
         // The gate and the ruleset refuse the same paths.
-        for path in ["\\.github/uplink/", "'^\\.uplink/'"] {
-            assert!(
-                gate.contains(path),
-                "{forge:?} gate must refuse {path}\n{gate}"
-            );
-        }
+        assert!(
+            gate.contains("\\.github/uplink/"),
+            "{forge:?} gate must refuse .github/uplink/\n{gate}"
+        );
+        // A product may track `.uplink/` like any other path.
+        assert!(
+            !gate.contains("'^\\.uplink/'"),
+            "{forge:?} gate must not refuse .uplink/\n{gate}"
+        );
         // GitHub enforces path rules only in push rulesets, which take no
-        // ref conditions. `.uplink/` is written on uplink/state, so only
-        // the gate refuses it.
+        // ref conditions.
         let ruleset: serde_json::Value = files
             .iter()
             .find(|(p, _)| p.ends_with("uplink-pack-files-ruleset.json"))

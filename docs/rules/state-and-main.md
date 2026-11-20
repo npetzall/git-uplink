@@ -8,7 +8,7 @@ A change that reached the company (a merged pull request, an approval, a recorde
 
 ## `uplink/state`
 
-State is read from and written to `uplink/state` objects only: a command stages its changes on a `StateTree` (`src/state.rs`) and commits them with a temporary index. Nothing is written to the work tree, so no checkout holds a copy that can go stale or be committed by mistake. A local commit moves `uplink/state` only while it is still at the commit the change was read from.
+State is read from and written to `uplink/state` objects only: a command stages its changes on a `StateTree` (`src/state.rs`) and commits them with a temporary index. Nothing is written to the work tree, so no checkout holds a copy that can go stale or be committed by mistake. A local commit moves `uplink/state` only while it is still at the commit the change was read from. Its `.uplink/…` paths are on that orphan branch only: a `.uplink/` folder a product tracks on `main` is product content like any other path, imported, assessed and rebuilt.
 
 1. **Never force-push it.** Push it only as a fast-forward. The ruleset `uplink-state-ruleset.json` refuses anything else.
    - **Push it with the internal App or PAT, never `GITHUB_TOKEN`.** `uplink-state-writers-ruleset.json` lets only the internal App and admins update it. A job that pushes it mints the internal App token and passes `steps.internal-app.outputs.token || secrets.UPLINK_INTERNAL_TOKEN` as `UPLINK_INTERNAL_TOKEN`; its own `GITHUB_TOKEN` stays `contents: read`.

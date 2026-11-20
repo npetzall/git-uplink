@@ -13657,21 +13657,16 @@ fn amend_complete_refreshes_an_internal_patch_and_rebuilds_main() {
 }
 
 #[test]
-fn amend_complete_leaves_tracked_uplink_files_out_of_the_patch() {
+fn amend_complete_keeps_product_files_under_uplink_in_the_patch() {
     let world = setup_world();
     let company = &world.company;
     let patch = add_internal_notes(company);
     amend_patch(company, &patch.id, false, None).unwrap();
     let work = format!("uplink/amend/{}-work", patch.id);
     git(company, &["checkout", "--quiet", &work], GitOpts::default()).unwrap();
-    // The checkout ignores .uplink/, so the gated work has to force it in.
-    write(company, ".uplink/queue.json", "{}\n");
-    git(
-        company,
-        &["add", "-f", ".uplink/queue.json"],
-        GitOpts::default(),
-    )
-    .unwrap();
+    // A product file that happens to live under .uplink/.
+    write(company, ".uplink/notes.md", "product notes\n");
+    git(company, &["add", ".uplink/notes.md"], GitOpts::default()).unwrap();
     amend_on_work_and_squash(company, &patch.id, "NOTES.md", "internal-notes\nreviewed\n");
     let done = amend_patch(company, &patch.id, true, None).unwrap();
     assert!(done.completed && done.changed, "{done:?}");
@@ -13684,9 +13679,11 @@ fn amend_complete_leaves_tracked_uplink_files_out_of_the_patch() {
     )
     .unwrap();
     assert!(stored.contains("+reviewed"), "{stored}");
-    assert!(!stored.contains(".uplink"), "{stored}");
-    let tracked = git_ok(company, &["ls-tree", "-r", "--name-only", "main"]).unwrap();
-    assert!(!tracked.contains(".uplink"), "{tracked}");
+    assert!(stored.contains("+++ b/.uplink/notes.md"), "{stored}");
+    assert_eq!(
+        git_ok(company, &["show", "main:.uplink/notes.md"]).unwrap(),
+        "product notes"
+    );
 }
 
 #[test]
@@ -19485,4 +19482,94 @@ fn submitted_refuses_an_export_file_that_is_not_the_patch() {
         state_file(company, &pr_path).trim_end(),
         git_uplink::upstream_pr_body(&patch).trim_end()
     );
+}
+
+#[test]
+fn import_keeps_product_files_under_uplink() {
+    let world = setup_world();
+    let company = &world.company;
+    git(
+        company,
+        &["checkout", "-b", "feat/config"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, ".uplink/config.yml", "mode: product\n");
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    commit_all(company, "Extend TTL and add config");
+    let patch = add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Extend TTL and add config".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let stored = state_file(company, &format!(".uplink/patches/{}.patch", patch.id));
+    assert!(stored.contains("+++ b/.uplink/config.yml"), "{stored}");
+    rebuild(company).unwrap();
+    assert_eq!(
+        git_ok(company, &["show", "main:.uplink/config.yml"]).unwrap(),
+        "mode: product"
+    );
+
+    // A change only under .uplink/ is a product change too.
+    git(
+        company,
+        &["checkout", "--quiet", "-B", "feat/only", "main"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(company, ".uplink/config.yml", "mode: other\n");
+    commit_all(company, "Change the config");
+    let only = add_landed_patch(
+        company,
+        AddPatchOpts {
+            message: "Change the config".into(),
+            from_ref: Some("main".into()),
+            depends_on: vec![patch.id.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(state_has(
+        company,
+        &format!(".uplink/patches/{}.patch", only.id)
+    ));
+}
+
+#[test]
+fn assessment_scans_product_files_under_uplink() {
+    let world = setup_world();
+    let company = &world.company;
+    set_settings(company, |s| s.banned_words = vec!["AcmeCorp".into()]);
+    git(
+        company,
+        &["checkout", "-b", "feat/hidden"],
+        GitOpts::default(),
+    )
+    .unwrap();
+    write(
+        company,
+        "src/tokens.js",
+        &TOKENS.replace("return 3600;", "return 7200;"),
+    );
+    write(company, ".uplink/notes.md", "Built for AcmeCorp\n");
+    commit_all(company, "Extend TTL");
+
+    let err = add_patch(
+        company,
+        AddPatchOpts {
+            message: "Extend TTL".into(),
+            from_ref: Some("main".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::Assess(_)), "{err}");
 }

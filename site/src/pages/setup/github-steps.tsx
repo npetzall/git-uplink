@@ -1015,11 +1015,9 @@ function RulesetList() {
         <code>uplink-assessment-hook.yml</code> and its example) are left out,
         so hooks pull requests need no admin. GitHub enforces path rules only in
         push rulesets, which cover forks too and exist only for private and
-        internal repositories. Product workflows stay editable, and{" "}
-        <code>Uplink gate</code> still refuses <code>.uplink/**</code> on gated
-        pull requests. Bypass: the internal App, which rebuilds{" "}
-        <code>main</code>, and the admin role, for <code>init --upgrade</code>.
-        Sample:{" "}
+        internal repositories. Product workflows stay editable. Bypass: the
+        internal App, which rebuilds <code>main</code>, and the admin role, for{" "}
+        <code>init --upgrade</code>. Sample:{" "}
         <a
           href={`${GITHUB_BLOB}/templates/github/.github/uplink-pack-files-ruleset.json`}
         >

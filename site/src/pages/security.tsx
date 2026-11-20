@@ -292,7 +292,7 @@ export function SecurityPage() {
           </li>
           <li>
             <strong>Uplink gate</strong> fails a gated PR that changes pack
-            files or anything under <code>.uplink/</code>.
+            files.
           </li>
           <li>
             Gated pull requests are opened by the internal App, so Actions needs

@@ -299,18 +299,7 @@ fn complete_split(
         }
     };
 
-    let combined = git_ok(
-        repo,
-        &[
-            "diff",
-            "--full-index",
-            &onto,
-            "HEAD",
-            "--",
-            ".",
-            ":!.uplink",
-        ],
-    )?;
+    let combined = git_ok(repo, &["diff", "--full-index", &onto, "HEAD"])?;
     let content_changed = patch.patch_id_stable.as_deref()
         != Some(stable_patch_id_from_contents(repo, &combined)?.as_str());
     let part_ids: Vec<String> = parts.iter().map(|p| p.id.clone()).collect();

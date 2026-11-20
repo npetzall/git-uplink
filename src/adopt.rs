@@ -299,19 +299,7 @@ fn describe_commit(repo: &Path, sha: &str) -> Result<Option<AdoptCommit>> {
 }
 
 fn product_diff_empty(repo: &Path, from: &str, head: &str) -> Result<bool> {
-    git_succeeds(
-        repo,
-        &[
-            "diff",
-            "--quiet",
-            "--full-index",
-            from,
-            head,
-            "--",
-            ".",
-            ":!.uplink",
-        ],
-    )
+    git_succeeds(repo, &["diff", "--quiet", "--full-index", from, head])
 }
 
 fn resolve_sha<'a>(commits: &'a [AdoptCommit], spec: &str) -> Result<&'a AdoptCommit> {

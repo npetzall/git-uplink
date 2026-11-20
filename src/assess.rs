@@ -289,10 +289,7 @@ pub fn patch_authors(repo: &Path, from: &str, head: &str) -> Result<Vec<String>>
 pub fn resolution_authors(repo: &Path, onto: &str) -> Result<Vec<String>> {
     let mut authors = patch_authors(repo, onto, "HEAD")?;
     if authors.is_empty() {
-        let pending = git_ok(
-            repo,
-            &["status", "--porcelain", "--", ".", ":(exclude).uplink"],
-        )?;
+        let pending = git_ok(repo, &["status", "--porcelain"])?;
         if !pending.trim().is_empty()
             && let Some((name, email)) = crate::git::operator_identity(repo)
             && !is_bot(&name, &email)
@@ -1863,18 +1860,7 @@ fn assess_range(
         None
     } else {
         Some(ExportDiff {
-            diff: git_ok(
-                repo,
-                &[
-                    "diff",
-                    "--full-index",
-                    from_ref,
-                    head_ref,
-                    "--",
-                    ".",
-                    ":!.uplink",
-                ],
-            )?,
+            diff: git_ok(repo, &["diff", "--full-index", from_ref, head_ref])?,
             binaries: binary_files(repo, from_ref, head_ref)?,
         })
     };
@@ -2154,16 +2140,7 @@ pub fn change_between(repo: &Path, from_ref: &str, head_ref: &str) -> Result<Str
     let shas = ensure_revs(repo, &[from_ref, head_ref])?;
     let diff = git_ok(
         repo,
-        &[
-            "diff",
-            "--full-index",
-            "--binary",
-            &shas[0],
-            &shas[1],
-            "--",
-            ".",
-            ":!.uplink",
-        ],
+        &["diff", "--full-index", "--binary", &shas[0], &shas[1]],
     )?;
     Ok(format!("{diff}\n"))
 }
@@ -2390,18 +2367,7 @@ fn binary_files_check(binaries: &[String]) -> Option<AssessCheck> {
 
 /// Paths `git diff --numstat` reports as binary (`-\t-\t<path>`) in the export.
 fn binary_files(repo: &Path, from_ref: &str, head_ref: &str) -> Result<Vec<String>> {
-    let numstat = git_ok(
-        repo,
-        &[
-            "diff",
-            "--numstat",
-            from_ref,
-            head_ref,
-            "--",
-            ".",
-            ":!.uplink",
-        ],
-    )?;
+    let numstat = git_ok(repo, &["diff", "--numstat", from_ref, head_ref])?;
     Ok(numstat
         .lines()
         .filter_map(|line| line.strip_prefix("-\t-\t"))

@@ -77,13 +77,7 @@ jobs:
             echo "Edit product workflows as needed. Change sidecars on main via git uplink init --upgrade."
             exit 1
           fi
-          # .uplink/ is Uplink's own state. It is not scanned by the
-          # assessment, so it must not be part of gated work.
-          if git diff --no-renames --name-only -z "$FROM_SHA" "$HEAD_SHA" | grep -zq '^\.uplink/'; then
-            echo "Gated PRs must not change files under .uplink/."
-            exit 1
-          fi
-          if git grep -I -l '^<<<<<<<' -- . ':!.uplink' >/dev/null 2>&1; then
+          if git grep -I -l '^<<<<<<<' >/dev/null 2>&1; then
             echo "Conflict markers still present; remove them before merge."
             exit 1
           fi
